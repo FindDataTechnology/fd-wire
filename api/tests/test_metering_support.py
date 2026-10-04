@@ -115,6 +115,7 @@ def metering_env(
         "DATABASE_URL": f"sqlite:///{tmp_path}/metering.db",
         "METERING_INGEST_TOKEN": TOKEN,
         "PLATFORM_IDENTITIES": PLATFORM_IDENTITIES,
+        "PLATFORM_IDENTITY_SOURCE_MAP": None,  # 默认未配置身份→来源映射
         "METERING_SOURCE_MAP": SOURCE_MAP,
         "REGISTRY_MONGO_URI": None,  # 默认未配置直读路径
         "REGISTRY_MONGO_DB": None,

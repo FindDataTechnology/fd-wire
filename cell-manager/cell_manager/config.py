@@ -20,13 +20,21 @@
     CELL_TARGET_URL_TEMPLATE  registry 条目 target 模板（{container_name} 占位）
     CELL_RETENTION_DAYS    注销保留期天数（默认 30，0=立即到期）
     CELL_DRIVER            容器驱动：docker | fake（默认 docker）
+    CELL_CUSTOMER_CREDENTIAL_MAP  客户轨凭据 JSON（customer_id → key），
+                                  provision 时注入容器 WIRE_CUSTOMER_KEY；
+                                  未配置则不注入（cell 内代理客户轨 fail-closed，
+                                  生产必须配置——见 README）
+    CELL_PLATFORM_CREDENTIAL     平台轨凭据单值（全部 cell 共用），
+                                  provision 时注入容器 WIRE_PLATFORM_KEY；
+                                  未配置则不注入（同上，生产必须配置）
 """
 
 from __future__ import annotations
 
+import json
 import re
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 
@@ -56,6 +64,35 @@ def validate_customer_id(customer_id: str) -> str:
     return customer_id
 
 
+def _parse_customer_credential_map(raw: str) -> dict[str, str]:
+    """解析 ``CELL_CUSTOMER_CREDENTIAL_MAP``（JSON 对象：customer_id → key）。
+
+    空/未配置 → 空映射（provision 不注入 ``WIRE_CUSTOMER_KEY``，cell 内
+    代理客户轨 fail-closed——生产必须配置）。键须是合法 customer_id，
+    值须是非空字符串；非法即 ``ConfigError``（启动期 fail-fast）。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ConfigError(
+            f"CELL_CUSTOMER_CREDENTIAL_MAP must be a JSON object (customer_id -> key): {exc}"
+        ) from exc
+    if not isinstance(parsed, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) and value.strip()
+        for key, value in parsed.items()
+    ):
+        raise ConfigError(
+            "CELL_CUSTOMER_CREDENTIAL_MAP must be a JSON object of "
+            "customer_id -> non-empty credential string"
+        )
+    for key in parsed:
+        validate_customer_id(key)
+    return dict(parsed)
+
+
 @dataclass(frozen=True)
 class CellManagerConfig:
     """运行时配置（不可变；``from_env`` 构造，测试可直构或注入 env mapping）。"""
@@ -71,6 +108,11 @@ class CellManagerConfig:
     target_url_template: str
     retention_days: int
     driver_name: str
+    #: customer_id → 客户轨凭据（CELL_CUSTOMER_CREDENTIAL_MAP 解析；
+    #: 空映射=不注入 WIRE_CUSTOMER_KEY，cell 内代理客户轨 fail-closed）
+    customer_credential_map: Mapping[str, str] = field(default_factory=dict)
+    #: 平台轨凭据单值（CELL_PLATFORM_CREDENTIAL；空=不注入 WIRE_PLATFORM_KEY）
+    platform_credential: str = ""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "CellManagerConfig":
@@ -93,6 +135,10 @@ class CellManagerConfig:
         registry_mode = e.get("CELL_REGISTRY_MODE", "http").strip().lower()
         if registry_mode not in ("http", "fake"):
             raise ConfigError(f"CELL_REGISTRY_MODE must be 'http' or 'fake', got {registry_mode!r}")
+        customer_credential_map = _parse_customer_credential_map(
+            e.get("CELL_CUSTOMER_CREDENTIAL_MAP", "")
+        )
+        platform_credential = e.get("CELL_PLATFORM_CREDENTIAL", "").strip()
         return cls(
             home=home,
             data_root=data_root,
@@ -105,6 +151,8 @@ class CellManagerConfig:
             target_url_template=e.get("CELL_TARGET_URL_TEMPLATE") or DEFAULT_TARGET_URL_TEMPLATE,
             retention_days=retention_days,
             driver_name=driver_name,
+            customer_credential_map=customer_credential_map,
+            platform_credential=platform_credential,
         )
 
     # ---- 派生命名（隔离保证：每 cell 独立卷目录 + 独立容器名 + 独立条目路径） ----

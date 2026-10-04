@@ -69,10 +69,14 @@ spec:
             - name: FD_WIRE_DATABASE_URL
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: fd_wire_database_url }
-            # 目录镜像（同步默认关闭，待权威源端点与凭据就绪后开）
+            # 目录镜像（权威源 fd-open-data-mcp 的 MCP streamable-http 入口；
+            # 客户端自动补 /mcp 后缀。同步开关与凭据均在 Secret）
             - name: INDICATOR_REGISTRY_URL
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: indicator_registry_url }
+            - name: INDICATOR_REGISTRY_TOKEN
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: indicator_registry_token }
             - name: CATALOG_SYNC_ENABLED
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: catalog_sync_enabled }

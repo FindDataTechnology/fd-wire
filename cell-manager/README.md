@@ -126,8 +126,12 @@ python -m cell_manager provision acme && python -m cell_manager status acme
 | `CELL_TARGET_URL_TEMPLATE` | `http://{container_name}:8000/mcp` | registry 条目 target 模板 |
 | `CELL_RETENTION_DAYS` | `30` | 注销保留期（0=立即到期） |
 | `CELL_DRIVER` | `docker` | `docker` \| `fake` |
+| `CELL_CUSTOMER_CREDENTIAL_MAP` | -（空） | 客户轨凭据 JSON（`customer_id → key`），provision 时注入容器 `WIRE_CUSTOMER_KEY` |
+| `CELL_PLATFORM_CREDENTIAL` | -（空） | 平台轨凭据单值（全部 cell 共用），provision 时注入容器 `WIRE_PLATFORM_KEY` |
 
-容器 env 隔离注入：`DAAS_DATABASE_URL=sqlite:////data/daas.db`（指向本 cell 卷挂载）+ `WIRE_GATEWAY_URL`（wire 入口）。卷以 bind mount 挂到容器 `/data`。
+容器 env 隔离注入：`DAAS_DATABASE_URL=sqlite:////data/daas.db`（指向本 cell 卷挂载）+ `WIRE_GATEWAY_URL`（wire 入口）+ 凭据双轨（`WIRE_CUSTOMER_KEY` / `WIRE_PLATFORM_KEY`，来自上表两项）。卷以 bind mount 挂到容器 `/data`。
+
+> **凭据双轨（生产必须配置）**：`CELL_CUSTOMER_CREDENTIAL_MAP` 与 `CELL_PLATFORM_CREDENTIAL` 未配置时 provision **不注入**这两个 env——cell 内 `wire_auth_proxy` 对缺 key 的轨道 fail-closed（503 拒绝）。生产必须两轨都配，凭据的发放/轮换约定见 [`docs/service-credentials.md`](../docs/service-credentials.md)。
 
 ## 隔离保证
 

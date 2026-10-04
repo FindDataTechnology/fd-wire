@@ -128,15 +128,26 @@ class CellManager:
             registry_path = self._config.registry_path(customer_id)
             db_path = init_volume(volume_dir)
 
+            env = {
+                # 隔离核心：每 cell 自己的库 + 同门计量入口（ADR-0002 / D5）。
+                # SQLAlchemy 绝对路径四斜杠：sqlite:////data/daas.db
+                "DAAS_DATABASE_URL": f"sqlite:///{CONTAINER_DATA_DIR}/daas.db",
+                "WIRE_GATEWAY_URL": self._config.gateway_url,
+            }
+            # 双轨凭据（8.3 G4）：客户轨 per-cell（CELL_CUSTOMER_CREDENTIAL_MAP）、
+            # 平台轨全局单值（CELL_PLATFORM_CREDENTIAL）。未配置则不注入——
+            # cell 内 wire_auth_proxy 对缺 key 的轨道 fail-closed（503），
+            # 生产必须配置（见 README「配置」节与 docs/service-credentials.md）。
+            customer_credential = self._config.customer_credential_map.get(customer_id)
+            if customer_credential:
+                env["WIRE_CUSTOMER_KEY"] = customer_credential
+            if self._config.platform_credential:
+                env["WIRE_PLATFORM_KEY"] = self._config.platform_credential
+
             spec = ContainerSpec(
                 name=container_name,
                 image=self._config.image,
-                env={
-                    # 隔离核心：每 cell 自己的库 + 同门计量入口（ADR-0002 / D5）。
-                    # SQLAlchemy 绝对路径四斜杠：sqlite:////data/daas.db
-                    "DAAS_DATABASE_URL": f"sqlite:///{CONTAINER_DATA_DIR}/daas.db",
-                    "WIRE_GATEWAY_URL": self._config.gateway_url,
-                },
+                env=env,
                 binds=(BindMount(host_path=str(db_path.parent), container_path=CONTAINER_DATA_DIR),),
             )
             self._driver.create(spec)
@@ -164,6 +175,10 @@ class CellManager:
             return self._record_status(record), {
                 "db_path": str(db_path),
                 "target_url": self._config.target_url(customer_id),
+                # 凭据注入留痕（只记 env 名，不落凭据明文）
+                "injected_credential_env": [
+                    key for key in ("WIRE_CUSTOMER_KEY", "WIRE_PLATFORM_KEY") if key in spec.env
+                ],
             }
 
         return self._run("provision", customer_id, _do)

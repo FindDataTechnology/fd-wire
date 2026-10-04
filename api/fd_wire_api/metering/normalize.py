@@ -143,11 +143,35 @@ def resolve_credential_track(caller: str, platform_identities: frozenset[str]) -
     return "platform" if caller.lower() in platform_identities else "customer"
 
 
-def resolve_source(credential_track: str, server_name: str, source_map: dict[str, str]) -> str:
-    """来源标记：platform 轨道恒 platform-internal；server 命中映射表取映射值
+def _match_identity_source(caller: str, identity_source_map: dict[str, str]) -> str | None:
+    """调用身份 → 来源：精确优先（大小写不敏感），其次 ``前缀*`` 通配。
+
+    ``identity_source_map`` 的键经 ``settings.identity_source_map()`` 已统一
+    小写，此处把 caller 一并小写后匹配。
+    """
+    lowered = caller.lower()
+    if lowered in identity_source_map:
+        return identity_source_map[lowered]
+    for pattern, source in identity_source_map.items():
+        if pattern.endswith("*") and lowered.startswith(pattern[:-1]):
+            return source
+    return None
+
+
+def resolve_source(
+    credential_track: str,
+    caller: str,
+    server_name: str,
+    source_map: dict[str, str],
+    identity_source_map: dict[str, str],
+) -> str:
+    """来源标记：platform 轨先按调用身份查 ``PLATFORM_IDENTITY_SOURCE_MAP``
+    （精确/``前缀*`` 通配，区分壹座/萬星/平台内部发起），未命中回退
+    ``platform-internal``；customer 轨按 server 名查 ``METERING_SOURCE_MAP``
     （精确优先，其次 ``前缀*`` 通配）；其余 customer。"""
     if credential_track == "platform":
-        return "platform-internal"
+        hit = _match_identity_source(caller, identity_source_map)
+        return hit if hit is not None else "platform-internal"
     if server_name in source_map:
         return source_map[server_name]
     for pattern, source in source_map.items():
@@ -230,7 +254,9 @@ def normalize_event(
             event_timestamp=timestamp,
         )
 
-    source = resolve_source(track, server_name, settings.source_map())
+    source = resolve_source(
+        track, caller, server_name, settings.source_map(), settings.identity_source_map()
+    )
     assert source in ALLOWED_SOURCES  # settings 校验保证映射值合法
     return NormalizedRecord(
         event_timestamp=timestamp,

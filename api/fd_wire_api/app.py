@@ -16,6 +16,12 @@ from .demands import admin_router as demands_admin_router
 from .demands import init_db as init_demands_db
 from .demands import pipeline_router as demands_pipeline_router
 from .demands import router as demands_router
+from .materialization import init_db as init_materialization_db
+from .materialization import router as materialization_router
+from .materialization import (
+    start_materialization_scheduler,
+    stop_materialization_scheduler,
+)
 from .metering.db import ensure_schema
 from .metering.settings import get_settings
 from .metering.routes import router as metering_router
@@ -36,9 +42,14 @@ async def lifespan(_: FastAPI):
     # AI 对话构建循环（任务 5.4）：对话/消息/产物暂存三表幂等建表兜底
     # （生产走 Alembic 迁移链 0005_ai）。
     init_ai_db()
+    # 产物物化计量（任务 5.6）：转正登记表幂等建表兜底（生产走 0009）+
+    # cron 调度循环（MATERIALIZATION_INTERVAL 扫描，硬停前置在 runner 内）。
+    init_materialization_db()
+    start_materialization_scheduler()
     try:
         yield
     finally:
+        stop_materialization_scheduler()
         shutdown_catalog()
 
 
@@ -64,6 +75,9 @@ register_catalog(app)
 # 内部后台（任务 7.1）：客户/账本/需求单派发/目录治理/用量分轨
 # （X-Admin-Token 鉴权，未配置 fail-closed；表迁移走 alembic 0007）
 app.include_router(admin_router)
+# 产物物化计量（任务 5.6）：draft 转正 + 运行摘要内部端点
+# （X-Internal-Token 鉴权，未配置 fail-closed；表迁移走 alembic 0009）
+app.include_router(materialization_router)
 
 
 @app.get("/health")

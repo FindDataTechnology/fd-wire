@@ -10,9 +10,16 @@
 - ``PLATFORM_IDENTITIES``：平台服务身份名单（逗号分隔的 username，
   大小写不敏感）。命中的调用 → credential_track=platform，
   否则 customer（AI 探索调用不计入客户账单的归属依据）。
-- ``METERING_SOURCE_MAP``：来源标记映射表，``server=yizuo,wanxing-mcp=wanxing``
-  形式（也接受 JSON 对象）。命中 server（精确或前缀 ``name*``）→ 对应
-  source；platform 轨道恒为 ``platform-internal``；其余 ``customer``。
+- ``PLATFORM_IDENTITY_SOURCE_MAP``：platform 轨道的「调用身份 → 来源」
+  映射，``yizuo-*=yizuo,wanxing-*=wanxing,platform-agent=platform-internal``
+  形式（也接受 JSON 对象；解析口径同 ``METERING_SOURCE_MAP``）。命中
+  （身份精确或 ``前缀*`` 通配，大小写不敏感）→ 对应 source，用于区分
+  壹座 agent / 萬星 agent / 平台内部发起的平台轨调用；未命中回退
+  ``platform-internal``。发放与回填联动见 ``docs/service-credentials.md``。
+- ``METERING_SOURCE_MAP``：customer 轨道的「server → 来源」映射表，
+  ``server=yizuo,wanxing-mcp=wanxing`` 形式（也接受 JSON 对象）。命中
+  server（精确或前缀 ``name*``）→ 对应 source；platform 轨道不走本表
+  （见 ``PLATFORM_IDENTITY_SOURCE_MAP``）；其余 ``customer``。
 - ``REGISTRY_MONGO_URI`` / ``REGISTRY_MONGO_DB`` /
   ``REGISTRY_MONGO_COLLECTION``：registry Mongo 直读轮询（可选路径）；
   URI 未配置时该路径禁用。
@@ -37,8 +44,16 @@ ALLOWED_SOURCES: tuple[str, ...] = ("yizuo", "wanxing", "platform-internal", "cu
 ALLOWED_TRACKS: tuple[str, ...] = ("platform", "customer")
 
 
-def _parse_source_map(raw: str | dict[str, str] | None) -> dict[str, str]:
-    """把 env 串（``a=x,b=y`` 或 JSON 对象）解析为 server → source 映射。"""
+def _parse_source_map(
+    raw: str | dict[str, str] | None,
+    *,
+    label: str = "METERING_SOURCE_MAP",
+) -> dict[str, str]:
+    """把 env 串（``a=x,b=y`` 或 JSON 对象）解析为键 → source 映射。
+
+    ``label`` 仅用于错误信息指认来源 env（METERING_SOURCE_MAP /
+    PLATFORM_IDENTITY_SOURCE_MAP 共用同一解析口径）。
+    """
     if not raw:
         return {}
     if isinstance(raw, dict):
@@ -54,13 +69,13 @@ def _parse_source_map(raw: str | dict[str, str] | None) -> dict[str, str]:
                 if not chunk:
                     continue
                 if "=" not in chunk:
-                    raise ValueError(f"METERING_SOURCE_MAP 片段缺少 '=': {chunk!r}")
+                    raise ValueError(f"{label} 片段缺少 '=': {chunk!r}")
                 key, _, value = chunk.partition("=")
                 pairs[key.strip()] = value.strip()
     for key, value in pairs.items():
         if value not in ALLOWED_SOURCES:
             raise ValueError(
-                f"METERING_SOURCE_MAP[{key!r}]={value!r} 不在允许集合 {ALLOWED_SOURCES}"
+                f"{label}[{key!r}]={value!r} 不在允许集合 {ALLOWED_SOURCES}"
             )
     return dict(pairs)
 
@@ -73,6 +88,7 @@ class MeteringSettings(BaseSettings):
     database_url: str = "sqlite:///./fd_wire_dev.db"
     metering_ingest_token: str | None = None
     platform_identities: str = ""
+    platform_identity_source_map: str = ""
     metering_source_map: str = ""
     registry_mongo_uri: str | None = None
     registry_mongo_db: str | None = None
@@ -86,11 +102,23 @@ class MeteringSettings(BaseSettings):
         _parse_source_map(v)  # 仅校验，保留原始串
         return v
 
+    @field_validator("platform_identity_source_map")
+    @classmethod
+    def _validate_identity_source_map(cls, v: str) -> str:
+        _parse_source_map(v, label="PLATFORM_IDENTITY_SOURCE_MAP")  # 仅校验，保留原始串
+        return v
+
     def platform_identity_set(self) -> frozenset[str]:
         """平台服务身份名单（小写精确匹配）。"""
         return frozenset(
             name.strip().lower() for name in self.platform_identities.split(",") if name.strip()
         )
+
+    def identity_source_map(self) -> dict[str, str]:
+        """platform 轨「调用身份 → 来源」映射（键统一小写，配合大小写
+        不敏感匹配；``前缀*`` 通配条目保持尾部 ``*``）。"""
+        parsed = _parse_source_map(self.platform_identity_source_map, label="PLATFORM_IDENTITY_SOURCE_MAP")
+        return {key.lower(): value for key, value in parsed.items()}
 
     def source_map(self) -> dict[str, str]:
         """server → source 映射（解析后的 dict）。"""
@@ -110,6 +138,7 @@ def describe() -> dict[str, Any]:
         "database_url": s.database_url,
         "ingest_token_configured": bool(s.metering_ingest_token),
         "platform_identities": sorted(s.platform_identity_set()),
+        "platform_identity_source_map": s.identity_source_map(),
         "source_map": s.source_map(),
         "registry_mongo_configured": bool(s.registry_mongo_uri and s.registry_mongo_db),
         "registry_mongo_collection": s.registry_mongo_collection,

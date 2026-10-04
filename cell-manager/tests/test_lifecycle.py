@@ -10,7 +10,10 @@ from cell_manager import (
     ACTIVE,
     NOT_FOUND,
     PAUSED,
+    CellManager,
+    CellManagerConfig,
     CellManagerError,
+    ConfigError,
     InvalidCellStateError,
     UnknownCellError,
 )
@@ -71,6 +74,58 @@ class TestProvision:
         for bad in ("../escape", "/abs", ".", "..", "a/b", "", "空格 x", "x" * 65):
             with pytest.raises(CellManagerError):
                 manager.provision(bad)
+
+    def test_provision_injects_credential_envs_when_configured(self, home, fake_driver, fake_registry, clock):
+        """8.3 G4：配置了凭据双轨时，provision 注入 WIRE_CUSTOMER_KEY /
+        WIRE_PLATFORM_KEY，且不破坏既有隔离两件套。"""
+        config = CellManagerConfig.from_env(
+            env={
+                "CELL_MANAGER_HOME": str(home),
+                "CELL_IMAGE": "fd-wire/cell-daas:test",
+                "CELL_GATEWAY_URL": "https://wire.example.test/mcp",
+                "CELL_REGISTRY_URL": "https://registry.example.test",
+                "CELL_DRIVER": "fake",
+                "CELL_REGISTRY_MODE": "fake",
+                "CELL_CUSTOMER_CREDENTIAL_MAP": '{"acme": "cust-key-1"}',
+                "CELL_PLATFORM_CREDENTIAL": "plat-key-9",
+            }
+        )
+        manager = CellManager(driver=fake_driver, registry=fake_registry, config=config, clock=clock)
+        manager.provision("acme")
+
+        info = fake_driver.inspect("fd-wire-cell-acme")
+        assert info.env["WIRE_CUSTOMER_KEY"] == "cust-key-1"
+        assert info.env["WIRE_PLATFORM_KEY"] == "plat-key-9"
+        # 既有隔离两件套不受影响
+        assert info.env["DAAS_DATABASE_URL"] == "sqlite:////data/daas.db"
+        assert info.env["WIRE_GATEWAY_URL"] == config.gateway_url
+
+    def test_provision_omits_credential_envs_when_unconfigured(self, manager, fake_driver):
+        """8.3 G4：未配置凭据双轨时，provision 不注入这两个 env（cell 内
+        代理 fail-closed，生产必须配置——见 README）。"""
+        manager.provision("acme")
+
+        info = fake_driver.inspect("fd-wire-cell-acme")
+        assert "WIRE_CUSTOMER_KEY" not in info.env
+        assert "WIRE_PLATFORM_KEY" not in info.env
+        assert info.env["DAAS_DATABASE_URL"] == "sqlite:////data/daas.db"
+        assert info.env["WIRE_GATEWAY_URL"]
+
+    def test_customer_credential_map_must_be_json_object(self, home):
+        """启动期 fail-fast：非法 JSON / 非对象 / 空 key 值都给 ConfigError。"""
+        base = {
+            "CELL_MANAGER_HOME": str(home),
+            "CELL_DRIVER": "fake",
+            "CELL_REGISTRY_MODE": "fake",
+        }
+        with pytest.raises(ConfigError, match="JSON object"):
+            CellManagerConfig.from_env(env={**base, "CELL_CUSTOMER_CREDENTIAL_MAP": "not-json"})
+        with pytest.raises(ConfigError, match="JSON object"):
+            CellManagerConfig.from_env(env={**base, "CELL_CUSTOMER_CREDENTIAL_MAP": '["acme"]'})
+        with pytest.raises(ConfigError, match="JSON object"):
+            CellManagerConfig.from_env(
+                env={**base, "CELL_CUSTOMER_CREDENTIAL_MAP": '{"acme": ""}'}
+            )
 
 
 class TestPauseResume:

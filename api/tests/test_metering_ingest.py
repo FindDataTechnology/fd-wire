@@ -171,7 +171,7 @@ def test_credential_track_resolution(metering_client: TestClient) -> None:
 
 def test_source_resolution(metering_client: TestClient) -> None:
     events = [
-        # platform 轨道恒 platform-internal，即使 server 命中映射
+        # platform 轨道未配置身份映射时恒 platform-internal，即使 server 命中映射
         make_event(request_id="s-1", username="svc-analysis", server="business-mcp", rows=1),
         # 精确映射
         make_event(request_id="s-2", server="business-mcp", rows=1),
@@ -186,6 +186,71 @@ def test_source_resolution(metering_client: TestClient) -> None:
     assert records["s-2"].source == "yizuo"
     assert records["s-3"].source == "wanxing"
     assert records["s-4"].source == "customer"
+
+
+def test_platform_track_source_by_identity_map(tmp_path, monkeypatch) -> None:
+    """G1：platform 轨按「身份 → 来源」映射区分壹座 / 萬星 / 平台内部。
+
+    - 前缀通配命中：``yizuo-*`` → yizuo
+    - 精确条目命中：``wanxing-bot-9`` → wanxing
+    - platform 轨身份未命中映射 → 回落 platform-internal
+    """
+    with metering_env(
+        tmp_path,
+        monkeypatch,
+        PLATFORM_IDENTITIES="yizuo-agent-01,wanxing-bot-9,svc-wire",
+        PLATFORM_IDENTITY_SOURCE_MAP="yizuo-*=yizuo,wanxing-bot-9=wanxing",
+    ) as client:
+        events = [
+            make_event(request_id="i-1", username="yizuo-agent-01", rows=1),
+            # 身份名单大小写不敏感：大写形态仍在 platform 轨，精确命中映射
+            make_event(request_id="i-2", username="WANXING-BOT-9", rows=2),
+            make_event(request_id="i-3", username="svc-wire", rows=3),
+        ]
+        push(client, events)
+    records = {r.request_id: r for r in all_records()}
+    assert all(r.credential_track == "platform" for r in records.values())
+    assert records["i-1"].source == "yizuo"
+    assert records["i-2"].source == "wanxing"
+    assert records["i-3"].source == "platform-internal"
+
+
+def test_platform_identity_source_map_case_insensitive(tmp_path, monkeypatch) -> None:
+    """G1：身份映射匹配两侧大小写不敏感（映射键大写、身份原样/大写）。"""
+    with metering_env(
+        tmp_path,
+        monkeypatch,
+        PLATFORM_IDENTITIES="yizuo-agent-01,wanxing-bot-9",
+        PLATFORM_IDENTITY_SOURCE_MAP="YIZUO-*=yizuo,WANXING-BOT-9=wanxing",
+    ) as client:
+        events = [
+            # 映射键大写 + 前缀通配，身份小写 → 命中
+            make_event(request_id="c-1", username="yizuo-agent-01", rows=1),
+            # 映射键大写 + 精确条目，身份大写 → 命中
+            make_event(request_id="c-2", username="WANXING-BOT-9", rows=2),
+        ]
+        push(client, events)
+    records = {r.request_id: r for r in all_records()}
+    assert records["c-1"].source == "yizuo"
+    assert records["c-2"].source == "wanxing"
+
+
+def test_identity_map_does_not_affect_customer_track(tmp_path, monkeypatch) -> None:
+    """G1：身份映射只作用于 platform 轨；customer 轨仍按 server 名解析。"""
+    with metering_env(
+        tmp_path,
+        monkeypatch,
+        PLATFORM_IDENTITY_SOURCE_MAP="alice*=wanxing",  # 故意与 server 映射结论不同
+    ) as client:
+        events = [
+            make_event(request_id="k-1", username="alice@customer.com", server="business-mcp", rows=1),
+            make_event(request_id="k-2", username="alice@customer.com", server="unmapped-srv", rows=1),
+        ]
+        push(client, events)
+    records = {r.request_id: r for r in all_records()}
+    assert all(r.credential_track == "customer" for r in records.values())
+    assert records["k-1"].source == "yizuo"  # server 精确映射生效，未被身份映射劫持
+    assert records["k-2"].source == "customer"
 
 
 # ---------------------------------------------------------------------------

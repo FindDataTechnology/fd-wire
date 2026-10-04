@@ -12,9 +12,13 @@
   token 网关 OpenAI 兼容面（LLM 出口，成本平台可控）。
 - ``AI_PLATFORM_CREDENTIAL``：平台服务凭据——AI 探索性工具执行统一走
   该凭据（不计费到客户账单；真正计量发生在 registry audit 侧）。
-- ``AI_CELL_ENDPOINT_MAP``：customer_id → cell MCP 端点映射，
-  ``cust-001=http://cell-001:8080/mcp,cust-002=...`` 形式（也接受 JSON
-  对象）；未命中即该企业 cell 未开通。
+- ``AI_CELL_ENDPOINT_MAP``：customer_id → cell 的 **registry wire 入口**
+  URL 映射，``cust-001=https://mcp.finddatatech.cloud/mcp-proxy/fd-wire-cell-cust-001/mcp,cust-002=...``
+  形式（也接受 JSON 对象）；未命中即该企业 cell 未开通。
+  map 值**必须**走 registry wire 入口（``/mcp-proxy/`` 路径形态）——
+  计量归集发生在 registry 审计侧；配成容器直连地址
+  （如 ``http://cell-001:8080/mcp``）会让 AI 探索调用绕过计量门，
+  一条计量记录都不产生。
 - ``AI_AUTO_CREATE_TABLES``：启动时 ``create_all``（默认 true 开发便利；
   生产走 Alembic 迁移链 0005 并可关闭）。
 """
@@ -28,8 +32,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def parse_endpoint_map(raw: str | dict[str, str] | None) -> dict[str, str]:
-    """把 env 串（``cust-001=http://...,cust-002=...`` 或 JSON 对象）解析为
-    customer_id → cell MCP 端点映射。"""
+    """把 env 串（``cust-001=https://...,cust-002=...`` 或 JSON 对象）解析为
+    customer_id → cell 的 registry wire 入口 URL 映射（值必须是 registry
+    入口而非容器直连地址，否则 AI 探索调用不经计量门——见模块头注）。"""
     if not raw:
         return {}
     if isinstance(raw, dict):

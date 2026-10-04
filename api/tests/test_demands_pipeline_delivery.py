@@ -791,5 +791,5 @@ def test_migration_0008_adds_demand_pipeline_columns(migrated_demands_sqlite):
     } <= columns
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    # 链头唯一且随链推进（6.5/6.6 起 = 0008_demand_pipeline）
-    assert version == "0008_demand_pipeline"
+    # 链头唯一且随链推进（任务 5.6 起 = 0009_materialization）
+    assert version == "0009_materialization"
