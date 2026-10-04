@@ -1,0 +1,27 @@
+[project]
+name = "fd-wire-api"
+version = "0.1.0"
+description = "柏讯（wire）平台 API：结算/后台服务骨架"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["fd_wire_api"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
