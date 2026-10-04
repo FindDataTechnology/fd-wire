@@ -39,6 +39,10 @@ async def lifespan(_: FastAPI):
     # register_catalog 挂的 add_event_handler 不会触发，故在此显式调）。
     init_catalog_db()
     startup_catalog()
+    # 内部后台（任务 7.1）：审核意见表幂等建表兜底（生产走 0007）。
+    from .admin import init_db as init_admin_db
+
+    init_admin_db()
     # AI 对话构建循环（任务 5.4）：对话/消息/产物暂存三表幂等建表兜底
     # （生产走 Alembic 迁移链 0005_ai）。
     init_ai_db()
