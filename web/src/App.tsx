@@ -1,6 +1,6 @@
-// App shell: top nav (site / catalog / console, zh–en toggle) over the views.
-// Hash routing, deliberately no router dependency — parametrized routes are
-// parsed by parseHash below (catalog list, catalog detail, demand placeholder).
+// App shell: top nav (site / pricing / docs / catalog / console, zh–en toggle)
+// over the views. Hash routing, deliberately no router dependency — parametrized
+// routes are parsed by parseHash below (catalog list, catalog detail, demand placeholder).
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { HomeView } from "./views/HomeView";
@@ -9,10 +9,14 @@ import { LoginView } from "./views/LoginView";
 import { CatalogView } from "./views/CatalogView";
 import { CatalogDetailView } from "./views/CatalogDetailView";
 import { DemandNewView } from "./views/DemandNewView";
+import { PricingView } from "./views/PricingView";
+import { DocsView } from "./views/DocsView";
 import { switchLanguage, type Language } from "./i18n";
 
 export type Route =
   | { name: "home" }
+  | { name: "pricing" }
+  | { name: "docs" }
   | { name: "catalog" }
   | { name: "catalogDetail"; id: string }
   | { name: "console" }
@@ -27,6 +31,8 @@ export function parseHash(rawHash: string): Route {
   const query = new URLSearchParams(rawQuery);
   if (segments.length === 0) return { name: "home" };
   const [head, second, third] = segments;
+  if (head === "pricing") return { name: "pricing" };
+  if (head === "docs") return { name: "docs" };
   if (head === "console") {
     if (second === "demands" && third === "new") {
       return { name: "demandNew", indicator: query.get("indicator") };
@@ -52,6 +58,10 @@ export function parseHash(rawHash: string): Route {
 
 function renderRoute(route: Route) {
   switch (route.name) {
+    case "pricing":
+      return <PricingView />;
+    case "docs":
+      return <DocsView />;
     case "catalog":
       return <CatalogView />;
     case "catalogDetail":
@@ -116,6 +126,8 @@ export function App() {
           </a>
           <nav className="ml-auto flex items-center gap-1">
             {tab("#/", t("nav.home"), route.name === "home")}
+            {tab("#/pricing", t("nav.pricing"), route.name === "pricing")}
+            {tab("#/docs", t("nav.docs"), route.name === "docs")}
             {tab("#/catalog", t("nav.catalog"), route.name === "catalog" || route.name === "catalogDetail")}
             {tab("#/console", t("nav.console"), route.name === "console" || route.name === "demandNew")}
             <a
@@ -136,8 +148,8 @@ export function App() {
       </main>
       <footer className="max-w-5xl mx-auto px-4 py-8 text-xs text-slate-400">
         {t("footer")} ·{" "}
-        <a className="underline" href="https://finddatatech.cloud">
-          finddatatech.cloud
+        <a className="underline" href="https://wire.finddatatech.cloud">
+          wire.finddatatech.cloud
         </a>
       </footer>
     </div>

@@ -7,24 +7,118 @@ const en: Translation = {
   },
   nav: {
     home: "Home",
+    pricing: "Pricing",
+    docs: "Docs",
     catalog: "Catalog",
     console: "Console",
     login: "Sign in",
   },
   home: {
-    heroTitle: "Enterprise data, self-served",
+    heroTitle: "Wire · B2B Data Platform",
     heroSubtitle:
-      "Browse the indicator catalog, build analytics with AI, file data demands — metered by the row: exploration is free of charge, only materialization bills.",
-    featuresTitle: "Three things the platform does",
-    featureCatalogTitle: "Indicator catalog",
-    featureCatalogDesc:
-      "Full catalog searchable without signing in — verified indicators read directly, registered ones on demand.",
-    featureConsoleTitle: "Analysis console",
-    featureConsoleDesc:
-      "Dashboards, composite indicators, research workflows, alerts and scheduled refresh — built by conversation.",
-    featureDemandTitle: "Data demands",
-    featureDemandDesc:
-      "Missing an indicator? File a demand ticket — the timeline is visible end to end, delivery lands in your private scope.",
+      "A direct lane from indicator discovery to data in your ledger — metered by the row, presented as it is: exploration is free of charge, only materialization bills.",
+    ctaCatalog: "Browse the catalog",
+    ctaContact: "Contact us to get started",
+    valueTitle: "Three value propositions",
+    value1Title: "57,000+ indicator catalog",
+    value1Desc:
+      "The unified indicator registry, fully searchable without signing in — verified indicators read directly, registered ones on demand.",
+    value2Title: "Data over MCP",
+    value2Desc:
+      "MCP protocol wires data straight into your toolchain and agents — rows flow in, no manual hauling.",
+    value3Title: "AI-built analytics + crawler demand loop",
+    value3Desc:
+      "Build analytical artifacts by conversation; file a demand for anything missing and the crawler pipeline delivers into your private scope (console in rollout).",
+    lineNote:
+      "One of five FindData lines — Yizuo aggregates, Wanxing shines; Wire settles by the row, straight into decisions.",
+  },
+  pricing: {
+    title: "Pricing",
+    subtitle:
+      "Monthly fee with included quota, tiered overage per row, metered by the row — plan figures are backend-configurable; below is the currently effective schedule.",
+    perMonth: "/mo",
+    recommended: "Recommended",
+    cta: "Contact us to get started",
+    featCatalog: "Full access to the 57,000+ indicator catalog",
+    featMcp: "Data reads over MCP",
+    featDemand: "Data demands (quoted separately)",
+    starter: {
+      name: "Starter",
+      price: "¥1,999",
+      rows: "500K rows/mo included",
+      overage: "Overage ¥0.004/row",
+      desc: "For small teams validating data value.",
+    },
+    pro: {
+      name: "Professional",
+      price: "¥6,999",
+      rows: "3M rows/mo included",
+      overage: "Overage ¥0.003/row",
+      desc: "The usual fit for growing teams.",
+    },
+    enterprise: {
+      name: "Enterprise",
+      price: "¥19,999",
+      rows: "12M rows/mo included",
+      overage: "Overage ¥0.002/row",
+      desc: "For high-volume, at-scale usage.",
+    },
+    fnDemand: "* Data demands are quoted separately and do not count against the plan's row quota.",
+    fnLegal: "* Legal-domain data is enquiry-gated by default and not directly readable in the public catalog.",
+  },
+  docs: {
+    title: "Docs",
+    subtitle: "A concise guide to using and being billed on the platform; operational detail lives in the console.",
+    quickStart: {
+      title: "Quick start",
+      mcpTitle: "MCP endpoint",
+      mcpDesc:
+        "Platform data is served over MCP: add the platform endpoint in your MCP client to discover and invoke the data tools enabled for you.",
+      mcpEndpointLabel: "Endpoint",
+      keyTitle: "API key",
+      keyDesc:
+        "Data calls require a platform key; keys are created, rotated and quota-managed under Console → Key management.",
+      keyExampleLabel: "Call sketch",
+      consoleLink: "Open the console →",
+    },
+    metering: {
+      title: "Metering & billing",
+      rowsTitle: "Metered by the row",
+      rowsDesc:
+        "Data reads are metered by returned rows; only results materialized into your scope count toward usage.",
+      exploreTitle: "AI exploration is free",
+      exploreDesc:
+        "Calls made while exploring with AI are not billed — only materialized artifacts count. Exploration has no gate.",
+      alertTitle: "Two-stage alerts",
+      alertDesc:
+        "When monthly rows reach 80% and 95% of the quota, alerts go to the account owner; service is not interrupted.",
+      hardStopTitle: "Hard-stop semantics",
+      hardStopDesc:
+        "Once the quota is exhausted, data reads fail closed (including scheduled artifact refresh); they resume after a top-up or plan change.",
+      pricingNote: "See the pricing page for plans and overage rates →",
+    },
+    demands: {
+      title: "Demand workflow",
+      intro:
+        "Missing an indicator? File a data demand — an eight-state machine keeps the timeline visible end to end, with delivery into your private scope (cell).",
+      stepsTitle: "The eight states",
+      step1: "Submitted",
+      step2: "Evaluating",
+      step3: "Quoted",
+      step4: "Awaiting confirm",
+      step5: "Building",
+      step6: "Delivery acceptance",
+      step7: "Delivered",
+      rejectedNote:
+        "Any evaluation-stage state may move to “Rejected” (reason archived and visible to the customer); a failed build stays in “Building” with issues shown as they are.",
+      cellLabel: "Cell provisioning (private-scope delivery)",
+    },
+    statusTitle: "Rollout status",
+    statusConsoleLabel: "Console analytics building",
+    statusDemandLabel: "Demand submission",
+  },
+  badge: {
+    comingSoon: "In rollout · coming soon",
   },
   catalog: {
     title: "Indicator catalog",
@@ -96,7 +190,7 @@ const en: Translation = {
     placeholder: "Customer sign-in under construction — enter the console with an enterprise account (owner / member).",
     cta: "Contact us to get started",
   },
-  footer: "Wire · Xunshu wire line · FindData Tech",
+  footer: "© FindData · Wire · FindData Tech wire line",
 };
 
 export default en;
