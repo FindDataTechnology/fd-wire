@@ -22,8 +22,10 @@ FROM ${NGINX_IMAGE}
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 # 非 root：master 由 USER nginx 起动——pid 挪 /tmp，日志/缓存/html 目录
 # 归属 nginx 用户。
-RUN sed -i 's|/var/run/nginx.pid|/tmp/nginx.pid|' /etc/nginx/nginx.conf \
- && chown -R nginx:nginx /usr/share/nginx/html /var/cache/nginx /var/log/nginx
+# nginx:1.27-alpine 主配置的 pid 路径是 /run/nginx.pid（非 root 不可写），
+# 逐行 sed 脆弱——直接换整份非特权主配置（pid /tmp、无 user 指令）。
+COPY nginx-main.conf /etc/nginx/nginx.conf
+RUN chown -R nginx:nginx /usr/share/nginx/html /var/cache/nginx /var/log/nginx
 COPY --from=builder /app/dist /usr/share/nginx/html
 USER nginx
 EXPOSE 8080
