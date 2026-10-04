@@ -27,7 +27,7 @@ spec:
       containers:
         - name: api
           # 不可变标签纪律（mcp-service-deploy spec：禁 latest/浮动标签）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-be8fbaa
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-4c8e3b7
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
