@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from . import __version__
+from .ai import init_db as init_ai_db
+from .ai import router as ai_router
 from .catalog import init_db as init_catalog_db
 from .catalog import register_catalog
 from .catalog import shutdown_catalog, startup_catalog
@@ -28,6 +30,9 @@ async def lifespan(_: FastAPI):
     # register_catalog 挂的 add_event_handler 不会触发，故在此显式调）。
     init_catalog_db()
     startup_catalog()
+    # AI 对话构建循环（任务 5.4）：对话/消息/产物暂存三表幂等建表兜底
+    # （生产走 Alembic 迁移链 0005_ai）。
+    init_ai_db()
     try:
         yield
     finally:
@@ -44,6 +49,8 @@ app = FastAPI(
 app.include_router(example.router)
 app.include_router(metering_router)
 app.include_router(demands_router)
+# AI 对话构建循环（任务 5.4）：对话会话 + 构建循环 + 产物暂存端点
+app.include_router(ai_router)
 # 指标目录镜像（任务 6.1）：公开目录查询 + internal 同步触发 + 每日调度
 register_catalog(app)
 
