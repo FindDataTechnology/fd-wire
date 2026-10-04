@@ -114,6 +114,17 @@ def transition(client, demand_id: int, target: str, **extra) -> dict:
     return resp.json()
 
 
+def gate_result(client, demand_id: int, passed: bool, **extra) -> dict:
+    """记录一次 conformance gate 结果（6.5 起 building→delivery_acceptance 的前置）。"""
+    resp = client.post(
+        f"/internal/demands/{demand_id}/gate-result",
+        json={"passed": passed, **extra},
+        headers=INTERNAL,
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
 def demand_at(client, target: DemandStatus) -> int:
     """走合法路径把一条需求单推进到指定状态，返回其 id。"""
     d = submit(client)
@@ -133,6 +144,9 @@ def demand_at(client, target: DemandStatus) -> int:
     if target is DemandStatus.awaiting_confirm:
         return did
     transition(client, did, "building", by="customer:cust-001", note="客户确认报价")
+    # 6.5 起：building→delivery_acceptance 需先有 gate 通过记录（building 期即记，
+    # 使 building 自身的白名单探测也可走到 delivery_acceptance）
+    gate_result(client, did, True, by="pipeline")
     if target is DemandStatus.building:
         return did
     transition(client, did, "delivery_acceptance", by="system", note="conformance gate 通过")
@@ -193,7 +207,30 @@ def test_happy_path_full_lifecycle_with_catalog_prefill(client):
     assert d["status"] == "building"
     assert d["status_history"][-1]["note"].startswith("conformance gate 未过")
 
-    # gate 过（building → delivery_acceptance）→ 客户验收（→ delivered）
+    # 6.5 门禁：无 gate 通过记录时 building→delivery_acceptance 直接 409（指明原因）
+    resp = client.post(
+        f"/internal/demands/{did}/transition",
+        json={"target_status": "delivery_acceptance", "by": "system"},
+        headers=INTERNAL,
+    )
+    assert resp.status_code == 409
+    assert "gate" in resp.json()["detail"]
+    assert get_detail(client, did)["status"] == "building"
+
+    # gate 结果端点：failed 如实入档、状态停留 building，可重跑
+    d = gate_result(
+        client, did, False,
+        note="conformance gate 复检未过：1 处违规（时间戳格式）",
+        report_path="fd-industry-data/reports/gate-rerun.txt",
+    )
+    assert d["status"] == "building"
+    assert d["gate"]["passed"] is False
+    assert d["gate"]["attempts"] == 1
+    assert d["pipeline_events"][-1]["note"].startswith("conformance gate 复检未过")
+
+    # 重跑通过（building → delivery_acceptance）→ 客户验收（→ delivered）
+    d = gate_result(client, did, True, by="pipeline", note="重跑全绿")
+    assert d["gate"]["passed"] is True
     d = transition(client, did, "delivery_acceptance", by="system", note="gate 复检通过")
     assert d["status"] == "delivery_acceptance"
     d = transition(client, did, "delivered", by="customer:cust-001", note="客户验收确认")

@@ -1,7 +1,9 @@
-"""demands 包：数据需求单八态状态机（任务 6.3）+ AI 预评估与人工报价（6.4）。
+"""demands 包：数据需求单八态状态机（任务 6.3）+ AI 预评估与人工报价（6.4）
++ 流水线衔接与私有 scope 交付（6.5/6.6）。
 
-对外暴露 ``router``（客户/内部核心端点）与 ``admin_router``（6.4 确认台：
-AI 评估独立触发 + 内部完整视图），挂到 app 即得全部端点。
+对外暴露 ``router``（客户/内部核心端点）、``admin_router``（6.4 确认台：
+AI 评估独立触发 + 内部完整视图）与 ``pipeline_router``（6.5/6.6：流水线
+事实、gate 结果、交付建 scope、授权转公开），挂到 app 即得全部端点。
 """
 
 from .admin_routes import router as admin_router
@@ -13,6 +15,7 @@ from .evaluation import (
     evaluate_demand,
 )
 from .models import Demand
+from .pipeline_routes import router as pipeline_router
 from .routes import router
 from .statemachine import (
     ALLOWED_TRANSITIONS,
@@ -36,5 +39,6 @@ __all__ = [
     "evaluate_demand",
     "get_db",
     "init_db",
+    "pipeline_router",
     "router",
 ]

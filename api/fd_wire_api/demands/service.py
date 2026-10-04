@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from .models import Demand
 from .schemas import DemandCreate
+from . import pipeline
 from ..billing.money import micro_to_yuan, yuan_to_micro
 from .statemachine import (
     DemandStatus,
@@ -121,6 +122,9 @@ def apply_transition(
     """执行一次合法迁移并追加时间线（历史只增不改）。
 
     building→building 是合法"停留"：状态不变，但 gate 问题 note 如实入档。
+    building→delivery_acceptance 有硬前置（任务 6.5）：``pipeline_events``
+    里必须已有一条 conformance gate 通过记录（无记录 → 409，错误信息
+    指明原因）。
     """
     current = DemandStatus(demand.status)
     ensure_transition(
@@ -129,6 +133,7 @@ def apply_transition(
         confirmed_by_operator=confirmed_by_operator,
         reason=reason,
         note=note,
+        gate_passed=pipeline.has_gate_pass(demand),
     )
     entry_note = note
     if target is DemandStatus.rejected:

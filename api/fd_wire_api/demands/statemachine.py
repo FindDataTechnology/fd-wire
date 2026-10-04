@@ -9,6 +9,10 @@
   （路由层统一转 409）。
 - ``evaluating → quoted`` 有硬前置：后台人工报价确认
   ``confirmed_by_operator=true``，没有人工确认绝不进 quoted。
+- ``building → delivery_acceptance`` 有硬前置（任务 6.5）：必须已有一条
+  conformance gate 通过记录（``gate_passed=true``，来自
+  ``POST /internal/demands/{id}/gate-result``）——无通过记录直接 409，
+  错误信息指明原因。
 - 进入 ``rejected`` 必带 ``reason``，留档于 ``rejection_reason``。
 - ``building → building`` 是唯一合法"停留"迁移：conformance gate 不过时
   需求单停留在构建中并如实追加构建问题 note，不进入交付验收。
@@ -96,13 +100,19 @@ def ensure_transition(
     confirmed_by_operator: bool = False,
     reason: str | None = None,
     note: str | None = None,
+    gate_passed: bool = False,
 ) -> None:
     """校验一次迁移的合法性与其前置条件，非法即抛 ``TransitionError``。
 
     前置条件（在白名单之外额外强制）：
     - ``evaluating→quoted`` 必须 ``confirmed_by_operator=True``（人工报价确认）；
+    - ``building→delivery_acceptance`` 必须 ``gate_passed=True``
+      （有一条 conformance gate 通过记录，任务 6.5 门禁）；
     - 任意→``rejected`` 必须携带非空 ``reason``；
     - ``building→building`` 停留必须携带非空 ``note``（如实展示构建问题）。
+
+    ``gate_passed`` 缺省 False——调用方不提供 gate 事实时一律拒绝进入
+    交付验收（默认拒绝，绝不放行）。
     """
     if current in TERMINAL_STATUSES:
         raise TransitionError(
@@ -125,6 +135,18 @@ def ensure_transition(
             target,
             "前置条件不满足：必须后台人工确认报价（confirmed_by_operator=true）"
             "才能进入 quoted",
+        )
+    if (
+        current is DemandStatus.building
+        and target is DemandStatus.delivery_acceptance
+        and not gate_passed
+    ):
+        raise TransitionError(
+            current,
+            target,
+            "前置条件不满足：没有 conformance gate 通过记录——须先经 "
+            "POST /internal/demands/{id}/gate-result 提交 passed=true"
+            "（gate 不过即停留 building，可重跑后再次提交）",
         )
     if target is DemandStatus.rejected and not (reason or "").strip():
         raise TransitionError(

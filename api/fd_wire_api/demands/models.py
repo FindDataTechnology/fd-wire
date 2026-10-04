@@ -63,6 +63,15 @@ class Demand(Base):
     quote_operator: Mapped[str | None] = mapped_column(String(64), nullable=True)
     #: 报价历史（append-only）：[{action, at, operator, amount_micro, note, valid_until}]
     quote_history: Mapped[list] = mapped_column(JSON, default=list)
+    #: 流水线事件（append-only，任务 6.5）：[{type: pipeline_run|gate_result, at, by, ...}]
+    pipeline_events: Mapped[list] = mapped_column(JSON, default=list)
+    #: 交付事件（append-only，任务 6.6）：
+    #: [{type: scope_created|scope_create_failed|publish_authorization, at, by, ...}]
+    delivery_events: Mapped[list] = mapped_column(JSON, default=list)
+    #: 私有 scope 交付状态：None=未发起 / "ok"=scope 已建 / "pending"=失败待重试
+    scope_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    #: 已建客户私有 scope 名（``demand-<code>``）
+    scope_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow_naive
@@ -98,6 +107,52 @@ class Demand(Base):
         history = list(self.quote_history or [])
         history.append(entry)
         self.quote_history = history
+
+    def append_pipeline_event(self, event: dict) -> None:
+        """只追加一条流水线事件（append-only，任务 6.5）：时间戳在此盖。"""
+        entry = {"at": utc_now_iso(), **event}
+        events = list(self.pipeline_events or [])
+        events.append(entry)
+        self.pipeline_events = events
+
+    def append_delivery_event(self, event: dict) -> None:
+        """只追加一条交付事件（append-only，任务 6.6）：时间戳在此盖。"""
+        entry = {"at": utc_now_iso(), **event}
+        events = list(self.delivery_events or [])
+        events.append(entry)
+        self.delivery_events = events
+
+    # ------------------------------------------------ 计算视图（响应组装用）
+
+    @property
+    def delivery(self) -> dict:
+        """客户可见交付视图：私有 scope 交付状态 + 授权转公开状态。
+
+        只含客户应见字段——内部留档（delivery_events 全文、失败错误串、
+        grant 明细）绝不在此出现。
+        """
+        authorized: bool | None = None
+        for event in self.delivery_events or []:
+            if event.get("type") == "publish_authorization":
+                authorized = bool(event.get("granted"))
+        return {
+            "scope_name": self.scope_name,
+            "scope_status": self.scope_status,
+            "publish_authorized": authorized,
+        }
+
+    @property
+    def gate(self) -> dict:
+        """内部 gate 门禁视图：是否有过通过记录 + 最近一次 gate 结果。"""
+        events = list(self.pipeline_events or [])
+        gate_results = [e for e in events if e.get("type") == "gate_result"]
+        pipeline_runs = [e for e in events if e.get("type") == "pipeline_run"]
+        return {
+            "passed": any(e.get("passed") is True for e in gate_results),
+            "attempts": len(gate_results),
+            "pipeline_runs": len(pipeline_runs),
+            "latest": gate_results[-1] if gate_results else None,
+        }
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用途
         return f"<Demand {self.code} customer={self.customer_id} status={self.status}>"

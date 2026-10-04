@@ -27,8 +27,10 @@ import secrets
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from . import delivery as delivery_service
 from . import evaluation, service
 from .db import get_db
+from ..delivery.scope_client import ScopeClient, scope_client_dep
 from .schemas import (
     DemandCreate,
     DemandInternalOut,
@@ -138,11 +140,14 @@ def transition_demand(
     demand_id: int,
     payload: TransitionIn,
     db: Session = Depends(get_db),
+    scope_client: ScopeClient | None = Depends(scope_client_dep),
 ) -> DemandInternalOut:
     """状态迁移：校验合法迁移表与前置条件（非法 409），历史只追加。
 
     迁移到 ``evaluating`` 成功后自动跑一次 AI 预评估（evaluation.py）：
     LLM 不可用/解析失败时如实落 doubtful 兜底，绝不因评估失败打断迁移。
+    迁移到 ``delivered`` 成功后自动发起客户私有 scope 交付（任务 6.6）：
+    scope 面失败只落 ``scope_pending`` 留档，绝不打断迁移响应。
     """
     demand = _demand_or_404(db, demand_id)
     try:
@@ -158,6 +163,8 @@ def transition_demand(
     except TransitionError as exc:
         raise _conflict(exc) from exc
     demand = evaluation.maybe_auto_evaluate(db, demand)
+    if payload.target_status is DemandStatus.delivered:
+        demand = delivery_service.maybe_auto_deliver(db, demand, scope_client=scope_client)
     return DemandInternalOut.model_validate(demand)
 
 
