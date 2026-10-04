@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from .models import Demand
 from .schemas import DemandCreate
+from ..billing.money import micro_to_yuan, yuan_to_micro
 from .statemachine import (
     DemandStatus,
     TransitionError,
@@ -144,12 +145,18 @@ def apply_transition(
 
 
 def write_evaluation(
-    db: Session, demand: Demand, *, summary: str, by: str = "ai"
+    db: Session,
+    demand: Demand,
+    *,
+    summary: str,
+    by: str = "ai",
+    detail: dict | None = None,
 ) -> Demand:
-    """写 AI 预评估结论概要。
+    """写 AI 预评估结论：summary 客户可见，detail 为内部全文（客户不可见）。
 
     submitted 状态下写入即触发 submitted→evaluating（后台/AI 接单）；
-    仅 evaluating 允许更新概要；其余状态 409。
+    仅 evaluating 允许更新；其余状态 409。detail 为 None 时保留既有
+    内部全文（旧调用只更新概要，不清空评估留档）。
     """
     current = DemandStatus(demand.status)
     if current is DemandStatus.submitted:
@@ -163,6 +170,8 @@ def write_evaluation(
             f"当前状态 {current.value} 不允许写入评估结论（仅 submitted/evaluating）",
         )
     demand.evaluation_summary = summary
+    if detail is not None:
+        demand.evaluation_detail = detail
     demand.updated_at = _utcnow_naive()
     db.commit()
     db.refresh(demand)
@@ -173,15 +182,21 @@ def submit_quote(
     db: Session,
     demand: Demand,
     *,
-    amount: Decimal,
-    note: str | None,
+    amount: Decimal | None = None,
+    amount_micro: int | None = None,
+    note: str | None = None,
+    valid_until=None,
+    operator: str | None = None,
     confirmed_by_operator: bool,
-    by: str = "operator",
+    by: str | None = None,
 ) -> Demand:
-    """人工确认报价：写 quote 字段并迁移 evaluating→quoted。
+    """人工确认报价（报价确认台）：写 quote 字段并迁移 evaluating→quoted。
 
-    硬前置：``confirmed_by_operator=True``——没有人工确认绝不进 quoted、
-    绝不向客户发出报价。仅 evaluating 状态可报价。
+    硬前置（缺一 409，绝不进入 quoted、绝不向客户发出报价）：
+    - ``confirmed_by_operator=True``（后台人工确认标志）；
+    - ``operator`` 操作人标识（报价必留档操作人）。
+    金额以微元整数为准（``amount_micro``）；兼容旧参 ``amount``（元）。
+    落库同时 append-only 追加 ``quote_history`` 留档。仅 evaluating 可报价。
     """
     current = DemandStatus(demand.status)
     if current is not DemandStatus.evaluating:
@@ -196,13 +211,42 @@ def submit_quote(
             DemandStatus.quoted,
             "没有后台人工确认（confirmed_by_operator=false），绝不进入 quoted、不发出报价",
         )
-    demand.quote_amount = amount
+    if not (operator or "").strip():
+        raise TransitionError(
+            current,
+            DemandStatus.quoted,
+            "缺少 operator 操作人标识：报价必须留档操作人，"
+            "confirmed_by_operator 与 operator 缺一不可",
+        )
+    if amount_micro is None:
+        if amount is None:
+            raise TransitionError(
+                current,
+                DemandStatus.quoted,
+                "报价必须携带金额（amount_micro；兼容旧参 amount）",
+            )
+        amount_micro = yuan_to_micro(amount)
+    amount_micro = int(amount_micro)
+    if amount_micro < 0:
+        raise TransitionError(current, DemandStatus.quoted, "报价金额不能为负")
+
+    operator_id = operator.strip()
+    demand.quote_amount_micro = amount_micro
+    demand.quote_amount = micro_to_yuan(amount_micro)
     demand.quote_note = note
+    demand.quote_valid_until = valid_until
+    demand.quote_operator = operator_id
+    demand.append_quote(
+        operator=operator_id,
+        amount_micro=amount_micro,
+        note=note,
+        valid_until=valid_until,
+    )
     return apply_transition(
         db,
         demand,
         target=DemandStatus.quoted,
-        by=by,
+        by=by or f"operator:{operator_id}",
         note=note or "后台人工确认报价",
         confirmed_by_operator=True,
     )

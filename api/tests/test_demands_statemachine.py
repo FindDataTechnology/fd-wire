@@ -89,9 +89,15 @@ def evaluate(client, demand_id: int, summary: str = "可行：公开源存在，
 
 
 def quote(client, demand_id: int, confirmed: bool = True, amount="1200.00") -> dict:
+    # 6.4 起：报价确认台必带 operator 操作人标识（缺一 409）
     resp = client.post(
         f"/internal/demands/{demand_id}/quote",
-        json={"amount": amount, "note": "首年订阅价", "confirmed_by_operator": confirmed},
+        json={
+            "amount": amount,
+            "note": "首年订阅价",
+            "confirmed_by_operator": confirmed,
+            "operator": "op-001",
+        },
         headers=INTERNAL,
     )
     assert resp.status_code == 200, resp.text

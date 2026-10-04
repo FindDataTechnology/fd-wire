@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import JSON, DateTime, Numeric, String, Text
+from sqlalchemy import JSON, DateTime, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -43,14 +43,26 @@ class Demand(Base):
     status_history: Mapped[list] = mapped_column(JSON, default=list)
     #: AI 预评估结论概要（客户可见）
     evaluation_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: AI 预评估内部全文（verdict/confidence/reasons/hints/flags——客户不可见）
+    evaluation_detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     #: 拒绝理由（必留档，客户可见）
     rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    #: 报价金额（进入 quoted 后写入）
+    #: 报价金额（元，展示用；进入 quoted 后写入）
     quote_amount: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 2), nullable=True
     )
+    #: 报价金额（微元整数，账内权威单位；与 billing.money 约定一致）
+    quote_amount_micro: Mapped[int | None] = mapped_column(Integer, nullable=True)
     #: 报价说明
     quote_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: 报价有效期（客户视图随金额一并展示）
+    quote_valid_until: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    #: 报价操作人（内部留档，客户不可见）
+    quote_operator: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: 报价历史（append-only）：[{action, at, operator, amount_micro, note, valid_until}]
+    quote_history: Mapped[list] = mapped_column(JSON, default=list)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow_naive
@@ -65,6 +77,27 @@ class Demand(Base):
         history = list(self.status_history or [])
         history.append(entry)
         self.status_history = history
+
+    def append_quote(
+        self,
+        *,
+        operator: str,
+        amount_micro: int,
+        note: str | None = None,
+        valid_until: datetime | None = None,
+    ) -> None:
+        """只追加一条报价留档（append-only）：操作人/金额/有效期必在案。"""
+        entry = {
+            "action": "quote",
+            "at": utc_now_iso(),
+            "operator": operator,
+            "amount_micro": int(amount_micro),
+            "note": note,
+            "valid_until": valid_until.isoformat() if valid_until else None,
+        }
+        history = list(self.quote_history or [])
+        history.append(entry)
+        self.quote_history = history
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用途
         return f"<Demand {self.code} customer={self.customer_id} status={self.status}>"

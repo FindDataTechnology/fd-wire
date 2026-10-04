@@ -368,7 +368,7 @@ def test_stage_artifact_roundtrip() -> None:
 
 @pytest.fixture
 def migrated_sqlite(tmp_path, monkeypatch):
-    """对临时库跑 alembic upgrade head（0001→0005），返回连接串。"""
+    """对临时库跑 alembic upgrade head（当前链 0001→0006），返回连接串。"""
     db_url = f"sqlite:///{tmp_path}/migration.db"
     monkeypatch.setenv("DATABASE_URL", db_url)
     cfg = Config(str(API_DIR / "alembic.ini"))
@@ -399,7 +399,8 @@ def test_migration_0005_creates_ai_tables(migrated_sqlite) -> None:
     }
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    assert version == "0005_ai"
+    # 迁移链只增不改：head 随链推进（6.4 起 = 0006_demand_eval）
+    assert version == "0006_demand_eval"
 
 
 def _cfg() -> Config:

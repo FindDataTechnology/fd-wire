@@ -11,6 +11,7 @@ from .catalog import init_db as init_catalog_db
 from .catalog import register_catalog
 from .catalog import shutdown_catalog, startup_catalog
 from .config import settings
+from .demands import admin_router as demands_admin_router
 from .demands import init_db as init_demands_db
 from .demands import router as demands_router
 from .metering.db import ensure_schema
@@ -49,6 +50,8 @@ app = FastAPI(
 app.include_router(example.router)
 app.include_router(metering_router)
 app.include_router(demands_router)
+# 需求单 AI 预评估与人工报价（任务 6.4）：评估独立触发 + 确认台内部视图
+app.include_router(demands_admin_router)
 # AI 对话构建循环（任务 5.4）：对话会话 + 构建循环 + 产物暂存端点
 app.include_router(ai_router)
 # 指标目录镜像（任务 6.1）：公开目录查询 + internal 同步触发 + 每日调度

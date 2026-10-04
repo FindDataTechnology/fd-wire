@@ -3,12 +3,20 @@
 客户侧（``X-Customer-Id`` 头标识企业，暂为骨架鉴权，接 wire-customer-identity 后替换）：
 - ``POST /api/v1/demands``            提交（可带目录预填 linked_indicators）
 - ``GET  /api/v1/demands``            本企业列表（含当前状态+时间线）
-- ``GET  /api/v1/demands/{id}``       详情（非本企业一律 404）
+- ``GET  /api/v1/demands/{id}``       详情（非本企业一律 404；只含客户可见字段，
+                                      评估只给概要 evaluation_summary，报价只给
+                                      金额/说明/有效期，绝不携带 operator 等内部信息）
 
 内部侧（``X-Internal-Token`` 与 ``FD_WIRE_INTERNAL_TOKEN`` 比对）：
-- ``POST /internal/demands/{id}/transition``  目标状态+note（校验白名单与前置）
-- ``POST /internal/demands/{id}/evaluation``  写 AI 预评估结论概要
-- ``POST /internal/demands/{id}/quote``       写报价（必带人工确认标志）
+- ``POST /internal/demands/{id}/transition``  目标状态+note（校验白名单与前置；
+                                      迁移到 evaluating 成功后自动跑 AI 预评估）
+- ``POST /internal/demands/{id}/evaluation``  写 AI 预评估结论概要（可带内部 detail）
+- ``POST /internal/demands/{id}/quote``       报价确认台：confirmed_by_operator
+                                      与 operator 缺一 409；落库微元金额+有效期，
+                                      quote_history append-only，迁移 quoted
+
+另见 admin_routes.py：``POST /internal/demands/{id}/evaluate``（AI 预评估独立
+触发端点）与 ``GET /internal/demands/{id}``（确认台内部完整视图）。
 """
 
 from __future__ import annotations
@@ -19,9 +27,16 @@ import secrets
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from . import service
+from . import evaluation, service
 from .db import get_db
-from .schemas import DemandCreate, DemandOut, EvaluationIn, QuoteIn, TransitionIn
+from .schemas import (
+    DemandCreate,
+    DemandInternalOut,
+    DemandOut,
+    EvaluationIn,
+    QuoteIn,
+    TransitionIn,
+)
 from .statemachine import DemandStatus, TransitionError
 
 router = APIRouter(tags=["demands"])
@@ -116,15 +131,19 @@ def get_demand(
 
 @router.post(
     "/internal/demands/{demand_id}/transition",
-    response_model=DemandOut,
+    response_model=DemandInternalOut,
     dependencies=[Depends(_require_internal)],
 )
 def transition_demand(
     demand_id: int,
     payload: TransitionIn,
     db: Session = Depends(get_db),
-) -> DemandOut:
-    """状态迁移：校验合法迁移表与前置条件（非法 409），历史只追加。"""
+) -> DemandInternalOut:
+    """状态迁移：校验合法迁移表与前置条件（非法 409），历史只追加。
+
+    迁移到 ``evaluating`` 成功后自动跑一次 AI 预评估（evaluation.py）：
+    LLM 不可用/解析失败时如实落 doubtful 兜底，绝不因评估失败打断迁移。
+    """
     demand = _demand_or_404(db, demand_id)
     try:
         demand = service.apply_transition(
@@ -138,51 +157,59 @@ def transition_demand(
         )
     except TransitionError as exc:
         raise _conflict(exc) from exc
-    return DemandOut.model_validate(demand)
+    demand = evaluation.maybe_auto_evaluate(db, demand)
+    return DemandInternalOut.model_validate(demand)
 
 
 @router.post(
     "/internal/demands/{demand_id}/evaluation",
-    response_model=DemandOut,
+    response_model=DemandInternalOut,
     dependencies=[Depends(_require_internal)],
 )
 def write_evaluation(
     demand_id: int,
     payload: EvaluationIn,
     db: Session = Depends(get_db),
-) -> DemandOut:
+) -> DemandInternalOut:
     """写 AI 预评估结论概要（submitted 下自动接单进入 evaluating）。"""
     demand = _demand_or_404(db, demand_id)
     try:
         demand = service.write_evaluation(
-            db, demand, summary=payload.summary, by=payload.by
+            db,
+            demand,
+            summary=payload.summary,
+            by=payload.by,
+            detail=payload.detail,
         )
     except TransitionError as exc:
         raise _conflict(exc) from exc
-    return DemandOut.model_validate(demand)
+    return DemandInternalOut.model_validate(demand)
 
 
 @router.post(
     "/internal/demands/{demand_id}/quote",
-    response_model=DemandOut,
+    response_model=DemandInternalOut,
     dependencies=[Depends(_require_internal)],
 )
 def submit_quote(
     demand_id: int,
     payload: QuoteIn,
     db: Session = Depends(get_db),
-) -> DemandOut:
-    """写报价：必须携带人工确认标志，否则绝不进入 quoted。"""
+) -> DemandInternalOut:
+    """报价确认台：confirmed_by_operator 与 operator 缺一 409，绝不进 quoted。"""
     demand = _demand_or_404(db, demand_id)
     try:
         demand = service.submit_quote(
             db,
             demand,
             amount=payload.amount,
+            amount_micro=payload.amount_micro,
             note=payload.note,
+            valid_until=payload.valid_until,
+            operator=payload.operator,
             confirmed_by_operator=payload.confirmed_by_operator,
             by=payload.by,
         )
     except TransitionError as exc:
         raise _conflict(exc) from exc
-    return DemandOut.model_validate(demand)
+    return DemandInternalOut.model_validate(demand)

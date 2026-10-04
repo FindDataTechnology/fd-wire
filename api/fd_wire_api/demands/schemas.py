@@ -31,7 +31,11 @@ class HistoryEvent(BaseModel):
 
 
 class DemandOut(BaseModel):
-    """需求单完整视图（含客户可见时间线/评估概要/拒绝理由/报价）。"""
+    """需求单客户视图（含客户可见时间线/评估概要/拒绝理由/报价摘要）。
+
+    绝不携带内部字段：evaluation_detail（评估全文）、quote_operator、
+    quote_history、quote_amount_micro（微元整数仅内部账用）。
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -49,8 +53,18 @@ class DemandOut(BaseModel):
     rejection_reason: str | None = None
     quote_amount: Decimal | None = None
     quote_note: str | None = None
+    quote_valid_until: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class DemandInternalOut(DemandOut):
+    """需求单内部完整视图（人工报价确认台用）：叠加评估全文与报价留档。"""
+
+    evaluation_detail: dict | None = None
+    quote_amount_micro: int | None = None
+    quote_operator: str | None = None
+    quote_history: list[dict[str, Any]] = []
 
 
 class TransitionIn(BaseModel):
@@ -64,16 +78,28 @@ class TransitionIn(BaseModel):
 
 
 class EvaluationIn(BaseModel):
-    """AI 预评估结论概要（写入 evaluation_summary）。"""
+    """AI 预评估结论概要（写入 evaluation_summary）。
+
+    detail 可选：携带时落内部全文 evaluation_detail（不携带则保留既有值）。
+    """
 
     summary: str = Field(min_length=1)
     by: str = "ai"
+    detail: dict[str, Any] | None = None
 
 
 class QuoteIn(BaseModel):
-    """人工确认后的报价写入；confirmed_by_operator 为硬前置。"""
+    """人工确认后的报价写入；confirmed_by_operator + operator 为硬前置。
 
-    amount: Decimal = Field(ge=0)
+    金额以微元整数为准（amount_micro，与 billing.money 约定一致）；
+    兼容旧参 amount（元，自动换算）。confirmed_by_operator 缺省 False、
+    operator 缺省 None——两者任一缺失都由业务层判 409（缺一 409，而非 422）。
+    """
+
+    amount_micro: int | None = Field(default=None, ge=0)
+    amount: Decimal | None = Field(default=None, ge=0)
     note: str | None = None
-    confirmed_by_operator: bool
+    valid_until: datetime | None = None
+    confirmed_by_operator: bool = False
+    operator: str | None = Field(default=None, max_length=64)
     by: str = "operator"
