@@ -102,7 +102,15 @@ def init_billing(engine: Engine | None = None, *, session: Session | None = None
     注意：不建 `metering_records`（归 metering 模块）；迁移链就位前
     用 create_all 起步，alembic 版本由主代理统一收敛。
     """
-    engine = engine or create_engine("sqlite:///./billing.db")
+    if engine is None:
+        import os
+
+        url = (
+            os.getenv("BILLING_DATABASE_URL")
+            or os.getenv("DATABASE_URL")
+            or "sqlite:///./billing.db"
+        )
+        engine = create_engine(url)
     Base.metadata.create_all(engine)
     with Session(engine) as sess:
         seed_plans(sess)
