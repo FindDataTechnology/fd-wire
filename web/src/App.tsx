@@ -1,17 +1,71 @@
-// App shell: top nav (site / console, zh–en toggle) over three placeholder views.
-// Hash routing, deliberately no router dependency — the face is three pages.
+// App shell: top nav (site / catalog / console, zh–en toggle) over the views.
+// Hash routing, deliberately no router dependency — parametrized routes are
+// parsed by parseHash below (catalog list, catalog detail, demand placeholder).
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { HomeView } from "./views/HomeView";
 import { ConsoleView } from "./views/ConsoleView";
 import { LoginView } from "./views/LoginView";
+import { CatalogView } from "./views/CatalogView";
+import { CatalogDetailView } from "./views/CatalogDetailView";
+import { DemandNewView } from "./views/DemandNewView";
 import { switchLanguage, type Language } from "./i18n";
 
-const VIEWS = {
-  "#/": HomeView,
-  "#/console": ConsoleView,
-  "#/login": LoginView,
-} as const;
+export type Route =
+  | { name: "home" }
+  | { name: "catalog" }
+  | { name: "catalogDetail"; id: string }
+  | { name: "console" }
+  | { name: "demandNew"; indicator: string | null }
+  | { name: "login" };
+
+/** "#/catalog/abc?indicator=x" → 结构化路由（未知路径回落首页）。 */
+export function parseHash(rawHash: string): Route {
+  const path = rawHash || "#/";
+  const [rawPath, rawQuery = ""] = path.replace(/^#/, "").split("?");
+  const segments = rawPath.split("/").filter(Boolean);
+  const query = new URLSearchParams(rawQuery);
+  if (segments.length === 0) return { name: "home" };
+  const [head, second, third] = segments;
+  if (head === "console") {
+    if (second === "demands" && third === "new") {
+      return { name: "demandNew", indicator: query.get("indicator") };
+    }
+    return { name: "console" };
+  }
+  if (head === "login") return { name: "login" };
+  if (head === "catalog") {
+    if (segments.length >= 2) {
+      const raw = segments.slice(1).join("/");
+      let id = raw;
+      try {
+        id = decodeURIComponent(raw);
+      } catch {
+        /* 保留原样，交由 API 404 */
+      }
+      return { name: "catalogDetail", id };
+    }
+    return { name: "catalog" };
+  }
+  return { name: "home" };
+}
+
+function renderRoute(route: Route) {
+  switch (route.name) {
+    case "catalog":
+      return <CatalogView />;
+    case "catalogDetail":
+      return <CatalogDetailView id={route.id} />;
+    case "console":
+      return <ConsoleView />;
+    case "demandNew":
+      return <DemandNewView indicator={route.indicator} />;
+    case "login":
+      return <LoginView />;
+    case "home":
+      return <HomeView />;
+  }
+}
 
 export function App() {
   const { t, i18n } = useTranslation();
@@ -23,15 +77,13 @@ export function App() {
     return () => window.removeEventListener("hashchange", on);
   }, []);
 
-  const View = VIEWS[hash as keyof typeof VIEWS] ?? HomeView;
+  const route = parseHash(hash);
 
-  const tab = (h: string, label: string) => (
+  const tab = (h: string, label: string, active: boolean) => (
     <a
       href={h}
       className={`px-3 py-1.5 rounded-md text-sm transition-colors ${
-        (hash === h || (h === "#/" && !(hash in VIEWS)))
-          ? "bg-slate-900 text-white"
-          : "hover:bg-slate-200"
+        active ? "bg-slate-900 text-white" : "hover:bg-slate-200"
       }`}
     >
       {label}
@@ -63,8 +115,9 @@ export function App() {
             </span>
           </a>
           <nav className="ml-auto flex items-center gap-1">
-            {tab("#/", t("nav.home"))}
-            {tab("#/console", t("nav.console"))}
+            {tab("#/", t("nav.home"), route.name === "home")}
+            {tab("#/catalog", t("nav.catalog"), route.name === "catalog" || route.name === "catalogDetail")}
+            {tab("#/console", t("nav.console"), route.name === "console" || route.name === "demandNew")}
             <a
               href="#/login"
               className="ml-2 px-3 py-1.5 rounded-md text-sm border border-slate-300 hover:bg-slate-100 transition-colors"
@@ -79,7 +132,7 @@ export function App() {
         </div>
       </header>
       <main className="max-w-5xl mx-auto px-4 py-8">
-        <View />
+        {renderRoute(route)}
       </main>
       <footer className="max-w-5xl mx-auto px-4 py-8 text-xs text-slate-400">
         {t("footer")} ·{" "}
