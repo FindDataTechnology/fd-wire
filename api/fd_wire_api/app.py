@@ -39,6 +39,10 @@ async def lifespan(_: FastAPI):
     # register_catalog 挂的 add_event_handler 不会触发，故在此显式调）。
     init_catalog_db()
     startup_catalog()
+    # 计费（任务 4.2）：billing_* 三表 + 三档 seed（幂等）。
+    from .billing import init_billing
+
+    init_billing()
     # 内部后台（任务 7.1）：审核意见表幂等建表兜底（生产走 0007）。
     from .admin import init_db as init_admin_db
 
