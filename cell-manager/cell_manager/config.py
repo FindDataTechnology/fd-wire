@@ -16,6 +16,7 @@
     CELL_GATEWAY_URL       注入容器的 WIRE_GATEWAY_URL（wire 入口，计量门）
     CELL_REGISTRY_URL      registry 借用契约地址（注册 server 条目用）
     CELL_REGISTRY_MODE     registry client 形态：http | fake（默认 http）
+    CELL_REGISTRY_AUTH/TOKEN/COOKIE/CSRF  http 模式鉴权（见 registry/http.py::auth_from_env）
     CELL_TARGET_URL_TEMPLATE  registry 条目 target 模板（{container_name} 占位）
     CELL_RETENTION_DAYS    注销保留期天数（默认 30，0=立即到期）
     CELL_DRIVER            容器驱动：docker | fake（默认 docker）

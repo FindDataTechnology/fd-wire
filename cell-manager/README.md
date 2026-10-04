@@ -41,7 +41,7 @@ cell-manager/
 │   │   └── fake.py           #   FakeDriver（内存态，可落盘，测试/演示）
 │   └── registry/             # RegistryClient 协议
 │       ├── base.py           #   协议 + ServerEntry
-│       ├── http.py           #   HttpRegistryClient（urllib，契约占位、任务 5.2 对齐）
+│       ├── http.py           #   HttpRegistryClient（urllib，真实 fork API，任务 5.2 已对齐）
 │       └── fake.py           #   FakeRegistryClient
 └── tests/                    # 全 Fake，不打真 docker / registry
 ```
@@ -52,9 +52,26 @@ cell-manager/
   - `DockerDriver`：docker SDK **惰性导入**——未装 SDK 时 `import` 本包不炸、实例化才报 `DriverError`（带安装指引）；daemon 不可达同样在实例化期包装报错
   - `FakeDriver`：内存容器表（create 重名报错 / start-stop 幂等 / remove 运行中须 force / inspect 暴露 env+mounts 供隔离断言）；`persist_path` 可选落盘，CLI 跨进程演示用
 - **RegistryClient 协议**（`registry/base.py`）：`register(entry)` / `unregister(path) -> bool`（不存在宽松返回 False）
-  - `HttpRegistryClient`：stdlib urllib；端点 env 可重指，**契约占位**（`POST {CELL_REGISTRY_URL}/api/servers`、`DELETE .../api/servers/{path}`），真实 fork API 由任务 5.2 联调对齐
+  - `HttpRegistryClient`：stdlib urllib，**已对齐 mcp-gateway-registry fork 真实控制台 API**（详见下节）
   - `FakeRegistryClient`：内存条目表 + 调用记录
 - 工厂：`build_driver(config)` / `build_registry_client(config)` 按 `CELL_DRIVER` / `CELL_REGISTRY_MODE` 选择形态
+
+## registry 真实 API（任务 5.2 摸底，源码 /Users/chengsishi/code/mcp-gateway-registry）
+
+部署：cheap-1 docker compose（/opt/mcp-gateway-registry），基址 `https://mcp.finddatatech.cloud`（v1.30.0，已连通验证）。
+
+| 操作 | 端点 | 请求体 | 成功 | 备注（源码行号） |
+| --- | --- | --- | --- | --- |
+| 注册 | `POST /api/servers/register` | **form 表单**：`name`/`description`/`path` 必填，remote 需 `proxy_pass_url`；`overwrite=true` | 201 | server_routes.py:4272；overwrite 缺省即 true（:4283）→ 同 path 重复注册 = 干净覆写 = 幂等；path 无 `/` 前缀服务端补齐（:4429）；403 = 无 `register_service` 权限（:4403）或覆写他人条目（:4672）；409 仅在 overwrite=false 撞已存在（:4699） |
+| 摘除 | `POST /api/servers/remove` | form 表单 `path` | 200 | server_routes.py:5624；404 = 本就不存在（:5673）→ `unregister` 宽松返回 False 的语义来源；删除需 owner 或 admin（:5703-5725） |
+| 探测 | `GET /api/servers` | query `limit`/`include_tools` | 200 `{"servers": [...], "total_count": N}` | server_routes.py:883；只读连通性/联调探测（`client.list_servers()`） |
+
+**鉴权（可插拔，v1 两种形态；请求体都是 form 而非 JSON——fork 的 Form() 参数）**：
+
+- **bearer**（推荐部署形态）：`Authorization: Bearer <JWT>`。JWT 在控制台 `POST /api/tokens/generate` 铸币（server_routes.py:3891；默认 8h、上限 7d，**到期需人工在 UI 重铸**）。链路：nginx 对 `/api/` 做 `auth_request /validate`（docker/nginx_rev_proxy_http_only.conf:415-470）→ auth_server `/validate` 校验（auth_server/server.py:3756）→ 铸 `X-Internal-Token-Registry` 转发。无会话 cookie 时 **CSRF 免检**（registry/auth/csrf.py:114-126）。
+- **console-session**：`Cookie: mcp_gateway_session=...`（cookie 名 registry/core/config.py:209）+ `X-CSRF-Token` 头（有会话 cookie 时 CSRF 必检，csrf.py:136；token 用 `GET /api/auth/csrf-token` 铸币，registry/auth/routes.py:487）。registry **无用户名密码 REST 登录**（登录只走 OAuth2 浏览器流，auth_server/oauth2_providers.yml），v1 会话由 env 直接喂 cookie+CSRF。
+- 仓内有 patch-key 通道（registry/api/patch_key_routes.py）但 **cheap-1 未部署**——不假设其存在。
+- 权限前提：操作账号需 `register_service` 权限（注册）与 owner/admin（删除/覆写他人）。
 
 ## 使用
 
@@ -100,10 +117,15 @@ python -m cell_manager provision acme && python -m cell_manager status acme
 | `CELL_GATEWAY_URL` | wire 占位 | 注入容器 `WIRE_GATEWAY_URL`（同门计量入口） |
 | `CELL_REGISTRY_URL` | registry 占位 | registry 借用契约地址 |
 | `CELL_REGISTRY_MODE` | `http` | `http` \| `fake` |
+| `CELL_REGISTRY_AUTH` | 自动嗅探 | `bearer` \| `console-session` \| `none`（显式指定鉴权形态） |
+| `CELL_REGISTRY_TOKEN` | - | Bearer JWT（控制台 tokens/generate 铸币；有值即选 bearer） |
+| `CELL_REGISTRY_COOKIE` / `CELL_REGISTRY_CSRF` | - | 控制台会话 `mcp_gateway_session=<v>` + CSRF token（两者齐备即选 console-session） |
+| `CELL_REGISTRY_REGISTER_PATH` / `CELL_REGISTRY_REMOVE_PATH` | `/api/servers/register` / `/api/servers/remove` | 端点微调（契约可重指纪律） |
+| `CELL_REGISTRY_SERVERS_PATH` | `/api/servers` | 只读探测端点（list_servers） |
+| `CELL_REGISTRY_TIMEOUT` | `15` | HTTP 超时秒数 |
 | `CELL_TARGET_URL_TEMPLATE` | `http://{container_name}:8000/mcp` | registry 条目 target 模板 |
 | `CELL_RETENTION_DAYS` | `30` | 注销保留期（0=立即到期） |
 | `CELL_DRIVER` | `docker` | `docker` \| `fake` |
-| `CELL_REGISTRY_SERVERS_PATH` / `CELL_REGISTRY_TOKEN` | - | HTTP registry 契约微调 |
 
 容器 env 隔离注入：`DAAS_DATABASE_URL=sqlite:////data/daas.db`（指向本 cell 卷挂载）+ `WIRE_GATEWAY_URL`（wire 入口）。卷以 bind mount 挂到容器 `/data`。
 
@@ -119,7 +141,7 @@ python -m cell_manager provision acme && python -m cell_manager status acme
 2. **daemon 访问**：cell-manager 容器需挂载 `/var/run/docker.sock`（或 `DOCKER_HOST` 指远程 daemon）；注意 docker.sock 等于宿主 root 权限——建议 sidecar proxy（如 tecnativa/docker-socket-proxy）只放行 containers API
 3. **bind mount 路径是 daemon 侧路径**：`CELL_DATA_ROOT` 必须在 daemon 可见的文件系统上；cell-manager 与 cell 卷放同一共享卷面（compose/k8s local-path 同款约束）
 4. **镜像**：`CELL_IMAGE` 默认是占位——部署时指 TCR 里 fd-daas-mcp 真实镜像（任务 1.2 发版产物）
-5. **registry 契约**：`HttpRegistryClient` 端点/字段为占位，任务 5.2（cell 注册进 registry）联调时对齐 fork API 后仅需改 `registry/http.py`
+5. **registry 鉴权凭据**：`HttpRegistryClient` 已对齐真实 fork API（见上节）。部署前需：① 用有 `register_service` 权限的账号在控制台登录，`POST /api/tokens/generate` 铸一枚 Bearer JWT（上限 7d，到期需重铸——建议运维日历提醒或后续接 patch-key 通道部署后切换）；② `export CELL_REGISTRY_TOKEN=<jwt>`（或会话形态 `CELL_REGISTRY_COOKIE` + `CELL_REGISTRY_CSRF`）。写操作账号还需是 cell 条目的 owner（同一账号注册/摘除即天然满足）
 6. **purge 调度**：`purge-expired` 需外部定时触发（cron/k8s CronJob 建议 1 次/天）；到期判定以簿记 `purge_at` 为准，`CELL_RETENTION_DAYS` 只在 deprovision 时刻生效
 7. **单写者假设**：簿记 cells.json 无跨进程锁——同一 home 只允许一个 cell-manager 实例操作（k8s 单副本 Deployment + `strategy: Recreate`）
 
@@ -129,10 +151,10 @@ python -m cell_manager provision acme && python -m cell_manager status acme
 cd cell-manager && python3 -m pytest
 ```
 
-覆盖：provision 幂等 / 两企业 cell 并存隔离（卷、容器名、FakeDriver mounts 互不可见）/ pause 数据保留 / deprovision→retention 剩余天数 / 到期 purge（卷删+registry 摘除+审计留档）/ 保留期内 cancel 恢复 / 审计追加（含失败留痕）/ 未知客户 status / DockerDriver 惰性导入纪律 / CLI 子进程全生命周期。全 Fake，零 docker、零网络。
+覆盖：provision 幂等 / 两企业 cell 并存隔离（卷、容器名、FakeDriver mounts 互不可见）/ pause 数据保留 / deprovision→retention 剩余天数 / 到期 purge（卷删+registry 摘除+审计留档）/ 保留期内 cancel 恢复 / 审计追加（含失败留痕）/ 未知客户 status / DockerDriver 惰性导入纪律 / CLI 子进程全生命周期 / **HttpRegistryClient 真实契约**（mock urllib：注册 form 载荷与幂等覆写、摘除 200/404、401/403/409/500、不可达/超时、bearer 与 console-session 头、auth_from_env、工厂接线）。除 HttpRegistryClient 契约测试为 mock 外全 Fake，零 docker、零网络。
 
 ## 边界（后续任务）
 
-- 任务 5.2：registry 真实契约联调（注册/摘除字段对齐）、wire 入口可达性验证
+- 任务 5.2 已对齐真实 API（端点/鉴权/字段，见上节）；剩余：用有效凭据做一次注册/摘除全链路真写联调（当前仅完成只读探测与鉴权链路验证——本地 token 均已过期，需控制台重铸）、wire 入口可达性验证
 - 任务 5.3：cell 内跑 fd-daas-mcp（161 工具），`DAAS_DATABASE_URL` 消费方验证
 - 存储演进：`DAAS_DATABASE_URL` 重指专属 PG database（先 spike 后迁移，ADR-0002）
