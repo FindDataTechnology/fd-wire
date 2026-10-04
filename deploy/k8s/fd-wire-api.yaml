@@ -26,9 +26,8 @@ spec:
     spec:
       containers:
         - name: api
-          # TODO(go-live): 首次构建后回填实际 sha- tag（不可变标签纪律，
-          # mcp-service-deploy spec：禁 latest/浮动标签）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-0000000
+          # 不可变标签纪律（mcp-service-deploy spec：禁 latest/浮动标签）。
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-9b49853
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -58,6 +57,28 @@ spec:
             - name: METERING_INGEST_TOKEN
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: metering_ingest_token }
+            # 内部端点令牌（catalog sync / demands / ai 共用，demands 与内部路由校验）
+            - name: FD_WIRE_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: fd_wire_internal_token }
+            # 双库口径合一：demands 等模块的库名与计量库同库（平台库）
+            - name: FD_WIRE_DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: fd_wire_database_url }
+            # 目录镜像（同步默认关闭，待权威源端点与凭据就绪后开）
+            - name: INDICATOR_REGISTRY_URL
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: indicator_registry_url }
+            - name: CATALOG_SYNC_ENABLED
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: catalog_sync_enabled }
+            # 计量归属：平台服务身份名单 + 来源映射
+            - name: PLATFORM_IDENTITIES
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: platform_identities }
+            - name: METERING_SOURCE_MAP
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: metering_source_map }
           readinessProbe:
             httpGet: { path: /health, port: http }
             initialDelaySeconds: 3
