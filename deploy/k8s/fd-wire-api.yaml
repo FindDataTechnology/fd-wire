@@ -98,11 +98,13 @@ metadata:
     app.kubernetes.io/name: fd-wire-api
     app.kubernetes.io/part-of: finddata
 spec:
-  # 集群内 ClusterIP 即可：对外不经此 Service（web 同域 /api/ 反代时启用，
-  # 见 web/nginx.conf 占位注释）。
+  # NodePort 31883：cheap-1 Caddy（非集群节点）反代 /api/ 用（wire 域同域
+  # 暴露控制台 API）；台账 PORTS.md 已登记。
+  type: NodePort
   selector:
     app.kubernetes.io/name: fd-wire-api
   ports:
     - name: http
       port: 8000
       targetPort: http
+      nodePort: 31883
