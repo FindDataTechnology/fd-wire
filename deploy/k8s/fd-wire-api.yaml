@@ -1,0 +1,87 @@
+# fd-wire-api — prod (fd-prod)
+# 柏讯平台 API（结算/后台骨架）：FastAPI on :8000，/health 探针（app.py）。
+# 借用契约端点全走 env → Secret fd-wire-env（清单不含明文 Secret，
+# wanxing-fleet 同纪律；集群内创建命令见 deploy/README.md 步骤 6）。
+# 镜像 tag 待首次 GHA 构建后回填（TODO(go-live)，README 步骤 4-5）。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fd-wire-api
+  namespace: fd-prod
+  labels:
+    app.kubernetes.io/name: fd-wire-api
+    app.kubernetes.io/part-of: finddata
+    app.kubernetes.io/environment: production
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fd-wire-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fd-wire-api
+        app.kubernetes.io/part-of: finddata
+        app.kubernetes.io/environment: production
+    spec:
+      containers:
+        - name: api
+          # TODO(go-live): 首次构建后回填实际 sha- tag（不可变标签纪律，
+          # mcp-service-deploy spec：禁 latest/浮动标签）。
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-0000000
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            # wire 账本数据库（平台库，外部实例；非本 pod 卷）
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: database_url }
+            # 借用契约（fd_wire_api.config：同名环境变量优先于占位默认值）
+            - name: BUSINESS_MCP_URL
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: business_mcp_url }
+            - name: REGISTRY_URL
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: registry_url }
+            - name: SUB2API_BASE
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: sub2api_base }
+            - name: SUB2API_ADMIN_KEY
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: sub2api_admin_key }
+            - name: TOKEN_GATEWAY_URL
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: token_gateway_url }
+            # 计量管道上报凭据（registry audit 流消费侧）
+            - name: METERING_INGEST_TOKEN
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: metering_ingest_token }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 3
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fd-wire-api
+  namespace: fd-prod
+  labels:
+    app.kubernetes.io/name: fd-wire-api
+    app.kubernetes.io/part-of: finddata
+spec:
+  # 集群内 ClusterIP 即可：对外不经此 Service（web 同域 /api/ 反代时启用，
+  # 见 web/nginx.conf 占位注释）。
+  selector:
+    app.kubernetes.io/name: fd-wire-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
