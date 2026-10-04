@@ -1,0 +1,208 @@
+"""需求单业务逻辑：建档、编码、状态迁移、评估与报价写入。
+
+所有状态变更都收敛到 :func:`apply_transition`——先经状态机白名单校验
+（非法即 ``TransitionError`` → 路由层 409），再 append-only 追加时间线。
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from decimal import Decimal
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from .models import Demand
+from .schemas import DemandCreate
+from .statemachine import (
+    DemandStatus,
+    TransitionError,
+    ensure_transition,
+    utc_now_iso,
+)
+
+
+class DemandNotFound(LookupError):
+    """需求单不存在（或不属于该客户）——路由层转 404。"""
+
+
+def _utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _next_code(db: Session) -> str:
+    """生成业务编码 ``DE-YYYYMMDD-XX``：按当日已有编码取最大序号 +1。"""
+    prefix = f"DE-{datetime.now(timezone.utc):%Y%m%d}-"
+    rows = db.execute(
+        select(Demand.code).where(Demand.code.like(prefix + "%"))
+    ).scalars().all()
+    max_seq = 0
+    for code in rows:
+        try:
+            max_seq = max(max_seq, int(code.rsplit("-", 1)[1]))
+        except (ValueError, IndexError):
+            continue
+    return f"{prefix}{max_seq + 1:02d}"
+
+
+def create_demand(db: Session, *, customer_id: str, payload: DemandCreate) -> Demand:
+    """客户提交：初始状态 submitted，时间线首条即提交事件。"""
+    demand = Demand(
+        code=_next_code(db),
+        customer_id=customer_id,
+        title=payload.title,
+        intent=payload.intent,
+        entities_hint=payload.entities_hint,
+        frequency_expect=payload.frequency_expect,
+        linked_indicators=list(payload.linked_indicators),
+        status=DemandStatus.submitted.value,
+        status_history=[],
+    )
+    demand.append_history(
+        status=DemandStatus.submitted,
+        by=f"customer:{customer_id}",
+        note="需求单提交" + (
+            f"（目录预填指标：{'、'.join(payload.linked_indicators)}）"
+            if payload.linked_indicators
+            else ""
+        ),
+    )
+    db.add(demand)
+    try:
+        db.commit()
+    except IntegrityError:
+        # 极小概率的编码并发冲突：换一个序号重试一次。
+        db.rollback()
+        demand.code = _next_code(db)
+        db.add(demand)
+        db.commit()
+    db.refresh(demand)
+    return demand
+
+
+def list_demands(
+    db: Session, *, customer_id: str, status: DemandStatus | None = None
+) -> list[Demand]:
+    """本企业的需求单列表（按创建时间倒序）。"""
+    stmt = select(Demand).where(Demand.customer_id == customer_id)
+    if status is not None:
+        stmt = stmt.where(Demand.status == status.value)
+    stmt = stmt.order_by(Demand.id.desc())
+    return list(db.scalars(stmt).all())
+
+
+def get_demand(db: Session, demand_id: int) -> Demand:
+    demand = db.get(Demand, demand_id)
+    if demand is None:
+        raise DemandNotFound(f"demand {demand_id} 不存在")
+    return demand
+
+
+def get_customer_demand(db: Session, *, demand_id: int, customer_id: str) -> Demand:
+    """客户侧详情：不存在或非本企业一律 404（不泄露他企需求单存在性）。"""
+    demand = get_demand(db, demand_id)
+    if demand.customer_id != customer_id:
+        raise DemandNotFound(f"demand {demand_id} 不存在")
+    return demand
+
+
+def apply_transition(
+    db: Session,
+    demand: Demand,
+    *,
+    target: DemandStatus,
+    by: str,
+    note: str | None = None,
+    reason: str | None = None,
+    confirmed_by_operator: bool = False,
+) -> Demand:
+    """执行一次合法迁移并追加时间线（历史只增不改）。
+
+    building→building 是合法"停留"：状态不变，但 gate 问题 note 如实入档。
+    """
+    current = DemandStatus(demand.status)
+    ensure_transition(
+        current,
+        target,
+        confirmed_by_operator=confirmed_by_operator,
+        reason=reason,
+        note=note,
+    )
+    entry_note = note
+    if target is DemandStatus.rejected:
+        entry_note = note or f"拒绝理由：{reason}"
+    demand.append_history(status=target, by=by, note=entry_note)
+    if target is DemandStatus.rejected:
+        demand.rejection_reason = reason
+    if target is not DemandStatus.building or current is not DemandStatus.building:
+        demand.status = target.value
+    demand.updated_at = _utcnow_naive()
+    db.commit()
+    db.refresh(demand)
+    return demand
+
+
+def write_evaluation(
+    db: Session, demand: Demand, *, summary: str, by: str = "ai"
+) -> Demand:
+    """写 AI 预评估结论概要。
+
+    submitted 状态下写入即触发 submitted→evaluating（后台/AI 接单）；
+    仅 evaluating 允许更新概要；其余状态 409。
+    """
+    current = DemandStatus(demand.status)
+    if current is DemandStatus.submitted:
+        apply_transition(
+            db, demand, target=DemandStatus.evaluating, by=by, note="后台/AI 接单，开始预评估"
+        )
+    elif current is not DemandStatus.evaluating:
+        raise TransitionError(
+            current,
+            DemandStatus.evaluating,
+            f"当前状态 {current.value} 不允许写入评估结论（仅 submitted/evaluating）",
+        )
+    demand.evaluation_summary = summary
+    demand.updated_at = _utcnow_naive()
+    db.commit()
+    db.refresh(demand)
+    return demand
+
+
+def submit_quote(
+    db: Session,
+    demand: Demand,
+    *,
+    amount: Decimal,
+    note: str | None,
+    confirmed_by_operator: bool,
+    by: str = "operator",
+) -> Demand:
+    """人工确认报价：写 quote 字段并迁移 evaluating→quoted。
+
+    硬前置：``confirmed_by_operator=True``——没有人工确认绝不进 quoted、
+    绝不向客户发出报价。仅 evaluating 状态可报价。
+    """
+    current = DemandStatus(demand.status)
+    if current is not DemandStatus.evaluating:
+        raise TransitionError(
+            current,
+            DemandStatus.quoted,
+            f"当前状态 {current.value} 不允许报价（须先处于 evaluating）",
+        )
+    if not confirmed_by_operator:
+        raise TransitionError(
+            current,
+            DemandStatus.quoted,
+            "没有后台人工确认（confirmed_by_operator=false），绝不进入 quoted、不发出报价",
+        )
+    demand.quote_amount = amount
+    demand.quote_note = note
+    return apply_transition(
+        db,
+        demand,
+        target=DemandStatus.quoted,
+        by=by,
+        note=note or "后台人工确认报价",
+        confirmed_by_operator=True,
+    )

@@ -1,0 +1,188 @@
+"""需求单 API 路由。
+
+客户侧（``X-Customer-Id`` 头标识企业，暂为骨架鉴权，接 wire-customer-identity 后替换）：
+- ``POST /api/v1/demands``            提交（可带目录预填 linked_indicators）
+- ``GET  /api/v1/demands``            本企业列表（含当前状态+时间线）
+- ``GET  /api/v1/demands/{id}``       详情（非本企业一律 404）
+
+内部侧（``X-Internal-Token`` 与 ``FD_WIRE_INTERNAL_TOKEN`` 比对）：
+- ``POST /internal/demands/{id}/transition``  目标状态+note（校验白名单与前置）
+- ``POST /internal/demands/{id}/evaluation``  写 AI 预评估结论概要
+- ``POST /internal/demands/{id}/quote``       写报价（必带人工确认标志）
+"""
+
+from __future__ import annotations
+
+import os
+import secrets
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from sqlalchemy.orm import Session
+
+from . import service
+from .db import get_db
+from .schemas import DemandCreate, DemandOut, EvaluationIn, QuoteIn, TransitionIn
+from .statemachine import DemandStatus, TransitionError
+
+router = APIRouter(tags=["demands"])
+
+_DEFAULT_INTERNAL_TOKEN = "wire-internal-dev"
+
+
+def _customer_id(
+    x_customer_id: str | None = Header(default=None, alias="X-Customer-Id"),
+) -> str:
+    """客户身份：骨架阶段用显式头，缺失即 401。"""
+    if not x_customer_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="缺少 X-Customer-Id（客户身份头）",
+        )
+    return x_customer_id
+
+
+def _require_internal(
+    x_internal_token: str | None = Header(default=None, alias="X-Internal-Token"),
+) -> None:
+    """内部调用鉴权：与 FD_WIRE_INTERNAL_TOKEN 常量时间比对。"""
+    expected = os.getenv("FD_WIRE_INTERNAL_TOKEN", _DEFAULT_INTERNAL_TOKEN)
+    if not x_internal_token or not secrets.compare_digest(x_internal_token, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="内部端点需要有效的 X-Internal-Token",
+        )
+
+
+def _demand_or_404(db: Session, demand_id: int):
+    try:
+        return service.get_demand(db, demand_id)
+    except service.DemandNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _conflict(exc: TransitionError) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+
+# ---------------------------------------------------------------- 客户侧
+
+
+@router.post(
+    "/api/v1/demands",
+    status_code=status.HTTP_201_CREATED,
+    response_model=DemandOut,
+)
+def submit_demand(
+    payload: DemandCreate,
+    customer_id: str = Depends(_customer_id),
+    db: Session = Depends(get_db),
+) -> DemandOut:
+    """提交需求单：初始 submitted，可携带目录导流的 indicator code 列表。"""
+    demand = service.create_demand(db, customer_id=customer_id, payload=payload)
+    return DemandOut.model_validate(demand)
+
+
+@router.get("/api/v1/demands", response_model=list[DemandOut])
+def list_demands(
+    status_filter: DemandStatus | None = Query(default=None, alias="status"),
+    customer_id: str = Depends(_customer_id),
+    db: Session = Depends(get_db),
+) -> list[DemandOut]:
+    """本企业需求单列表：当前状态 + 完整时间线。"""
+    demands = service.list_demands(
+        db, customer_id=customer_id, status=status_filter
+    )
+    return [DemandOut.model_validate(d) for d in demands]
+
+
+@router.get("/api/v1/demands/{demand_id}", response_model=DemandOut)
+def get_demand(
+    demand_id: int,
+    customer_id: str = Depends(_customer_id),
+    db: Session = Depends(get_db),
+) -> DemandOut:
+    """需求单详情（仅本企业可见；他企或不存在一律 404）。"""
+    try:
+        demand = service.get_customer_demand(
+            db, demand_id=demand_id, customer_id=customer_id
+        )
+    except service.DemandNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return DemandOut.model_validate(demand)
+
+
+# ---------------------------------------------------------------- 内部侧
+
+
+@router.post(
+    "/internal/demands/{demand_id}/transition",
+    response_model=DemandOut,
+    dependencies=[Depends(_require_internal)],
+)
+def transition_demand(
+    demand_id: int,
+    payload: TransitionIn,
+    db: Session = Depends(get_db),
+) -> DemandOut:
+    """状态迁移：校验合法迁移表与前置条件（非法 409），历史只追加。"""
+    demand = _demand_or_404(db, demand_id)
+    try:
+        demand = service.apply_transition(
+            db,
+            demand,
+            target=payload.target_status,
+            by=payload.by,
+            note=payload.note,
+            reason=payload.reason,
+            confirmed_by_operator=payload.confirmed_by_operator,
+        )
+    except TransitionError as exc:
+        raise _conflict(exc) from exc
+    return DemandOut.model_validate(demand)
+
+
+@router.post(
+    "/internal/demands/{demand_id}/evaluation",
+    response_model=DemandOut,
+    dependencies=[Depends(_require_internal)],
+)
+def write_evaluation(
+    demand_id: int,
+    payload: EvaluationIn,
+    db: Session = Depends(get_db),
+) -> DemandOut:
+    """写 AI 预评估结论概要（submitted 下自动接单进入 evaluating）。"""
+    demand = _demand_or_404(db, demand_id)
+    try:
+        demand = service.write_evaluation(
+            db, demand, summary=payload.summary, by=payload.by
+        )
+    except TransitionError as exc:
+        raise _conflict(exc) from exc
+    return DemandOut.model_validate(demand)
+
+
+@router.post(
+    "/internal/demands/{demand_id}/quote",
+    response_model=DemandOut,
+    dependencies=[Depends(_require_internal)],
+)
+def submit_quote(
+    demand_id: int,
+    payload: QuoteIn,
+    db: Session = Depends(get_db),
+) -> DemandOut:
+    """写报价：必须携带人工确认标志，否则绝不进入 quoted。"""
+    demand = _demand_or_404(db, demand_id)
+    try:
+        demand = service.submit_quote(
+            db,
+            demand,
+            amount=payload.amount,
+            note=payload.note,
+            confirmed_by_operator=payload.confirmed_by_operator,
+            by=payload.by,
+        )
+    except TransitionError as exc:
+        raise _conflict(exc) from exc
+    return DemandOut.model_validate(demand)
