@@ -57,6 +57,6 @@ spec:
       port: 80
       targetPort: http
       # TODO(go-live): 台账先行——先在 fd-infra-deploy PORTS.md 登记再定值。
-      # 31881 系当前空档推定（wanxing-web 已占 31880），主代理核对台账后
+      # 31882 系当前空档推定（wanxing-web 已占 31880），主代理核对台账后
       # 如有冲突改此处并同步 PORTS.md（冻结端口见台账第 2 节）。
-      nodePort: 31881
+      nodePort: 31882
