@@ -14,7 +14,7 @@ metadata:
     app.kubernetes.io/part-of: finddata
     app.kubernetes.io/environment: production
 spec:
-  replicas: 2
+  replicas: 1  # fd-prod compute-quota cpu limits 已满（7900m/8）：v1 单副本轻档，扩容前先调配额
   selector:
     matchLabels:
       app.kubernetes.io/name: fd-wire-web
@@ -38,7 +38,7 @@ spec:
             initialDelaySeconds: 2
           resources:
             requests: { cpu: 20m, memory: 64Mi }
-            limits: { memory: 128Mi }
+            limits: { cpu: 100m, memory: 128Mi }
 ---
 apiVersion: v1
 kind: Service
