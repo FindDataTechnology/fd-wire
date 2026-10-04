@@ -1,0 +1,193 @@
+// 需求单派发台组件测试（任务 7.1）：全客户列表 + 状态筛选查询形状、
+// 派发操作调用形状（POST transition）、非法迁移项禁用、rejected 必填理由、
+// 终态不可派发、409 冲突如实回显。
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import "../i18n";
+import i18n from "../i18n";
+import { DemandsPage } from "./DemandsPage";
+import { installAdminBackend } from "./testing";
+import type { AdminDemand } from "./api";
+
+const TOKEN = "test-admin-token";
+
+function demand(partial: Partial<AdminDemand> & { id: number; status: AdminDemand["status"] }): AdminDemand {
+  return {
+    code: `DE-20261004-0${partial.id}`,
+    customer_id: `cust-${partial.id}`,
+    title: `需求 ${partial.id}`,
+    intent: "意图",
+    status_history: [
+      { status: "submitted", at: "2026-10-04T09:00:00+00:00", by: `customer:cust-${partial.id}`, note: "需求单提交" },
+    ],
+    evaluation_summary: null,
+    rejection_reason: null,
+    quote_amount: null,
+    quote_note: null,
+    created_at: "2026-10-04T09:00:00",
+    updated_at: "2026-10-04T09:00:00",
+    ...partial,
+  };
+}
+
+const DEMANDS: AdminDemand[] = [
+  demand({ id: 1, status: "submitted", customer_id: "cust-001", title: "煤价日度" }),
+  demand({ id: 2, status: "evaluating", customer_id: "cust-002", title: "航运运价" }),
+  demand({ id: 3, status: "delivered", customer_id: "cust-002", title: "光伏装机" }),
+];
+
+beforeEach(() => {
+  i18n.changeLanguage("zh");
+  localStorage.clear();
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  localStorage.clear();
+});
+
+function openPanel(itemId: number) {
+  const item = screen
+    .getAllByTestId("admin-demand-item")
+    .find((el) => el.textContent!.includes(`DE-20261004-0${itemId}`))!;
+  fireEvent.click(
+    screen.getAllByTestId("admin-demand-dispatch-toggle")[
+      screen.getAllByTestId("admin-demand-item").indexOf(item)
+    ]!,
+  );
+  return item;
+}
+
+describe("DemandsPage（需求单派发台）", () => {
+  it("全客户列表渲染 + 状态筛选的查询形状（?status=）", async () => {
+    const backend = installAdminBackend({ demands: DEMANDS, adminToken: TOKEN });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<DemandsPage token={TOKEN} />);
+
+    const items = await screen.findAllByTestId("admin-demand-item");
+    expect(items.length).toBe(3);
+    // 两家客户的单都在（全客户视图）
+    const allText = items.map((el) => el.textContent!).join("\n");
+    expect(allText).toContain("煤价日度");
+    expect(allText).toContain("航运运价");
+    expect(allText).toContain("光伏装机");
+    expect(allText).toContain("cust-001");
+    expect(allText).toContain("cust-002");
+
+    fireEvent.change(screen.getByTestId("demand-status-filter"), {
+      target: { value: "evaluating" },
+    });
+    await waitFor(() => {
+      expect(screen.getAllByTestId("admin-demand-item").length).toBe(1);
+    });
+    const filterCall = backend.calls.filter((c) => c.url.pathname === "/internal/admin/demands").pop()!;
+    expect(filterCall.url.searchParams.get("status")).toBe("evaluating");
+  });
+
+  it("派发操作：非法迁移项禁用，合法迁移的调用形状（target/by/note）与刷新", async () => {
+    const backend = installAdminBackend({ demands: [DEMANDS[0]!], adminToken: TOKEN });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<DemandsPage token={TOKEN} />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    openPanel(1);
+    const select = screen.getByTestId("admin-dispatch-target") as HTMLSelectElement;
+    // submitted 只允许 evaluating：其余七态全部禁用
+    const options = Array.from(select.options);
+    expect(options.find((o) => o.value === "evaluating")!.disabled).toBe(false);
+    for (const illegal of ["quoted", "delivered", "rejected", "building"]) {
+      expect(options.find((o) => o.value === illegal)!.disabled).toBe(true);
+    }
+
+    fireEvent.change(screen.getByTestId("admin-dispatch-note"), {
+      target: { value: "派发台接单" },
+    });
+    fireEvent.click(screen.getByTestId("admin-dispatch-submit"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("admin-demand-status").getAttribute("data-status"),
+      ).toBe("evaluating");
+    });
+
+    const call = backend.calls.find((c) => c.method === "POST")!;
+    expect(call.url.pathname).toBe("/internal/admin/demands/1/transition");
+    expect(call.headers["x-admin-token"]).toBe(TOKEN);
+    expect(call.body).toEqual({
+      target_status: "evaluating",
+      by: "admin-console",
+      note: "派发台接单",
+    });
+    // 时间线追加 admin-console 的派发记录
+    expect(screen.getByTestId("admin-demand-last-event").textContent).toContain(
+      "admin-console",
+    );
+  });
+
+  it("rejected 必填理由：缺理由禁用提交，携带 reason 的调用形状", async () => {
+    const backend = installAdminBackend({
+      demands: [demand({ id: 2, status: "evaluating" })],
+      adminToken: TOKEN,
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<DemandsPage token={TOKEN} />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    openPanel(2);
+    fireEvent.change(screen.getByTestId("admin-dispatch-target"), {
+      target: { value: "rejected" },
+    });
+    // 理由输入出现且提交禁用
+    const submit = screen.getByTestId("admin-dispatch-submit") as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    fireEvent.change(screen.getByTestId("admin-dispatch-reason"), {
+      target: { value: "数据源不可达" },
+    });
+    expect((screen.getByTestId("admin-dispatch-submit") as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByTestId("admin-dispatch-submit"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("admin-demand-status").getAttribute("data-status"),
+      ).toBe("rejected");
+    });
+    const call = backend.calls.find((c) => c.method === "POST")!;
+    expect(call.body).toEqual({
+      target_status: "rejected",
+      by: "admin-console",
+      reason: "数据源不可达",
+    });
+  });
+
+  it("终态（delivered）不可派发：按钮禁用且无面板", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({ demands: [DEMANDS[2]!], adminToken: TOKEN }).fetchImpl,
+    );
+    render(<DemandsPage token={TOKEN} />);
+    await screen.findAllByTestId("admin-demand-item");
+    const toggle = screen.getByTestId("admin-demand-dispatch-toggle") as HTMLButtonElement;
+    expect(toggle.disabled).toBe(true);
+    expect(screen.queryByTestId("admin-dispatch-panel")).toBeNull();
+  });
+
+  it("409 冲突如实回显（服务端是唯一裁决面）", async () => {
+    // 假后端对迁移强制 409——面板提交后应出现冲突提示并保留原状态
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [DEMANDS[0]!],
+        adminToken: TOKEN,
+        failTransitionStatus: 409,
+      }).fetchImpl,
+    );
+    render(<DemandsPage token={TOKEN} />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    openPanel(1);
+    fireEvent.click(screen.getByTestId("admin-dispatch-submit"));
+    const conflict = await screen.findByTestId("admin-dispatch-conflict");
+    expect(conflict.textContent).toContain("不允许");
+  });
+});

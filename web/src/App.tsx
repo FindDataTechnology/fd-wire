@@ -12,6 +12,8 @@ import { CatalogDetailView } from "./views/CatalogDetailView";
 import { DemandNewView } from "./views/DemandNewView";
 import { PricingView } from "./views/PricingView";
 import { DocsView } from "./views/DocsView";
+import { AdminView } from "./admin/AdminView";
+import { parseAdminSection, type AdminSection } from "./admin/AdminLayout";
 import type { ConsoleTab } from "./console/ConsoleLayout";
 import { switchLanguage, type Language } from "./i18n";
 
@@ -23,6 +25,7 @@ export type Route =
   | { name: "catalogDetail"; id: string }
   | { name: "console"; tab: ConsoleTab; conversationId: number | null }
   | { name: "demandNew"; indicator: string | null }
+  | { name: "admin"; section: AdminSection }
   | { name: "login" };
 
 /** 控制台二级段 → tab（未知段回落默认 chat）。 */
@@ -61,6 +64,10 @@ export function parseHash(rawHash: string): Route {
         : null;
     return { name: "console", tab, conversationId };
   }
+  if (head === "admin") {
+    // #/admin/customers|ledger|demands|catalog|usage（未知段回落客户页）
+    return { name: "admin", section: parseAdminSection(second) };
+  }
   if (head === "login") return { name: "login" };
   if (head === "catalog") {
     if (segments.length >= 2) {
@@ -94,6 +101,8 @@ function renderRoute(route: Route) {
       );
     case "demandNew":
       return <DemandNewView indicator={route.indicator} />;
+    case "admin":
+      return <AdminView section={route.section} />;
     case "login":
       return <LoginView />;
     case "home":
@@ -112,8 +121,8 @@ export function App() {
   }, []);
 
   const route = parseHash(hash);
-  // 控制台是工作台布局（自带侧栏与宽内容区），主容器放宽。
-  const wideMain = route.name === "console";
+  // 控制台/内部后台是工作台布局（自带侧栏与宽内容区），主容器放宽。
+  const wideMain = route.name === "console" || route.name === "admin";
 
   const tab = (h: string, label: string, active: boolean) => (
     <a
@@ -156,6 +165,7 @@ export function App() {
             {tab("#/docs", t("nav.docs"), route.name === "docs")}
             {tab("#/catalog", t("nav.catalog"), route.name === "catalog" || route.name === "catalogDetail")}
             {tab("#/console", t("nav.console"), route.name === "console" || route.name === "demandNew")}
+            {tab("#/admin", t("nav.admin"), route.name === "admin")}
 
             <a
               href="#/login"
