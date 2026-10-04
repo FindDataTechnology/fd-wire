@@ -61,6 +61,10 @@ spec:
             - name: FD_WIRE_INTERNAL_TOKEN
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: fd_wire_internal_token }
+            # ai 模块库（缺省相对路径在容器 CWD 不可写——显式指 /tmp 平台库）
+            - name: AI_DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: ai_database_url }
             # 双库口径合一：demands 等模块的库名与计量库同库（平台库）
             - name: FD_WIRE_DATABASE_URL
               valueFrom:
