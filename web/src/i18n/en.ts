@@ -119,6 +119,7 @@ const en: Translation = {
   },
   badge: {
     comingSoon: "In rollout · coming soon",
+    comingSoonShort: "Coming soon",
   },
   catalog: {
     title: "Indicator catalog",
@@ -180,10 +181,95 @@ const en: Translation = {
   },
   console: {
     title: "Console",
-    placeholder:
-      "Console under construction — the five artifact kinds (dashboards, composite indicators, research workflows, alerts, scheduled refresh) and AI-assisted building will land here.",
     chartTitle: "Dashboard placeholder",
     chartEmpty: "No data yet",
+    nav: {
+      chat: "AI builder",
+      artifacts: "Artifacts",
+      demands: "Demands",
+      usage: "Usage",
+    },
+    topbar: {
+      org: "Enterprise (placeholder)",
+      customerLabel: "X-Customer-Id",
+      customerHint:
+        "Development placeholder, dev use only — replaced by real sign-in once auth lands",
+      save: "Save",
+      login: "Sign in (placeholder)",
+    },
+    chat: {
+      conversations: "Conversations",
+      newConversation: "New conversation",
+      conversationsLoading: "Loading conversations…",
+      conversationsEmpty:
+        "No conversations yet — send the first message to start one.",
+      listErrorTitle: "Failed to load conversations",
+      messagesLoading: "Loading messages…",
+      messagesEmpty: "No messages in this conversation yet.",
+      messagesErrorTitle: "Failed to load messages",
+      retry: "Retry",
+      startTitle: "Start a new conversation",
+      startHint:
+        "Your first message creates the conversation and runs one build loop (subject to the daily creation limit).",
+      inputLabel: "Message input",
+      inputPlaceholder: "Describe what to build next…",
+      inputPlaceholderNew:
+        "Describe the analysis you want — sending starts a new conversation…",
+      send: "Send",
+      sending: "Sending…",
+      errorTitle: "Send failed",
+      error429: "Daily conversation creation limit reached",
+      error429Hint:
+        "Try again tomorrow, or contact the platform to adjust the limit.",
+      errorNetwork: "Network error — the console service is unreachable.",
+      toolTrace: "Tool call",
+      toolTraceArgs: "Arguments",
+      toolTraceResult: "Result",
+      resultOk: "OK",
+      resultFail: "Failed",
+    },
+    artifacts: {
+      title: "Artifact drafts",
+      subtitle:
+        "Draft artifacts staged by the AI build loop — grouped per conversation, with a link back to the source.",
+      draftBadge: "Draft",
+      draftNote:
+        "All artifacts below are drafts — materialization in rollout: not yet landed in your enterprise cell, no metering incurred.",
+      loading: "Loading artifacts…",
+      errorTitle: "Failed to load artifacts",
+      retry: "Retry",
+      empty: "No artifact drafts",
+      emptyHint:
+        "Drafts generated in the AI builder will appear here.",
+      kindFilterLabel: "Artifact kind",
+      kindAll: "All kinds",
+      kinds: {
+        dashboard: "Dashboard",
+        composite_indicator: "Composite indicator",
+        research_report: "Research workflow",
+        alert_rule: "Alert rule",
+        refresh_schedule: "Refresh schedule",
+      },
+      source: "Source conversation",
+      viewSpec: "View spec",
+      viewer: {
+        title: "Spec viewer",
+        note: "Edits are saved only to this browser (localStorage) — real persistence and materialization are upcoming work.",
+        localDraft: "Local draft",
+        saveLocal: "Save locally",
+        saved: "Saved to this browser (real persistence is upcoming work)",
+        restoreOriginal: "Restore original spec",
+        invalidJson: "Not valid JSON — fix before saving.",
+      },
+    },
+    demandsPlaceholder: {
+      title: "Demands",
+      body: "Demand management is under construction — filing demands for indicators outside the catalog, with the eight-state timeline, will land here (today a placeholder filing can be started from a catalog detail page).",
+    },
+    usagePlaceholder: {
+      title: "Usage",
+      body: "Usage views are under construction — row-level metering, quota alerts and dual-track usage will land here.",
+    },
   },
   login: {
     title: "Sign in",

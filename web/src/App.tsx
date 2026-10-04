@@ -1,6 +1,7 @@
 // App shell: top nav (site / pricing / docs / catalog / console, zh–en toggle)
 // over the views. Hash routing, deliberately no router dependency — parametrized
-// routes are parsed by parseHash below (catalog list, catalog detail, demand placeholder).
+// routes are parsed by parseHash below (catalog list, catalog detail, console
+// tabs with ?c=<conversationId>, demand placeholder).
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { HomeView } from "./views/HomeView";
@@ -11,6 +12,7 @@ import { CatalogDetailView } from "./views/CatalogDetailView";
 import { DemandNewView } from "./views/DemandNewView";
 import { PricingView } from "./views/PricingView";
 import { DocsView } from "./views/DocsView";
+import type { ConsoleTab } from "./console/ConsoleLayout";
 import { switchLanguage, type Language } from "./i18n";
 
 export type Route =
@@ -19,9 +21,22 @@ export type Route =
   | { name: "docs" }
   | { name: "catalog" }
   | { name: "catalogDetail"; id: string }
-  | { name: "console" }
+  | { name: "console"; tab: ConsoleTab; conversationId: number | null }
   | { name: "demandNew"; indicator: string | null }
   | { name: "login" };
+
+/** 控制台二级段 → tab（未知段回落默认 chat）。 */
+function parseConsoleTab(segment: string | undefined): ConsoleTab {
+  if (
+    segment === "chat" ||
+    segment === "artifacts" ||
+    segment === "demands" ||
+    segment === "usage"
+  ) {
+    return segment;
+  }
+  return "chat";
+}
 
 /** "#/catalog/abc?indicator=x" → 结构化路由（未知路径回落首页）。 */
 export function parseHash(rawHash: string): Route {
@@ -37,7 +52,14 @@ export function parseHash(rawHash: string): Route {
     if (second === "demands" && third === "new") {
       return { name: "demandNew", indicator: query.get("indicator") };
     }
-    return { name: "console" };
+    const tab = parseConsoleTab(second);
+    // ?c=<id> 选中会话（非法值回落未选中新会话态）。
+    const rawConversation = Number(query.get("c"));
+    const conversationId =
+      Number.isInteger(rawConversation) && rawConversation > 0
+        ? rawConversation
+        : null;
+    return { name: "console", tab, conversationId };
   }
   if (head === "login") return { name: "login" };
   if (head === "catalog") {
@@ -67,7 +89,9 @@ function renderRoute(route: Route) {
     case "catalogDetail":
       return <CatalogDetailView id={route.id} />;
     case "console":
-      return <ConsoleView />;
+      return (
+        <ConsoleView tab={route.tab} conversationId={route.conversationId} />
+      );
     case "demandNew":
       return <DemandNewView indicator={route.indicator} />;
     case "login":
@@ -88,6 +112,8 @@ export function App() {
   }, []);
 
   const route = parseHash(hash);
+  // 控制台是工作台布局（自带侧栏与宽内容区），主容器放宽。
+  const wideMain = route.name === "console";
 
   const tab = (h: string, label: string, active: boolean) => (
     <a
@@ -130,6 +156,7 @@ export function App() {
             {tab("#/docs", t("nav.docs"), route.name === "docs")}
             {tab("#/catalog", t("nav.catalog"), route.name === "catalog" || route.name === "catalogDetail")}
             {tab("#/console", t("nav.console"), route.name === "console" || route.name === "demandNew")}
+
             <a
               href="#/login"
               className="ml-2 px-3 py-1.5 rounded-md text-sm border border-slate-300 hover:bg-slate-100 transition-colors"
@@ -143,7 +170,11 @@ export function App() {
           </nav>
         </div>
       </header>
-      <main className="max-w-5xl mx-auto px-4 py-8">
+      <main
+        className={
+          wideMain ? "mx-auto max-w-7xl px-4 py-6" : "mx-auto max-w-5xl px-4 py-8"
+        }
+      >
         {renderRoute(route)}
       </main>
       <footer className="max-w-5xl mx-auto px-4 py-8 text-xs text-slate-400">
