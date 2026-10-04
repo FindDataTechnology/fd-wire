@@ -69,7 +69,7 @@ spec:
                 secretKeyRef: { name: fd-wire-env, key: materialization_internal_token }
             - name: WIRE_ENTRY_URL
               valueFrom:
-                secretKeyRef: { name: fd-wire-env, key: wire_entry_url }}
+                secretKeyRef: { name: fd-wire-env, key: wire_entry_url }
             # ai 模块库（缺省相对路径在容器 CWD 不可写——显式指 /tmp 平台库）
             - name: AI_DATABASE_URL
               valueFrom:
