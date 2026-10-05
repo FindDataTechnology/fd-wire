@@ -167,6 +167,10 @@ const zh = {
         "该指标为 verified 状态：登录后即可在控制台直接读取，本页不展示观测数值。",
       readData: "读取数据",
       readDataHint: "将引导你登录 / 开通",
+      lexReferralNote:
+        "该条目属法律域数据，由寻数·识律平台提供：目录保留可见，开通走人工合规审查（合规判断不自动化）。",
+      lexReferralCta: "前往识律平台开通",
+      lexReferralHint: "开通与取数均在识律平台完成：lex.finddatatech.cloud",
     },
   },
   demandNew: {

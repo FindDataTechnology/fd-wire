@@ -171,6 +171,10 @@ const en: Translation = {
         "This indicator is verified: sign in to read it directly in the console. No observation values are shown on this page.",
       readData: "Read data",
       readDataHint: "You will be guided to sign in / get access",
+      lexReferralNote:
+        "This entry belongs to the legal domain and is served by the Lex platform: it stays visible here, and activation goes through manual compliance review (never automated).",
+      lexReferralCta: "Activate on the Lex platform",
+      lexReferralHint: "Activation and data delivery both happen on Lex: lex.finddatatech.cloud",
     },
   },
   demandNew: {

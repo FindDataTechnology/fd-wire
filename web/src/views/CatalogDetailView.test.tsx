@@ -111,6 +111,55 @@ describe("CatalogDetailView", () => {
     expect(notFound.textContent).toContain("指标不存在");
   });
 
+  const LEGAL: IndicatorDetail = {
+    ...REGISTERED,
+    indicator_id: "ind-law",
+    code: "law.guide_cases",
+    name_zh: "指导性案例库",
+    name_en: "Guiding Cases",
+    description_zh: "最高法指导案例合集",
+    description_en: "SPC guiding cases",
+    domain: "法律",
+    status: "registered",
+    on_demand: true,
+    demand_prefill: { indicator_code: "law.guide_cases" },
+  };
+
+  it("法律域：保留可见、开通转介识律，不出现需求单/读取入口", async () => {
+    installDetails({ "ind-law": LEGAL });
+    render(<CatalogDetailView id="ind-law" />);
+
+    const box = await screen.findByTestId("detail-lex-referral");
+    const cta = screen.getByRole("link", { name: "前往识律平台开通" });
+    expect(cta.getAttribute("href")).toBe("https://lex.finddatatech.cloud");
+    expect(cta.getAttribute("target")).toBe("_blank");
+    expect(box.textContent).toContain("目录保留可见");
+    // 条目本身完整可见（字段区不被转介替换）
+    expect(screen.getByTestId("detail-fields").textContent).toContain("指导性案例库");
+    // 开通/读取动线均不出现
+    expect(screen.queryByTestId("detail-on-demand")).toBeNull();
+    expect(screen.queryByTestId("detail-direct-read")).toBeNull();
+    expect(screen.queryByText("按需开通（提交需求单）")).toBeNull();
+  });
+
+  it("法律域 verified 同样转介（避免「绿色可读」假象）", async () => {
+    installDetails({
+      "ind-law2": { ...LEGAL, indicator_id: "ind-law2", status: "verified", on_demand: false },
+    });
+    render(<CatalogDetailView id="ind-law2" />);
+    await screen.findByTestId("detail-lex-referral");
+    expect(screen.queryByTestId("detail-direct-read")).toBeNull();
+  });
+
+  it("双语对等：英文界面呈现等价转介", async () => {
+    i18n.changeLanguage("en");
+    installDetails({ "ind-law": LEGAL });
+    render(<CatalogDetailView id="ind-law" />);
+    const box = await screen.findByTestId("detail-lex-referral");
+    expect(screen.getByRole("link", { name: "Activate on the Lex platform" })).toBeTruthy();
+    expect(box.textContent).toContain("served by the Lex platform");
+  });
+
   it("API 故障：错误态 + 重试恢复", async () => {
     const backend = installFakeBackend([], { "ind-coal": REGISTERED });
     vi.stubGlobal(

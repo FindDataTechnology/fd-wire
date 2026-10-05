@@ -10,6 +10,7 @@ import {
   type IndicatorDetail,
 } from "../catalog/api";
 import { DomainBadge, StatusBadge } from "../components/IndicatorBadges";
+import { isLegalIndicator, LEX_PLATFORM_URL } from "../catalog/legal";
 
 type DetailState = {
   loading: boolean;
@@ -116,6 +117,9 @@ export function CatalogDetailView({ id }: { id: string }) {
   } else if (state.data) {
     const d = state.data;
     const registered = d.status === "registered";
+    // 法律域转介（wire-lex-referral）：条目保留可见，开通动线归识律——
+    // 法律域数据不由 wire 供给，任何 status 一律转介（避免"绿色可读"假象）。
+    const legal = isLegalIndicator(d);
     const timeSpan =
       d.time_span_start || d.time_span_end
         ? t("catalog.detail.timeSpanRange", {
@@ -170,7 +174,23 @@ export function CatalogDetailView({ id }: { id: string }) {
           </Field>
         </dl>
 
-        {registered ? (
+        {legal ? (
+          <div
+            className="mt-8 rounded-lg border border-indigo-200 bg-indigo-50 p-5"
+            data-testid="detail-lex-referral"
+          >
+            <p className="text-sm text-indigo-900">{t("catalog.detail.lexReferralNote")}</p>
+            <a
+              href={LEX_PLATFORM_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-4 inline-block rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 transition-colors"
+            >
+              {t("catalog.detail.lexReferralCta")}
+            </a>
+            <p className="mt-2 text-xs text-indigo-700">{t("catalog.detail.lexReferralHint")}</p>
+          </div>
+        ) : registered ? (
           <div
             className="mt-8 rounded-lg border border-amber-300 bg-amber-50 p-5"
             data-testid="detail-on-demand"
