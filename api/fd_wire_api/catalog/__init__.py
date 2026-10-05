@@ -1,9 +1,11 @@
 """指标目录镜像（wire-indicator-catalog，任务 6.1）。
 
 统一指标注册目录的每日只读镜像：
-- 模型：``models``（迁移链 ``api/alembic`` 的 ``0002_catalog`` 落表；
-  启动时另有幂等 ``init_db``/create_all 兜底）
-- 唯一写路径：``sync.IndicatorRegistrySync``（权威源 list_concepts 族 → upsert）
+- 模型：``models``（迁移链 ``api/alembic`` 的 ``0002_catalog`` 落表、
+  ``0010_catalog_source_db`` 加 source_db/unit 列；启动时另有幂等
+  ``init_db``/create_all 兜底）
+- 唯一写路径：``sync.IndicatorRegistrySync``（权威源 list_registry_entries
+  全量枚举 → 单事务全量重刷）
 - 调度：``scheduler``（asyncio 循环，间隔 env 可配，默认 24h）
 - API：``routes``（公开查询 + internal 手动同步触发）
 

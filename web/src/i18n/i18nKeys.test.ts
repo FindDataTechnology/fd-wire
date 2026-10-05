@@ -30,6 +30,27 @@ describe("i18n zh/en 键位一致", () => {
       ).toBe(true);
     }
   });
+
+  it("文案不携带手写指标计数字面量（目录规模数字一律活取）", () => {
+    // 目录规模呈现键必须是 {{total}} 模板 + 无数字回退键
+    expect(zh.home.value1Title).toBe("{{total}}+ 指标目录");
+    expect(zh.home.value1TitleNoCount).not.toMatch(/\d/);
+    expect(zh.pricing.featCatalog).toBe("{{total}}+ 指标目录全量浏览");
+    expect(zh.pricing.featCatalogNoCount).not.toMatch(/\d/);
+    expect(en.home.value1Title).toBe("{{total}}+ indicator catalog");
+    expect(en.home.value1TitleNoCount).not.toMatch(/\d/);
+    expect(en.pricing.featCatalog).toBe(
+      "Full access to the {{total}}+ indicator catalog",
+    );
+    expect(en.pricing.featCatalogNoCount).not.toMatch(/\d/);
+    // 全量扫描：任何叶子文案都不出现旧手写数字（57,000 / 5.7万 等）
+    for (const [path, value] of [...leafEntries(zh), ...leafEntries(en)]) {
+      expect(
+        /57[,.]?000|5\.7\s*万/.test(String(value)),
+        `${path} 携带手写指标数字`,
+      ).toBe(false);
+    }
+  });
 });
 
 function leafEntries(

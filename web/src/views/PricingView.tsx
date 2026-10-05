@@ -1,8 +1,12 @@
 // 定价页（#/pricing）——三档卡片，中档（专业版）标「推荐」。
 // 档位数字为 design.md 已裁决口径（后台可配不发版）；需求单独立报价、
 // 法律域询价为脚注如实呈现。CTA 一律 mailto 占位（联系开通）。
+// 目录规模数字活取 /v1/catalog/stats（千位向下取整）；取不到时回退
+// 不带数字的文案——源码不携带手写指标数字面量。
 import { useTranslation } from "react-i18next";
 import { CONTACT_MAILTO } from "./HomeView";
+import { formatCatalogTotal } from "../catalog/api";
+import { useCatalogStats } from "../catalog/useCatalogStats";
 
 type TierKey = "starter" | "pro" | "enterprise";
 
@@ -14,9 +18,13 @@ const TIERS: { key: TierKey; testid: string; featured: boolean }[] = [
 
 export function PricingView() {
   const { t } = useTranslation();
+  const stats = useCatalogStats();
+  const catalogTotal = formatCatalogTotal(stats?.registered ?? 0);
 
   const features = [
-    t("pricing.featCatalog"),
+    catalogTotal
+      ? t("pricing.featCatalog", { total: catalogTotal })
+      : t("pricing.featCatalogNoCount"),
     t("pricing.featMcp"),
     t("pricing.featDemand"),
   ];

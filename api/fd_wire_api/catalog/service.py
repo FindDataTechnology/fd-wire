@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 
 from .db import readonly_session
 from .models import IndicatorSnapshot
@@ -77,3 +77,36 @@ class CatalogQueryService:
                 return None
             # 脱离只读 session 后仍可读字段（expire_on_commit=False + 属性已加载）
             return row
+
+    def stats(self) -> dict[str, Any]:
+        """目录计数（/v1/catalog/stats）：镜像 GROUP BY source_db 现算。
+
+        ``registered`` 是登记总量口径（注册表全量，含 verified）；``verified``
+        为其中已核验数。无缓存——同步完成后数值自然新鲜。
+        """
+        with self._session_factory() as session:
+            rows = session.execute(
+                select(
+                    IndicatorSnapshot.source_db,
+                    func.count().label("total"),
+                    func.sum(
+                        case(
+                            (IndicatorSnapshot.status == "verified", 1),
+                            else_=0,
+                        )
+                    ).label("verified"),
+                ).group_by(IndicatorSnapshot.source_db)
+            ).all()
+        by_source = [
+            {
+                "source_db": row.source_db or "",
+                "registered": int(row.total or 0),
+                "verified": int(row.verified or 0),
+            }
+            for row in rows
+        ]
+        return {
+            "registered": sum(b["registered"] for b in by_source),
+            "verified": sum(b["verified"] for b in by_source),
+            "by_source": by_source,
+        }

@@ -1,6 +1,6 @@
 // 测试专用：目录 API 的内存假后端（q/domain/status 过滤 + 分页，
 // 语义对齐 api 仓 CatalogQueryService.search）。
-import type { IndicatorDetail, IndicatorListItem } from "./api";
+import type { CatalogStats, IndicatorDetail, IndicatorListItem } from "./api";
 
 export type FakeResponse = {
   ok: boolean;
@@ -22,11 +22,13 @@ export function makeListItems(
     const n = String(i + 1).padStart(2, "0");
     return {
       indicator_id: `ind-${n}`,
+      source_db: "world_bank",
       code: `CODE_${n}`,
       name_zh: `指标 ${n}`,
       name_en: `Indicator ${n}`,
       domain: i % 2 === 0 ? "macro" : "energy",
       frequency: "月度",
+      unit: null,
       status: (i % 3 === 0 ? "verified" : "registered") as IndicatorListItem["status"],
       ...overrides[i],
     };
@@ -37,6 +39,7 @@ export function makeListItems(
 export function installFakeBackend(
   items: IndicatorListItem[],
   details: Record<string, IndicatorDetail> = {},
+  stats: CatalogStats | null = null,
 ): { calls: FetchCall[]; fetchImpl: typeof fetch } {
   const calls: FetchCall[] = [];
 
@@ -44,6 +47,11 @@ export function installFakeBackend(
     const url = new URL(String(input), "http://catalog.test");
     calls.push({ url });
     const path = url.pathname;
+
+    if (path === "/api/v1/catalog/stats") {
+      if (stats) return Promise.resolve(jsonResponse(stats));
+      return Promise.resolve(jsonResponse({ detail: "stats unavailable" }, 503));
+    }
 
     if (path === "/api/v1/catalog/indicators") {
       const q = (url.searchParams.get("q") || "").trim().toLowerCase();

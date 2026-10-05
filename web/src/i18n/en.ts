@@ -21,7 +21,11 @@ const en: Translation = {
     ctaCatalog: "Browse the catalog",
     ctaContact: "Contact us to get started",
     valueTitle: "Three value propositions",
-    value1Title: "57,000+ indicator catalog",
+    // Catalog figure is fetched live: {{total}} is rendered from /v1/catalog/stats
+    // (floored to thousands, e.g. 57,000); falls back to value1TitleNoCount when
+    // the stats endpoint is unreachable — no hardcoded figures in copy.
+    value1Title: "{{total}}+ indicator catalog",
+    value1TitleNoCount: "Indicator catalog",
     value1Desc:
       "The unified indicator registry, fully searchable without signing in — verified indicators read directly, registered ones on demand.",
     value2Title: "Data over MCP",
@@ -40,7 +44,8 @@ const en: Translation = {
     perMonth: "/mo",
     recommended: "Recommended",
     cta: "Contact us to get started",
-    featCatalog: "Full access to the 57,000+ indicator catalog",
+    featCatalog: "Full access to the {{total}}+ indicator catalog",
+    featCatalogNoCount: "Full access to the indicator catalog",
     featMcp: "Data reads over MCP",
     featDemand: "Data demands (quoted separately)",
     starter: {

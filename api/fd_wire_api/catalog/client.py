@@ -1,4 +1,4 @@
-"""权威源客户端：统一指标注册目录（fd-open-data-mcp 侧 list_concepts 族）。
+"""权威源客户端：统一指标注册目录（fd-open-data-mcp 侧 ``list_registry_entries``）。
 
 - ``RegistryClient`` 是协议（Protocol）：测试用内存假实现替换，生产用
   ``HttpRegistryClient``。同步器只依赖协议，不依赖 HTTP 细节。
@@ -7,14 +7,21 @@
   1. POST ``initialize``（JSON-RPC 2.0）→ 200，SSE 或 JSON 体携带 result，
      响应头 ``Mcp-Session-Id`` 是后续请求的会话凭证；
   2. POST ``notifications/initialized``（202 无体）；
-  3. POST ``tools/call`` ``list_concepts``，参数 ``limit``/``offset``（服务端
-     clamp 至 [1,1000]），「页短于 limit 即末页」翻页——无 cursor、无 total；
-     结果在 ``structuredContent.result``（fastmcp 对 list 返回的包装）或
-     ``content[0].text``（JSON 文本）。
-- 增量游标：权威 ``list_concepts`` **没有** ``updated_since`` 参数——客户端
-  每次全量翻页，行级 ``updated_at`` 存在时按 ``updated_since`` 水位本地过滤；
-  行不携带该字段（当前契约，Concept.toDict / registry 行均无）时保守保留，
-  交由同步器以 indicator_id 幂等 upsert。
+  3. POST ``tools/call`` ``list_registry_entries``，参数 ``limit``/``offset``
+     （服务端 clamp 至 [1,1000]），「页短于 limit 即末页」翻页——无 cursor、
+     无 total；结果在 ``structuredContent.result``（fastmcp 对 list 返回的
+     包装）或 ``content[0].text``（JSON 文本）。
+- 工具契约（固定）：``list_registry_entries(status=None, limit=500,
+  offset=0)``——``status`` 缺省=全量（verified+registered）；行字段
+  ``source_db, native_code, semantic_code, name_zh, name_en, unit,
+  frequency, domain, verified``（``verified`` 为 bool）。全量枚举含未核验
+  条目（这是换源的目的：目录浏览面呈现全部登记条目）。
+- 标识方案：``indicator_id = f"{source_db}:{native_code}"``——注册表唯一
+  锚本是（来源库, 原生码）；语义码跨源等价可重复，不得当主键。语义码、
+  双语名、单位、频率、域一律作为条目属性（``code``/``name_*``/``unit``/
+  ``frequency``/``domain``），不进标识。
+- 无增量游标：``list_registry_entries`` **没有** ``updated_since`` 参数，
+  客户端每次全量翻页，幂等 upsert 兜底（沿用现契约）。
 - 凭据：``INDICATOR_REGISTRY_TOKEN`` 以 Bearer 随每个请求上行（公网入口
   网关鉴权）；空值 = 匿名。
 - ``INDICATOR_REGISTRY_URL`` 指权威基地址（如
@@ -53,9 +60,15 @@ def _parse_dt(value: Any) -> datetime | None:
 
 @dataclass
 class ConceptRecord:
-    """规范化后的权威库指标记录（展示字段 + 变更时间）。"""
+    """规范化后的权威库指标记录（展示字段 + 变更时间）。
+
+    ``indicator_id = source_db:native_code``（全局唯一稳定主键）；``code``
+    承载语义码（跨源可重复，仅作展示/搜索属性）。
+    """
 
     indicator_id: str
+    source_db: str | None = None
+    native_code: str | None = None
     code: str = ""
     name_zh: str | None = None
     name_en: str | None = None
@@ -63,6 +76,7 @@ class ConceptRecord:
     description_en: str | None = None
     domain: str | None = None
     frequency: str | None = None
+    unit: str | None = None
     time_span_start: str | None = None
     time_span_end: str | None = None
     entity_coverage_count: int | None = None
@@ -73,7 +87,7 @@ class ConceptRecord:
 
 @dataclass
 class ConceptBatch:
-    """一次拉取的结果：记录集合 + 推进后的水位。"""
+    """一次拉取的结果：记录集合 + 水位（无行级 updated_at 时为拉取时刻）。"""
 
     items: list[ConceptRecord] = field(default_factory=list)
     next_watermark: datetime | None = None
@@ -83,9 +97,7 @@ class ConceptBatch:
 class RegistryClient(Protocol):
     """权威源客户端协议（可 mock）。"""
 
-    def fetch_concepts(
-        self, updated_since: datetime | None = None, force_full: bool = False
-    ) -> ConceptBatch:
+    def fetch_concepts(self) -> ConceptBatch:
         ...  # pragma: no cover
 
 
@@ -117,28 +129,58 @@ def normalize_status(value: Any) -> str:
     return "verified" if text == "verified" else "registered"
 
 
+def _row_verified(row: dict[str, Any]) -> bool:
+    """登记行的 ``verified`` 段：契约是 bool；字符串 "true"/"false" 容错。"""
+    verified = row.get("verified")
+    if verified is True:
+        return True
+    if isinstance(verified, str) and verified.strip().lower() == "true":
+        return True
+    return False
+
+
+# indicator_id 列宽（indicator_snapshots.indicator_id String(128)）；超长时
+# 退化为前缀 + sha1 后缀（确定性、无截断碰撞）。
+_INDICATOR_ID_MAX_LEN = 128
+
+
+def _stable_indicator_id(composite: str) -> str:
+    if len(composite) <= _INDICATOR_ID_MAX_LEN:
+        return composite
+    digest = hashlib.sha1(composite.encode("utf-8")).hexdigest()[:7]
+    return f"{composite[:120]}~{digest}"
+
+
 def normalize_record(raw: dict[str, Any]) -> ConceptRecord:
-    """把权威侧记录（别名容错）规范化为 ConceptRecord。"""
-    indicator_id = _first_str(raw, "indicator_id", "concept_id", "identifier", "id")
-    if not indicator_id:
-        raise ValueError(f"authority record without a usable id: {raw!r}")
+    """把权威 ``list_registry_entries`` 行规范化为 ConceptRecord。
+
+    - ``indicator_id`` ＝ ``source_db:native_code``：全局唯一稳定主键——
+      名称/单位/语义码等展示字段被权威库修正时不变，跨源等价条目
+      （语义码相同、source_db 不同）不碰撞；
+    - ``code`` ← ``semantic_code``（语义码，展示/搜索属性，非主键）；
+    - name_zh/name_en/unit/frequency/domain 直映；
+    - ``status`` ← ``verified``（两级口径：verified | registered）。
+    """
+    source_db = _first_str(raw, "source_db")
+    native_code = _first_str(raw, "native_code")
+    if not source_db or not native_code:
+        raise ValueError(
+            f"registry entry without usable source_db/native_code: {raw!r}"
+        )
     return ConceptRecord(
-        indicator_id=indicator_id,
-        code=_first_str(raw, "code", "indicator_code", "concept_code") or "",
-        name_zh=_first_str(raw, "name_zh", "title_zh", "label_zh", "name", "title"),
-        name_en=_first_str(raw, "name_en", "title_en", "label_en"),
-        description_zh=_first_str(raw, "description_zh", "summary_zh", "desc_zh"),
-        description_en=_first_str(raw, "description_en", "summary_en", "desc_en", "description"),
-        domain=_first_str(raw, "domain", "theme", "category"),
-        frequency=_first_str(raw, "frequency", "period", "freq"),
-        time_span_start=_first_str(raw, "time_span_start", "start_date", "start"),
-        time_span_end=_first_str(raw, "time_span_end", "end_date", "end"),
-        entity_coverage_count=_first_int(
-            raw, "entity_coverage_count", "coverage_count", "entities", "entity_count"
-        ),
-        sample_value=_first_str(raw, "sample_value", "example_value", "sample"),
-        status=normalize_status(raw.get("status")),
-        updated_at=_parse_dt(raw.get("updated_at") or raw.get("updated") or raw.get("last_modified")),
+        indicator_id=_stable_indicator_id(f"{source_db}:{native_code}"),
+        source_db=source_db,
+        native_code=native_code,
+        code=_first_str(raw, "semantic_code") or "",
+        name_zh=_first_str(raw, "name_zh"),
+        name_en=_first_str(raw, "name_en"),
+        description_zh=_first_str(raw, "description_zh"),
+        description_en=_first_str(raw, "description_en"),
+        domain=_first_str(raw, "domain"),
+        frequency=_first_str(raw, "frequency"),
+        unit=_first_str(raw, "unit"),
+        status="verified" if _row_verified(raw) else "registered",
+        updated_at=_parse_dt(raw.get("updated_at") or raw.get("updated")),
     )
 
 
@@ -157,7 +199,7 @@ def _extract_items(payload: Any) -> tuple[list[Any], str | None]:
             if isinstance(value, list):
                 return value, next_cursor
         # 单条对象本身即记录
-        if any(k in payload for k in ("indicator_id", "concept_id", "identifier", "id")):
+        if any(k in payload for k in ("indicator_id", "native_code", "source_db", "id")):
             return [payload], None
     raise ValueError(f"unexpected authority payload shape: {type(payload)!r}")
 
@@ -166,7 +208,7 @@ def _extract_items(payload: Any) -> tuple[list[Any], str | None]:
 
 _MCP_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 _SESSION_HEADER = "Mcp-Session-Id"
-_LIST_TOOL = "list_concepts"
+_LIST_TOOL = "list_registry_entries"
 _TOOL_LIST_KEYS = ("result", "items", "data", "concepts", "results", "records")
 
 
@@ -236,65 +278,9 @@ def _tool_result_rows(payload: dict[str, Any], context: str = "tools/call") -> l
     raise ValueError(f"authority {context} carried no row payload")
 
 
-# list_concepts 行的权威身份五元组（concepts 表唯一约束的列序）
-_IDENTITY_KEYS = ("code", "entity_type", "measure", "unit", "frequency")
-
-
-def _segment(row: dict[str, Any], key: str) -> str | None:
-    """行的非空字符串段（None / 空白 → None）。"""
-    value = row.get(key)
-    if value is None or (isinstance(value, str) and not value.strip()):
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _stable_indicator_id(composite: str) -> str:
-    """五元组拼接超列宽（128）时退化为前缀 + sha1 后缀（确定性、无截断碰撞）。"""
-    if len(composite) <= 128:
-        return composite
-    digest = hashlib.sha1(composite.encode("utf-8")).hexdigest()[:7]
-    return f"{composite[:120]}~{digest}"
-
-
-def mcp_concept_row_to_record(row: dict[str, Any]) -> ConceptRecord:
-    """``list_concepts`` 行（Concept.toDict() / 统一注册目录行）→ ConceptRecord。
-
-    - ``indicator_id``：权威五元组 (code, entity_type, measure, unit,
-      frequency) 的非空段 ``@`` 拼接（registry 行只携带 code 段）——与权威
-      唯一约束同口径，重灌权威库也稳定；
-    - ``domain`` ← 权威 ``category``（registry 行即 domain）；
-    - ``status`` ← 权威 ``verified``（两级口径：verified | registered）。
-    """
-    code = _segment(row, "code") or _segment(row, "semantic_code") or _segment(row, "native_code")
-    if code is None:
-        raise ValueError(f"list_concepts row without a usable code: {row!r}")
-    parts = [_segment(row, key) for key in _IDENTITY_KEYS]
-    composite = "@".join(part for part in parts if part)
-    verified = row.get("verified")
-    is_verified = verified is True or (
-        isinstance(verified, str) and verified.strip().lower() == "true"
-    )
-    return ConceptRecord(
-        indicator_id=_stable_indicator_id(composite),
-        code=code,
-        name_zh=_first_str(row, "name_zh"),
-        name_en=_first_str(row, "name_en"),
-        description_zh=_first_str(row, "description_zh"),
-        description_en=_first_str(row, "description_en"),
-        domain=_first_str(row, "domain", "category"),
-        frequency=_first_str(row, "frequency"),
-        time_span_start=_first_str(row, "time_span_start"),
-        time_span_end=_first_str(row, "time_span_end"),
-        entity_coverage_count=_first_int(row, "entity_coverage_count"),
-        sample_value=_first_str(row, "sample_value"),
-        status="verified" if is_verified else "registered",
-        updated_at=_parse_dt(row.get("updated_at") or row.get("updated")),
-    )
-
-
 class HttpRegistryClient:
-    """MCP streamable-http 权威源客户端（fd-open-data-mcp 的 list_concepts 族）。
+    """MCP streamable-http 权威源客户端（fd-open-data-mcp 的
+    ``list_registry_entries``，登记表全量枚举）。
 
     ``transport`` 可注入（httpx.MockTransport）供全 mock 测试；生产缺省走
     真实网络。凭据 ``token`` 缺省取 ``settings.indicator_registry_token``
@@ -375,9 +361,10 @@ class HttpRegistryClient:
             return session_id
         raise ValueError("authority MCP rejected every known protocol version")
 
-    def _call_list_concepts(
+    def _call_list_tool(
         self, client: httpx.Client, session_id: str, offset: int
     ) -> list[Any]:
+        """``tools/call list_registry_entries``：limit/offset 翻页（status 缺省=全量）。"""
         self._rpc_id += 1
         resp = self._post(
             client,
@@ -409,9 +396,8 @@ class HttpRegistryClient:
 
     # ── RegistryClient 协议实现 ─────────────────────────────────────────────
 
-    def fetch_concepts(
-        self, updated_since: datetime | None = None, force_full: bool = False
-    ) -> ConceptBatch:
+    def fetch_concepts(self) -> ConceptBatch:
+        """全量翻页拉取登记表（无增量游标：每次都是全量，幂等 upsert 兜底）。"""
         pulled: list[ConceptRecord] = []
         with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
             session_id = self._initialize(client)
@@ -419,12 +405,12 @@ class HttpRegistryClient:
                 offset = 0
                 # 保守分页上限，防权威侧异常翻页不终止
                 for _ in range(self._max_pages):
-                    page = self._call_list_concepts(client, session_id, offset)
+                    page = self._call_list_tool(client, session_id, offset)
                     for row in page:
-                        if not isinstance(row, dict) or row.get("deprecated"):
-                            # deprecated 权威行已从发现/调度下线，目录镜像同样不带
-                            continue
-                        pulled.append(mcp_concept_row_to_record(row))
+                        # 契约行必须携带 source_db/native_code；畸形行 fail-fast
+                        # （同步器整批中止、旧镜像原样保留，见 sync 的异常路径）
+                        if isinstance(row, dict):
+                            pulled.append(normalize_record(row))
                     if len(page) < self._page_size:
                         break
                     offset += self._page_size
@@ -432,17 +418,9 @@ class HttpRegistryClient:
                     raise ValueError("authority pagination did not terminate")
             finally:
                 self._close_session(client, session_id)
-        # 权威 list_concepts 无 updated_since 参数：全量翻页后按行级 updated_at
-        # 本地过滤；行不携带 updated_at（当前契约）时保守保留，幂等 upsert 兜底。
-        if updated_since is not None and not force_full:
-            pulled = [
-                rec for rec in pulled
-                if rec.updated_at is None or rec.updated_at > updated_since
-            ]
-        batch = ConceptBatch(items=pulled, full=updated_since is None or force_full)
-        stamps = [rec.updated_at for rec in pulled if rec.updated_at is not None]
-        batch.next_watermark = max(stamps) if stamps else (updated_since or utcnow())
-        return batch
+        # 登记行不携带 updated_at（当前契约）：水位退化为拉取时刻，
+        # 仅作同步状态展示，不再承担增量语义。
+        return ConceptBatch(items=pulled, full=True, next_watermark=utcnow())
 
 
 __all__ = [
@@ -450,7 +428,6 @@ __all__ = [
     "ConceptRecord",
     "HttpRegistryClient",
     "RegistryClient",
-    "mcp_concept_row_to_record",
     "normalize_record",
     "normalize_status",
     "utcnow",

@@ -18,11 +18,13 @@ class IndicatorListItem(BaseModel):
     """目录列表项（精简展示）。"""
 
     indicator_id: str
+    source_db: str | None = None
     code: str
     name_zh: str | None = None
     name_en: str | None = None
     domain: str | None = None
     frequency: str | None = None
+    unit: str | None = None
     status: str
 
 
@@ -55,7 +57,7 @@ class IndicatorListResponse(BaseModel):
 
 
 class SyncTriggerRequest(BaseModel):
-    force_full: bool = False
+    force_full: bool = False  # 兼容保留；同步已恒为单事务全量重刷
 
 
 class SyncResultResponse(BaseModel):
@@ -68,11 +70,28 @@ class SyncResultResponse(BaseModel):
     watermark: datetime | None = None
 
 
+class CatalogSourceStats(BaseModel):
+    """按源分列计数（source_db 为空的历史行归入空串组）。"""
+
+    source_db: str
+    registered: int = Field(ge=0)
+    verified: int = Field(ge=0)
+
+
+class CatalogStatsResponse(BaseModel):
+    """目录计数（活取口径）：registered＝登记总量（全量，含 verified）。"""
+
+    registered: int = Field(ge=0)
+    verified: int = Field(ge=0)
+    by_source: list[CatalogSourceStats] = Field(default_factory=list)
+
+
 def detail_from_row(row: IndicatorSnapshot) -> dict[str, Any]:
     """镜像行 → 详情 payload（含 registered 导流字段；无任何观测数值）。"""
     on_demand = row.status == "registered"
     return {
         "indicator_id": row.indicator_id,
+        "source_db": row.source_db,
         "code": row.code,
         "name_zh": row.name_zh,
         "name_en": row.name_en,
@@ -80,6 +99,7 @@ def detail_from_row(row: IndicatorSnapshot) -> dict[str, Any]:
         "description_en": row.description_en,
         "domain": row.domain,
         "frequency": row.frequency,
+        "unit": row.unit,
         "time_span_start": row.time_span_start,
         "time_span_end": row.time_span_end,
         "entity_coverage_count": row.entity_coverage_count,
@@ -94,10 +114,12 @@ def detail_from_row(row: IndicatorSnapshot) -> dict[str, Any]:
 def list_item_from_row(row: IndicatorSnapshot) -> dict[str, Any]:
     return {
         "indicator_id": row.indicator_id,
+        "source_db": row.source_db,
         "code": row.code,
         "name_zh": row.name_zh,
         "name_en": row.name_en,
         "domain": row.domain,
         "frequency": row.frequency,
+        "unit": row.unit,
         "status": row.status,
     }

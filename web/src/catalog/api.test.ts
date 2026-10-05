@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   API_BASE,
+  buildCatalogStatsUrl,
   buildIndicatorDetailUrl,
   buildIndicatorsUrl,
   demandNewHref,
   displayName,
   displayDescription,
+  fetchCatalogStats,
   fetchIndicators,
   fetchIndicator,
+  formatCatalogTotal,
   CatalogApiError,
 } from "./api";
 import { failingBackend } from "./testing";
@@ -69,5 +72,68 @@ describe("fetch error mapping", () => {
     } finally {
       globalThis.fetch = original;
     }
+  });
+});
+
+describe("buildCatalogStatsUrl / fetchCatalogStats", () => {
+  const originalFetch = globalThis.fetch;
+
+  it("stats URL 与解析（公开匿名计数端点）", async () => {
+    expect(buildCatalogStatsUrl()).toBe("/api/v1/catalog/stats");
+    const fetchImpl = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        registered: 57553,
+        verified: 3421,
+        by_source: [
+          { source_db: "world_bank", registered: 12000, verified: 800 },
+        ],
+      }),
+    })) as unknown as typeof fetch;
+    globalThis.fetch = fetchImpl;
+    try {
+      const stats = await fetchCatalogStats();
+      expect(stats.registered).toBe(57553);
+      expect(stats.verified).toBe(3421);
+      expect(stats.by_source[0]?.source_db).toBe("world_bank");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("stats 非法 JSON → CatalogApiError", async () => {
+    const fetchImpl = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new Error("boom");
+      },
+    })) as unknown as typeof fetch;
+    globalThis.fetch = fetchImpl;
+    try {
+      await expect(fetchCatalogStats()).rejects.toBeInstanceOf(CatalogApiError);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("formatCatalogTotal（首页数字：千位向下取整）", () => {
+  it("57,553 → 57,000（千位分隔符展示）", () => {
+    expect(formatCatalogTotal(57553)).toBe("57,000");
+  });
+
+  it("恰为千整倍数与边界", () => {
+    expect(formatCatalogTotal(1000)).toBe("1,000");
+    expect(formatCatalogTotal(999999)).toBe("999,000");
+  });
+
+  it("不足 1,000 / 非法值 → 空串（调用方回退不带数字文案）", () => {
+    expect(formatCatalogTotal(999)).toBe("");
+    expect(formatCatalogTotal(1)).toBe("");
+    expect(formatCatalogTotal(0)).toBe("");
+    expect(formatCatalogTotal(-5)).toBe("");
+    expect(formatCatalogTotal(Number.NaN)).toBe("");
   });
 });

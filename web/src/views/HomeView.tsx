@@ -1,14 +1,25 @@
 // 官网首页（#/）——柏讯产品叙事：hero + 三条价值主张 + 双 CTA + wire 线站位一句。
 // 联系开通为 mailto 占位（正式商留通道后续接入）。
+// 目录规模数字活取 /v1/catalog/stats（千位向下取整，如 57,000+）；
+// 取不到计数时回退不带数字的文案——源码不携带手写指标数字面量。
 import { useTranslation } from "react-i18next";
+import { formatCatalogTotal } from "../catalog/api";
+import { useCatalogStats } from "../catalog/useCatalogStats";
 
 export const CONTACT_MAILTO = "mailto:wire@finddatatech.cloud";
 
 export function HomeView() {
   const { t } = useTranslation();
+  const stats = useCatalogStats();
+  const catalogTotal = formatCatalogTotal(stats?.registered ?? 0);
 
   const values = [
-    { title: t("home.value1Title"), desc: t("home.value1Desc") },
+    {
+      title: catalogTotal
+        ? t("home.value1Title", { total: catalogTotal })
+        : t("home.value1TitleNoCount"),
+      desc: t("home.value1Desc"),
+    },
     { title: t("home.value2Title"), desc: t("home.value2Desc") },
     { title: t("home.value3Title"), desc: t("home.value3Desc") },
   ];
@@ -49,7 +60,9 @@ export function HomeView() {
               key={v.title}
               className="rounded-lg border border-slate-200 p-5"
             >
-              <h3 className="font-medium">{v.title}</h3>
+              <h3 className="font-medium" data-testid="home-value-title">
+                {v.title}
+              </h3>
               <p className="mt-2 text-sm text-slate-500">{v.desc}</p>
             </div>
           ))}

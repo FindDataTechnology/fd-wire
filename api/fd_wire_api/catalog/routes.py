@@ -2,9 +2,11 @@
 
 - 公开（不登录）：``GET /api/v1/catalog/indicators``（分页+关键词+domain+
   status 过滤）、``GET /api/v1/catalog/indicators/{id}``（详情 + registered
-  导流字段）。不返回任何观测数值。
+  导流字段）、``GET /api/v1/catalog/stats``（目录计数：登记总量/verified
+  总量/按源分列，镜像 GROUP BY 现算——对外文案的数字一律活取于此）。
+  不返回任何观测数值。
 - 内部（X-Internal-Token 保护）：``POST /internal/catalog/sync`` 手动触发
-  同步（可 force_full）。
+  同步（单事务全量重刷；force_full 参数兼容保留）。
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from sqlalchemy.exc import OperationalError
 from .client import HttpRegistryClient, RegistryClient
 from .db import MirrorWriteBlocked
 from .schemas import (
+    CatalogStatsResponse,
     IndicatorDetail,
     IndicatorListResponse,
     SyncResultResponse,
@@ -73,6 +76,18 @@ def list_indicators(
         page=result["page"],
         page_size=result["page_size"],
     )
+
+
+@public_router.get("/stats", response_model=CatalogStatsResponse)
+def catalog_stats(
+    service: CatalogQueryService = Depends(get_query_service),
+) -> CatalogStatsResponse:
+    """目录计数（公开匿名）：镜像 GROUP BY source_db 现算，如实反映镜像。
+
+    ``registered``＝登记总量（全量，含 verified）；首页等对外文案的指标
+    数字一律从此活取，MUST NOT 手写。
+    """
+    return CatalogStatsResponse.model_validate(service.stats())
 
 
 @public_router.get("/indicators/{indicator_ref}", response_model=IndicatorDetail)

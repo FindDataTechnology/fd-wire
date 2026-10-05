@@ -19,7 +19,10 @@ const zh = {
     ctaCatalog: "浏览指标目录",
     ctaContact: "联系开通",
     valueTitle: "三条价值主张",
-    value1Title: "57,000+ 指标目录",
+    // 目录数字活取：{{total}} 由 /v1/catalog/stats 千位取整渲染（如 57,000）；
+    // 取不到计数时回退 value1TitleNoCount——文案不携带手写数字。
+    value1Title: "{{total}}+ 指标目录",
+    value1TitleNoCount: "指标目录",
     value1Desc:
       "统一指标注册目录全量可搜（无需登录）——verified 直读、registered 按需开通。",
     value2Title: "MCP 直连数据",
@@ -37,7 +40,8 @@ const zh = {
     perMonth: "/月",
     recommended: "推荐",
     cta: "联系开通",
-    featCatalog: "57,000+ 指标目录全量浏览",
+    featCatalog: "{{total}}+ 指标目录全量浏览",
+    featCatalogNoCount: "指标目录全量浏览",
     featMcp: "MCP 直连数据读取",
     featDemand: "数据需求单（独立报价）",
     starter: {

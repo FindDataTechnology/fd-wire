@@ -1,69 +1,40 @@
-"""HttpRegistryClient 的 MCP streamable-http 全 mock 测试。
+"""HttpRegistryClient 的 MCP streamable-http 全 mock 测试（list_registry_entries 通道）。
 
 线格式按 fastmcp 3.4.4 / mcp 1.28.1 实测（2026-10）模拟，全程
 httpx.MockTransport，无真实网络：
 - initialize → 200 + ``text/event-stream``（``event: message`` / ``data:`` 行）
   + ``Mcp-Session-Id`` 响应头；
 - notifications/initialized → 202 无体；
-- tools/call → 200 + SSE，结果在 ``structuredContent.result``
-  （fastmcp 对 list 返回值的包装），``content[0].text`` 同载荷。
+- tools/call ``list_registry_entries`` → 200 + SSE，结果在
+  ``structuredContent.result``（fastmcp 对 list 返回值的包装），
+  ``content[0].text`` 同载荷。
 覆盖：握手→tools/call→解析→映射到 ConceptRecord/IndicatorSnapshot 字段、
-limit/offset 翻页、Bearer 凭据、端点归一、错误面、水位本地过滤。
+limit/offset 翻页、Bearer 凭据、端点归一、错误面、新标识方案
+（indicator_id = source_db:native_code）。
 """
 
 from __future__ import annotations
 
 import json
-from datetime import timedelta
 
 import httpx
 import pytest
 
-from fd_wire_api.catalog.client import HttpRegistryClient, mcp_concept_row_to_record, utcnow
+from fd_wire_api.catalog.client import HttpRegistryClient, normalize_record, utcnow
 
 
-def native_row(code: str, entity_type: str = "country", **overrides) -> dict:
-    """Concept.toDict() 形状的权威行（+ family label，list_concepts 原样返回）。"""
+def entry_row(source_db: str = "world_bank", native_code: str = "WB.COAL", **overrides) -> dict:
+    """list_registry_entries 权威行（固定契约的 9 字段）。"""
     row = {
-        "id": 1,
-        "code": code,
-        "name_en": f"Name {code}",
-        "name_zh": f"指标-{code}",
-        "category": "macro",
-        "unit": "USD",
-        "measure": "nominal_current",
+        "source_db": source_db,
+        "native_code": native_code,
+        "semantic_code": "coal_output",
+        "name_zh": f"注册-{native_code}",
+        "name_en": f"Registry {native_code}",
+        "unit": "万吨",
         "frequency": "annual",
-        "concept_code": "GDP",
-        "entity_type": entity_type,
-        "source": "vocabulary",
+        "domain": "energy",
         "verified": True,
-        "deprecated": False,
-        "concept_family_label": "GDP",
-    }
-    row.update(overrides)
-    return row
-
-
-def registry_row(code: str, **overrides) -> dict:
-    """统一注册目录（registry_entries）行：id/entity_type 为 None，带 native_code。"""
-    row = {
-        "id": None,
-        "code": code,
-        "name_en": f"Registry {code}",
-        "name_zh": f"注册-{code}",
-        "category": "energy",
-        "unit": None,
-        "measure": None,
-        "frequency": "annual",
-        "concept_code": None,
-        "concept_family_label": None,
-        "entity_type": None,
-        "source": "registry",
-        "verified": True,
-        "deprecated": False,
-        "native_code": f"WB.{code}",
-        "source_db": "world_bank",
-        "read_via": "wb_read",
     }
     row.update(overrides)
     return row
@@ -176,8 +147,13 @@ def make_client(authority: FakeAuthority, **kwargs) -> HttpRegistryClient:
 # ── 握手 → tools/call → 解析 → 映射 ────────────────────────────────────────
 
 
-def test_handshake_then_list_concepts_and_field_mapping():
-    authority = FakeAuthority(rows=[native_row("GDP_TOTAL"), registry_row("COAL_OUTPUT")])
+def test_handshake_then_list_registry_entries_and_field_mapping():
+    authority = FakeAuthority(
+        rows=[
+            entry_row("world_bank", "WB.COAL"),
+            entry_row("gta", "GDP_TOTAL", verified=False, unit=None),
+        ]
+    )
     client = make_client(authority)
 
     batch = client.fetch_concepts()
@@ -192,11 +168,12 @@ def test_handshake_then_list_concepts_and_field_mapping():
     assert len(authority.calls("notifications/initialized")) == 1
     assert authority.calls("notifications/initialized")[0].headers.get("mcp-session-id") == "sess-abc-123"
 
-    # tools/call：limit/offset 入参 + 会话头；会话用完 DELETE 关闭
+    # tools/call：工具名 list_registry_entries + limit/offset 入参 + 会话头；
+    # 会话用完 DELETE 关闭
     calls = authority.calls("tools/call")
     assert len(calls) == 1
     assert json.loads(calls[0].content)["params"] == {
-        "name": "list_concepts",
+        "name": "list_registry_entries",
         "arguments": {"limit": 500, "offset": 0},
     }
     assert calls[0].headers.get("mcp-session-id") == "sess-abc-123"
@@ -204,35 +181,24 @@ def test_handshake_then_list_concepts_and_field_mapping():
 
     # 映射到 ConceptRecord（IndicatorSnapshot 的同步字段来源）
     assert len(batch.items) == 2
-    native, reg = batch.items
-    assert native.indicator_id == "GDP_TOTAL@country@nominal_current@USD@annual"
-    assert native.code == "GDP_TOTAL"
-    assert native.name_zh == "指标-GDP_TOTAL" and native.name_en == "Name GDP_TOTAL"
-    assert native.domain == "macro"  # domain ← 权威 category
-    assert native.frequency == "annual"
-    assert native.status == "verified"
-    assert reg.indicator_id == "COAL_OUTPUT@annual"  # registry 行只有 code+frequency 段
-    assert reg.code == "COAL_OUTPUT"
-    assert reg.domain == "energy"
-    assert reg.status == "verified"
-
-
-def test_unverified_row_maps_to_registered_and_full_watermark_fallback():
-    authority = FakeAuthority(
-        rows=[native_row("PMI", verified=False, updated_at="2026-10-01T00:00:00Z")]
-    )
-    batch = make_client(authority).fetch_concepts()
-    assert batch.items[0].status == "registered"
+    wb, gta = batch.items
+    assert wb.indicator_id == "world_bank:WB.COAL"  # source_db:native_code
+    assert wb.source_db == "world_bank"
+    assert wb.native_code == "WB.COAL"
+    assert wb.code == "coal_output"  # code ← semantic_code（展示属性）
+    assert wb.name_zh == "注册-WB.COAL" and wb.name_en == "Registry WB.COAL"
+    assert wb.unit == "万吨"
+    assert wb.domain == "energy"
+    assert wb.frequency == "annual"
+    assert wb.status == "verified"
+    # unverified → registered（如实两级口径）
+    assert gta.indicator_id == "gta:GDP_TOTAL"
+    assert gta.status == "registered"
     assert batch.full is True
-    assert batch.items[0].updated_at is not None
-    assert batch.next_watermark == batch.items[0].updated_at
-
-
-# ── 分页（limit/offset，无 cursor）───────────────────────────────────────────
 
 
 def test_pagination_advances_offset_until_short_page():
-    rows = [native_row(f"C{i:03d}") for i in range(5)]
+    rows = [entry_row("world_bank", f"WB.C{i:03d}") for i in range(5)]
     authority = FakeAuthority(rows=rows)
     client = make_client(authority, page_size=2)
 
@@ -243,11 +209,13 @@ def test_pagination_advances_offset_until_short_page():
     # 翻页：0,2（满页）→ 4（短页 1 行 < 2 即停，无需第 4 次探底）
     assert offsets == [0, 2, 4]
     assert len(batch.items) == 5
-    assert {r.indicator_id.split("@")[0] for r in batch.items} == {f"C{i:03d}" for i in range(5)}
+    assert {r.indicator_id for r in batch.items} == {
+        f"world_bank:WB.C{i:03d}" for i in range(5)
+    }
 
 
 def test_exact_multiple_pages_stops_on_empty_page():
-    rows = [native_row(f"C{i}") for i in range(4)]
+    rows = [entry_row("gta", f"C{i}") for i in range(4)]
     authority = FakeAuthority(rows=rows)
     client = make_client(authority, page_size=2)
 
@@ -261,59 +229,20 @@ def test_exact_multiple_pages_stops_on_empty_page():
     assert len(batch.items) == 4
 
 
-def test_deprecated_rows_dropped_but_pagination_counts_them():
-    rows = [
-        native_row("KEEP_1"),
-        native_row("DROP_1", deprecated=True),
-        native_row("DROP_2", deprecated=True),
-        native_row("KEEP_2"),
-    ]
-    authority = FakeAuthority(rows=rows)
-    client = make_client(authority, page_size=2)
-
-    batch = client.fetch_concepts()
-
-    assert {r.code for r in batch.items} == {"KEEP_1", "KEEP_2"}
-
-
-# ── 增量水位（权威无 updated_since 参数 → 本地过滤）────────────────────────
-
-
-def test_updated_since_filters_only_rows_with_stamp():
-    next_day = utcnow() + timedelta(days=1)
-    rows = [
-        native_row("NEW", updated_at=next_day.isoformat()),
-        native_row("OLD", updated_at=(utcnow() - timedelta(days=30)).isoformat()),
-        native_row("UNSTAMPED"),  # 当前真实契约：行不携带 updated_at
-    ]
-    authority = FakeAuthority(rows=rows)
-    client = make_client(authority)
-
-    batch = client.fetch_concepts(updated_since=utcnow())
-
-    # 带旧时间戳的行被滤掉；无时间戳的保守保留（幂等 upsert 兜底）
-    assert {r.code for r in batch.items} == {"NEW", "UNSTAMPED"}
-    assert batch.full is False
-    assert batch.next_watermark == next_day
-
-    # force_full 一律全量
-    full = client.fetch_concepts(updated_since=utcnow(), force_full=True)
-    assert {r.code for r in full.items} == {"NEW", "OLD", "UNSTAMPED"}
-    assert full.full is True
-
-
-def test_watermark_falls_back_when_no_row_carries_stamp():
-    authority = FakeAuthority(rows=[native_row("C1")])
-    since = utcnow() - timedelta(hours=1)
-    batch = make_client(authority).fetch_concepts(updated_since=since)
-    assert batch.next_watermark == since
+def test_watermark_falls_back_to_fetch_time():
+    """登记行不携带 updated_at（现契约）：水位退化为拉取时刻。"""
+    authority = FakeAuthority(rows=[entry_row()])
+    before = utcnow()
+    batch = make_client(authority).fetch_concepts()
+    assert batch.next_watermark is not None
+    assert batch.next_watermark >= before
 
 
 # ── 凭据与端点归一 ──────────────────────────────────────────────────────────
 
 
 def test_missing_token_sends_no_authorization_header():
-    authority = FakeAuthority(rows=[native_row("C1")], token="")
+    authority = FakeAuthority(rows=[entry_row()], token="")
     client = make_client(authority, token="")
     batch = client.fetch_concepts()
     assert len(batch.items) == 1
@@ -323,7 +252,7 @@ def test_missing_token_sends_no_authorization_header():
 
 
 def test_wrong_token_surfaces_as_http_401():
-    authority = FakeAuthority(rows=[native_row("C1")], token="right-token")
+    authority = FakeAuthority(rows=[entry_row()], token="right-token")
     client = make_client(authority, token="wrong-token")
     with pytest.raises(httpx.HTTPStatusError, match="401"):
         client.fetch_concepts()
@@ -340,7 +269,7 @@ def test_endpoint_normalization_appends_mcp_suffix():
         ("http://fd-open-data-mcp.mcp.svc:8899",
          "http://fd-open-data-mcp.mcp.svc:8899/mcp"),
     ]:
-        authority = FakeAuthority(rows=[native_row("C1")])
+        authority = FakeAuthority(rows=[entry_row()])
         client = make_client(authority, base_url=base)
         client.fetch_concepts()
         assert authority.requests[0].url == expected
@@ -349,7 +278,7 @@ def test_endpoint_normalization_appends_mcp_suffix():
 def test_token_defaults_to_settings(monkeypatch):
     from fd_wire_api.catalog import settings as catalog_settings_module
 
-    authority = FakeAuthority(rows=[native_row("C1")], token="from-settings")
+    authority = FakeAuthority(rows=[entry_row()], token="from-settings")
     monkeypatch.setattr(
         catalog_settings_module.settings, "indicator_registry_token", "from-settings"
     )
@@ -365,7 +294,7 @@ def test_token_defaults_to_settings(monkeypatch):
 
 
 def test_protocol_version_fallback_on_400():
-    authority = FakeAuthority(rows=[native_row("C1")])
+    authority = FakeAuthority(rows=[entry_row()])
     authority.reject_first_versions = 1  # 2025-06-18 被拒 → 回落 2025-03-26
     client = make_client(authority)
 
@@ -378,7 +307,7 @@ def test_protocol_version_fallback_on_400():
 
 
 def test_plain_json_body_response_path():
-    authority = FakeAuthority(rows=[native_row("C1")])
+    authority = FakeAuthority(rows=[entry_row()])
     authority.json_body = True  # 服务端以纯 JSON（非 SSE）应答
     batch = make_client(authority).fetch_concepts()
     assert len(batch.items) == 1
@@ -386,7 +315,7 @@ def test_plain_json_body_response_path():
 
 def test_text_block_payload_path_without_structured_content():
     """structuredContent 缺失时从 content[0].text 解析（与 fastmcp 兼容兜底）。"""
-    authority = FakeAuthority(rows=[native_row("C1")])
+    authority = FakeAuthority(rows=[entry_row()])
 
     original_handler = authority.handler
 
@@ -407,35 +336,66 @@ def test_text_block_payload_path_without_structured_content():
     )
     batch = client.fetch_concepts()
     assert len(batch.items) == 1
-    assert batch.items[0].code == "C1"
+    assert batch.items[0].code == "coal_output"
 
 
 def test_rpc_error_payload_raises():
-    authority = FakeAuthority(rows=[native_row("C1")])
+    authority = FakeAuthority(rows=[entry_row()])
     authority.fail_mode = ("rpc_error", "unknown tool")
     with pytest.raises(RuntimeError, match="RPC error -32602: unknown tool"):
         make_client(authority).fetch_concepts()
 
 
 def test_tool_is_error_result_raises():
-    authority = FakeAuthority(rows=[native_row("C1")])
+    authority = FakeAuthority(rows=[entry_row()])
     authority.fail_mode = ("tool_is_error", "database unreadable")
     with pytest.raises(RuntimeError, match="database unreadable"):
         make_client(authority).fetch_concepts()
 
 
-# ── 行映射单元 ──────────────────────────────────────────────────────────────
+# ── 行映射单元（normalize_record：新标识方案） ──────────────────────────────
 
 
-def test_long_identity_composite_gets_hash_suffix_without_collision():
-    long_unit = "U" * 200
-    record_a = mcp_concept_row_to_record(native_row("GDP", unit=long_unit))
-    record_b = mcp_concept_row_to_record(native_row("GDP", unit="X" + long_unit))
+def test_row_without_source_db_or_native_code_raises():
+    with pytest.raises(ValueError, match="without usable source_db/native_code"):
+        normalize_record(entry_row(source_db=None))
+    with pytest.raises(ValueError, match="without usable source_db/native_code"):
+        normalize_record(entry_row(native_code=""))
+    with pytest.raises(ValueError, match="without usable source_db/native_code"):
+        normalize_record({"semantic_code": "orphan"})
+
+
+def test_cross_source_same_semantic_code_distinct_ids():
+    """跨源等价条目（语义码相同）标识不同——语义码不得当主键。"""
+    a = normalize_record(entry_row("gta", "GDP", semantic_code="gdp"))
+    b = normalize_record(entry_row("world_bank", "WB.GDP", semantic_code="gdp"))
+    assert a.indicator_id == "gta:GDP"
+    assert b.indicator_id == "world_bank:WB.GDP"
+    assert a.indicator_id != b.indicator_id
+    assert a.code == b.code == "gdp"  # 语义码只作展示/搜索属性
+
+
+def test_identity_immune_to_display_field_changes():
+    """名称/单位被权威库修正 → indicator_id 不变（原地更新语义）。"""
+    before = normalize_record(entry_row("gta", "CPI", name_zh="旧名", unit="指数点"))
+    after = normalize_record(entry_row("gta", "CPI", name_zh="新名", unit="%"))
+    assert before.indicator_id == after.indicator_id == "gta:CPI"
+    assert after.name_zh == "新名" and after.unit == "%"
+
+
+def test_long_indicator_id_gets_hash_suffix_without_collision():
+    long_native = "N" * 200
+    record_a = normalize_record(entry_row("src", long_native))
+    record_b = normalize_record(entry_row("src", "X" + long_native))
     assert len(record_a.indicator_id) == 128
     assert len(record_b.indicator_id) == 128
     assert record_a.indicator_id != record_b.indicator_id  # 同前缀不同行不可撞
 
 
-def test_row_without_code_raises():
-    with pytest.raises(ValueError, match="without a usable code"):
-        mcp_concept_row_to_record({"id": None, "entity_type": None})
+def test_verified_string_true_tolerated_but_conservative_default():
+    """契约 verified 为 bool；字符串 "true" 容错，其余一律保守落 registered。"""
+    assert normalize_record(entry_row(verified=True)).status == "verified"
+    assert normalize_record(entry_row(verified="true")).status == "verified"
+    assert normalize_record(entry_row(verified=False)).status == "registered"
+    assert normalize_record(entry_row(verified=None)).status == "registered"
+    assert normalize_record(entry_row(verified="yes")).status == "registered"

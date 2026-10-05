@@ -8,11 +8,13 @@ export type IndicatorStatus = "verified" | "registered";
 
 export interface IndicatorListItem {
   indicator_id: string;
+  source_db: string | null;
   code: string;
   name_zh: string | null;
   name_en: string | null;
   domain: string | null;
   frequency: string | null;
+  unit: string | null;
   status: IndicatorStatus;
 }
 
@@ -38,6 +40,19 @@ export interface IndicatorListResponse {
   total: number;
   page: number;
   page_size: number;
+}
+
+/** 目录计数（/v1/catalog/stats）：registered＝登记总量（全量，含 verified）。 */
+export interface CatalogSourceStats {
+  source_db: string;
+  registered: number;
+  verified: number;
+}
+
+export interface CatalogStats {
+  registered: number;
+  verified: number;
+  by_source: CatalogSourceStats[];
 }
 
 export interface CatalogQuery {
@@ -75,9 +90,14 @@ export function buildIndicatorsUrl(query: CatalogQuery = {}): string {
   return `${API_BASE}/v1/catalog/indicators${qs ? `?${qs}` : ""}`;
 }
 
-/** 详情 URL：{id} 为 indicator_id（权威主键）。 */
+/** 详情 URL：{id} 为 indicator_id（权威主键 source_db:native_code）。 */
 export function buildIndicatorDetailUrl(id: string): string {
   return `${API_BASE}/v1/catalog/indicators/${encodeURIComponent(id)}`;
+}
+
+/** 目录计数 URL（公开匿名；首页/定价页数字活取源）。 */
+export function buildCatalogStatsUrl(): string {
+  return `${API_BASE}/v1/catalog/stats`;
 }
 
 async function getJson(url: string): Promise<unknown> {
@@ -107,7 +127,26 @@ export function fetchIndicator(id: string): Promise<IndicatorDetail> {
   return getJson(buildIndicatorDetailUrl(id)) as Promise<IndicatorDetail>;
 }
 
-/** 展示名：中文优先，英文兜底，最后兜底 code。 */
+/** 目录计数（公开匿名）：登记总量 / verified 总量 / 按源分列。 */
+export function fetchCatalogStats(): Promise<CatalogStats> {
+  return getJson(buildCatalogStatsUrl()) as Promise<CatalogStats>;
+}
+
+/**
+ * 目录总量 → 千位向下取整的展示数字（57,553 → "57,000"）。
+ * 不足 1,000（或非有限正数）返回空串——调用方回退到不带数字的文案。
+ */
+export function formatCatalogTotal(total: number): string {
+  if (!Number.isFinite(total) || total <= 0) return "";
+  const floored = Math.floor(total / 1000) * 1000;
+  if (floored < 1000) return "";
+  return floored.toLocaleString("en-US");
+}
+
+/**
+ * 展示名：中文优先，英文兜底，最后兜底 code（即 semantic_code）。
+ * name 缺失如实回退显示语义码——渲染层兜底，API 层不做名字编造。
+ */
 export function displayName(item: {
   name_zh: string | null;
   name_en: string | null;

@@ -66,11 +66,14 @@ class IndicatorSnapshot(Base):
         Index("ix_indicator_snapshots_domain", "domain"),
         Index("ix_indicator_snapshots_status", "status"),
         Index("ix_indicator_snapshots_code", "code"),
+        Index("ix_indicator_snapshots_source_db", "source_db"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    # 权威库主键（同步 upsert 锚点）
+    # 权威库主键（同步 upsert 锚点）＝ source_db:native_code
     indicator_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    # 来源库（indicator_id 的前半边；按源过滤与 stats GROUP BY 用，不解析 ID）
+    source_db: Mapped[str | None] = mapped_column(String(128))
     code: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     name_zh: Mapped[str | None] = mapped_column(String(512))
     name_en: Mapped[str | None] = mapped_column(String(512))
@@ -78,6 +81,8 @@ class IndicatorSnapshot(Base):
     description_en: Mapped[str | None] = mapped_column(Text)
     domain: Mapped[str | None] = mapped_column(String(128))
     frequency: Mapped[str | None] = mapped_column(String(64))
+    # 计量单位（登记行直映；条目属性呈现，不进标识）
+    unit: Mapped[str | None] = mapped_column(String(128))
     time_span_start: Mapped[str | None] = mapped_column(String(64))
     time_span_end: Mapped[str | None] = mapped_column(String(64))
     entity_coverage_count: Mapped[int | None] = mapped_column(Integer)

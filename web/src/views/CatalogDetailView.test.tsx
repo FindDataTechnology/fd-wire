@@ -8,6 +8,7 @@ import type { IndicatorDetail } from "../catalog/api";
 
 const REGISTERED: IndicatorDetail = {
   indicator_id: "ind-coal",
+  source_db: "world_bank",
   code: "CN_COAL",
   name_zh: "煤炭产量",
   name_en: "Coal Output",
@@ -15,6 +16,7 @@ const REGISTERED: IndicatorDetail = {
   description_en: "National raw coal output",
   domain: "energy",
   frequency: "周度",
+  unit: "万吨",
   time_span_start: "2015-01",
   time_span_end: "2024-06",
   entity_coverage_count: 31,
