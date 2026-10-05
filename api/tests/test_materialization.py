@@ -20,13 +20,13 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from fd_wire_api.app import app
 from fd_wire_api.billing.models import Base as BillingBase
-from fd_wire_api.billing.models import Customer, Plan
+from fd_wire_api.billing.models import Customer, LedgerEntry, Plan
 from fd_wire_api.materialization import (
     STATUS_QUOTA_EXHAUSTED,
     STATUS_QUOTA_UNVERIFIABLE,
@@ -691,6 +691,54 @@ def test_run_quota_exhausted_hard_stop(quota_env) -> None:
     session.refresh(artifact)
     assert artifact.last_status == STATUS_QUOTA_EXHAUSTED
     assert artifact.last_rows == 0
+
+
+def test_run_quota_exhausted_records_ledger_hardstop(quota_env) -> None:
+    """额度耗尽硬停同时落账本 hardstop 事件（每客户每期幂等一条）——
+
+    wire-platform-v1 4.4 的「账本硬停半链」：物化侧的拒绝不再只是 skip 记录，
+    账本获得同一口径的事件轨迹（预检 402 与账本硬停一致、控制台可如实展示）。
+    """
+    session, runner, wire = quota_env
+    customer = seed_customer(session, included_lines=1_000)
+    add_usage(session, 1_000, when=datetime(2026, 10, 5, 8, 0, 0))
+    register_artifact(session, artifact_id=302)
+
+    result = runner.run("cust-001", 302, now=datetime(2026, 10, 5, 10, 0))
+    assert result.status == STATUS_QUOTA_EXHAUSTED
+    rows = (
+        session.execute(select(LedgerEntry).where(LedgerEntry.kind == "hardstop"))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].customer_id == customer.id
+    assert rows[0].period == "2026-10"
+
+    # 幂等：再次运行（含次日同月）不新增
+    runner.run("cust-001", 302, now=datetime(2026, 10, 6, 10, 0))
+    again = (
+        session.execute(select(LedgerEntry).where(LedgerEntry.kind == "hardstop"))
+        .scalars()
+        .all()
+    )
+    assert len(again) == 1
+    assert wire.calls == []
+
+
+def test_run_quota_unverifiable_does_not_record_hardstop(quota_env) -> None:
+    """「无法核实额度」是 fail-closed 拒绝但不是额度耗尽——不落硬停事件。"""
+    session, runner, wire = quota_env
+    register_artifact(session, artifact_id=303)  # 未 seed 客户 → 映射不到
+    result = runner.run("cust-001", 303, now=datetime(2026, 10, 5, 10, 0))
+    assert result.status == STATUS_QUOTA_UNVERIFIABLE
+    rows = (
+        session.execute(select(LedgerEntry).where(LedgerEntry.kind == "hardstop"))
+        .scalars()
+        .all()
+    )
+    assert rows == []
+    assert wire.calls == []
 
 
 def test_run_quota_allows_below_limit(quota_env) -> None:

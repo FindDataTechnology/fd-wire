@@ -28,17 +28,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import logging
 
 import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..billing.ledger import Ledger
+from ..billing.models import Customer
 from .credentials import CustomerCredentialMissingError, resolve_customer_credential
 from .db import utc_now_naive
 from .models import MaterializedArtifact
 from .quota import QuotaGuard, SqlQuotaGuard
 from .settings import get_settings
 from .specs import ReadItem, SpecReadListError, extract_read_list
+
+logger = logging.getLogger(__name__)
 
 #: 运行状态取值（落 last_status）
 STATUS_SUCCESS = "success"
@@ -148,6 +153,27 @@ class MaterializationRunner:
             )
         return artifact
 
+    def _record_hardstop(self, customer_id: str, *, now: datetime | None = None) -> None:
+        """落账本硬停事件（幂等：每客户每期至多一条；写失败不改变拒绝语义）。
+
+        ``customer_id`` 是物化侧的字符串身份键（=``Customer.sub2api_user_id``），
+        与 ``SqlQuotaGuard`` 同一映射口径。
+        """
+        try:
+            customer = self._db.execute(
+                select(Customer).where(Customer.sub2api_user_id == customer_id)
+            ).scalar_one_or_none()
+            if customer is None:
+                return
+            period = (now or utc_now_naive()).strftime("%Y-%m")
+            Ledger(self._db).record_hardstop(
+                customer_id=customer.id, period=period, ref="quota_exhausted"
+            )
+            self._db.commit()
+        except Exception:  # noqa: BLE001 - 拒绝语义已生效，留痕失败仅记日志
+            self._db.rollback()
+            logger.exception("账本硬停留痕失败 customer_ref=%s", customer_id)
+
     def _record(
         self,
         artifact: MaterializedArtifact,
@@ -234,6 +260,11 @@ class MaterializationRunner:
         # 1) 硬停前置（wire-billing「额度耗尽含产物定时刷新一律拒绝」）
         verdict = self._quota_guard.check(customer_id, now=now)
         if not verdict.allowed:
+            if verdict.exhausted:
+                # 账本硬停半链（wire-platform-v1 4.4）：额度耗尽不止在此拒绝，
+                # 同时落一条 hardstop 账本事件——预检 402（交互）与账本硬停
+                # （物化/对账面）由此保持一致口径，控制台经账本可如实展示。
+                self._record_hardstop(customer_id, now=now)
             return self._record(
                 artifact, status=verdict.status or STATUS_FAILED, rows=0,
                 error=verdict.reason, now=now,
