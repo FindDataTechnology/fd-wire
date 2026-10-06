@@ -7,8 +7,9 @@
 - 行预览分页透传（limit/offset）；
 - 删除调引擎 ``delete``；引擎不可达 → 502 且登记行不删（fail-closed）；
 - 跨企业 404；
-- 真实 ``EngineToolClient``：MCP JSON-RPC tools/call 报文 + 平台服务凭据
-  头（httpx.MockTransport），连接器 key 绝不进入该通道。
+- 真实 ``EngineToolClient``：经 fd_mcp_client gateway 模式的简化报文
+  （``{"tool","arguments"}`` + 平台服务凭据头，httpx.MockTransport），
+  连接器 key 绝不进入该通道。
 """
 
 from __future__ import annotations
@@ -237,7 +238,12 @@ def test_cross_customer_access_all_404(datasets_env) -> None:
 # ------------------------------------------------------------------ 引擎通道报文
 
 
-def test_engine_client_jsonrpc_envelope_and_platform_credential() -> None:
+def test_engine_client_gateway_body_and_platform_credential() -> None:
+    """gateway 简化报文勘误后的报文钉子：``{"tool","arguments"}`` + Bearer。
+
+    （历史：本用例曾按 JSON-RPC 直发形态断言，ingest 通道勘误对齐为
+    registry mcp-proxy 验证过的 gateway 简化形态后同步更正。）
+    """
     seen: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -270,18 +276,13 @@ def test_engine_client_jsonrpc_envelope_and_platform_credential() -> None:
         credential="platform-service-credential",
         http_client=httpx.Client(transport=transport),
     )
-    result = client.call("daas_customer_dataset_ingest_commit", {"ingest_id": "ing-1"})
+    result = client.call("customer_dataset_ingest_commit", {"ingest_id": "ing-1"})
     assert result == {"rows": 3, "size_bytes": 42}
     assert seen["headers"]["authorization"] == "Bearer platform-service-credential"
     assert seen["headers"]["content-type"] == "application/json"
     assert seen["body"] == {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": "daas_customer_dataset_ingest_commit",
-            "arguments": {"ingest_id": "ing-1"},
-        },
+        "tool": "customer_dataset_ingest_commit",
+        "arguments": {"ingest_id": "ing-1"},
     }
     assert "fwc_" not in json.dumps(seen["body"])
     client.close()
@@ -310,7 +311,7 @@ def test_engine_client_surfaces_tool_error_and_non_2xx() -> None:
         http_client=httpx.Client(transport=httpx.MockTransport(tool_error)),
     )
     with pytest.raises(EngineCallError, match="行数超过上限"):
-        client.call("daas_customer_dataset_ingest_commit", {})
+        client.call("customer_dataset_ingest_commit", {})
     client.close()
 
     def boom(_: httpx.Request) -> httpx.Response:
@@ -323,5 +324,5 @@ def test_engine_client_surfaces_tool_error_and_non_2xx() -> None:
         http_client=httpx.Client(transport=httpx.MockTransport(boom)),
     )
     with pytest.raises(EngineCallError, match="500"):
-        client.call("daas_customer_dataset_overview", {})
+        client.call("customer_dataset_overview", {})
     client.close()

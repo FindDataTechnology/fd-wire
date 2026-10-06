@@ -8,15 +8,17 @@
 （env ``AI_PLATFORM_CREDENTIAL``）——AI 探索不计费（探索行数归集到
 平台轨道；真正的计量发生在 registry audit 侧，凭据是平台身份，
 绝不落到客户账单）。产物物化走客户凭据是任务 5.6 的活。
-外部 HTTP 依赖在测试中经注入的 httpx 客户端 mock。
+
+薄壳（daas-deployment-profiles 2.3）：报文/解包/错误体系全部委托
+:mod:`fd_mcp_client` gateway 模式（计量轨 call-only）；本模块只保留
+env 解析、开通/凭据守卫与领域错误（``CellNotProvisionedError`` /
+``CellToolError``）语义。外部 HTTP 依赖在测试中经注入的 httpx 客户端 mock。
 """
 
 from __future__ import annotations
 
-import os
-from typing import Any
-
 import httpx
+from fd_mcp_client import GatewayMcpClient, McpCallError, McpTransportError
 
 from .settings import get_settings, parse_endpoint_map
 
@@ -80,9 +82,10 @@ class CellMcpExecutor:
     def execute(self, tool_name: str, args: dict) -> dict:
         """执行一次 cell 工具调用，返回 MCP 端点的 JSON 结果 dict。
 
-        端点契约（v1 约定）：``POST {endpoint}`` body
-        ``{"tool": name, "arguments": args}``，鉴权 ``Authorization:
-        Bearer <AI_PLATFORM_CREDENTIAL>``（平台凭据轨道）。
+        端点契约（gateway 简化形态，契约钉在 ``fd_mcp_client``）：
+        ``POST {endpoint}`` body ``{"tool": name, "arguments": args}``，
+        鉴权 ``Authorization: Bearer <AI_PLATFORM_CREDENTIAL>``（平台凭据
+        轨道）。
         """
         if not self._endpoint:
             raise CellNotProvisionedError(
@@ -92,25 +95,15 @@ class CellMcpExecutor:
             raise CellToolError(
                 "平台服务凭据未配置（AI_PLATFORM_CREDENTIAL），拒绝以客户凭据执行 AI 探索"
             )
-        body = {"tool": tool_name, "arguments": args}
+        gateway = GatewayMcpClient(
+            self._endpoint,
+            self._credential,
+            http_client=self._http,
+            label="cell MCP 端点",
+        )
         try:
-            resp = self._http.post(
-                self._endpoint,
-                json=body,
-                headers={"Authorization": f"Bearer {self._credential}"},
-            )
-        except httpx.HTTPError as exc:
-            raise CellToolError(f"cell MCP 端点不可达: {exc}") from exc
-        if resp.status_code >= 400:
-            raise CellToolError(
-                f"cell MCP 端点返回 {resp.status_code}: {resp.text[:200]}"
-            )
-        try:
-            payload: Any = resp.json()
-        except ValueError as exc:
-            raise CellToolError("cell MCP 端点返回非 JSON") from exc
-        if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
-            return payload["result"]
-        if isinstance(payload, dict):
-            return payload
-        raise CellToolError("cell MCP 端点返回形态不合契约（需 JSON 对象）")
+            return gateway.call(tool_name, args)
+        except McpTransportError as exc:
+            raise CellToolError(str(exc)) from exc
+        except McpCallError as exc:
+            raise CellToolError(f"cell MCP 端点{exc}") from exc

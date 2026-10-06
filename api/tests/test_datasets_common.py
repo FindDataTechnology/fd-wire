@@ -3,7 +3,7 @@
 - 内存 SQLite 库（``FD_WIRE_DATASETS_DATABASE_URL=sqlite://``，StaticPool）；
 - 挂了 datasets 客户面 + 连接器面的 FastAPI 应用（全量 app，路由真身）；
 - ``FakeEngine``：引擎 MCP 客户端假实现——记录 ``tools/call`` 调用序列
-  （工具全名 ``daas_customer_dataset_*``）、可注入指定工具的失败。
+  （工具全名 ``customer_dataset_*``）、可注入指定工具的失败。
 
 每个用例独立重置 datasets 运行时缓存（引擎/配置/建表标记）。
 """

@@ -1,7 +1,7 @@
 """连接器推送三阶段、漂移判定与配额 fail-closed（任务 2.3 核心）。
 
 覆盖：
-- 三阶段对 fake 引擎的**调用序列**断言（工具全名 daas_customer_dataset_*、
+- 三阶段对 fake 引擎的**调用序列**断言（工具全名 customer_dataset_*、
   chunk 的 start_index 累积）；
 - 漂移判定在 api 侧（缺列/类型变 → 409 + paused_drift + 记 drift，且
   不再调引擎）；增列接受并追加；resume 人工确认后恢复；
