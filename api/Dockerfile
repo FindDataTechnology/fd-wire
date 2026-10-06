@@ -10,9 +10,11 @@ ARG BASE_IMAGE=python:3.12-slim
 
 FROM ${BASE_IMAGE} AS builder
 WORKDIR /build
-# 只拷构建所需：hatchling wheel 的 packages=["fd_wire_api"]，tests 不进镜像。
+# 只拷构建所需：hatchling wheel 的 packages=["fd_wire_api","fd_mcp_client"]，
+# tests 不进镜像。
 COPY pyproject.toml ./
 COPY fd_wire_api ./fd_wire_api
+COPY fd_mcp_client ./fd_mcp_client
 # 依赖闭包全为纯/pydantic-core 轮子，无需编译工具链（fd-proxy-service 同判）。
 RUN python -m venv /opt/venv \
  && /opt/venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
@@ -26,6 +28,7 @@ COPY --from=builder /opt/venv /opt/venv
 # venv 即运行时；包源码随镜像以便现场核查（k8s 不挂卷，配置全走 env →
 # Secret fd-wire-env，见 deploy/k8s/fd-wire-api.yaml）。
 COPY --chown=appuser:appuser fd_wire_api ./fd_wire_api
+COPY --chown=appuser:appuser fd_mcp_client ./fd_mcp_client
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
