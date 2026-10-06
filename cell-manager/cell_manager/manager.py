@@ -133,6 +133,10 @@ class CellManager:
                 # SQLAlchemy 绝对路径四斜杠：sqlite:////data/daas.db
                 "DAAS_DATABASE_URL": f"sqlite:///{CONTAINER_DATA_DIR}/daas.db",
                 "WIRE_GATEWAY_URL": self._config.gateway_url,
+                # cell 画像（daas-deployment-profiles / ADR-0001）：引擎只装载
+                # 通用组+客户数据集组。缺了它 default 画像没有 customer_dataset
+                # 组，数据集同步全部 502——cell 形态的硬前置。
+                "DAAS_PROFILE": "cell",
             }
             # 双轨凭据（8.3 G4）：客户轨 per-cell（CELL_CUSTOMER_CREDENTIAL_MAP）、
             # 平台轨全局单值（CELL_PLATFORM_CREDENTIAL）。未配置则不注入——

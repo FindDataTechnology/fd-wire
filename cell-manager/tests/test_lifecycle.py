@@ -36,6 +36,8 @@ class TestProvision:
         assert info.image == config.image
         assert info.env["DAAS_DATABASE_URL"] == "sqlite:////data/daas.db"
         assert info.env["WIRE_GATEWAY_URL"] == config.gateway_url
+        # cell 画像（ADR-0001）：没有它引擎不装载 customer_dataset 组
+        assert info.env["DAAS_PROFILE"] == "cell"
         # registry：server 条目已注册
         assert fake_registry.is_registered("fd-wire-cell-acme")
 
