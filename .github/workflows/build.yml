@@ -87,10 +87,10 @@ jobs:
           provenance: false
           # named context for the cell image's `COPY --from=daas`; api/web
           # Dockerfiles never reference it and buildx resolves contexts lazily,
-          # so passing it unconditionally is harmless there. A conditional
-          # expression here evaluated empty in run 37520142803 and buildx
-          # tried to pull `daas:latest` from Docker Hub instead.
-          additional_contexts: daas=${{ github.workspace }}/daas-src
+          # so passing it unconditionally is harmless there. NOTE: the action
+          # input is `build-contexts` — `additional_contexts` is silently
+          # ignored as an unexpected input (run 37520142803/37520691589).
+          build-contexts: daas=${{ github.workspace }}/daas-src
           tags: |
             ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.image }}:${{ steps.tag.outputs.tag }}
             ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.image }}:main
