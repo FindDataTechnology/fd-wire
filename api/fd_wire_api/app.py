@@ -12,6 +12,9 @@ from .catalog import init_db as init_catalog_db
 from .catalog import register_catalog
 from .catalog import shutdown_catalog, startup_catalog
 from .config import settings
+from .datasets import connector_router as datasets_connector_router
+from .datasets import init_datasets_db
+from .datasets import router as datasets_router
 from .demands import admin_router as demands_admin_router
 from .demands import init_db as init_demands_db
 from .demands import pipeline_router as demands_pipeline_router
@@ -54,6 +57,9 @@ async def lifespan(_: FastAPI):
     # cron 调度循环（MATERIALIZATION_INTERVAL 扫描，硬停前置在 runner 内）。
     init_materialization_db()
     start_materialization_scheduler()
+    # 客户数据集（wire-customer-local-data 任务组 2）：登记/同步/修正/上传
+    # 表幂等建表兜底（生产走 Alembic 0011）。
+    init_datasets_db()
     try:
         yield
     finally:
@@ -86,6 +92,10 @@ app.include_router(admin_router)
 # 产物物化计量（任务 5.6）：draft 转正 + 运行摘要内部端点
 # （X-Internal-Token 鉴权，未配置 fail-closed；表迁移走 alembic 0009）
 app.include_router(materialization_router)
+# 客户数据集（wire-customer-local-data 任务组 2）：客户面（X-Customer-Id）
+app.include_router(datasets_router)
+# 连接器面（Bearer fwc_...）与内部只读概览；客户数据读写全经引擎 MCP 通道
+app.include_router(datasets_connector_router)
 
 
 @app.get("/health")

@@ -13,6 +13,7 @@ import { LedgerPage } from "./LedgerPage";
 import { DemandsPage } from "./DemandsPage";
 import { CatalogGovernancePage } from "./CatalogGovernancePage";
 import { UsageOverviewPage } from "./UsageOverviewPage";
+import { LocalDataPage } from "./LocalDataPage";
 
 export function AdminView({
   section = "customers",
@@ -36,6 +37,9 @@ export function AdminView({
       )}
       {active === "usage" && (
         <UsageOverviewPage key={`usage:${token}`} token={token} />
+      )}
+      {active === "localdata" && (
+        <LocalDataPage key={`localdata:${token}`} token={token} />
       )}
     </AdminLayout>
   );

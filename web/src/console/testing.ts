@@ -1,11 +1,21 @@
-// 测试专用：控制台 AI API 的内存假后端（语义对齐 api 仓 fd_wire_api.ai 路由：
-// X-Customer-Id 隔离、创建即跑一轮循环、消息 append-only、产物草稿列表）。
+// 测试专用：控制台 API 的内存假后端（语义对齐 api 仓 fd_wire_api 路由：
+// X-Customer-Id 隔离、创建即跑一轮循环、消息 append-only、产物草稿列表；
+// wire-customer-local-data 任务组 3 追加 数据集/上传/修正/同步/连接器 路由，
+// 路径与载荷对齐 reports/interfaces.md §3.3——纯内存、零网络）。
 import type {
   ChatMessage,
+  Connector,
   Conversation,
   ConversationDetail,
+  Correction,
+  CorrectionInput,
+  CorrectionOp,
+  Dataset,
+  DatasetColumn,
   DraftArtifact,
   MessageRole,
+  SyncRecord,
+  UploadPreview,
 } from "./api";
 
 export type FakeResponse = {
@@ -19,6 +29,8 @@ export type FetchCall = {
   url: URL;
   headers: Record<string, string>;
   body?: unknown;
+  /** 非 JSON 请求体（multipart 上传的 FormData）原样保留，便于断言文件字段。 */
+  formData?: FormData;
 };
 
 interface StoredConversation {
@@ -48,6 +60,22 @@ export interface ConsoleBackendOptions {
   /** 强制 POST /ai/conversations 返回该状态（如 429 每日限额）。 */
   failCreateStatus?: number;
   failCreateDetail?: string;
+  /** 种子数据集（带 customer_id 的仅对同客户可见）。 */
+  datasets?: Dataset[];
+  /** 种子连接器（带 customer_id 的仅对同客户可见）。 */
+  connectors?: Connector[];
+  /** 数据集预览行：dataset id → {columns, rows}；缺 __row_id 的行自动补 `hash:seed-<n>`。 */
+  datasetRows?: Record<
+    string,
+    { columns: DatasetColumn[]; rows: Array<Record<string, unknown>> }
+  >;
+  /** 上传响应注入（默认 2 列 / 120 行 / within_limit=true）。 */
+  uploadPreview?: Partial<UploadPreview>;
+  /** 强制上传失败（如 400 行数超限）。 */
+  failUploadStatus?: number;
+  failUploadDetail?: string;
+  /** 配对令牌有效期秒数（默认 900 = 15 分钟）。 */
+  pairingTokenTtlSeconds?: number;
 }
 
 /** 安装假后端为 global fetch；返回调用记录与状态注入接口。 */
@@ -63,6 +91,17 @@ export function installConsoleBackend(
     content: string,
   ) => ChatMessage;
   addArtifact: (artifact: Omit<DraftArtifact, "customer_id" | "status">) => void;
+  addDataset: (dataset: Dataset) => void;
+  addConnector: (connector: Connector) => void;
+  addRows: (
+    datasetId: string,
+    columns: DatasetColumn[],
+    rows: Array<Record<string, unknown>>,
+  ) => void;
+  addCorrection: (correction: Correction) => void;
+  addSync: (sync: SyncRecord) => void;
+  getDatasets: () => Dataset[];
+  getCorrections: (datasetId: string) => Correction[];
 } {
   const store = new Map<number, StoredConversation>();
   let nextConversationId = 1;
@@ -71,6 +110,61 @@ export function installConsoleBackend(
   for (const meta of conversations) {
     nextConversationId = Math.max(nextConversationId, meta.id + 1);
     store.set(meta.id, { meta, messages: [], artifacts: [] });
+  }
+
+  // ── 数据集假后端状态（我的数据） ──
+  const datasets = new Map<string, Dataset>();
+  let nextDatasetSeq = 1;
+  for (const dataset of options.datasets ?? []) datasets.set(dataset.id, { ...dataset });
+  while (datasets.has(`ds-${nextDatasetSeq}`)) nextDatasetSeq += 1;
+  const rowsStore = new Map<
+    string,
+    { columns: DatasetColumn[]; rows: Array<Record<string, unknown>> }
+  >();
+  const anchorRows = (rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> =>
+    rows.map((row, i) => ({ ...row, __row_id: row.__row_id ?? `hash:seed-${i + 1}` }));
+  for (const [id, data] of Object.entries(options.datasetRows ?? {})) {
+    rowsStore.set(id, { columns: data.columns, rows: anchorRows(data.rows) });
+  }
+  const uploads = new Map<string, UploadPreview>();
+  const connectors = new Map<string, Connector>();
+  for (const connector of options.connectors ?? []) {
+    connectors.set(connector.id, { ...connector });
+  }
+  const corrections = new Map<string, Correction[]>();
+  const syncs = new Map<string, SyncRecord[]>();
+  let nextUploadSeq = 1;
+  let nextCorrectionId = 1;
+  let nextTokenSeq = 1;
+
+  function addDataset(dataset: Dataset): void {
+    datasets.set(dataset.id, dataset);
+    while (datasets.has(`ds-${nextDatasetSeq}`)) nextDatasetSeq += 1;
+  }
+
+  function addConnector(connector: Connector): void {
+    connectors.set(connector.id, connector);
+  }
+
+  function addRows(
+    datasetId: string,
+    columns: DatasetColumn[],
+    rows: Array<Record<string, unknown>>,
+  ): void {
+    rowsStore.set(datasetId, { columns, rows: anchorRows(rows) });
+  }
+
+  function addCorrection(correction: Correction): void {
+    const list = corrections.get(correction.dataset_id) ?? [];
+    list.push(correction);
+    corrections.set(correction.dataset_id, list);
+    nextCorrectionId = Math.max(nextCorrectionId, correction.id + 1);
+  }
+
+  function addSync(sync: SyncRecord): void {
+    const list = syncs.get(sync.dataset_id) ?? [];
+    list.push(sync);
+    syncs.set(sync.dataset_id, list);
   }
 
   const chatReply =
@@ -110,11 +204,14 @@ export function installConsoleBackend(
     const url = new URL(String(input), "http://console.test");
     const method = (init?.method ?? "GET").toUpperCase();
     const headers = headersOf(init);
+    const rawBody = init?.body;
+    const isForm = typeof FormData !== "undefined" && rawBody instanceof FormData;
     calls.push({
       method,
       url,
       headers,
-      body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      body: typeof rawBody === "string" ? JSON.parse(rawBody) : undefined,
+      formData: isForm ? rawBody : undefined,
     });
 
     const customerId = headers["x-customer-id"];
@@ -123,6 +220,14 @@ export function installConsoleBackend(
         jsonResponse({ detail: "缺少 X-Customer-Id（客户身份头）" }, 401),
       );
     }
+    /** 本客户可见性：带 customer_id 的种子仅同客户可见（跨企业 404）。 */
+    const ownDataset = (id: string): Dataset | undefined => {
+      const dataset = datasets.get(id);
+      if (!dataset) return undefined;
+      return dataset.customer_id && dataset.customer_id !== customerId
+        ? undefined
+        : dataset;
+    };
 
     const path = url.pathname;
     if (path === "/api/v1/ai/conversations" && method === "POST") {
@@ -197,10 +302,256 @@ export function installConsoleBackend(
       return Promise.resolve(jsonResponse(stored.artifacts));
     }
 
+    // ── 我的数据：数据集列表 / 建档 / 详情 / 预览 ──
+    if (path === "/api/v1/datasets" && method === "GET") {
+      const mine = [...datasets.values()].filter(
+        (d) => !d.customer_id || d.customer_id === customerId,
+      );
+      return Promise.resolve(jsonResponse(mine));
+    }
+
+    if (path === "/api/v1/datasets" && method === "POST") {
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        name?: string;
+        source?: {
+          kind?: string;
+          upload_id?: string;
+          connector_id?: string;
+          source_name?: string;
+          source_ref?: string;
+          schedule_cron?: string | null;
+        };
+      };
+      const source = payload.source ?? {};
+      const upload = source.upload_id ? uploads.get(source.upload_id) : undefined;
+      const nowIso = "2026-10-05T12:00:00";
+      const id = `ds-${nextDatasetSeq++}`;
+      const dataset: Dataset = {
+        id,
+        key: `ds_${id.replace(/-/g, "_")}`,
+        name: payload.name ?? "未命名",
+        source_kind: source.kind === "connector" ? "connector" : "upload",
+        connector_id: source.connector_id ?? null,
+        source_name: source.source_name,
+        source_ref: source.source_ref ?? null,
+        columns: upload?.columns ?? [],
+        row_count: upload?.row_count ?? 0,
+        size_bytes: upload ? upload.row_count * 24 : 0,
+        sync_cron: source.schedule_cron ?? null,
+        sync_status: "ok",
+        paused_reason: null,
+        created_at: nowIso,
+        updated_at: nowIso,
+        customer_id: customerId,
+      };
+      datasets.set(id, dataset);
+      return Promise.resolve(jsonResponse(dataset, 201));
+    }
+
+    if (path === "/api/v1/datasets/uploads" && method === "POST") {
+      if (options.failUploadStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: options.failUploadDetail ?? `upload failed ${options.failUploadStatus}` },
+            options.failUploadStatus,
+          ),
+        );
+      }
+      const call = calls[calls.length - 1]!;
+      const file = call.formData?.get("file");
+      const filename =
+        typeof file === "string" ? file : file?.name ?? "upload.csv";
+      const preview: UploadPreview = {
+        upload_id: `up-${nextUploadSeq++}`,
+        filename,
+        columns:
+          options.uploadPreview?.columns ?? [
+            { name: "id", type: "INTEGER" },
+            { name: "amount", type: "REAL" },
+          ],
+        row_count: options.uploadPreview?.row_count ?? 120,
+        within_limit: options.uploadPreview?.within_limit ?? true,
+        sample_rows:
+          options.uploadPreview?.sample_rows ?? [{ id: 1, amount: 12.5 }],
+      };
+      uploads.set(preview.upload_id, preview);
+      return Promise.resolve(jsonResponse(preview, 201));
+    }
+
+    match = path.match(/^\/api\/v1\/datasets\/([^/]+)$/);
+    if (match) {
+      const dataset = ownDataset(match[1]);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      if (method === "GET") return Promise.resolve(jsonResponse(dataset));
+      if (method === "DELETE") {
+        datasets.delete(dataset.id);
+        return Promise.resolve(jsonResponse({ deleted: true }));
+      }
+    }
+
+    match = path.match(/^\/api\/v1\/datasets\/([^/]+)\/rows$/);
+    if (match && method === "GET") {
+      const dataset = ownDataset(match[1]);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      const data = rowsStore.get(dataset.id) ?? { columns: dataset.columns, rows: [] };
+      const rawPage = Number(url.searchParams.get("page") ?? "1");
+      const rawSize = Number(url.searchParams.get("page_size") ?? "50");
+      const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+      const pageSize = Number.isFinite(rawSize) && rawSize > 0 ? rawSize : 50;
+      const start = (page - 1) * pageSize;
+      return Promise.resolve(
+        jsonResponse({
+          columns: data.columns,
+          rows: data.rows.slice(start, start + pageSize),
+          total: data.rows.length,
+        }),
+      );
+    }
+
+    match = path.match(/^\/api\/v1\/datasets\/([^/]+)\/corrections$/);
+    if (match) {
+      const dataset = ownDataset(match[1]);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      if (method === "GET") {
+        return Promise.resolve(jsonResponse(corrections.get(dataset.id) ?? []));
+      }
+      if (method === "POST") {
+        const payload = (calls[calls.length - 1]!.body ?? {}) as CorrectionInput;
+        const id = nextCorrectionId++;
+        const correction: Correction = {
+          id,
+          dataset_id: dataset.id,
+          op: payload.op as CorrectionOp,
+          row_id: "row_id" in payload ? payload.row_id : null,
+          column: payload.op === "update" ? payload.column : null,
+          value: payload.op === "update" ? payload.value : null,
+          values: payload.op === "insert" ? payload.values : null,
+          actor: "console-test",
+          created_at: "2026-10-05T12:30:00",
+          reverted_at: null,
+          dangling_at: null,
+          dangling_reason: null,
+        };
+        addCorrection(correction);
+        // 假后端同步应用修正，便于断言预览刷新后的结果。
+        const data = rowsStore.get(dataset.id);
+        if (data) {
+          if (payload.op === "update") {
+            data.rows = data.rows.map((row) =>
+              row.__row_id === payload.row_id
+                ? { ...row, [payload.column]: payload.value }
+                : row,
+            );
+          } else if (payload.op === "delete") {
+            data.rows = data.rows.filter((row) => row.__row_id !== payload.row_id);
+          } else {
+            data.rows = [...data.rows, { ...payload.values, __row_id: `ins:${id}` }];
+          }
+        }
+        return Promise.resolve(jsonResponse({ correction_id: id }, 201));
+      }
+    }
+
+    match = path.match(/^\/api\/v1\/datasets\/([^/]+)\/corrections\/(\d+)\/revert$/);
+    if (match && method === "POST") {
+      const dataset = ownDataset(match[1]);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      const list = corrections.get(dataset.id) ?? [];
+      const correction = list.find((c) => c.id === Number(match![2]));
+      if (!correction) {
+        return Promise.resolve(jsonResponse({ detail: "correction not found" }, 404));
+      }
+      correction.reverted_at = "2026-10-05T13:00:00";
+      return Promise.resolve(jsonResponse({ reverted: true }));
+    }
+
+    match = path.match(/^\/api\/v1\/datasets\/([^/]+)\/syncs$/);
+    if (match && method === "GET") {
+      const dataset = ownDataset(match[1]);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      return Promise.resolve(jsonResponse(syncs.get(dataset.id) ?? []));
+    }
+
+    match = path.match(/^\/api\/v1\/datasets\/([^/]+)\/resume$/);
+    if (match && method === "POST") {
+      const dataset = ownDataset(match[1]);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        accept_columns?: string[];
+      };
+      for (const name of payload.accept_columns ?? []) {
+        if (!dataset.columns.some((c) => c.name === name)) {
+          dataset.columns = [...dataset.columns, { name, type: "TEXT" }];
+        }
+      }
+      dataset.sync_status = "idle";
+      dataset.paused_reason = null;
+      dataset.updated_at = "2026-10-05T13:10:00";
+      return Promise.resolve(jsonResponse(dataset));
+    }
+
+    // ── 我的数据：连接器（配对令牌 / 列表 / 吊销） ──
+    if (path === "/api/v1/connectors/pairing-tokens" && method === "POST") {
+      const ttl = options.pairingTokenTtlSeconds ?? 900;
+      return Promise.resolve(
+        jsonResponse(
+          {
+            token: `fwp_test_${nextTokenSeq++}`,
+            expires_at: new Date(Date.now() + ttl * 1000).toISOString(),
+          },
+          201,
+        ),
+      );
+    }
+
+    if (path === "/api/v1/connectors" && method === "GET") {
+      const mine = [...connectors.values()].filter(
+        (c) => !c.customer_id || c.customer_id === customerId,
+      );
+      return Promise.resolve(jsonResponse(mine));
+    }
+
+    match = path.match(/^\/api\/v1\/connectors\/([^/]+)$/);
+    if (match && method === "DELETE") {
+      const connector = connectors.get(match[1]);
+      if (
+        !connector ||
+        (connector.customer_id && connector.customer_id !== customerId)
+      ) {
+        return Promise.resolve(jsonResponse({ detail: "connector not found" }, 404));
+      }
+      connector.revoked_at = "2026-10-05T13:20:00";
+      return Promise.resolve(jsonResponse(connector));
+    }
+
     return Promise.resolve(jsonResponse({ detail: "not found" }, 404));
   }) as unknown as typeof fetch;
 
-  return { calls, fetchImpl, addMessage, addArtifact };
+  return {
+    calls,
+    fetchImpl,
+    addMessage,
+    addArtifact,
+    addDataset,
+    addConnector,
+    addRows,
+    addCorrection,
+    addSync,
+    getDatasets: () => [...datasets.values()],
+    getCorrections: (datasetId: string) => corrections.get(datasetId) ?? [],
+  };
 }
 
 /** 任意请求一律失败的后端（错误态测试）。 */

@@ -4,7 +4,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-export type ConsoleTab = "chat" | "artifacts" | "demands" | "usage";
+export type ConsoleTab = "chat" | "artifacts" | "datasets" | "demands" | "usage";
 
 export const CONSOLE_TABS: ReadonlyArray<{
   id: ConsoleTab;
@@ -14,6 +14,11 @@ export const CONSOLE_TABS: ReadonlyArray<{
 }> = [
   { id: "chat", href: "#/console/chat", labelKey: "console.nav.chat" },
   { id: "artifacts", href: "#/console/artifacts", labelKey: "console.nav.artifacts" },
+  {
+    id: "datasets",
+    href: "#/console/datasets",
+    labelKey: "console.nav.datasets",
+  },
   {
     id: "demands",
     href: "#/console/demands",

@@ -10,6 +10,7 @@ import {
 } from "../console/ConsoleLayout";
 import { ChatPage } from "../console/ChatPage";
 import { ArtifactsPage } from "../console/ArtifactsPage";
+import { DatasetsPage } from "../console/DatasetsPage";
 
 export function ConsoleView({
   tab = "chat",
@@ -35,6 +36,9 @@ export function ConsoleView({
       )}
       {tab === "artifacts" && (
         <ArtifactsPage key={`artifacts:${customerId}`} customerId={customerId} />
+      )}
+      {tab === "datasets" && (
+        <DatasetsPage key={`datasets:${customerId}`} customerId={customerId} />
       )}
       {tab === "demands" && (
         <ConsolePlaceholder

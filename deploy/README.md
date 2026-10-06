@@ -61,3 +61,49 @@
 - `/internal/`（内部后台端点族）**不经 Caddy 单列路由**：`web/nginx.conf` 的 `location /internal/` 直接反代 `fd-wire-api.fd-prod.svc.cluster.local:8000`（wire-internal-public-routing），门禁在后端令牌 `X-Admin-Token`（fail-closed：未配置 403/不匹配 401）。⚠️ 前端 bundle 公开含开发占位令牌 `dev-admin-token`——生产 secret `fd-wire-env` 键 `fd_wire_admin_token` 必须保持强随机值（10-07 核验为 48 位非占位）。
 - `fd-wire-api` 只暴露 ClusterIP；`/api` 由边缘 Caddy 承接直指 api，web nginx 刻意不设 `/api` 反代（同域双路由是隐患，注释占位保留仅作文档）。
 - 回滚：清单回退 git tag/commit → ArgoCD 滚回；镜像按不可变 sha- tag 永远可指回。
+
+## 连接器 fd-wire-connector（客户内网单二进制，仅出站连接）
+
+上游能力：`specs/wire-local-connector/`；代码 `connector/`（Go module，随本仓 CI 独立构建；详细行为见该目录各包注释）。
+
+### 取件
+
+GHA `build` 的 `connector` job 在 push main 时产出三平台产物（artifact 名即 `fd-wire-connector-<os>-<arch>`，内含同名可执行文件；`-trimpath`，版本注入 `sha-<7>` 并随心跳上报控制台）：
+
+| 平台 | 产物 |
+|---|---|
+| Linux | `fd-wire-connector-linux-{amd64,arm64}` |
+| macOS | `fd-wire-connector-darwin-{amd64,arm64}` |
+| Windows | `fd-wire-connector-windows-amd64.exe` |
+
+本地自建：`cd connector && go build ./cmd/fd-wire-connector`（或 `go build -ldflags "-X main.version=sha-$(git rev-parse --short HEAD)"`）。
+
+### 安装三步（零入站开孔）
+
+1. **配对**（令牌在控制台「我的数据 → 连接器 → 配对向导」生成，15 分钟单次有效）：
+   `fd-wire-connector pair --token fwp_xxx --api https://wire.finddatatech.cloud --name erp-app-01`
+   连接器 key 只写入本地配置文件（0600），云端仅保存其哈希；吊销即时生效。
+2. **配客户源**（在本地配置文件 `sources` 段；凭据只存这里，永不上传云端）：
+   ```json
+   {"api_url":"https://wire.finddatatech.cloud","connector_key":"fwc_...",
+    "sources":[{"name":"erp_db","kind":"postgres","dsn":"postgres://user:pass@host/db"},
+               {"name":"sales_mysql","kind":"mysql","dsn":"user:pass@tcp(host:3306)/sales"},
+               {"name":"reports","kind":"file","path":"/data/reports"}]}
+   ```
+   路径：Linux/macOS `$XDG_CONFIG_HOME/fd-wire-connector/config.json`（缺省 `~/.config/fd-wire-connector/config.json`）、Windows `%APPDATA%\fd-wire-connector\config.json`。建议给数据库账号**只读 + 仅白名单库表**的库级权限（第一道边界）。文件源 `source_ref` 是文件名（一个文件=一个数据集），不与目录拼接。
+3. **常驻**：`fd-wire-connector run --verbose`（`--once` 只跑一轮，用于冒烟/排障）。
+   控制台圈定白名单与调度频率后，连接器在下一轮询周期内生效；白名单之外的数据没有离开内网的路径。
+
+### 常驻方式
+
+- Linux（systemd）：`/etc/systemd/system/fd-wire-connector.service` → `ExecStart=/usr/local/bin/fd-wire-connector run --config /etc/fd-wire-connector/config.json`、`Restart=always`、专用账号（配置文件属主 0600）。
+- Windows：任务计划程序「启动时」运行，或 `nssm install fd-wire-connector fd-wire-connector.exe run` 注册为服务。
+- macOS：`launchd` LaunchDaemon 或前台运行；该机器需能同时访问客户源与公网。
+
+### 运行语义与排障
+
+- **心跳/轮询**：默认 60s（云端可下发覆盖，夹紧在 10s–1h）；心跳上报版本、各数据集同步状态与本地告警。控制台按 `now - last_heartbeat > 3×周期` 判离线。
+- **同步**：按云端 cron + 最小同步间隔全量快照（begin → chunk ≤2000 行 → commit 原子替换；任一步失败即 abort 并回报原因）。同一数据集并发锁；白名单里 `source` 名在本机 `sources` 找不到 → 跳过该数据集，并在心跳 `warnings` 里回报（控制台连接器区块可见）。
+- **重试**：5xx 与网络错误指数退避（默认 4 次尝试）；4xx 立即失败并带原因（key 吊销 401、漂移 409、配额 429 均属此类，不做无谓重试）。
+- **schema 漂移**：加列自动跟随；缺列/改类型由控制台暂停该数据集（`paused_drift`）等人工 `resume`，期间数据集保持最后一次有效快照。
+- **安全**：只发起出站 HTTPS——唯一例外是本机回环 `http://127.0.0.1`（本地联调用），其余明文地址启动即拒；配置文件权限 0600，过宽时启动打印告警。轮换 = 控制台吊销连接器后重新配对。

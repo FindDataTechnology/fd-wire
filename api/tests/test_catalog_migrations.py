@@ -43,12 +43,12 @@ def test_upgrade_head_adds_source_db_and_unit(migrated_sqlite) -> None:
     engine.dispose()
 
 
-def test_chain_head_is_catalog_source_db(migrated_sqlite) -> None:
-    """revision 顺接现链头：head 即 0010_catalog_source_db。"""
+def test_chain_head_follows_catalog_source_db(migrated_sqlite) -> None:
+    """revision 顺接链头：0010 之后由 0011_datasets 接续（wire-customer-local-data 2.1）。"""
     engine = create_engine(migrated_sqlite)
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    assert version == "0010_catalog_source_db"
+    assert version == "0011_datasets"
     engine.dispose()
 
 
@@ -56,7 +56,8 @@ def test_downgrade_removes_source_db_and_unit(migrated_sqlite, monkeypatch) -> N
     monkeypatch.setenv("DATABASE_URL", migrated_sqlite)
     cfg = Config(str(API_DIR / "alembic.ini"))
     cfg.set_main_option("script_location", str(API_DIR / "alembic"))
-    command.downgrade(cfg, "-1")
+    # 明确回退到 0010 的下游（链头之上后续迁移只增不改，-1 已不再是 0010）
+    command.downgrade(cfg, "0009_materialization")
     engine = create_engine(migrated_sqlite)
     columns = {c["name"] for c in inspect(engine).get_columns("indicator_snapshots")}
     assert "source_db" not in columns

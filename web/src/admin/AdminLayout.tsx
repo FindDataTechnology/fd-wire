@@ -3,7 +3,13 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-export type AdminSection = "customers" | "ledger" | "demands" | "catalog" | "usage";
+export type AdminSection =
+  | "customers"
+  | "ledger"
+  | "demands"
+  | "catalog"
+  | "usage"
+  | "localdata";
 
 export const ADMIN_SECTIONS: ReadonlyArray<{
   id: AdminSection;
@@ -15,6 +21,11 @@ export const ADMIN_SECTIONS: ReadonlyArray<{
   { id: "demands", href: "#/admin/demands", labelKey: "admin.nav.demands" },
   { id: "catalog", href: "#/admin/catalog", labelKey: "admin.nav.catalog" },
   { id: "usage", href: "#/admin/usage", labelKey: "admin.nav.usage" },
+  {
+    id: "localdata",
+    href: "#/admin/localdata",
+    labelKey: "admin.nav.localData",
+  },
 ];
 
 export function parseAdminSection(segment: string | undefined): AdminSection {
@@ -23,7 +34,8 @@ export function parseAdminSection(segment: string | undefined): AdminSection {
     segment === "ledger" ||
     segment === "demands" ||
     segment === "catalog" ||
-    segment === "usage"
+    segment === "usage" ||
+    segment === "localdata"
   ) {
     return segment;
   }

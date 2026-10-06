@@ -7,6 +7,7 @@ import type {
   AdminPlan,
   AggRow,
   CatalogPendingResponse,
+  CustomerLocalDataOverview,
   CustomerUsage,
   DemandStatus,
   LedgerEntry,
@@ -76,6 +77,8 @@ export interface AdminBackendOptions {
   ledger?: LedgerEntry[];
   tracks?: AggRow[];
   bySource?: AggRow[];
+  /** 客户本地数据只读概览（/internal/datasets/overview 响应体）。 */
+  datasetOverviews?: CustomerLocalDataOverview[];
 }
 
 function jsonResponse(body: unknown, status = 200): FakeResponse {
@@ -308,6 +311,42 @@ export function installAdminBackend(options: AdminBackendOptions = {}): {
       return Promise.resolve(
         jsonResponse(notes.filter((n) => n.indicator_id === indicatorId)),
       );
+    }
+
+    // -- 客户本地数据只读概览 ----------------------------------------------
+    // 端点在 datasets 内部面：鉴权头是 X-Internal-Token（同一后台令牌值）。
+    if (path === "/internal/datasets/overview" && method === "GET") {
+      if (headers["x-internal-token"] !== adminToken) {
+        return Promise.resolve(
+          jsonResponse({ detail: "内部端点需要有效的 X-Internal-Token" }, 401),
+        );
+      }
+      const overview: CustomerLocalDataOverview[] = options.datasetOverviews ?? [
+        {
+          customer_id: "cust-alpha",
+          datasets: 3,
+          storage_bytes: 2_147_483_648,
+          connectors: [
+            {
+              id: "conn-alpha-1",
+              status: "online",
+              last_heartbeat_at: "2026-10-06T09:58:00+00:00",
+            },
+            {
+              id: "conn-alpha-2",
+              status: "offline",
+              last_heartbeat_at: "2026-10-05T09:58:00+00:00",
+            },
+          ],
+        },
+        {
+          customer_id: "cust-beta",
+          datasets: 0,
+          storage_bytes: 0,
+          connectors: [],
+        },
+      ];
+      return Promise.resolve(jsonResponse(overview));
     }
 
     // -- 用量分轨 --------------------------------------------------------------

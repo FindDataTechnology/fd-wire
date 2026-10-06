@@ -47,8 +47,23 @@ jobs:
             context: api
           - image: web
             context: web
+          # cell（wire-customer-local-data 1.4/1.5）：fd-daas-mcp 引擎整树进 cell
+          # 镜像。私有 DAAS 仓源码作 BuildKit named context（cell-image/README
+          # 「CI 接线」）。前置：per-repo secret DAAS_REPO_TOKEN（对私仓有读权的
+          # PAT）+ DAAS main 已含引擎侧数据集工具。
+          - image: cell
+            context: cell-image
     steps:
       - uses: actions/checkout@v4
+
+      # cell 镜像需要私有 DAAS 仓源码作 named context（仅 cell 矩阵项执行）
+      - uses: actions/checkout@v4
+        if: matrix.image == 'cell'
+        with:
+          repository: FindDataTechnology/fd-daas-mcp
+          token: ${{ secrets.DAAS_REPO_TOKEN }}
+          path: daas-src
+          ref: main
 
       - name: Compute tag
         id: tag
@@ -68,8 +83,80 @@ jobs:
           platforms: linux/amd64
           push: true
           provenance: false
+          additional_contexts: |
+            ${{ matrix.image == 'cell' && format('daas={0}/daas-src', github.workspace) || '' }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.image }}:${{ steps.tag.outputs.tag }}
             ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.image }}:main
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,scope=${{ matrix.image }},mode=max
+
+  # 连接器（wire-local-connector）：单二进制出站连接器，不只产镜像——
+  # 客户内网直接下载对应平台可执行文件运行（deploy/README.md「连接器」段）。
+  # 产物名 fd-wire-connector-<os>-<arch>；版本号注入 git sha，心跳里上报给控制台。
+  connector-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: connector/go.mod
+          cache-dependency-path: connector/go.sum
+
+      - name: Vet & test
+        working-directory: connector
+        run: |
+          go vet ./...
+          go test ./...
+
+  connector:
+    needs: connector-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [linux, darwin, windows]
+        arch: [amd64, arm64]
+        exclude:
+          # windows/arm64 暂无实际客户场景，按最小可用集省 runner 时间
+          - os: windows
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: connector/go.mod
+          cache-dependency-path: connector/go.sum
+
+      - name: Compute version
+        id: tag
+        run: echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build ${{ matrix.os }}/${{ matrix.arch }}
+        working-directory: connector
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "0"
+        run: |
+          ext=""
+          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
+          mkdir -p "$RUNNER_TEMP/out"
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${{ steps.tag.outputs.tag }}" \
+            -o "$RUNNER_TEMP/out/fd-wire-connector-${GOOS}-${GOARCH}${ext}" \
+            ./cmd/fd-wire-connector
+          if [ "$GOOS" = "linux" ] && [ "$GOARCH" = "amd64" ]; then
+            "$RUNNER_TEMP/out/fd-wire-connector-${GOOS}-${GOARCH}" version
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fd-wire-connector-${{ matrix.os }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/out/fd-wire-connector-${{ matrix.os }}-${{ matrix.arch }}*
+          if-no-files-found: error
+          retention-days: 90

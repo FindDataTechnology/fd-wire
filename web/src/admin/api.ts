@@ -208,6 +208,8 @@ interface RequestOptions {
   method: "GET" | "POST" | "PATCH";
   token: string;
   body?: unknown;
+  /** 端点要求的额外头（如 datasets 内部面的 X-Internal-Token）。 */
+  headers?: Record<string, string>;
 }
 
 async function requestJson<T>(path: string, options: RequestOptions): Promise<T> {
@@ -221,6 +223,7 @@ async function requestJson<T>(path: string, options: RequestOptions): Promise<T>
         Accept: "application/json",
         "X-Admin-Token": token,
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(options.headers ?? {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
@@ -398,5 +401,40 @@ export function fetchUsageOverview(
   return requestJson(`/internal/admin/usage/overview${suffix}`, {
     method: "GET",
     token,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 客户本地数据只读概览（wire-customer-local-data 任务 5.1）
+// ---------------------------------------------------------------------------
+
+/** 连接器健康（api 仓 datasets/schemas.py InternalConnectorOut，只读投影）。 */
+export interface DatasetConnectorHealth {
+  id: string;
+  status: string;
+  last_heartbeat_at: string | null;
+}
+
+/** per-cell 概览行（api 仓 datasets/schemas.py InternalOverviewOut）。 */
+export interface CustomerLocalDataOverview {
+  customer_id: string;
+  datasets: number;
+  storage_bytes: number;
+  connectors: DatasetConnectorHealth[];
+}
+
+/**
+ * per-cell 客户数据集存储用量与连接器同步健康（只读，无管理操作入口）。
+ * 鉴权沿用后台单一令牌通道：既有 admin 端点认 ``X-Admin-Token``，本端点
+ * （datasets 内部面）按冻结契约认 ``X-Internal-Token``——同一令牌值同时
+ * 携带于两个头，不引入第二套令牌 UI/存储。
+ */
+export function fetchCustomerLocalDataOverview(
+  token: string,
+): Promise<CustomerLocalDataOverview[]> {
+  return requestJson("/internal/datasets/overview", {
+    method: "GET",
+    token,
+    headers: { "X-Internal-Token": token },
   });
 }
