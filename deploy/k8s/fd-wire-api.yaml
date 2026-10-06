@@ -37,6 +37,11 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: database_url }
+            # datasets 模块库：与主库同文件（/tmp 共享库是平台一期既有口径；
+            # sqlite URL 非敏感，走清单字面值。缺它默认 ./ 相对路径在 /app 不可写
+            # —— CrashLoopBackOff 实证）
+            - name: FD_WIRE_DATASETS_DATABASE_URL
+              value: sqlite:////tmp/fd_wire.db
             # 借用契约（fd_wire_api.config：同名环境变量优先于占位默认值）
             - name: BUSINESS_MCP_URL
               valueFrom:
