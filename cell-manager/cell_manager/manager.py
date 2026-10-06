@@ -152,6 +152,7 @@ class CellManager:
                 name=container_name,
                 image=self._config.image,
                 env=env,
+                network=self._config.network,
                 binds=(BindMount(host_path=str(db_path.parent), container_path=CONTAINER_DATA_DIR),),
             )
             self._driver.create(spec)

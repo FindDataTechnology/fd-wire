@@ -70,6 +70,7 @@ class DockerDriver:
                 name=spec.name,
                 environment=dict(spec.env),
                 volumes=[f"{b.host_path}:{b.container_path}" for b in spec.binds],
+                network=spec.network,
                 restart_policy={"Name": "unless-stopped"},
                 detach=True,
             )

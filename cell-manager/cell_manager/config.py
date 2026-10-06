@@ -113,6 +113,9 @@ class CellManagerConfig:
     customer_credential_map: Mapping[str, str] = field(default_factory=dict)
     #: 平台轨凭据单值（CELL_PLATFORM_CREDENTIAL；空=不注入 WIRE_PLATFORM_KEY）
     platform_credential: str = ""
+    #: docker 网络名（CELL_NETWORK；None=驱动缺省网络）。wire cell 必须与
+    #: registry 栈同网，注册的 target_url（容器名:端口）才能被网关解析。
+    network: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "CellManagerConfig":
@@ -146,6 +149,7 @@ class CellManagerConfig:
             audit_log=audit_log,
             image=e.get("CELL_IMAGE") or DEFAULT_IMAGE,
             gateway_url=e.get("CELL_GATEWAY_URL") or DEFAULT_GATEWAY_URL,
+            network=e.get("CELL_NETWORK") or None,
             registry_url=e.get("CELL_REGISTRY_URL") or DEFAULT_REGISTRY_URL,
             registry_mode=registry_mode,
             target_url_template=e.get("CELL_TARGET_URL_TEMPLATE") or DEFAULT_TARGET_URL_TEMPLATE,

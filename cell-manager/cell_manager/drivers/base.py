@@ -31,6 +31,9 @@ class ContainerSpec:
     image: str
     env: dict[str, str] = field(default_factory=dict)
     binds: tuple[BindMount, ...] = ()
+    #: docker 网络名（None=驱动缺省）。wire cell 必须与 registry 栈同网，
+    #: 注册条目的 target_url（http://<容器名>:8000/mcp）才能被网关解析。
+    network: str | None = None
 
 
 @dataclass(frozen=True)
