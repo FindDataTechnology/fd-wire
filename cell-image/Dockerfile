@@ -55,6 +55,7 @@ COPY --from=daas alerts-mcp /opt/fd-daas-mcp/alerts-mcp
 COPY --from=daas cron-mcp /opt/fd-daas-mcp/cron-mcp
 COPY --from=daas composite-mcp /opt/fd-daas-mcp/composite-mcp
 COPY --from=daas daas-mcp /opt/fd-daas-mcp/daas-mcp
+COPY --from=daas customer-dataset-mcp /opt/fd-daas-mcp/customer-dataset-mcp
 COPY --from=daas dashboard-mcp /opt/fd-daas-mcp/dashboard-mcp
 COPY --from=daas gateway-mcp /opt/fd-daas-mcp/gateway-mcp
 COPY --from=daas research-mcp /opt/fd-daas-mcp/research-mcp
