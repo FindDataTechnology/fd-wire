@@ -58,5 +58,6 @@
 ## 备注
 
 - Ingress（`deploy/k8s/ingress.yaml`）是占位：集群现无 ingress controller，真实入口是步骤 9-10 的 Caddy；清单为路由意图存档，controller 启用后即生效。
-- `fd-wire-api` 只暴露 ClusterIP；控制台将来接服务端接口时启用 `web/nginx.conf` 里的 `/api/` 反代占位。
+- `/internal/`（内部后台端点族）**不经 Caddy 单列路由**：`web/nginx.conf` 的 `location /internal/` 直接反代 `fd-wire-api.fd-prod.svc.cluster.local:8000`（wire-internal-public-routing），门禁在后端令牌 `X-Admin-Token`（fail-closed：未配置 403/不匹配 401）。⚠️ 前端 bundle 公开含开发占位令牌 `dev-admin-token`——生产 secret `fd-wire-env` 键 `fd_wire_admin_token` 必须保持强随机值（10-07 核验为 48 位非占位）。
+- `fd-wire-api` 只暴露 ClusterIP；`/api` 由边缘 Caddy 承接直指 api，web nginx 刻意不设 `/api` 反代（同域双路由是隐患，注释占位保留仅作文档）。
 - 回滚：清单回退 git tag/commit → ArgoCD 滚回；镜像按不可变 sha- tag 永远可指回。
