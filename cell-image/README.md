@@ -122,9 +122,9 @@ CELL_GATEWAY_URL=https://wire.finddatatech.cloud/mcp             # 已有
 
 镜像只认 env，不感知 cell-manager；`fd-wire-cell-*` 容器名/条目路径由 manager 侧生成。
 
-## CI 接线（`.github/workflows/build.yml` 应加内容——本任务不改该文件，主代理收敛时合入）
+## CI 接线（`.github/workflows/build.yml` 已按此合入——daas-deployment-profiles 1.5）
 
-matrix 加第三项 + 私有 DAAS 仓二次 checkout + `additional_contexts`：
+matrix 加第三项 + DAAS 仓二次 checkout + `additional_contexts`：
 
 ```yaml
       matrix:
@@ -137,14 +137,15 @@ matrix 加第三项 + 私有 DAAS 仓二次 checkout + `additional_contexts`：
             context: cell-image
     steps:
       - uses: actions/checkout@v4
-      # cell 镜像需要私有 DAAS 仓源码作 named context（排在 tag 步骤前）
+      # cell 镜像需要 DAAS 仓源码作 named context（排在 tag 步骤前）。
+      # FindDataTechnology/fd-daas-mcp 是公开仓：main=开源净化线，
+      # internal-main=内部开发线（cell 引擎能力在此线），cell 必须用内部线。
       - uses: actions/checkout@v4             # ← 新增（仅 cell 需要；矩阵项可用 if 区分）
         if: matrix.image == 'cell'
         with:
-          repository: <org>/fd-daas-mcp       # DAAS 仓的远端名（以实际 org/repo 为准）
-          token: ${{ secrets.DAAS_REPO_TOKEN }}  # 新增 per-repo secret（对私仓有读权的 PAT）
+          repository: FindDataTechnology/fd-daas-mcp   # 公开仓，无需 token
           path: daas-src
-          ref: main                           # 或锁到已发布 sha/tag
+          ref: internal-main
       # ……tag / login 步骤不变……
       - uses: docker/build-push-action@v6
         with:
