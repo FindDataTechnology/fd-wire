@@ -126,6 +126,12 @@ const zh = {
   catalog: {
     title: "指标目录",
     subtitle: "全量指标可搜索——无需登录；verified 可直读，registered 按需开通。",
+    // 自助分析工作区（协同变更 wire-daas-analysis-referral）：常驻能力条目，非目录数据。
+    daasReferralTitle: "自助分析工作区",
+    daasReferralNote:
+      "谦面提供开箱即用的自助分析工作区：取数 → 指标 → 看板 → 研究，一条动线走完。两条通道任选——壹座市场订阅预设包（零安装、即订即用），或本地安装 fd-daas-mcp（install.sh 一键私有部署）。",
+    daasMarketCta: "前往壹座市场订阅",
+    daasInstallCta: "本地安装 fd-daas-mcp",
     searchLabel: "搜索",
     searchPlaceholder: "搜索名称 / 描述 / code",
     domainLabel: "所属域",

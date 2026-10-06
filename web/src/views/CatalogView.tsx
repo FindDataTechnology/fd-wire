@@ -12,6 +12,7 @@ import {
 import { useDebouncedValue } from "../catalog/useDebouncedValue";
 import { useDomains } from "../catalog/useDomains";
 import { DomainBadge, StatusBadge } from "../components/IndicatorBadges";
+import { DAAS_INSTALL_URL, DAAS_MARKET_URL } from "../catalog/daas";
 
 const PAGE_SIZE = 20;
 const SEARCH_DEBOUNCE_MS = 300;
@@ -81,6 +82,38 @@ export function CatalogView() {
         <h1 className="text-2xl font-semibold tracking-tight">{t("catalog.title")}</h1>
         <p className="text-sm text-slate-500">{t("catalog.subtitle")}</p>
       </div>
+
+      {/* 自助分析工作区（协同变更 wire-daas-analysis-referral）：常驻静态能力
+          条目，与指标条目并列但独立于目录数据管线——不参与搜索/筛选/分页，
+          亦不随同步源变化；数据出结果前（loading/error/empty）同样常驻。 */}
+      <section
+        className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-5"
+        data-testid="daas-analysis-referral"
+        aria-label={t("catalog.daasReferralTitle")}
+      >
+        <h2 className="text-sm font-semibold text-slate-900">
+          {t("catalog.daasReferralTitle")}
+        </h2>
+        <p className="mt-1 text-sm text-slate-600">{t("catalog.daasReferralNote")}</p>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <a
+            href={DAAS_MARKET_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-block rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 transition-colors"
+          >
+            {t("catalog.daasMarketCta")}
+          </a>
+          <a
+            href={DAAS_INSTALL_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-block rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 transition-colors"
+          >
+            {t("catalog.daasInstallCta")}
+          </a>
+        </div>
+      </section>
 
       <div className="mt-6 flex flex-wrap items-center gap-2">
         <input

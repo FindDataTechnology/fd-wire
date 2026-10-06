@@ -190,4 +190,84 @@ describe("CatalogView（公开目录列表）", () => {
     act(() => switchLanguage("zh"));
     await waitFor(() => expect(badgeCount("可直读")).toBe(1));
   });
+
+  it("常驻能力条目：双通道 CTA 新窗口外链；目录数据不可达时照常呈现（非数据驱动）", async () => {
+    // 后端 503：指标列表不可达，但能力条目是静态呈现，不依赖目录数据
+    vi.stubGlobal("fetch", failingBackend(503));
+    render(<CatalogView />);
+    await screen.findByTestId("catalog-error");
+
+    const box = screen.getByTestId("daas-analysis-referral");
+    expect(box.textContent).toContain("自助分析工作区");
+    expect(box.textContent).toContain("取数 → 指标 → 看板 → 研究");
+
+    const market = screen.getByRole("link", { name: "前往壹座市场订阅" });
+    expect(market.getAttribute("href")).toBe("https://platform.finddatatech.cloud");
+    expect(market.getAttribute("target")).toBe("_blank");
+    expect(market.getAttribute("rel")).toContain("noopener");
+
+    const install = screen.getByRole("link", { name: "本地安装 fd-daas-mcp" });
+    expect(install.getAttribute("href")).toBe(
+      "https://github.com/FindDataTechnology/fd-daas-mcp",
+    );
+    expect(install.getAttribute("target")).toBe("_blank");
+    expect(install.getAttribute("rel")).toContain("noopener");
+
+    // 指标表格未渲染（错误态），能力条目与表格并列而非其数据行
+    expect(screen.queryByTestId("catalog-table")).toBeNull();
+  });
+
+  it("能力条目不参与搜索/筛选/分页，指标条目行为不变", async () => {
+    install(THREE);
+    const { container } = render(<CatalogView />);
+    await screen.findByText("居民消费价格指数同比");
+
+    const table = screen.getByTestId("catalog-table");
+    const box = screen.getByTestId("daas-analysis-referral");
+    // 并列而非表格数据行：条目不在指标表格内
+    expect(table.contains(box)).toBe(false);
+    // 指标表格数据行只有 3 条目录条目
+    expect(container.querySelectorAll("tbody tr").length).toBe(3);
+
+    // 搜索收窄到 1 条 → 条目仍在且不受筛选影响
+    fireEvent.change(screen.getByLabelText("搜索"), { target: { value: "cpi" } });
+    await waitFor(() => expect(screen.queryByText("制造业PMI")).toBeNull(), {
+      timeout: 2000,
+    });
+    expect(screen.getByTestId("daas-analysis-referral")).toBeTruthy();
+    expect(container.querySelectorAll("tbody tr").length).toBe(1);
+
+    // 搜索无结果（空态）→ 条目仍在
+    fireEvent.change(screen.getByLabelText("搜索"), { target: { value: "zzz" } });
+    await screen.findByTestId("catalog-empty", {}, { timeout: 2000 });
+    expect(screen.getByTestId("daas-analysis-referral")).toBeTruthy();
+  });
+
+  it("双语对等：英文界面标题/说明/两个 CTA 等价呈现", async () => {
+    act(() => switchLanguage("en"));
+    install(THREE);
+    render(<CatalogView />);
+    // 指标条目名恒「中文优先英文兜底」（displayName 与语言无关），等待列表就绪
+    await screen.findByText("居民消费价格指数同比");
+
+    const box = screen.getByTestId("daas-analysis-referral");
+    expect(box.textContent).toContain("Self-service analysis workspace");
+    expect(box.textContent).toContain("data access, indicators, dashboards and research");
+    expect(
+      screen.getByRole("link", { name: "Subscribe on the Base market" }).getAttribute("href"),
+    ).toBe("https://platform.finddatatech.cloud");
+    expect(
+      screen.getByRole("link", { name: "Install fd-daas-mcp locally" }).getAttribute("href"),
+    ).toBe("https://github.com/FindDataTechnology/fd-daas-mcp");
+
+    // 切回中文：标题/说明/按钮同步换文案（无未翻译裸段）
+    act(() => switchLanguage("zh"));
+    await waitFor(() =>
+      expect(screen.getByTestId("daas-analysis-referral").textContent).toContain(
+        "自助分析工作区",
+      ),
+    );
+    expect(screen.getByRole("link", { name: "前往壹座市场订阅" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "本地安装 fd-daas-mcp" })).toBeTruthy();
+  });
 });

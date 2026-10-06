@@ -131,6 +131,13 @@ const en: Translation = {
     title: "Indicator catalog",
     subtitle:
       "Search the full catalog without signing in — verified indicators read directly, registered ones on demand.",
+    // Self-service analysis workspace (wire-daas-analysis-referral): a persistent
+    // capability entry, not catalog data.
+    daasReferralTitle: "Self-service analysis workspace",
+    daasReferralNote:
+      "Facet ships a ready-to-use self-service analysis workspace — data access, indicators, dashboards and research in one flow. Two ways in: subscribe to a preset pack on the Base market (zero install, instant), or install fd-daas-mcp locally (one-command private deployment via install.sh).",
+    daasMarketCta: "Subscribe on the Base market",
+    daasInstallCta: "Install fd-daas-mcp locally",
     searchLabel: "Search",
     searchPlaceholder: "Search name, description or code",
     domainLabel: "Domain",
