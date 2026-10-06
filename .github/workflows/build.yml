@@ -56,12 +56,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # cell 镜像需要 DAAS 仓源码作 named context（仅 cell 矩阵项执行）。
-      # FindDataTechnology/fd-daas-mcp 是公开仓：GitHub main=开源净化线，
-      # internal-main=内部开发线（cell 引擎能力在此线，ADR-0001 组拆分等），
-      # cell 镜像必须用内部线。
+      # DAAS 仓源码作 named context（build-contexts 对缺失路径会提前报错，
+      # 所以全矩阵都 checkout：FindDataTechnology/fd-daas-mcp 是公开仓，
+      # main=开源净化线，internal-main=内部开发线（cell 引擎能力在此线）。
       - uses: actions/checkout@v4
-        if: matrix.image == 'cell'
         with:
           repository: FindDataTechnology/fd-daas-mcp
           ref: internal-main
