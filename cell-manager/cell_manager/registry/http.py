@@ -10,6 +10,12 @@
   即协议要求的幂等。path 无前导斜杠会被服务端补齐（server_routes.py:4429）。
   成功 201（server_routes.py:4761）；403 = 无 register_service 权限或覆写他人条目
   （server_routes.py:4403/4672）；409 = overwrite=false 撞已存在（server_routes.py:4699）。
+- 启用  ``POST /api/servers/toggle``  registry/api/server_routes.py:4556
+  form 表单 ``path`` + ``new_state``（bool 字符串）。**控制台注册创建的条目
+  默认 disabled**（`is_enabled=false`，nginx location 整条不生成——仅内部
+  通道的注册自动启用，server_routes.py:1960-2071 注释）；「开通即注册、
+  注册即可用」的 cell 语义要求 register 后显式启用。幂等：true→true 无害。
+  200 = 已处理（含服务端即时健康检查与 nginx 重生成标记）；401 = 鉴权失配。
 - 摘除  ``POST /api/servers/remove``  registry/api/server_routes.py:5624
   form 表单 ``path``；200 = 已摘除（server_routes.py:5789），404 = 本就不存在
   （server_routes.py:5673）——宽松返回 False 的语义来源。
@@ -49,6 +55,7 @@ from cell_manager.errors import ConfigError, RegistryError
 from cell_manager.registry.base import ServerEntry
 
 DEFAULT_REGISTER_PATH = "/api/servers/register"
+DEFAULT_TOGGLE_PATH = "/api/servers/toggle"
 DEFAULT_REMOVE_PATH = "/api/servers/remove"
 DEFAULT_SERVERS_PATH = "/api/servers"
 DEFAULT_TIMEOUT = 15.0  # 秒；注册在服务端是同步写（DB+搜索索引），给足余量
@@ -95,6 +102,7 @@ class HttpRegistryClient:
         *,
         auth: AuthStrategy | None = None,
         register_path: str | None = None,
+        toggle_path: str | None = None,
         remove_path: str | None = None,
         servers_path: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
@@ -102,12 +110,14 @@ class HttpRegistryClient:
         self._base = base_url.rstrip("/")
         self._auth = auth
         self._register_path = register_path or DEFAULT_REGISTER_PATH
+        self._toggle_path = toggle_path or DEFAULT_TOGGLE_PATH
         self._remove_path = remove_path or DEFAULT_REMOVE_PATH
         self._servers_path = servers_path or DEFAULT_SERVERS_PATH
         self._timeout = timeout
 
     def register(self, entry: ServerEntry) -> None:
-        """注册（幂等）：overwrite=true 让同 path 重复注册成为服务端干净覆写。"""
+        """注册（幂等）+ **启用**（控制台注册创建的条目默认 disabled——
+        开通即可用语义要求显式置 true，10-07 生产实证）。"""
         name = entry.display_name or entry.path.strip("/")
         self._post_form(
             self._register_path,
@@ -119,6 +129,11 @@ class HttpRegistryClient:
                 "overwrite": "true",
             },
             ok=(200, 201),
+        )
+        self._post_form(
+            self._toggle_path,
+            {"path": entry.path, "new_state": "true"},
+            ok=(200,),
         )
 
     def unregister(self, path: str) -> bool:

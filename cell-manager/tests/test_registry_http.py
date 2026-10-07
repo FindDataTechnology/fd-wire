@@ -100,45 +100,72 @@ def io_bytes(body: bytes):
 # ---- register ----
 
 
-def test_register_posts_form_and_succeeds_on_201(monkeypatch, client):
-    spy = UrlopenSpy(FakeResponse(201, b'{"path": "/fd-wire-cell-acme"}'))
+def test_register_posts_form_then_enables(monkeypatch, client):
+    """register = 注册（form/overwrite/201）+ 启用（toggle new_state=true）。
+
+    控制台注册创建的条目默认 disabled（nginx location 整条不生成）——
+    开通即可用语义要求显式启用（10-07 生产实证）。"""
+    spy = UrlopenSpy([FakeResponse(201, b'{"path": "/fd-wire-cell-acme"}'), FakeResponse(200)])
     monkeypatch.setattr(urllib.request, "urlopen", spy)
 
     client.register(ENTRY)
 
-    req = spy.last
+    req = spy.requests[0]
     assert req.full_url == f"{BASE}/api/servers/register"
     assert req.get_method() == "POST"
     assert req.headers["Content-type"] == "application/x-www-form-urlencoded"
     assert req.headers["Authorization"] == "Bearer jwt-123"
-    form = spy.form()
+    form = dict(urllib.parse.parse_qs(req.data.decode("utf-8")))
     assert form["name"] == ["柏讯 cell · acme"]
     assert form["description"] == [DEFAULT_DESCRIPTION]
     assert form["path"] == ["fd-wire-cell-acme"]  # 无前导斜杠：服务端补齐
     assert form["proxy_pass_url"] == ["http://fd-wire-cell-acme:8000/mcp"]
     assert form["overwrite"] == ["true"]  # 幂等键：服务端覆写语义
 
+    tog = spy.requests[1]
+    assert tog.full_url == f"{BASE}/api/servers/toggle"
+    assert tog.get_method() == "POST"
+    tform = dict(urllib.parse.parse_qs(tog.data.decode("utf-8")))
+    assert tform == {"path": ["fd-wire-cell-acme"], "new_state": ["true"]}
+
+
+def test_register_toggle_failure_surfaces(monkeypatch, client):
+    """启用步失败不吞：RegistryError 上抛（provision 原子回滚据此触发）。"""
+    spy = UrlopenSpy([FakeResponse(201), http_error(500, {"detail": "toggle exploded"})])
+    monkeypatch.setattr(urllib.request, "urlopen", spy)
+    with pytest.raises(RegistryError, match="HTTP 500"):
+        client.register(ENTRY)
+
 
 def test_register_idempotent_retry_same_payload(monkeypatch, client):
-    # overwrite=true 下重复注册是服务端干净覆写：两次 201 均成功，载荷一致
-    spy = UrlopenSpy(FakeResponse(201))
+    # overwrite=true 下重复注册是服务端干净覆写：两次均成功、载荷一致；
+    # 启用步幂等（true→true 无害）——每次 register 共 2 个请求（注册+启用）
+    spy = UrlopenSpy([FakeResponse(201), FakeResponse(200)])
     monkeypatch.setattr(urllib.request, "urlopen", spy)
 
     client.register(ENTRY)
     client.register(ENTRY)
 
-    assert spy.calls == 2
-    assert spy.form() == spy.form()  # 第二次请求与第一次同形（parse_qs 幂等）
-    assert spy.form()["proxy_pass_url"] == ["http://fd-wire-cell-acme:8000/mcp"]
+    assert spy.calls == 4
+    first_reg = spy.requests[0]
+    second_reg = spy.requests[2]
+    assert first_reg.full_url.endswith("/api/servers/register")
+    assert second_reg.full_url.endswith("/api/servers/register")
+    assert first_reg.data == second_reg.data  # 同形载荷
+    first_tog = spy.requests[1]
+    second_tog = spy.requests[3]
+    assert first_tog.data == second_tog.data
+    assert first_tog.full_url.endswith("/api/servers/toggle")
 
 
 def test_register_name_falls_back_to_path(monkeypatch, client):
-    spy = UrlopenSpy(FakeResponse(201))
+    spy = UrlopenSpy([FakeResponse(201), FakeResponse(200)])
     monkeypatch.setattr(urllib.request, "urlopen", spy)
 
     client.register(ServerEntry(path="/x/y", target_url="http://x:8000/mcp"))
 
-    assert spy.form()["name"] == ["x/y"]
+    reg_form = dict(urllib.parse.parse_qs(spy.requests[0].data.decode("utf-8")))
+    assert reg_form["name"] == ["x/y"]
 
 
 def test_register_409_conflict_raises_with_reason(monkeypatch, client):
@@ -242,7 +269,7 @@ def test_error_body_plain_text_still_reported(monkeypatch, client):
 
 
 def test_bearer_auth_header_applied(monkeypatch):
-    spy = UrlopenSpy(FakeResponse(201))
+    spy = UrlopenSpy([FakeResponse(201), FakeResponse(200)])
     monkeypatch.setattr(urllib.request, "urlopen", spy)
     HttpRegistryClient(BASE, auth=BearerTokenAuth("t0k")).register(ENTRY)
     assert spy.last.headers["Authorization"] == "Bearer t0k"
@@ -261,7 +288,7 @@ def test_console_session_headers_applied(monkeypatch):
 
 
 def test_anonymous_client_sends_no_auth_headers(monkeypatch):
-    spy = UrlopenSpy(FakeResponse(201))
+    spy = UrlopenSpy([FakeResponse(201), FakeResponse(200)])
     monkeypatch.setattr(urllib.request, "urlopen", spy)
     HttpRegistryClient(BASE).register(ENTRY)
     assert "Authorization" not in spy.last.headers
