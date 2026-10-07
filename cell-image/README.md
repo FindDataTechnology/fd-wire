@@ -104,7 +104,7 @@ docker buildx build \
 |---|---|---|
 | `WIRE_CUSTOMER_KEY` | （无） | 客户 per-user 长命 key（registry patch-key 铸造）；缺省时代理对客户轨 fail-closed 503（读取报错、不静默旁路计量） |
 | `WIRE_PLATFORM_KEY` | （无） | 平台服务凭据；缺省则 `/mcp-platform` 轨 503 |
-| `WIRE_SERVER_PATH` | `mcp-proxy/business-mcp/mcp` | 拼 `WIRE_GATEWAY_URL` 后的条目路径；registry 条目路径或 Caddy 改写变化时调这里 |
+| `WIRE_SERVER_PATH` | `business-mcp/mcp` | 拼 `WIRE_GATEWAY_URL` 后的条目路径；registry 条目路径或 Caddy 改写变化时调这里 |
 | `WIRE_UPSTREAM_URL` | （自动拼出） | 完整 wire 门 URL 一票覆盖（联调/测试用） |
 | `WIRE_PROXY_HOST` / `WIRE_PROXY_PORT` | `127.0.0.1` / `8312` | 凭据代理监听（回环，不 EXPOSE） |
 | `MCP_TRANSPORT` / `MCP_HOST` / `MCP_PORT` | `http` / `0.0.0.0` / `8000` | 引擎自身 MCP 面；`:8000` 与 cell-manager `DEFAULT_TARGET_URL_TEMPLATE` 对齐 |

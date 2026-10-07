@@ -1,15 +1,16 @@
-"""fd_mcp_client 契约钉住（daas-deployment-profiles 任务 2.1/2.2）。
+"""fd_mcp_client 契约钉住（wire-native-channel-cutover）。
 
 覆盖：
-- gateway 模式报文契约：``{"tool","arguments"}`` 简化 POST + Bearer 平台
-  凭据（逐字段断言）；响应 ``{"result":...}`` / 直接业务 dict 双形态；
-- native 模式线协议：initialize 握手序列（→ Mcp-Session-Id →
-  notifications/initialized → tools/call 带会话头）、惰性握手与会话复用、
-  list_tools、SSE 应答解码、协议版本回退、close 释放会话；
+- native 单模式线协议：initialize 握手序列（→ Mcp-Session-Id →
+  notifications/initialized → tools/call 带会话头）、惰性握手与会话
+  复用、list_tools、SSE 应答解码、协议版本回退、close 释放会话；
+- gateway 模式不存在（退役钉住）：包公开面无任何简化报文客户端；
 - 错误体系：传输层失败 → ``McpTransportError``；工具报错/契约不符 →
   ``McpCallError``；
-- ingest 经新客户端：env 解析复用、工具新名（无 ``daas_`` 前缀）调用
-  序列、``EngineUnavailable``/``EngineCallError`` 包装不回归。
+- ingest 经 native 客户端：env 解析复用（map 覆盖优先/约定派生）、
+  工具新名（无 ``daas_`` 前缀）调用序列、会话复用、
+  ``EngineUnavailable``/``EngineCallError`` 包装与握手期 404/405 的
+  「cell 未开通」语义。
 
 外部 HTTP 全部经注入的 httpx.MockTransport mock，绝不打真网。
 """
@@ -21,8 +22,8 @@ import json
 import httpx
 import pytest
 
+import fd_mcp_client
 from fd_mcp_client import (
-    GatewayMcpClient,
     McpCallError,
     McpTransportError,
     NativeMcpClient,
@@ -37,98 +38,15 @@ from fd_wire_api.datasets.ingest import (
 )
 
 
-# ------------------------------------------------------------------ gateway
+# ------------------------------------------------------------------ 退役钉住
 
 
-def test_gateway_call_posts_simplified_body_with_bearer() -> None:
-    """gateway 报文契约：简化 POST 形态 + Bearer 头，逐字段钉住。"""
-    seen: dict = {}
+def test_gateway_mode_is_gone() -> None:
+    """gateway 简化模式退役：包公开面（与模块面）无简化报文客户端。"""
+    assert not hasattr(fd_mcp_client, "GatewayMcpClient")
+    import fd_mcp_client.native as native_mod
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen["url"] = str(request.url)
-        seen["auth"] = request.headers.get("Authorization")
-        seen["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"result": {"rows": 3, "preview": [1, 2]}})
-
-    client = GatewayMcpClient(
-        "http://cell-1/mcp",
-        "platform-secret",
-        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
-    )
-    result = client.call("customer_dataset_preview", {"dataset_key": "d1", "limit": 10})
-    assert result == {"rows": 3, "preview": [1, 2]}
-    assert seen["url"] == "http://cell-1/mcp"
-    assert seen["auth"] == "Bearer platform-secret"
-    assert seen["body"] == {
-        "tool": "customer_dataset_preview",
-        "arguments": {"dataset_key": "d1", "limit": 10},
-    }
-    client.close()
-
-
-def test_gateway_accepts_plain_business_dict() -> None:
-    """gateway 响应双形态之二：直接业务 dict 原样透传。"""
-    client = GatewayMcpClient(
-        "http://cell-1/mcp",
-        "cred",
-        http_client=httpx.Client(
-            transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"ok": True}))
-        ),
-    )
-    assert client.call("t", {}) == {"ok": True}
-    client.close()
-
-
-def test_gateway_transport_errors_are_mcp_transport_error() -> None:
-    """不可达 / 非 2xx / 非 JSON → McpTransportError（带 label 措辞）。"""
-    def unreachable(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("connection refused")
-
-    def _client(handler) -> GatewayMcpClient:
-        return GatewayMcpClient(
-            "http://cell-1/mcp",
-            "cred",
-            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
-        )
-
-    with pytest.raises(McpTransportError, match="MCP 端点不可达"):
-        _client(unreachable).call("t", {})
-    with pytest.raises(McpTransportError, match="返回 500"):
-        _client(lambda r: httpx.Response(500, text="boom")).call("t", {})
-    with pytest.raises(McpTransportError, match="返回非 JSON"):
-        _client(lambda r: httpx.Response(200, text="not-json")).call("t", {})
-
-
-def test_gateway_tool_errors_are_mcp_call_error() -> None:
-    """JSON-RPC error / isError / success=False → McpCallError。"""
-    cases = [
-        ({"jsonrpc": "2.0", "id": 1, "error": {"code": -32601, "message": "no such tool"}},
-         "返回 JSON-RPC 错误"),
-        ({"result": {"isError": True, "error": "行数超限"}}, "工具报错"),
-        # 顶层 truthy error 键先按 JSON-RPC error 处理（与提炼源 _unwrap 同序），
-        # 故 success=False 用例不带 error 键
-        ({"success": False, "reason": "配额超限"}, "工具报错"),
-    ]
-    for payload, pattern in cases:
-        client = GatewayMcpClient(
-            "http://cell-1/mcp",
-            "cred",
-            http_client=httpx.Client(
-                transport=httpx.MockTransport(lambda r, p=payload: httpx.Response(200, json=p))
-            ),
-        )
-        with pytest.raises(McpCallError, match=pattern):
-            client.call("t", {})
-        client.close()
-
-
-def test_gateway_close_is_safe_without_owned_client() -> None:
-    """注入的 HTTP 客户端不归 gateway 关（幂等，不抛）。"""
-    http = httpx.Client()
-    client = GatewayMcpClient("http://cell-1/mcp", "cred", http_client=http)
-    client.close()
-    assert not client._owns_http
-    http.close()
+    assert not hasattr(native_mod, "GatewayMcpClient")
 
 
 # ------------------------------------------------------------------ unwrap
@@ -260,7 +178,7 @@ def test_native_handshake_sequence_then_call_with_session_header() -> None:
         note = server.requests[1]
         assert note["headers"].get("mcp-session-id") == "sess-abc123"
         assert "id" not in note["body"]  # 通知无 id
-        # tools/call 带会话头 + 简化参数进 JSON-RPC params
+        # tools/call 带会话头 + 工具名进 JSON-RPC params
         call = server.requests[2]
         assert call["headers"].get("mcp-session-id") == "sess-abc123"
         assert call["body"]["params"] == {
@@ -430,14 +348,14 @@ def test_native_close_deletes_session_and_is_idempotent() -> None:
     assert deletes[0]["headers"].get("mcp-session-id") == "sess-abc123"
 
 
-# ------------------------------------------------------------------ ingest 经新客户端
+# ------------------------------------------------------------------ ingest 经 native 客户端
 
 
 @pytest.fixture()
 def engine_env(monkeypatch):
     """配好 cell 端点映射与平台凭据（env 复用纪律：解析留在调用方）。"""
     monkeypatch.setenv(
-        "AI_CELL_ENDPOINT_MAP", "cust-001=http://registry.example/mcp-proxy/cell-cust-001/mcp"
+        "AI_CELL_ENDPOINT_MAP", "cust-001=http://registry.example/fd-wire-cell-cust-001/mcp"
     )
     monkeypatch.setenv("AI_PLATFORM_CREDENTIAL", "platform-service-credential")
     from fd_wire_api.ai.settings import get_settings as ai_get_settings
@@ -447,10 +365,8 @@ def engine_env(monkeypatch):
     ai_get_settings.cache_clear()
 
 
-def test_engine_client_call_sequence_with_renamed_tools(engine_env) -> None:
-    """ingest 走 fd_mcp_client gateway：工具新名（无 daas_ 前缀）+ 简化报文 +
-    平台凭据 + env 解析；引擎 success 信封剥掉。"""
-    seen: list[dict] = []
+def _mcp_engine_server(seen: list[dict]) -> httpx.MockTransport:
+    """记录请求序列的 native 引擎假实现（握手+tools/call）。"""
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
@@ -458,15 +374,24 @@ def test_engine_client_call_sequence_with_renamed_tools(engine_env) -> None:
             {
                 "url": str(request.url),
                 "auth": request.headers.get("Authorization"),
+                "method": body.get("method"),
                 "body": body,
             }
         )
+        if body.get("method") == "initialize":
+            return httpx.Response(
+                200,
+                headers={"Mcp-Session-Id": "sess-engine"},
+                json={"jsonrpc": "2.0", "id": body["id"], "result": {}},
+            )
+        if body.get("method") == "notifications/initialized":
+            return httpx.Response(202)
         result_text = json.dumps({"success": True, "ingest_id": "ing-1", "rows": 2})
         return httpx.Response(
             200,
             json={
                 "jsonrpc": "2.0",
-                "id": 1,
+                "id": body["id"],
                 "result": {
                     "content": [{"type": "text", "text": result_text}],
                     "isError": False,
@@ -474,44 +399,118 @@ def test_engine_client_call_sequence_with_renamed_tools(engine_env) -> None:
             },
         )
 
-    client = EngineToolClient("cust-001", http_client=httpx.Client(
-        transport=httpx.MockTransport(handler)
-    ))
+    return httpx.MockTransport(handler)
+
+
+def test_engine_client_call_sequence_with_renamed_tools(engine_env) -> None:
+    """ingest 走 native 客户端：工具新名（无 daas_ 前缀）+ 标准握手序列 +
+    平台凭据 + env 解析；引擎 success 信封剥掉；会话跨调用复用。"""
+    seen: list[dict] = []
+    client = EngineToolClient(
+        "cust-001", http_client=httpx.Client(transport=_mcp_engine_server(seen))
+    )
     try:
         begin = client.call(TOOL_INGEST_BEGIN, {"dataset_key": "d1", "columns": []})
         assert TOOL_INGEST_BEGIN == "customer_dataset_ingest_begin"
         assert begin == {"ingest_id": "ing-1", "rows": 2}
         client.call(TOOL_PREVIEW, {"dataset_key": "d1", "limit": 10})
-        assert [c["body"]["tool"] for c in seen] == [
+        methods = [c["method"] for c in seen]
+        assert methods == [
+            "initialize",
+            "notifications/initialized",
+            "tools/call",
+            "tools/call",
+        ]
+        assert seen[0]["url"] == "http://registry.example/fd-wire-cell-cust-001/mcp"
+        assert seen[0]["auth"] == "Bearer platform-service-credential"
+        calls = [c for c in seen if c["method"] == "tools/call"]
+        assert [c["body"]["params"]["name"] for c in calls] == [
             "customer_dataset_ingest_begin",
             "customer_dataset_preview",
         ]
-        assert seen[0]["url"] == "http://registry.example/mcp-proxy/cell-cust-001/mcp"
-        assert seen[0]["auth"] == "Bearer platform-service-credential"
-        assert seen[0]["body"]["arguments"] == {"dataset_key": "d1", "columns": []}
+        assert calls[0]["body"]["params"]["arguments"] == {"dataset_key": "d1", "columns": []}
         assert not any("daas_" in json.dumps(c["body"]) for c in seen)
     finally:
         client.close()
 
 
+def test_engine_client_endpoint_convention_derivation(engine_env, monkeypatch) -> None:
+    """约定派生：未配 map 时按 ``<base>/fd-wire-cell-<cid>/mcp`` 派生端点。"""
+    monkeypatch.delenv("AI_CELL_ENDPOINT_MAP", raising=False)
+    from fd_wire_api.ai.settings import get_settings as ai_get_settings
+
+    ai_get_settings.cache_clear()
+    try:
+        seen: list[dict] = []
+        client = EngineToolClient(
+            "cust-042", http_client=httpx.Client(transport=_mcp_engine_server(seen))
+        )
+        try:
+            client.call(TOOL_PREVIEW, {"dataset_key": "d1", "limit": 5})
+            assert seen[0]["url"] == "https://mcp.finddatatech.cloud/fd-wire-cell-cust-042/mcp"
+        finally:
+            client.close()
+    finally:
+        ai_get_settings.cache_clear()
+
+
+def test_engine_client_map_miss_is_unprovisioned(engine_env) -> None:
+    """显式部署口径：map 已配且未命中 → EngineUnavailable（未开通）。"""
+    with pytest.raises(EngineUnavailable, match="无映射"):
+        EngineToolClient("cust-999").call("t", {})
+
+
+def test_engine_client_handshake_404_405_is_unprovisioned(engine_env, monkeypatch) -> None:
+    """派生端点握手期 404/405 → 「cell 未开通」语义（不静默降级）。"""
+    monkeypatch.delenv("AI_CELL_ENDPOINT_MAP", raising=False)
+    from fd_wire_api.ai.settings import get_settings as ai_get_settings
+
+    ai_get_settings.cache_clear()
+    try:
+        for status in (404, 405):
+            client = EngineToolClient(
+                "cust-nada",
+                http_client=httpx.Client(
+                    transport=httpx.MockTransport(lambda r, s=status: httpx.Response(s, text="no such server"))
+                ),
+            )
+            with pytest.raises(EngineUnavailable, match="cell 未开通"):
+                client.call("t", {})
+            client.close()
+    finally:
+        ai_get_settings.cache_clear()
+
+
 def test_engine_client_error_mapping_unchanged(engine_env) -> None:
-    """错误包装不回归：传输层/工具报错 → EngineCallError；未配置 → EngineUnavailable。"""
+    """错误包装不回归：传输层/工具报错 → EngineCallError。"""
+    def handshake_then(status: int, body: dict | None) -> httpx.MockTransport:
+        def handler(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content)
+            if payload.get("method") == "initialize":
+                return httpx.Response(
+                    200,
+                    headers={"Mcp-Session-Id": "s"},
+                    json={"jsonrpc": "2.0", "id": payload["id"], "result": {}},
+                )
+            if payload.get("method") == "notifications/initialized":
+                return httpx.Response(202)
+            if body is not None:
+                return httpx.Response(200, json=body)
+            return httpx.Response(status, text="boom")
+
+        return httpx.MockTransport(handler)
+
     def _client(handler) -> EngineToolClient:
         return EngineToolClient(
-            "cust-001", http_client=httpx.Client(transport=httpx.MockTransport(handler))
+            "cust-001", http_client=httpx.Client(transport=handler)
         )
 
-    with pytest.raises(EngineCallError, match="引擎端点返回 500"):
-        _client(lambda r: httpx.Response(500, text="boom")).call("t", {})
+    with pytest.raises(EngineCallError, match="返回 500"):
+        _client(handshake_then(500, None)).call("t", {})
     with pytest.raises(EngineCallError, match="引擎工具报错: 行数超过上限"):
         _client(
-            lambda r: httpx.Response(
-                200,
-                json={"result": {"structuredContent": {"success": False, "error": "行数超过上限"}}},
-            )
+            handshake_then(200, {"result": {"structuredContent": {"success": False, "error": "行数超过上限"}}})
         ).call("t", {})
-    with pytest.raises(EngineUnavailable, match="AI_CELL_ENDPOINT_MAP 无映射"):
-        EngineToolClient("cust-999").call("t", {})
 
 
 def test_engine_client_refuses_without_platform_credential(engine_env, monkeypatch) -> None:

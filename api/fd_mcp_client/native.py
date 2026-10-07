@@ -17,10 +17,13 @@
 - 端点归一：自动补齐 ``/mcp`` 后缀（已带则不重复），与 catalog client
   同一纪律。
 
-计量轨道不变量（spec「计量轨道不变量」）：native 模式**不经 wire 入口、
-registry 审计侧不产生计量记录**——仅用于平台内部数据写入通道、开发与
-测试，SHALL NOT 用于对 cell 的客户数据读取。包不强制（无 auth 边界可
-依），由代码评审与调用方保证。
+计量轨道不变量（spec「计量轨道不变量（端点决定）」）：计量归属由端点
+决定——endpoint 配成 **registry 入口**（``https://<registry>/<server>/mcp``
+形态）即计量轨，registry 审计侧照常落计量记录、归集平台凭据轨道；
+endpoint 配成**容器直连地址**（如 ``http://fd-wire-cell-x:8000/mcp``）
+则不经计量门、不产生计量记录——仅限开发与测试，SHALL NOT 用于对
+cell 的客户数据读取。包不强制（无 auth 边界可依），由代码评审与
+调用方部署纪律保证。
 
 错误：传输层失败（不可达 / 非 2xx / 非 JSON / 握手失败）→
 :class:`McpTransportError`；JSON-RPC error / 工具报错 / 结果不合契约 →

@@ -85,19 +85,66 @@ def test_resolve_cell_endpoint(monkeypatch) -> None:
     monkeypatch.setenv("AI_CELL_ENDPOINT_MAP", "cust-001=http://cell-1/mcp")
     reset_ai_runtime()
     assert resolve_cell_endpoint("cust-001") == "http://cell-1/mcp"
-    # 未命中即 cell 未开通（None——调用方如实报错，不静默降级）
+    # map 已配且未命中 → None（显式部署口径：未开通，调用方如实报错）
     assert resolve_cell_endpoint("cust-999") is None
+    reset_ai_runtime()
+
+
+def test_resolve_cell_endpoint_convention_derivation(monkeypatch) -> None:
+    """约定派生：map 未配时按 ``<base>/fd-wire-cell-<cid>/mcp``（基址可覆盖）。"""
+    monkeypatch.delenv("AI_CELL_ENDPOINT_MAP", raising=False)
+    monkeypatch.setenv("AI_CELL_ENDPOINT_BASE", "https://registry.example")
+    reset_ai_runtime()
+    assert (
+        resolve_cell_endpoint("cust-042")
+        == "https://registry.example/fd-wire-cell-cust-042/mcp"
+    )
+    # 基址缺省 = registry 公网入口
+    monkeypatch.delenv("AI_CELL_ENDPOINT_BASE", raising=False)
+    reset_ai_runtime()
+    assert (
+        resolve_cell_endpoint("cust-042")
+        == "https://mcp.finddatatech.cloud/fd-wire-cell-cust-042/mcp"
+    )
     reset_ai_runtime()
 
 
 # ------------------------------------------------------------------ executor
 
 
-def test_cell_executor_not_provisioned() -> None:
-    executor = CellMcpExecutor("cust-999", endpoint=None)
-    assert executor.endpoint is None
-    with pytest.raises(CellNotProvisionedError):
-        executor.execute("search_indicators", {"q": "GDP"})
+def test_cell_executor_not_provisioned(monkeypatch) -> None:
+    """显式部署口径：map 已配且未命中 → 端点 None → CellNotProvisionedError。"""
+    monkeypatch.setenv("AI_CELL_ENDPOINT_MAP", "cust-001=http://cell-1/mcp")
+    reset_ai_runtime()
+    try:
+        executor = CellMcpExecutor("cust-999", endpoint=None)
+        assert executor.endpoint is None
+        with pytest.raises(CellNotProvisionedError):
+            executor.execute("search_indicators", {"q": "GDP"})
+    finally:
+        reset_ai_runtime()
+
+
+def test_cell_executor_handshake_404_is_not_provisioned(monkeypatch) -> None:
+    """约定派生口径：派生端点握手期 404/405 → CellNotProvisionedError（未开通）。"""
+    monkeypatch.delenv("AI_CELL_ENDPOINT_MAP", raising=False)
+    reset_ai_runtime()
+    try:
+        for status in (404, 405):
+            executor = CellMcpExecutor(
+                "cust-nada",
+                credential="platform-secret",
+                http_client=httpx.Client(
+                    transport=httpx.MockTransport(
+                        lambda r, s=status: httpx.Response(s, text="no such server")
+                    )
+                ),
+            )
+            with pytest.raises(CellNotProvisionedError, match="cell 未开通"):
+                executor.execute("search_indicators", {"q": "GDP"})
+            executor.close()
+    finally:
+        reset_ai_runtime()
 
 
 def test_cell_executor_refuses_without_platform_credential() -> None:
@@ -112,14 +159,37 @@ def test_cell_executor_refuses_without_platform_credential() -> None:
         executor.execute("search_indicators", {"q": "GDP"})
 
 
-def test_cell_executor_posts_with_platform_credential() -> None:
-    seen: dict = {}
+def test_cell_executor_calls_native_mcp_with_platform_credential() -> None:
+    """执行走标准 MCP：initialize 握手 → tools/call（工具名进 JSON-RPC
+    params），平台凭据 Bearer 上行；会话跨 execute 复用。"""
+    seen: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen["url"] = str(request.url)
-        seen["auth"] = request.headers.get("Authorization")
-        seen["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"result": {"rows": 3, "preview": [1, 2]}})
+        body = json.loads(request.content)
+        seen.append(
+            {
+                "url": str(request.url),
+                "auth": request.headers.get("Authorization"),
+                "method": body.get("method"),
+                "body": body,
+            }
+        )
+        if body.get("method") == "initialize":
+            return httpx.Response(
+                200,
+                headers={"Mcp-Session-Id": "sess-exec"},
+                json={"jsonrpc": "2.0", "id": body["id"], "result": {}},
+            )
+        if body.get("method") == "notifications/initialized":
+            return httpx.Response(202)
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "result": {"structuredContent": {"rows": 3, "preview": [1, 2]}},
+            },
+        )
 
     executor = CellMcpExecutor(
         "cust-001",
@@ -127,29 +197,74 @@ def test_cell_executor_posts_with_platform_credential() -> None:
         credential="platform-secret",
         http_client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
-    result = executor.execute("search_indicators", {"q": "GDP 人均"})
-    assert result == {"rows": 3, "preview": [1, 2]}
-    assert seen["url"] == "http://cell-1/mcp"
-    assert seen["auth"] == "Bearer platform-secret"
-    assert seen["body"] == {"tool": "search_indicators", "arguments": {"q": "GDP 人均"}}
+    try:
+        result = executor.execute("search_indicators", {"q": "GDP 人均"})
+        assert result == {"rows": 3, "preview": [1, 2]}
+        assert [s["method"] for s in seen] == [
+            "initialize",
+            "notifications/initialized",
+            "tools/call",
+        ]
+        assert seen[0]["url"] == "http://cell-1/mcp"
+        assert seen[0]["auth"] == "Bearer platform-secret"
+        call = seen[2]
+        assert call["body"]["params"] == {"name": "search_indicators", "arguments": {"q": "GDP 人均"}}
+        assert call["body"]["jsonrpc"] == "2.0"
+        # 会话复用：第二次 execute 不再握手
+        executor.execute("search_indicators", {"q": "CPI"})
+        assert [s["method"] for s in seen].count("initialize") == 1
+    finally:
+        executor.close()
 
 
-def test_cell_executor_unwraps_plain_dict_and_errors() -> None:
+def test_cell_executor_tool_errors_are_cell_tool_error() -> None:
+    """JSON-RPC error / isError / 非 2xx / 非 JSON / 形态不合契约 → CellToolError。"""
+
+    def _handshake_then(response_factory):
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            if body.get("method") == "initialize":
+                return httpx.Response(
+                    200,
+                    headers={"Mcp-Session-Id": "s"},
+                    json={"jsonrpc": "2.0", "id": body["id"], "result": {}},
+                )
+            if body.get("method") == "notifications/initialized":
+                return httpx.Response(202)
+            return response_factory(body)
+
+        return handler
+
+    cases = [
+        (lambda b: httpx.Response(200, json={"jsonrpc": "2.0", "id": b["id"], "error": {"code": -32601, "message": "no such tool"}}), "no such tool"),
+        (lambda b: httpx.Response(200, json={"result": {"structuredContent": {"ok": True}}}), "ok"),  # 对照：正常路径
+    ]
+    # JSON-RPC error → CellToolError
     executor = CellMcpExecutor(
         "cust-001",
         endpoint="http://cell-1/mcp",
         credential="platform-secret",
-        http_client=httpx.Client(
-            transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"ok": True}))
-        ),
+        http_client=httpx.Client(transport=httpx.MockTransport(_handshake_then(cases[0][0]))),
     )
-    assert executor.execute("t", {}) == {"ok": True}
+    with pytest.raises(CellToolError, match="no such tool"):
+        executor.execute("t", {})
+    executor.close()
+
+    # 正常路径对照
+    executor2 = CellMcpExecutor(
+        "cust-001",
+        endpoint="http://cell-1/mcp",
+        credential="platform-secret",
+        http_client=httpx.Client(transport=httpx.MockTransport(_handshake_then(cases[1][0]))),
+    )
+    assert executor2.execute("t", {}) == {"ok": True}
+    executor2.close()
 
     # 非 2xx / 不可达 / 非 JSON / 形态不合契约 → CellToolError（如实上抛）
     for response, pattern in [
         (httpx.Response(500, text="boom"), "返回 500"),
         (httpx.Response(200, text="not-json"), "非 JSON"),
-        (httpx.Response(200, json=[1, 2]), "不合契约"),
+        (httpx.Response(200, json=[1, 2]), "非 JSON"),
     ]:
         bad = CellMcpExecutor(
             "cust-001",

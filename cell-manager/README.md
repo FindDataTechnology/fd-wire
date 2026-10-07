@@ -68,9 +68,9 @@ cell-manager/
 
 **鉴权（可插拔，v1 两种形态；请求体都是 form 而非 JSON——fork 的 Form() 参数）**：
 
-- **bearer**（推荐部署形态）：`Authorization: Bearer <JWT>`。JWT 在控制台 `POST /api/tokens/generate` 铸币（server_routes.py:3891；默认 8h、上限 7d，**到期需人工在 UI 重铸**）。链路：nginx 对 `/api/` 做 `auth_request /validate`（docker/nginx_rev_proxy_http_only.conf:415-470）→ auth_server `/validate` 校验（auth_server/server.py:3756）→ 铸 `X-Internal-Token-Registry` 转发。无会话 cookie 时 **CSRF 免检**（registry/auth/csrf.py:114-126）。
+- **bearer**（推荐部署形态，cell-manager 自动化正解）：`Authorization: Bearer <凭据>`。凭据首选 **patch key**（`wgk-` 前缀，registry 定版起默认开启）：**永不过期**、MCP 入口与 registry `/api/` 双面可用、SHA256 落库吊销即时——一次铸币（控制台 UI 或 `POST /api/patch-keys`）长期无人值守使用。JWT 亦可（`POST /api/tokens/generate` 铸币；默认 8h、上限 7d，**到期需人工重铸**，不推荐常驻自动化）。链路：nginx 对 `/api/` 做 `auth_request /validate`（docker/nginx_rev_proxy_http_only.conf:415-470）→ auth_server `/validate` 校验（auth_server/server.py:3756）→ 铸 `X-Internal-Token-Registry` 转发。无会话 cookie 时 **CSRF 免检**（registry/auth/csrf.py:114-126）。
 - **console-session**：`Cookie: mcp_gateway_session=...`（cookie 名 registry/core/config.py:209）+ `X-CSRF-Token` 头（有会话 cookie 时 CSRF 必检，csrf.py:136；token 用 `GET /api/auth/csrf-token` 铸币，registry/auth/routes.py:487）。registry **无用户名密码 REST 登录**（登录只走 OAuth2 浏览器流，auth_server/oauth2_providers.yml），v1 会话由 env 直接喂 cookie+CSRF。
-- 仓内有 patch-key 通道（registry/api/patch_key_routes.py）但 **cheap-1 未部署**——不假设其存在。
+- patch-key 通道（registry/api/patch_key_routes.py）在 registry 定版后**已上线**（`PATCH_KEY_AUTH_ENABLED` 默认 true、铸出前惰性）：它是本客户端 bearer 模式的首选凭据形态（见上）。
 - 权限前提：操作账号需 `register_service` 权限（注册）与 owner/admin（删除/覆写他人）。
 
 ## 使用
@@ -118,7 +118,7 @@ python -m cell_manager provision acme && python -m cell_manager status acme
 | `CELL_REGISTRY_URL` | registry 占位 | registry 借用契约地址 |
 | `CELL_REGISTRY_MODE` | `http` | `http` \| `fake` |
 | `CELL_REGISTRY_AUTH` | 自动嗅探 | `bearer` \| `console-session` \| `none`（显式指定鉴权形态） |
-| `CELL_REGISTRY_TOKEN` | - | Bearer JWT（控制台 tokens/generate 铸币；有值即选 bearer） |
+| `CELL_REGISTRY_TOKEN` | - | Bearer 凭据（首选 patch key `wgk-`，永不过期；JWT 亦可；有值即选 bearer） |
 | `CELL_REGISTRY_COOKIE` / `CELL_REGISTRY_CSRF` | - | 控制台会话 `mcp_gateway_session=<v>` + CSRF token（两者齐备即选 console-session） |
 | `CELL_REGISTRY_REGISTER_PATH` / `CELL_REGISTRY_REMOVE_PATH` | `/api/servers/register` / `/api/servers/remove` | 端点微调（契约可重指纪律） |
 | `CELL_REGISTRY_SERVERS_PATH` | `/api/servers` | 只读探测端点（list_servers） |

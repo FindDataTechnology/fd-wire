@@ -46,7 +46,7 @@ JSON-RPC（initialize / tools/list / tools/call）。
 $ env -i PATH=…venv/bin… HOME=… \
     FD_HOME=/path/to/DAAS/fd-daas-mcp  DATA_DIR=/tmp/cell-smoke-53/data \
     MCP_PORT=18311 WIRE_PROXY_PORT=18312 \
-    WIRE_UPSTREAM_URL=http://127.0.0.1:19990/mcp-proxy/business-mcp/mcp \
+    WIRE_UPSTREAM_URL=http://127.0.0.1:19990/business-mcp/mcp \
     WIRE_CUSTOMER_KEY=test-customer-key WIRE_PLATFORM_KEY=test-platform-key \
     sh cell-image/entrypoint.sh
 [entrypoint] wire_auth_proxy up at http://127.0.0.1:18312/mcp -> http://127.0.0.1:19990/…
@@ -78,7 +78,7 @@ curl 直打引擎 initialize（healthcheck 同款请求）→ `HTTP 200` +
 ## 6. 凭据注入断言（假门日志，逐请求）
 
 ```
-{"path": "/mcp-proxy/business-mcp/mcp", "auth": "Bearer test-customer-key", "track": "customer"}  ×4
+{"path": "/business-mcp/mcp", "auth": "Bearer test-customer-key", "track": "customer"}  ×4
 ```
 
 引擎经网关发出的每一个 MCP 请求都带注入的客户凭据 → registry 侧按凭据

@@ -292,8 +292,12 @@ def test_max_turns_truncation(db) -> None:
 
 
 def test_cell_not_provisioned_constant_reply(db, monkeypatch) -> None:
-    """cell 未开通：常量错误回复，零 LLM 调用、零工具执行。"""
-    monkeypatch.setenv("AI_CELL_ENDPOINT_MAP", "")
+    """cell 未开通的两种口径都常量回复、零产物：
+    ①显式部署口径（map 已配未命中）：护栏一零 LLM/工具调用；
+    ②约定派生口径（map 未配）：首个探索调用抛 CellNotProvisionedError
+    → 常量回复、安全中止。"""
+    # ① 显式部署口径
+    monkeypatch.setenv("AI_CELL_ENDPOINT_MAP", "cust-001=http://cell-1/mcp")
     reset_ai_runtime()
     conversation = _conversation(db, customer_id="cust-404")
     llm = FakeLlm([])
@@ -316,6 +320,37 @@ def test_cell_not_provisioned_constant_reply(db, monkeypatch) -> None:
     assert llm.calls == []
     assert executor.calls == []
     assert _artifacts(db, conversation.id) == []
+
+    # ② 约定派生口径：LLM 回了工具调用、executor 抛未开通
+    from fd_wire_api.ai.executor import CellNotProvisionedError
+
+    monkeypatch.setenv("AI_CELL_ENDPOINT_MAP", "")
+    reset_ai_runtime()
+    conversation2 = _conversation(db, customer_id="cust-405")
+    llm2 = FakeLlm([assistant_tool(tool_call("search_indicators", {"q": "GDP"}))])
+    executor2 = FakeExecutor(
+        behavior={
+            "search_indicators": CellNotProvisionedError(
+                "customer cust-405 的 cell 未开通（握手期端点拒绝: initialize 返回 404）"
+            )
+        }
+    )
+
+    appended2 = chat(
+        db,
+        conversation2,
+        content="建个仪表盘",
+        llm=llm2,
+        tool_executor=executor2,
+        settings=AiSettings(ai_max_turns=8),
+    )
+
+    assert appended2[0].role == MessageRole.user.value
+    assert appended2[-1].content == CELL_NOT_PROVISIONED_MESSAGE
+    assert len(llm2.calls) == 1  # 首轮 LLM 真的被调（派生口径下无法预知）
+    assert len(executor2.calls) == 1
+    assert _artifacts(db, conversation2.id) == []
+    reset_ai_runtime()
 
 
 # ------------------------------------------------------------------ 失败如实

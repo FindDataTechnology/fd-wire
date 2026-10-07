@@ -43,8 +43,8 @@ esac
 if [ -n "${WIRE_UPSTREAM_URL:-}" ]; then
     GATE_URL="$WIRE_UPSTREAM_URL"
 elif [ -n "${WIRE_GATEWAY_URL:-}" ]; then
-    # 默认条目路径 = registry 的 business-mcp 条目（/mcp-proxy/<path>/<端点>）
-    GATE_URL="${WIRE_GATEWAY_URL%/}/${WIRE_SERVER_PATH:-mcp-proxy/business-mcp/mcp}"
+    # 默认条目路径 = registry 的 business-mcp 条目（<path>/<端点>；外部 /mcp-proxy/ 前缀已随 registry 定版镜像移除）
+    GATE_URL="${WIRE_GATEWAY_URL%/}/${WIRE_SERVER_PATH:-business-mcp/mcp}"
 else
     GATE_URL=""
 fi

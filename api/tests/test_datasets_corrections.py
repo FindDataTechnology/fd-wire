@@ -238,23 +238,39 @@ def test_cross_customer_access_all_404(datasets_env) -> None:
 # ------------------------------------------------------------------ 引擎通道报文
 
 
-def test_engine_client_gateway_body_and_platform_credential() -> None:
-    """gateway 简化报文勘误后的报文钉子：``{"tool","arguments"}`` + Bearer。
+def test_engine_client_native_body_and_platform_credential() -> None:
+    """引擎通道 native 报文钉子：标准 MCP 握手 + tools/call（工具名进
+    JSON-RPC params）+ Bearer 平台凭据；registry 入口端点形态。
 
-    （历史：本用例曾按 JSON-RPC 直发形态断言，ingest 通道勘误对齐为
-    registry mcp-proxy 验证过的 gateway 简化形态后同步更正。）
+    （历史：本用例两代更迭——JSON-RPC 直发 → registry mcp-proxy 验证
+    过的 gateway 简化形态 → 2026-10-07 registry 定版后回归标准 MCP
+    native 形态，简化报文已透传不翻译、正式退役。）
     """
-    seen: dict = {}
+    seen: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen["url"] = str(request.url)
-        seen["headers"] = dict(request.headers)
-        seen["body"] = json.loads(request.content)
+        body = json.loads(request.content)
+        seen.append(
+            {
+                "url": str(request.url),
+                "headers": dict(request.headers),
+                "method": body.get("method"),
+                "body": body,
+            }
+        )
+        if body.get("method") == "initialize":
+            return httpx.Response(
+                200,
+                headers={"Mcp-Session-Id": "sess-eng"},
+                json={"jsonrpc": "2.0", "id": body["id"], "result": {}},
+            )
+        if body.get("method") == "notifications/initialized":
+            return httpx.Response(202)
         return httpx.Response(
             200,
             json={
                 "jsonrpc": "2.0",
-                "id": 1,
+                "id": body["id"],
                 "result": {
                     "content": [
                         {
@@ -272,29 +288,48 @@ def test_engine_client_gateway_body_and_platform_credential() -> None:
     transport = httpx.MockTransport(handler)
     client = EngineToolClient(
         "cust-001",
-        endpoint="https://registry.example/mcp-proxy/fd-wire-cell-cust-001/mcp",
+        endpoint="https://registry.example/fd-wire-cell-cust-001/mcp",
         credential="platform-service-credential",
         http_client=httpx.Client(transport=transport),
     )
     result = client.call("customer_dataset_ingest_commit", {"ingest_id": "ing-1"})
     assert result == {"rows": 3, "size_bytes": 42}
-    assert seen["headers"]["authorization"] == "Bearer platform-service-credential"
-    assert seen["headers"]["content-type"] == "application/json"
-    assert seen["body"] == {
-        "tool": "customer_dataset_ingest_commit",
+    calls = [s for s in seen if s["method"] == "tools/call"]
+    assert len(calls) == 1
+    assert calls[0]["headers"]["authorization"] == "Bearer platform-service-credential"
+    assert calls[0]["body"]["jsonrpc"] == "2.0"
+    assert calls[0]["body"]["params"] == {
+        "name": "customer_dataset_ingest_commit",
         "arguments": {"ingest_id": "ing-1"},
     }
-    assert "fwc_" not in json.dumps(seen["body"])
+    assert calls[0]["headers"]["mcp-session-id"] == "sess-eng"
+    assert "fwc_" not in json.dumps(calls[0]["body"])
+    assert "mcp-proxy" not in calls[0]["url"]
     client.close()
 
 
 def test_engine_client_surfaces_tool_error_and_non_2xx() -> None:
-    def tool_error(_: httpx.Request) -> httpx.Response:
+    def _handshake(final_handler):
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            if body.get("method") == "initialize":
+                return httpx.Response(
+                    200,
+                    headers={"Mcp-Session-Id": "s"},
+                    json={"jsonrpc": "2.0", "id": body["id"], "result": {}},
+                )
+            if body.get("method") == "notifications/initialized":
+                return httpx.Response(202)
+            return final_handler(body)
+
+        return handler
+
+    def tool_error(body) -> httpx.Response:
         return httpx.Response(
             200,
             json={
                 "jsonrpc": "2.0",
-                "id": 1,
+                "id": body["id"],
                 "result": {
                     "content": [
                         {"type": "text", "text": json.dumps({"success": False, "error": "行数超过上限"})}
@@ -308,7 +343,7 @@ def test_engine_client_surfaces_tool_error_and_non_2xx() -> None:
         "cust-001",
         endpoint="https://example/mcp",
         credential="cred",
-        http_client=httpx.Client(transport=httpx.MockTransport(tool_error)),
+        http_client=httpx.Client(transport=httpx.MockTransport(_handshake(tool_error))),
     )
     with pytest.raises(EngineCallError, match="行数超过上限"):
         client.call("customer_dataset_ingest_commit", {})

@@ -57,6 +57,10 @@ _Avoid_: 编辑混称写回（云端永不写回客户源）、补丁泛称
 连接器向平台认证的凭据：沿用长命 key 的生命周期（不过期、可吊销且吊销即时生效），scope 仅限推送同步数据与拉取白名单配置，不能调用 MCP 读取任何数据。每个连接器独立一把。
 _Avoid_: 长命 key 混用（那是客户 MCP 调用凭据，scope 不同）、token（易与 LLM token 混）
 
+**native 模式（native mode）**:
+平台服务调 MCP 端点的唯一形态：标准 MCP streamable-http（完整 initialize 握手 + 会话复用 + tools/call/list_tools）。计量归属由**端点**决定——经 registry 入口端点（`https://<registry>/<server>/mcp`）+ 平台服务凭据即计量轨（归集平台、不落客户账单）；容器直连地址不经计量门，仅限开发与测试、禁止用于客户数据读取。
+_Avoid_: gateway 混称（简化报文形态已随 registry 定版镜像退役）、stdio 混称（一期不覆盖）
+
 **源适配器（source adapter）**:
 连接器内可插拔的一类客户源驱动：内网数据库、本地文件、业务系统 API 各为其一种实现。
 _Avoid_: 驱动泛称、spider 混称

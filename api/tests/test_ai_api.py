@@ -220,8 +220,13 @@ def test_max_turns_via_env(client, fake_llm, monkeypatch) -> None:
 
 
 def test_cell_not_provisioned_constant_error(client, fake_llm, fake_executor, monkeypatch) -> None:
-    """企业无 cell 端点映射：常量错误回复，零 LLM/工具调用。"""
-    monkeypatch.setenv("AI_CELL_ENDPOINT_MAP", "")  # 无任何映射
+    """cell 未开通的两种形态都回常量错误，零 LLM 调用：
+    ①显式部署口径：map 已配且未命中；②约定派生口径：握手期 404/405
+    （CellNotProvisionedError 由 executor 包装）。"""
+    from fd_wire_api.ai.executor import CellNotProvisionedError
+
+    # ① map 已配、OTHER 企业未命中
+    monkeypatch.setenv("AI_CELL_ENDPOINT_MAP", "cust-001=http://cell-001/mcp")
     reset_ai_runtime()
     body = create(client, headers=OTHER, message="帮我建个仪表盘")
 
@@ -229,7 +234,27 @@ def test_cell_not_provisioned_constant_error(client, fake_llm, fake_executor, mo
     assert body["messages"][1]["content"] == "该企业尚未开通数据 cell，AI 构建暂不可用。请联系平台开通 cell 后再试。"
     assert fake_llm.calls == []
     assert fake_executor.calls == []
-    artifacts = client.get(f"/api/v1/ai/conversations/{body['id']}/artifacts", headers=OTHER)
+
+    # ② map 未配（约定派生恒有端点）→ 派生端点握手期 404 → 未开通
+    monkeypatch.setenv("AI_CELL_ENDPOINT_MAP", "")
+    reset_ai_runtime()
+    fake_llm.script = [tool_reply(ToolCall(id="c1", name="search_indicators", arguments={"q": "GDP"}))]
+    fake_executor.behavior = {
+        "search_indicators": CellNotProvisionedError(
+            "customer cust-002 的 cell 未开通（握手期端点拒绝: initialize 返回 404）"
+        )
+    }
+    body2 = create(client, headers=OTHER, message="帮我建个仪表盘")
+
+    # 派生口径：首轮 LLM 真实发生（无法预知未开通），探索调用抛
+    # CellNotProvisionedError → 常量回复收场（tool_trace 不落库）
+    assert [m["role"] for m in body2["messages"]] == [
+        "user",
+        "assistant",
+        "assistant",
+    ]
+    assert body2["messages"][-1]["content"] == "该企业尚未开通数据 cell，AI 构建暂不可用。请联系平台开通 cell 后再试。"
+    artifacts = client.get(f"/api/v1/ai/conversations/{body2['id']}/artifacts", headers=OTHER)
     assert artifacts.json() == []
 
 

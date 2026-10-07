@@ -12,11 +12,15 @@
   token 网关 OpenAI 兼容面（LLM 出口，成本平台可控）。
 - ``AI_PLATFORM_CREDENTIAL``：平台服务凭据——AI 探索性工具执行统一走
   该凭据（不计费到客户账单；真正计量发生在 registry audit 侧）。
-- ``AI_CELL_ENDPOINT_MAP``：customer_id → cell 的 **registry wire 入口**
-  URL 映射，``cust-001=https://mcp.finddatatech.cloud/mcp-proxy/fd-wire-cell-cust-001/mcp,cust-002=...``
-  形式（也接受 JSON 对象）；未命中即该企业 cell 未开通。
-  map 值**必须**走 registry wire 入口（``/mcp-proxy/`` 路径形态）——
-  计量归集发生在 registry 审计侧；配成容器直连地址
+- ``AI_CELL_ENDPOINT_BASE``：cell 端点约定派生的基址（缺省 registry
+  公网入口 ``https://mcp.finddatatech.cloud``）；customer_id 的引擎
+  端点按 ``<base>/fd-wire-cell-<customer_id>/mcp`` 约定派生。
+- ``AI_CELL_ENDPOINT_MAP``：customer_id → cell 端点的**显式覆盖**映射，
+  ``cust-001=https://mcp.finddatatech.cloud/fd-wire-cell-cust-001/mcp,cust-002=...``
+  形式（也接受 JSON 对象）；命中优先于约定派生，map 已配且未命中即
+  该企业 cell 未开通（显式部署口径）。
+  map 值**必须**走 registry 入口（``https://<registry>/<server>/mcp``
+  形态）——计量归集发生在 registry 审计侧；配成容器直连地址
   （如 ``http://cell-001:8080/mcp``）会让 AI 探索调用绕过计量门，
   一条计量记录都不产生。
 - ``AI_AUTO_CREATE_TABLES``：启动时 ``create_all``（默认 true 开发便利；
@@ -68,6 +72,8 @@ class AiSettings(BaseSettings):
     token_gateway_model: str = "glm-4.7"
     # 平台服务凭据：AI 探索不计费的凭据轨道
     ai_platform_credential: str = ""
+    # cell 端点约定派生基址（缺省 registry 公网入口；map 覆盖优先）
+    ai_cell_endpoint_base: str = "https://mcp.finddatatech.cloud"
     ai_cell_endpoint_map: str = ""
     ai_auto_create_tables: bool = True
 

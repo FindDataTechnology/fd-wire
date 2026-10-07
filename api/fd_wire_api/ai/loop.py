@@ -19,7 +19,11 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .executor import CELL_NOT_PROVISIONED_MESSAGE, resolve_cell_endpoint
+from .executor import (
+    CELL_NOT_PROVISIONED_MESSAGE,
+    CellNotProvisionedError,
+    resolve_cell_endpoint,
+)
 from .models import AIMessage, AIConversation, MessageRole
 from .protocols import LlmAssistantMessage, LlmClient, ToolCall, ToolExecutor
 from .tools import ARTIFACT_TOOL_KINDS, TOOL_SCHEMAS, stage_artifact
@@ -155,10 +159,12 @@ def execute_tool_call(
     call: ToolCall,
     tool_executor: ToolExecutor,
 ) -> dict:
-    """执行一次工具调用并返回回灌结果（永不抛异常——异常即错误结果）。
+    """执行一次工具调用并返回回灌结果（异常即错误结果；未开通例外穿透）。
 
     产物工具 → spec 暂存；其余 → ToolExecutor（cell MCP，平台服务凭据
     轨道：AI 探索不计费，计量在 registry audit 侧按平台身份归集）。
+    ``CellNotProvisionedError`` 不在此吞——上抛给循环以常量回复收场
+    （约定派生口径下「未开通」在首个探索调用的握手期才被发现）。
     """
     if call.name in ARTIFACT_TOOL_KINDS:
         try:
@@ -178,6 +184,8 @@ def execute_tool_call(
             }
     try:
         return tool_executor.execute(call.name, call.arguments)
+    except CellNotProvisionedError:
+        raise  # 未开通：穿透到循环层走常量回复
     except Exception as exc:
         return {
             "ok": False,
@@ -208,6 +216,9 @@ def run_build_loop(
         return message
 
     # 护栏一：cell 未开通——常量如实报错，不调 LLM、零工具执行。
+    # （显式部署口径：map 已配且未命中时 resolve 为 None；约定派生口径
+    # 下派生端点恒有值，未开通在首次工具执行的握手期 404/405 处发现，
+    # CellNotProvisionedError 在循环体内同样触发本常量回复。）
     if resolve_cell_endpoint(conversation.customer_id) is None:
         emit(MessageRole.assistant, CELL_NOT_PROVISIONED_MESSAGE)
         return appended
@@ -226,27 +237,33 @@ def run_build_loop(
             return appended  # 终答
 
         wire.append(_assistant_wire(assistant))
-        for call in assistant.tool_calls:
-            result = execute_tool_call(db, conversation, call, tool_executor)
-            emit(
-                MessageRole.tool_trace,
-                json.dumps(
+        try:
+            for call in assistant.tool_calls:
+                result = execute_tool_call(db, conversation, call, tool_executor)
+                emit(
+                    MessageRole.tool_trace,
+                    json.dumps(
+                        {
+                            "tool_call_id": call.id,
+                            "tool_name": call.name,
+                            "arguments": call.arguments,
+                            "result": result,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+                wire.append(
                     {
+                        "role": "tool",
                         "tool_call_id": call.id,
-                        "tool_name": call.name,
-                        "arguments": call.arguments,
-                        "result": result,
-                    },
-                    ensure_ascii=False,
-                ),
-            )
-            wire.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call.id,
-                    "content": json.dumps(result, ensure_ascii=False),
-                }
-            )
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+        except CellNotProvisionedError:
+            # 约定派生口径的「未开通」：首个探索调用握手期 404/405——
+            # 常量回复、安全中止（不把未开通当作可继续探索的普通错误回灌）。
+            emit(MessageRole.assistant, CELL_NOT_PROVISIONED_MESSAGE)
+            return appended
 
     # 护栏二：轮次上限——如实告知截断（draft 留存，不静默丢弃）。
     emit(MessageRole.assistant, _truncation_message(max_turns))
