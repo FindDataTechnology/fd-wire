@@ -150,3 +150,62 @@ class TestFakeRegistryClient:
         client.register(ServerEntry(path="p", target_url="http://x/mcp"))
         with pytest.raises(RegistryError, match="already registered"):
             client.register(ServerEntry(path="p", target_url="http://y/mcp"))
+
+
+class TestDockerDriverWaitReady:
+    """wait_ready：注册前硬前置（registry 注册即触发扫描/探针，未就绪即被
+    自动禁用——10-07 生产实证）。三态：healthy 返回 / unhealthy 快速失败 /
+    超时失败；无 HEALTHCHECK 时运行态即就绪。"""
+
+    def _driver(self, monkeypatch, health_sequence, *, status="running"):
+        fake_docker = types.ModuleType("docker")
+
+        class _DockerException(Exception):
+            pass
+
+        class FakeContainer:
+            def __init__(self):
+                self._seq = list(health_sequence)
+
+            def reload(self):
+                pass
+
+            @property
+            def attrs(self):
+                h = self._seq.pop(0) if len(self._seq) > 1 else self._seq[0]
+                state = {"Status": status}
+                if h is not None:
+                    state["Health"] = {"Status": h}
+                return {"State": state, "Config": {}, "Mounts": []}
+
+        container = FakeContainer()
+
+        class FakeContainers:
+            def get(self, name):
+                return container
+
+        class FakeClient:
+            containers = FakeContainers()
+
+        fake_docker.DockerException = _DockerException
+        fake_docker.from_env = lambda: FakeClient()
+        monkeypatch.setitem(sys.modules, "docker", fake_docker)
+        return DockerDriver()
+
+    def test_returns_after_healthy(self, monkeypatch):
+        driver = self._driver(monkeypatch, ["starting", "starting", "healthy"])
+        driver.wait_ready("cell-1", timeout=5, poll_interval=0.01)
+
+    def test_unhealthy_fails_fast(self, monkeypatch):
+        driver = self._driver(monkeypatch, ["starting", "unhealthy"])
+        with pytest.raises(DriverError, match="unhealthy"):
+            driver.wait_ready("cell-1", timeout=5, poll_interval=0.01)
+
+    def test_timeout_reports_last_status(self, monkeypatch):
+        driver = self._driver(monkeypatch, ["starting"])
+        with pytest.raises(DriverError, match="not ready within .*last health: starting"):
+            driver.wait_ready("cell-1", timeout=0.05, poll_interval=0.01)
+
+    def test_no_healthcheck_running_is_ready(self, monkeypatch):
+        driver = self._driver(monkeypatch, [None])
+        driver.wait_ready("cell-1", timeout=1, poll_interval=0.01)

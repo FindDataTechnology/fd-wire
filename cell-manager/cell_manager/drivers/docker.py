@@ -94,6 +94,44 @@ class DockerDriver:
             raise DriverError(f"docker stop {name!r} failed: {exc}") from exc
         return self.inspect(name)
 
+    def wait_ready(self, name: str, *, timeout: float, poll_interval: float = 2.0) -> None:
+        """等待容器健康（Docker HEALTHCHECK=healthy）；无健康检查则运行态即就绪。
+
+        注册前的硬前置：registry 注册即触发安全扫描与健康探针，打在一个
+        还没就绪的 cell 上会被判不可达并自动禁用（2026-10-07 生产实证——
+        cell 镜像 start-period 25s，注册窗口必须等过它）。unhealthy 快速
+        失败；超时抛 DriverError（带最后观测状态）。
+        """
+        import time  # noqa: PLC0415 —— 仅本方法用，避免模块级 import
+
+        container = self._get(name)
+        deadline = time.monotonic() + timeout
+        last = "unknown"
+        while True:
+            try:
+                container.reload()
+                state = (container.attrs or {}).get("State", {})
+            except Exception as exc:
+                raise DriverError(f"docker inspect {name!r} failed: {exc}") from exc
+            health = (state.get("Health") or {}).get("Status")
+            if health == "healthy":
+                return
+            if health == "unhealthy":
+                raise DriverError(
+                    f"container {name!r} is unhealthy (HEALTHCHECK failing)"
+                )
+            if health is None:
+                if state.get("Status") == "running":
+                    return  # 无 HEALTHCHECK 配置：运行态即视为就绪（无法再深验）
+                last = state.get("Status", "unknown")
+            else:
+                last = health
+            if time.monotonic() >= deadline:
+                raise DriverError(
+                    f"container {name!r} not ready within {timeout}s (last health: {last})"
+                )
+            time.sleep(poll_interval)
+
     def remove(self, name: str, force: bool = False) -> None:
         container = self._get(name)
         try:

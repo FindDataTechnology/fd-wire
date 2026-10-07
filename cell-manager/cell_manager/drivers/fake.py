@@ -66,6 +66,11 @@ class FakeDriver:
         self._save()
         return self.inspect(name)
 
+    def wait_ready(self, name: str, *, timeout: float) -> None:
+        """Fake 语义：容器存在即就绪（调用留痕供顺序断言）。"""
+        self.calls.append(("wait_ready", name))
+        self._require(name)
+
     def remove(self, name: str, force: bool = False) -> None:
         self.calls.append(("remove", name))
         record = self._require(name)

@@ -1,6 +1,8 @@
 """CellManager：企业 cell 生命周期状态机（规格 wire-cell-tenancy / 任务 5.1）。
 
-状态机（cell = 容器 + 独立 SQLite WAL 卷 + registry 条目）::
+状态机（cell = 容器 + 独立 SQLite WAL 卷 + registry 条目）。provision 步骤：
+建卷 → 起容器 → **等就绪（wait_ready）** → 注册；创建之后的任何失败
+原子回滚（删容器+删空卷），不留孤儿。::
 
     (不存在) --provision--> ACTIVE
     ACTIVE   --pause------> PAUSED       （卷保留）
@@ -155,15 +157,31 @@ class CellManager:
                 network=self._config.network,
                 binds=(BindMount(host_path=str(db_path.parent), container_path=CONTAINER_DATA_DIR),),
             )
-            self._driver.create(spec)
-            self._driver.start(container_name)
-            self._registry.register(
-                ServerEntry(
-                    path=registry_path,
-                    target_url=self._config.target_url(customer_id),
-                    display_name=f"柏讯 cell · {customer_id}",
+            # 创建→启动→等就绪→注册，整体原子：任何一步失败即回滚
+            # （删容器+删刚建的空卷），不留孤儿。
+            # 等就绪是注册的硬前置：registry 注册即触发安全扫描与健康探针，
+            # 打未就绪 cell 会被判不可达并自动禁用（2026-10-07 生产实证）。
+            try:
+                self._driver.create(spec)
+                self._driver.start(container_name)
+                self._driver.wait_ready(
+                    container_name, timeout=self._config.readiness_timeout_seconds
                 )
-            )
+                self._registry.register(
+                    ServerEntry(
+                        path=registry_path,
+                        target_url=self._config.target_url(customer_id),
+                        display_name=f"柏讯 cell · {customer_id}",
+                    )
+                )
+            except Exception:
+                try:
+                    if self._driver.exists(container_name):
+                        self._driver.remove(container_name, force=True)
+                except Exception:  # noqa: BLE001 —— 回滚尽力，原异常优先
+                    pass
+                shutil.rmtree(volume_dir, ignore_errors=True)
+                raise
             now = utc_now_iso()
             record = {
                 "customer_id": customer_id,
@@ -204,6 +222,9 @@ class CellManager:
         def _do() -> tuple[CellStatus, dict[str, Any]]:
             record = self._require(customer_id, expect=PAUSED, action="resume")
             self._driver.start(record["container_name"])
+            self._driver.wait_ready(
+                record["container_name"], timeout=self._config.readiness_timeout_seconds
+            )
             return self._transition(record, ACTIVE), {}
 
         return self._run("resume", customer_id, _do)
@@ -227,6 +248,9 @@ class CellManager:
         def _do() -> tuple[CellStatus, dict[str, Any]]:
             record = self._require(customer_id, expect=RETENTION, action="cancel_deprovision")
             self._driver.start(record["container_name"])
+            self._driver.wait_ready(
+                record["container_name"], timeout=self._config.readiness_timeout_seconds
+            )
             return self._transition(record, ACTIVE, purge_at=None), {}
 
         return self._run("cancel_deprovision", customer_id, _do)

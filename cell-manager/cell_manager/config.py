@@ -116,6 +116,10 @@ class CellManagerConfig:
     #: docker 网络名（CELL_NETWORK；None=驱动缺省网络）。wire cell 必须与
     #: registry 栈同网，注册的 target_url（容器名:端口）才能被网关解析。
     network: str | None = None
+    #: 就绪等待超时秒数（CELL_READINESS_TIMEOUT）。start→等健康→register 的
+    #: 窗口：注册即触发安全扫描与健康探针，打未就绪 cell 会被判不可达并
+    #: 自动禁用（2026-10-07 生产实证）；cell 镜像 HEALTHCHECK start-period 25s。
+    readiness_timeout_seconds: float = 120.0
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "CellManagerConfig":
@@ -142,6 +146,17 @@ class CellManagerConfig:
             e.get("CELL_CUSTOMER_CREDENTIAL_MAP", "")
         )
         platform_credential = e.get("CELL_PLATFORM_CREDENTIAL", "").strip()
+        raw_readiness = e.get("CELL_READINESS_TIMEOUT", "120")
+        try:
+            readiness_timeout = float(raw_readiness)
+        except ValueError as exc:
+            raise ConfigError(
+                f"CELL_READINESS_TIMEOUT must be a number, got {raw_readiness!r}"
+            ) from exc
+        if readiness_timeout <= 0:
+            raise ConfigError(
+                f"CELL_READINESS_TIMEOUT must be > 0, got {readiness_timeout}"
+            )
         return cls(
             home=home,
             data_root=data_root,
@@ -157,6 +172,7 @@ class CellManagerConfig:
             driver_name=driver_name,
             customer_credential_map=customer_credential_map,
             platform_credential=platform_credential,
+            readiness_timeout_seconds=readiness_timeout,
         )
 
     # ---- 派生命名（隔离保证：每 cell 独立卷目录 + 独立容器名 + 独立条目路径） ----

@@ -59,6 +59,14 @@ class ContainerDriver(Protocol):
         """启动已存在的容器；已在运行则为幂等 no-op。"""
         ...
 
+    def wait_ready(self, name: str, *, timeout: float) -> None:
+        """等待容器进入就绪态（健康检查通过）；超时/不健康抛 DriverError。
+
+        注册前的硬前置：registry 注册即触发安全扫描与健康探针，打在一个
+        还没就绪的 cell 上会被判不可达并自动禁用（2026-10-07 生产实证）。
+        """
+        ...
+
     def stop(self, name: str) -> ContainerInfo:
         """停止运行中的容器（数据卷随宿主文件系统保留）。"""
         ...

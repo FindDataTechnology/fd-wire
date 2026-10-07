@@ -124,6 +124,7 @@ python -m cell_manager provision acme && python -m cell_manager status acme
 | `CELL_REGISTRY_SERVERS_PATH` | `/api/servers` | 只读探测端点（list_servers） |
 | `CELL_REGISTRY_TIMEOUT` | `15` | HTTP 超时秒数 |
 | `CELL_TARGET_URL_TEMPLATE` | `http://{container_name}:8000/mcp` | registry 条目 target 模板 |
+| `CELL_READINESS_TIMEOUT` | `120` | 就绪等待秒数（start→等健康→register；注册即触发扫描探针，未就绪会被自动禁用） |
 | `CELL_RETENTION_DAYS` | `30` | 注销保留期（0=立即到期） |
 | `CELL_DRIVER` | `docker` | `docker` \| `fake` |
 | `CELL_CUSTOMER_CREDENTIAL_MAP` | -（空） | 客户轨凭据 JSON（`customer_id → key`），provision 时注入容器 `WIRE_CUSTOMER_KEY` |

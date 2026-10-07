@@ -176,3 +176,74 @@ class TestStatusUnknown:
         for op in (manager.pause, manager.resume, manager.deprovision, manager.cancel_deprovision):
             with pytest.raises(UnknownCellError, match="ghost-corp"):
                 op("ghost-corp")
+
+
+class TestProvisionReadiness:
+    """注册前等就绪 + 原子回滚（wire-native-channel-cutover 实证修复）。
+
+    registry 注册即触发安全扫描与健康探针；打在一个还没就绪的 cell 上会
+    被判不可达并自动禁用（2026-10-07 生产实证），故 provision 的
+    start→register 之间必须等健康；创建之后的任何失败原子回滚（不留孤儿）。
+    """
+
+    def test_waits_ready_before_register(self, config, clock):
+        order: list[str] = []
+
+        from cell_manager import FakeDriver as _FakeDriver
+        from cell_manager import FakeRegistryClient as _FakeRegistry
+
+        class OrderingDriver(_FakeDriver):
+            def wait_ready(self, name, *, timeout):
+                order.append("wait_ready")
+                super().wait_ready(name, timeout=timeout)
+
+        class OrderingRegistry(_FakeRegistry):
+            def register(self, entry):
+                order.append("register")
+                super().register(entry)
+
+        manager = CellManager(
+            driver=OrderingDriver(),
+            registry=OrderingRegistry(),
+            config=config,
+            clock=clock,
+        )
+        manager.provision("acme")
+        assert order == ["wait_ready", "register"]
+
+    def test_wait_ready_failure_rolls_back_atomically(self, config, fake_registry, clock):
+        from cell_manager import DriverError
+        from cell_manager import FakeDriver as _FakeDriver
+
+        class NeverReadyDriver(_FakeDriver):
+            def wait_ready(self, name, *, timeout):
+                raise DriverError(
+                    f"container {name!r} not ready within {timeout}s (last health: starting)"
+                )
+
+        driver = NeverReadyDriver()
+        manager = CellManager(driver=driver, registry=fake_registry, config=config, clock=clock)
+        with pytest.raises(DriverError, match="not ready"):
+            manager.provision("acme")
+        # 原子回滚：容器删、卷删、未注册、簿记无记录（可干净重跑）
+        assert driver.names == []
+        assert not (config.data_root / "acme").exists()
+        assert fake_registry.paths == []
+        assert manager.status("acme").state == NOT_FOUND
+        # 审计留痕：error 条目在案
+        audit_lines = config.audit_log.read_text(encoding="utf-8").strip().splitlines()
+        assert any('"action": "provision"' in line and '"result": "error"' in line for line in audit_lines)
+        # 重跑（驱动恢复就绪）成功——回滚后不留脏状态
+        ok_driver = _FakeDriver()
+        manager2 = CellManager(driver=ok_driver, registry=fake_registry, config=config, clock=clock)
+        assert manager2.provision("acme").state == ACTIVE
+
+    def test_readiness_timeout_config_validation(self, home):
+        with pytest.raises(ConfigError, match="CELL_READINESS_TIMEOUT"):
+            CellManagerConfig.from_env(
+                env={"CELL_MANAGER_HOME": str(home), "CELL_READINESS_TIMEOUT": "soon"}
+            )
+        with pytest.raises(ConfigError, match="CELL_READINESS_TIMEOUT"):
+            CellManagerConfig.from_env(
+                env={"CELL_MANAGER_HOME": str(home), "CELL_READINESS_TIMEOUT": "0"}
+            )
