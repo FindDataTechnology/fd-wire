@@ -31,7 +31,7 @@ Streamable HTTP 的 POST(JSON / JSON+SSE)、GET(SSE)、DELETE（会话关闭）
 Env::
 
     WIRE_UPSTREAM_URL   目标 wire 门完整 URL（entrypoint 已拼好；优先级最高）
-    WIRE_GATEWAY_URL    门基址 + WIRE_SERVER_PATH（默认 business-mcp/mcp）
+    WIRE_GATEWAY_URL    门基址 + WIRE_SERVER_PATH（默认 fd-find-data-business-mcp/mcp）
                         ——仅当 WIRE_UPSTREAM_URL 未设时使用
     WIRE_CUSTOMER_KEY   客户长命 key（默认轨凭据）
     WIRE_PLATFORM_KEY   平台服务凭据（平台轨；未设则平台轨 503 fail-closed）
@@ -67,7 +67,7 @@ def resolve_target() -> tuple[str, str, int, str]:
     url = os.environ.get("WIRE_UPSTREAM_URL", "").strip()
     if not url:
         base = os.environ.get("WIRE_GATEWAY_URL", "").strip().rstrip("/")
-        suffix = os.environ.get("WIRE_SERVER_PATH", "business-mcp/mcp").strip("/")
+        suffix = os.environ.get("WIRE_SERVER_PATH", "fd-find-data-business-mcp/mcp").strip("/")
         if not base:
             raise SystemExit("[wire-auth-proxy] neither WIRE_UPSTREAM_URL nor WIRE_GATEWAY_URL set")
         url = f"{base}/{suffix}"
