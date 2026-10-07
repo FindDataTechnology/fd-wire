@@ -25,7 +25,13 @@ from .materialization import (
     start_materialization_scheduler,
     stop_materialization_scheduler,
 )
+from .provenance import router as provenance_router
+from .provenance import init_provenance_db
+from .provenance.forwarder import start_forwarder_loop, stop_forwarder_loop
+from .provenance.sealing import start_sealer_loop, stop_sealer_loop
+from .provenance.selfcheck import start_selfcheck_loop, stop_selfcheck_loop
 from .metering.db import ensure_schema
+from .metering.driver import start_metering_driver, stop_metering_driver
 from .metering.settings import get_settings
 from .metering.routes import router as metering_router
 from .routes import example
@@ -57,12 +63,26 @@ async def lifespan(_: FastAPI):
     # cron 调度循环（MATERIALIZATION_INTERVAL 扫描，硬停前置在 runner 内）。
     init_materialization_db()
     start_materialization_scheduler()
+    # 计量入账驱动（sub2api 入账管道）：周期「registry 审计摄取 → 当月结算」。
+    # REGISTRY_MONGO_URI / SUB2API_ADMIN_KEY 未配置时对应段自动跳过。
+    start_metering_driver()
     # 客户数据集（wire-customer-local-data 任务组 2）：登记/同步/修正/上传
     # 表幂等建表兜底（生产走 Alembic 0011）。
     init_datasets_db()
+    # 溯源账本（wire-provenance-ledger）：账本表兜底（生产走 Alembic 0012；
+    # 含触发器安装）+ 三个后台任务——WAL 转发（引擎事件入账）、epoch 封存
+    # （backend=none 时空转）、夜间完整性自检（只读）。
+    init_provenance_db()
+    start_forwarder_loop()
+    start_sealer_loop()
+    start_selfcheck_loop()
     try:
         yield
     finally:
+        stop_selfcheck_loop()
+        stop_sealer_loop()
+        stop_forwarder_loop()
+        stop_metering_driver()
         stop_materialization_scheduler()
         shutdown_catalog()
 
@@ -96,6 +116,9 @@ app.include_router(materialization_router)
 app.include_router(datasets_router)
 # 连接器面（Bearer fwc_...）与内部只读概览；客户数据读写全经引擎 MCP 通道
 app.include_router(datasets_connector_router)
+# 溯源账本（wire-provenance-ledger 任务组 2）：客户面概览/时间线/状态/调档
+# + 内部 ingest 入账端点（X-Customer-Id / X-Provenance-Token）
+app.include_router(provenance_router)
 
 
 @app.get("/health")

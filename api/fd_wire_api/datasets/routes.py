@@ -64,6 +64,7 @@ from .schemas import (
     UploadOut,
 )
 from .settings import get_settings
+from ..provenance.ledger import append_event
 
 router = APIRouter(tags=["datasets"])
 
@@ -170,7 +171,7 @@ def upload_dataset_file(
     tmp_path.write_bytes(incoming)
     try:
         try:
-            stored, parsed = uploads.store_upload_file(
+            stored, parsed, content_sha256 = uploads.store_upload_file(
                 source_path=tmp_path,
                 original_name=filename,
                 upload_dir=upload_dir,
@@ -196,8 +197,29 @@ def upload_dataset_file(
         row_count=parsed.row_count,
         size_bytes=parsed.size_bytes,
         stored_path=str(stored),
+        # 原件内容哈希（客户端发来的原始字节；Excel 为 .xlsx 原件而非转换
+        # 后 CSV）——客户可对原件独立复算（wire-provenance-ledger）
+        content_sha256=content_sha256,
     )
     db.add(record)
+    db.flush()  # 先取 record.id（upload 事件的 subject 要引用）
+    # 上传事件入账（wire-provenance-ledger 任务 4.1）：与 uploads 落行同一
+    # 事务——append_event 只 flush 不 commit，事务边界归本路由的 commit；
+    # 任何失败回滚时登记行与事件一起消失，不留半条事件。建档时数据集尚
+    # 不存在，不查档位恒入账（chain 便宜，档位门只作用于引擎修正类事件）。
+    append_event(
+        db,
+        ledger=customer_id,
+        type="dataset.upload.registered",
+        actor={"kind": "customer", "id": customer_id, "sig": None},
+        subject={"kind": "upload", "id": record.id},
+        payload={
+            "filename": filename,
+            "content_sha256": content_sha256,
+            "size_bytes": parsed.size_bytes,
+            "row_count": parsed.row_count,
+        },
+    )
     db.commit()
     db.refresh(record)
     return UploadOut(
@@ -409,14 +431,18 @@ def delete_dataset(
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> dict:
-    """删除：先调引擎 drop 三表与元数据（不可达即 502，绝不假删）。"""
+    """删除：先调引擎 drop 三表与元数据（不可达即 502，绝不假删）。
+
+    同步历史行**保留不删**（dataset_syncs append-only，触发器层禁删；
+    行内只有状态/行数/错误文本，无客户数据——孤儿化由设计接受，
+    wire-provenance-ledger「不可变登记基线」）。
+    """
     dataset = _dataset_or_404(db, dataset_id, customer_id)
     client = engine_factory(customer_id)
     try:
         client.call(TOOL_DELETE, {"dataset_key": dataset.key, "actor": _actor(customer_id)})
     except (EngineUnavailable, EngineCallError) as exc:
         raise _ensure_engine_ok(exc) from exc
-    db.execute(DatasetSync.__table__.delete().where(DatasetSync.dataset_id == dataset.id))
     db.delete(dataset)
     db.commit()
     return {"deleted": True}

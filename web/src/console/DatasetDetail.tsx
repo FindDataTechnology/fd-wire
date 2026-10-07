@@ -1,7 +1,10 @@
 // 数据集详情（wire-customer-local-data 任务组 3，四块）：
 // 预览网格（分页/双击改值/删行/加行 → 修正层）、修正历史（悬空徽标+单条回滚）、
 // 同步历史（失败原因；漂移暂停行确认列并恢复）、悬空清单（逐条回滚）。
-// 契约：openspec/changes/wire-customer-local-data/reports/interfaces.md §3.3/§4。
+// 溯源区块（wire-provenance-ledger 任务组 8）：档位/链完整性/锚定进度状态条、
+// 倒序事件时间线（before_seq 加载更早）、证据包下载。
+// 契约：openspec/changes/wire-customer-local-data/reports/interfaces.md §3.3/§4、
+// openspec/changes/wire-provenance-ledger /api/v1/provenance/*。
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -11,17 +14,27 @@ import {
   fetchCorrections,
   fetchDataset,
   fetchDatasetRows,
+  fetchEvidencePackage,
+  fetchProvenanceEvents,
+  fetchProvenanceOverview,
+  fetchProvenanceStatus,
   fetchSyncs,
+  PROVENANCE_TIERS,
   resumeDataset,
   revertCorrection,
+  updateProvenanceTier,
   type Correction,
   type CorrectionInput,
   type Dataset,
   type DatasetRows,
+  type ProvenanceEvent,
+  type ProvenanceOverview,
+  type ProvenanceStatus,
+  type ProvenanceTier,
   type SyncRecord,
   type SyncStatus,
 } from "./api";
-import { formatServerDate } from "./util";
+import { formatServerDate, truncate } from "./util";
 
 const SYNC_BADGE_CLASS: Record<SyncStatus, string> = {
   idle: "bg-slate-100 text-slate-600 ring-slate-200",
@@ -309,6 +322,7 @@ export function DatasetDetail({
         }}
       />
       <DanglingPanel corrections={corrections} revert={revert} />
+      <ProvenancePanel customerId={customerId} datasetKey={dataset.key} />
     </div>
   );
 }
@@ -1084,6 +1098,413 @@ function DanglingPanel({
             </li>
           ))}
         </ul>
+      )}
+    </section>
+  );
+}
+// ── 溯源区块（wire-provenance-ledger 任务组 8）──────────────────────────
+
+/** 已知事件类型 → eventTypes i18n 键；cell.* 前缀归并为 cell 生命周期。 */
+const PROVENANCE_EVENT_TYPE_KEYS: Record<string, string> = {
+  "dataset.upload.registered": "uploadRegistered",
+  "dataset.correction.added": "correctionAdded",
+  "dataset.correction.reverted": "correctionReverted",
+  "dataset.snapshot.refreshed": "snapshotRefreshed",
+  "dataset.correction.dangling": "correctionDangling",
+  "dataset.dataset.deleted": "datasetDeleted",
+  "ledger.epoch.sealed": "epochSealed",
+};
+
+export function provenanceEventTypeKey(type: string): string | null {
+  if (PROVENANCE_EVENT_TYPE_KEYS[type]) return PROVENANCE_EVENT_TYPE_KEYS[type];
+  if (type.startsWith("cell.")) return "cellLifecycle";
+  return null;
+}
+
+/** 事件负载摘要：顶层键值平铺 `k=v` 取前 4 项、长值截断，尾部 +N 计余。 */
+export function summarizeProvenancePayload(
+  payload: Record<string, unknown> | null | undefined,
+): string {
+  if (payload == null || typeof payload !== "object") return "";
+  const entries = Object.entries(payload);
+  const shown = entries.slice(0, 4).map(([key, value]) => {
+    const text =
+      value == null
+        ? "null"
+        : typeof value === "object"
+          ? truncate(JSON.stringify(value), 48)
+          : truncate(String(value), 48);
+    return `${key}=${text}`;
+  });
+  const rest = entries.length - shown.length;
+  if (rest > 0) shown.push(`+${rest}`);
+  return shown.join(", ");
+}
+
+function ProvenancePanel({
+  customerId,
+  datasetKey,
+}: {
+  customerId: string;
+  datasetKey: string;
+}) {
+  const { t } = useTranslation();
+  const [status, setStatus] = useState<ProvenanceStatus | null>(null);
+  const [statusError, setStatusError] = useState(false);
+  const [overview, setOverview] = useState<ProvenanceOverview | null>(null);
+  const [tier, setTier] = useState<ProvenanceTier>("off");
+  const [tierBusy, setTierBusy] = useState(false);
+  const [tierError, setTierError] = useState<string | null>(null);
+  const [events, setEvents] = useState<ProvenanceEvent[] | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [eventsError, setEventsError] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [evidenceBusy, setEvidenceBusy] = useState(false);
+  const [evidenceError, setEvidenceError] = useState<string | null>(null);
+
+  const loadStatus = useCallback(async () => {
+    setStatusError(false);
+    try {
+      const next = await fetchProvenanceStatus(customerId, datasetKey);
+      setStatus(next);
+      setTier(next.tier);
+    } catch {
+      setStatus(null);
+      setStatusError(true);
+    }
+  }, [customerId, datasetKey]);
+
+  const loadEvents = useCallback(async () => {
+    setEventsError(false);
+    try {
+      const page = await fetchProvenanceEvents(customerId, datasetKey);
+      setEvents(page.events);
+      setHasMore(page.has_more);
+    } catch {
+      setEvents(null);
+      setEventsError(true);
+    }
+  }, [customerId, datasetKey]);
+
+  useEffect(() => {
+    setStatus(null);
+    setOverview(null);
+    setTierError(null);
+    void loadStatus();
+    fetchProvenanceOverview(customerId)
+      .then(setOverview)
+      .catch(() => setOverview(null));
+  }, [customerId, datasetKey, loadStatus]);
+
+  useEffect(() => {
+    setEvents(null);
+    setHasMore(false);
+    void loadEvents();
+  }, [loadEvents]);
+
+  const changeTier = async (next: ProvenanceTier) => {
+    if (tierBusy || next === tier) return;
+    setTierBusy(true);
+    setTierError(null);
+    try {
+      const result = await updateProvenanceTier(customerId, datasetKey, next);
+      setTier(result.tier);
+      await loadStatus();
+    } catch (err) {
+      setTierError(
+        apiErrorText(err, t("console.datasets.detail.provenance.tierError")),
+      );
+    } finally {
+      setTierBusy(false);
+    }
+  };
+
+  const loadEarlier = async () => {
+    if (events == null || events.length === 0 || loadingEarlier) return;
+    const oldest = events[events.length - 1]!.seq;
+    setLoadingEarlier(true);
+    try {
+      const page = await fetchProvenanceEvents(customerId, datasetKey, oldest);
+      setEvents((prev) => [...(prev ?? []), ...page.events]);
+      setHasMore(page.has_more);
+    } catch {
+      setEventsError(true);
+    } finally {
+      setLoadingEarlier(false);
+    }
+  };
+
+  const downloadEvidence = async () => {
+    if (evidenceBusy) return;
+    setEvidenceBusy(true);
+    setEvidenceError(null);
+    try {
+      const { blob, filename } = await fetchEvidencePackage(customerId);
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      setEvidenceError(
+        apiErrorText(err, t("console.datasets.detail.provenance.evidenceError")),
+      );
+    } finally {
+      setEvidenceBusy(false);
+    }
+  };
+
+  const anchoredThrough = status?.anchored_through;
+  const anchoringParts: string[] = [];
+  if (anchoredThrough?.backend) {
+    anchoringParts.push(anchoredThrough.backend);
+    anchoringParts.push(
+      anchoredThrough.epoch != null
+        ? t("console.datasets.detail.provenance.anchoringEpoch", {
+            epoch: anchoredThrough.epoch,
+          })
+        : t("console.datasets.detail.provenance.anchoringNotSealed"),
+    );
+    if (overview?.anchoring) {
+      anchoringParts.push(
+        t("console.datasets.detail.provenance.anchoringLag", {
+          count: overview.anchoring.lag_events,
+        }),
+      );
+    }
+  } else {
+    anchoringParts.push(t("console.datasets.detail.provenance.anchoringNone"));
+  }
+
+  return (
+    <section data-testid="provenance-section" className="mt-6">
+      <h2 className="text-base font-semibold">
+        {t("console.datasets.detail.provenance.title")}
+      </h2>
+      <p className="mt-1 max-w-2xl text-xs text-slate-500">
+        {t("console.datasets.detail.provenance.hint")}
+      </p>
+
+      {statusError && (
+        <div data-testid="provenance-status-error" className="mt-2">
+          <p className="text-xs text-red-600">
+            {t("console.datasets.detail.provenance.statusError")}
+          </p>
+          <button
+            type="button"
+            data-testid="provenance-status-retry"
+            onClick={() => void loadStatus()}
+            className="mt-1 rounded border border-red-300 px-2 py-0.5 text-xs text-red-700 hover:bg-red-100"
+          >
+            {t("console.datasets.detail.provenance.retry")}
+          </button>
+        </div>
+      )}
+
+      {status == null && !statusError && (
+        <p
+          data-testid="provenance-status-loading"
+          className="mt-2 text-xs text-slate-400"
+        >
+          {t("console.datasets.detail.provenance.statusLoading")}
+        </p>
+      )}
+
+      {status != null && (
+        <div
+          data-testid="provenance-status-bar"
+          className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
+        >
+          <label className="flex items-center gap-1.5">
+            <span className="text-slate-500">
+              {t("console.datasets.detail.provenance.tierLabel")}
+            </span>
+            <select
+              data-testid="provenance-tier-select"
+              data-tier={tier}
+              value={tier}
+              disabled={tierBusy}
+              onChange={(e) => void changeTier(e.target.value as ProvenanceTier)}
+              className="rounded border border-slate-300 px-1.5 py-1 text-xs disabled:bg-slate-100"
+            >
+              {PROVENANCE_TIERS.map((tierId) => (
+                <option key={tierId} value={tierId}>
+                  {t(`console.datasets.detail.provenance.tiers.${tierId}`)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span
+            data-testid="provenance-integrity"
+            data-ok={status.integrity.ok ? "true" : "false"}
+            className={`rounded-full px-2 py-0.5 ring-1 ${
+              status.integrity.ok
+                ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                : "bg-red-50 text-red-700 ring-red-200"
+            }`}
+          >
+            {status.integrity.ok
+              ? t("console.datasets.detail.provenance.integrityOk")
+              : t("console.datasets.detail.provenance.integrityBroken")}
+            <span className="ml-1 text-[10px] opacity-70">
+              {t("console.datasets.detail.provenance.integrityChecked", {
+                count: status.integrity.checked,
+              })}
+            </span>
+          </span>
+          <span
+            data-testid="provenance-anchoring"
+            data-backend={anchoredThrough?.backend ?? ""}
+            data-epoch={anchoredThrough?.epoch ?? ""}
+            className="text-slate-600"
+          >
+            <span className="text-slate-400">
+              {t("console.datasets.detail.provenance.anchoringLabel")}：
+            </span>
+            {anchoringParts.join(" · ")}
+          </span>
+          {status.note ? (
+            <span
+              data-testid="provenance-note"
+              className="rounded bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700"
+            >
+              {status.note}
+            </span>
+          ) : status.first_event_ts ? (
+            <span
+              data-testid="provenance-first-event"
+              className="text-[11px] text-slate-400"
+            >
+              {t("console.datasets.detail.provenance.firstEvent", {
+                time: formatServerDate(status.first_event_ts),
+              })}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            data-testid="provenance-evidence-download"
+            disabled={evidenceBusy}
+            onClick={() => void downloadEvidence()}
+            className="ml-auto rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {evidenceBusy
+              ? t("console.datasets.detail.provenance.evidenceDownloading")
+              : t("console.datasets.detail.provenance.evidenceDownload")}
+          </button>
+        </div>
+      )}
+
+      {tierError && (
+        <p data-testid="provenance-tier-error" className="mt-2 text-xs text-red-600">
+          {tierError}
+        </p>
+      )}
+      {evidenceError && (
+        <p
+          data-testid="provenance-evidence-error"
+          className="mt-2 text-xs text-red-600"
+        >
+          {evidenceError}
+        </p>
+      )}
+
+      <h3 className="mt-4 text-sm font-medium">
+        {t("console.datasets.detail.provenance.timelineTitle")}
+      </h3>
+      {eventsError && (
+        <div data-testid="provenance-events-error" className="mt-2">
+          <p className="text-xs text-red-600">
+            {t("console.datasets.detail.provenance.timelineError")}
+          </p>
+          <button
+            type="button"
+            data-testid="provenance-events-retry"
+            onClick={() => void loadEvents()}
+            className="mt-1 rounded border border-red-300 px-2 py-0.5 text-xs text-red-700 hover:bg-red-100"
+          >
+            {t("console.datasets.detail.provenance.retry")}
+          </button>
+        </div>
+      )}
+      {events == null && !eventsError && (
+        <p
+          data-testid="provenance-timeline-loading"
+          className="mt-2 text-xs text-slate-400"
+        >
+          {t("console.datasets.detail.provenance.timelineLoading")}
+        </p>
+      )}
+      {events != null && events.length === 0 && !eventsError && (
+        <p
+          data-testid="provenance-timeline-empty"
+          className="mt-2 text-xs text-slate-400"
+        >
+          {t("console.datasets.detail.provenance.timelineEmpty")}
+        </p>
+      )}
+      {events != null && events.length > 0 && (
+        <ul data-testid="provenance-timeline" className="mt-2 space-y-1.5">
+          {events.map((event) => {
+            const typeKey = provenanceEventTypeKey(event.type);
+            return (
+              <li
+                key={event.event_id || event.seq}
+                data-testid="provenance-event"
+                data-type={event.type}
+                className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-slate-200 bg-white px-3 py-2 text-xs"
+              >
+                <span
+                  data-testid="provenance-event-type"
+                  className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600"
+                >
+                  {typeKey
+                    ? t(`console.datasets.detail.provenance.eventTypes.${typeKey}`)
+                    : event.type}
+                </span>
+                <span
+                  data-testid="provenance-event-payload"
+                  className="font-mono text-[11px] text-slate-700"
+                >
+                  {summarizeProvenancePayload(event.payload)}
+                </span>
+                <span
+                  data-testid="provenance-event-actor"
+                  className="text-[11px] text-slate-500"
+                >
+                  {event.actor.id}
+                </span>
+                <span
+                  data-testid="provenance-event-ts"
+                  className="text-[11px] text-slate-400"
+                >
+                  {formatServerDate(event.ts_platform)}
+                </span>
+                <span
+                  data-testid="provenance-event-seq"
+                  className="ml-auto font-mono text-[10px] text-slate-400"
+                >
+                  #{event.seq}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {hasMore && (
+        <button
+          type="button"
+          data-testid="provenance-load-earlier"
+          disabled={loadingEarlier}
+          onClick={() => void loadEarlier()}
+          className="mt-2 rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {loadingEarlier
+            ? t("console.datasets.detail.provenance.loadingEarlier")
+            : t("console.datasets.detail.provenance.loadEarlier")}
+        </button>
       )}
     </section>
   );

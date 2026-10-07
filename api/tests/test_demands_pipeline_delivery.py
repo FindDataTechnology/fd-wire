@@ -792,4 +792,4 @@ def test_migration_0008_adds_demand_pipeline_columns(migrated_demands_sqlite):
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
     # 链头唯一且随链推进（wire-customer-local-data 任务 2.1 起 = 0011_datasets）
-    assert version == "0011_datasets"
+    assert version == "0013_provenance_foundation"

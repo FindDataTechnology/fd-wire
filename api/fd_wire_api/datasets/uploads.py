@@ -2,6 +2,8 @@
 
 - CSV 用 stdlib（``csv``）：原件原样存 ``stored_path``。
 - Excel 用 openpyxl（read_only 流式）：转 CSV 暂存 ``stored_path``。
+- 原件哈希：落盘前对客户端发来的原始字节流式算 sha256（Excel 先算
+  原件再转换）——登记值可由客户侧对原件独立复算（wire-provenance-ledger）。
 - 类型推断：抽样前 200 行——整列可解析 INTEGER → INTEGER；否则整列可
   解析 REAL → REAL；否则 TEXT（保守兜底）。空串一律视为缺失值。
 - 扫描是流式的：不做「全量进内存」；建档 ingest 时按 2000 行分块重读。
@@ -10,11 +12,15 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+#: 哈希计算分块大小（1MiB，流式、内存有界）
+_HASH_CHUNK_BYTES = 1024 * 1024
 
 INTEGER = "INTEGER"
 REAL = "REAL"
@@ -212,13 +218,30 @@ def _write_excel_as_csv(source: Path, target: Path, max_rows: int) -> None:
         workbook.close()
 
 
+def sha256_of_file(path: Path) -> str:
+    """对文件字节流式计算 sha256，返回 ``sha256:<hex>``（登记口径）。
+
+    只对**原始上传字节**调用（CSV 原件即暂存件；Excel 在转换前对 .xlsx
+    原件调用）——原件哈希才可由客户侧独立复算（wire-provenance-ledger
+    「不可变登记基线」）。
+    """
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(_HASH_CHUNK_BYTES), b""):
+            digest.update(block)
+    return f"sha256:{digest.hexdigest()}"
+
+
 def store_upload_file(
     *, source_path: Path, original_name: str, upload_dir: Path, max_rows: int
-) -> tuple[Path, ParsedUpload]:
-    """落盘 + 扫描（返回 stored_path 与预览解析结果）。
+) -> tuple[Path, ParsedUpload, str]:
+    """落盘 + 扫描（返回 stored_path、预览解析结果与原件 content_sha256）。
 
-    CSV：原件原样复制；Excel（.xlsx/.xlsm）：转 CSV 暂存。其余拒绝。
+    CSV：原件原样复制（哈希=原件）；Excel（.xlsx/.xlsm）：**先对原件算
+    哈希再转 CSV 暂存**（哈希≠转换后 CSV）。其余拒绝。
     """
+    # 原件哈希先于任何转换/复制动作落定（Excel 转换会丢失原件字节形态）
+    content_sha256 = sha256_of_file(source_path)
     suffix = Path(original_name).suffix.lower()
     upload_dir.mkdir(parents=True, exist_ok=True)
     if suffix == ".csv":
@@ -240,7 +263,7 @@ def store_upload_file(
     except UploadError:
         stored.unlink(missing_ok=True)
         raise
-    return stored, parsed
+    return stored, parsed, content_sha256
 
 
 def iter_ingest_chunks(path: Path, columns: list[dict[str, str]]) -> Iterator[list[dict]]:

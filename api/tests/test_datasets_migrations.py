@@ -1,8 +1,8 @@
 """datasets 迁移链测试（任务 2.1）：干净库 upgrade/downgrade 往返。
 
 - upgrade head → 六表齐全、列与索引/唯一约束按契约 §3.2；
-- 链头 = 0011_datasets（顺接 0010_catalog_source_db）；
-- downgrade -1 → 六表全清、链头回到 0010。
+- 链头 = 0013_provenance_foundation（wire-provenance-ledger 扩链 0012/0013）；
+- downgrade 到 0010 → 六表全清、链头回到 0010。
 """
 
 from __future__ import annotations
@@ -86,6 +86,7 @@ def test_upgrade_head_creates_dataset_tables(migrated_sqlite) -> None:
         "sync_cron",
         "sync_status",
         "paused_reason",
+        "provenance_tier",
         "created_at",
         "updated_at",
     }
@@ -106,6 +107,7 @@ def test_upgrade_head_creates_dataset_tables(migrated_sqlite) -> None:
         "row_count",
         "size_bytes",
         "stored_path",
+        "content_sha256",
         "created_at",
         "consumed_at",
     }
@@ -133,19 +135,19 @@ def test_upgrade_head_creates_dataset_tables(migrated_sqlite) -> None:
     engine.dispose()
 
 
-def test_chain_head_is_datasets(migrated_sqlite) -> None:
+def test_chain_head_is_provenance_foundation(migrated_sqlite) -> None:
     engine = create_engine(migrated_sqlite)
     with engine.connect() as conn:
         version = conn.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
         ).scalar()
-    assert version == "0011_datasets"
+    assert version == "0013_provenance_foundation"
     engine.dispose()
 
 
 def test_downgrade_removes_dataset_tables(migrated_sqlite, monkeypatch) -> None:
     monkeypatch.setenv("DATABASE_URL", migrated_sqlite)
-    command.downgrade(_alembic_config(), "-1")
+    command.downgrade(_alembic_config(), "0010_catalog_source_db")
     engine = create_engine(migrated_sqlite)
     inspector = inspect(engine)
     assert not (TABLES & set(inspector.get_table_names()))

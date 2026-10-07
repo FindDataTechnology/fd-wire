@@ -15,6 +15,8 @@ dependencies = [
     # Excel 解析（CSV 走 stdlib）。
     "python-multipart>=0.0.9",
     "openpyxl>=3.1",
+    "cryptography>=50.0.2",
+    "opentimestamps>=0.4.5",
 ]
 
 [project.optional-dependencies]

@@ -7,7 +7,7 @@
   不再调引擎）；增列接受并追加；resume 人工确认后恢复；
 - 漂移暂停中再同步 → 409；
 - 行上限/存储上限 → 429 + paused_quota + 记 quota；
-- wrong_index 防重放 409；abort 清理在飞行；
+- wrong_index 防重放 409；abort 终态留痕（aborted 行保留不删）；
 - 引擎不可达 → 502 fail-closed（绝不假成功）；未配 map/凭据 → 502。
 """
 
@@ -181,7 +181,9 @@ def test_commit_row_limit_error_maps_to_429_quota(datasets_env) -> None:
     assert TOOL_INGEST_ABORT in datasets_env.fake.tools
 
 
-def test_abort_cleans_inflight_and_engine_staging(datasets_env) -> None:
+def test_abort_marks_inflight_aborted_and_keeps_history(datasets_env) -> None:
+    """abort 留痕：行仍在、status=aborted、含原因；不删历史行
+    （wire-provenance-ledger「不可变登记基线」）。"""
     key, dataset = _setup_connector_dataset(datasets_env)
     headers = connector_headers(key)
     begun = datasets_env.client.post(
@@ -211,17 +213,28 @@ def test_abort_cleans_inflight_and_engine_staging(datasets_env) -> None:
     assert aborted.json() == {"aborted": True}
     assert TOOL_INGEST_ABORT in datasets_env.fake.tools
     assert _dataset_row(dataset["id"]).sync_status == "idle"
-    assert (
-        datasets_env.client.get(
-            f"/api/v1/datasets/{dataset['id']}/syncs", headers=CUSTOMER_A
-        ).json()
-        == []
-    )
+    syncs = datasets_env.client.get(
+        f"/api/v1/datasets/{dataset['id']}/syncs", headers=CUSTOMER_A
+    ).json()
+    assert [s["status"] for s in syncs] == ["aborted"]
+    assert syncs[0]["id"] == sync_id
+    assert syncs[0]["finished_at"] is not None
+    assert "中止" in (syncs[0]["error"] or "")
     assert sync_id not in connector_routes._SYNC_SESSIONS
+    # abort 后旧 sync 不能再推分块（终态行）
+    assert (
+        datasets_env.client.post(
+            f"/api/v1/connector/syncs/{sync_id}/chunks",
+            headers=headers,
+            json={"index": 1, "rows": ROWS},
+        ).status_code
+        == 409
+    )
 
 
 def test_begin_supersedes_stale_inflight_sync(datasets_env) -> None:
-    """未 abort 就重新 begin：旧在飞行/会话清理，旧 sid 不再可用。"""
+    """未 abort 就重新 begin：旧在飞行终态化 aborted（含原因）、会话清理，
+    旧 sid 推分块 → 409（终态，非 404——历史行保留）。"""
     key, dataset = _setup_connector_dataset(datasets_env)
     headers = connector_headers(key)
     payload = {
@@ -240,13 +253,17 @@ def test_begin_supersedes_stale_inflight_sync(datasets_env) -> None:
         headers=headers,
         json={"index": 0, "rows": ROWS},
     )
-    assert stale_chunk.status_code == 404
+    # 旧行不删：sync_id 仍存在但已终态 → 409（原为 404——删行语义已废除）
+    assert stale_chunk.status_code == 409
+    assert "aborted" in stale_chunk.json()["detail"]
     syncs = datasets_env.client.get(
         f"/api/v1/datasets/{dataset['id']}/syncs", headers=CUSTOMER_A
     ).json()
-    # 旧在飞行已清（不留下永远 syncing 的死行）；只剩新一次的在飞行标记
-    assert [s["status"] for s in syncs] == ["syncing"]
+    # 旧在飞行落 aborted 终态留痕（含原因）；新一次的在飞行在前
+    assert [s["status"] for s in syncs] == ["syncing", "aborted"]
     assert syncs[0]["id"] != first_id
+    assert syncs[1]["id"] == first_id
+    assert "取代" in (syncs[1]["error"] or "")
 
 
 def test_failed_sync_keeps_paused_reason_empty(datasets_env) -> None:

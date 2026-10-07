@@ -97,6 +97,8 @@ class Dataset(DatasetsBase):
     #: idle|syncing|ok|failed|paused_drift|paused_quota
     sync_status: Mapped[str] = mapped_column(String(16), default="idle")
     paused_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: 溯源档位 off|chain_only|anchored_batch|anchored_realtime（wire-provenance-ledger）
+    provenance_tier: Mapped[str] = mapped_column(String(24), default="chain_only")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow_naive, onupdate=_utcnow_naive
@@ -104,11 +106,12 @@ class Dataset(DatasetsBase):
 
 
 class DatasetSync(DatasetsBase):
-    """同步历史行。
+    """同步历史行（wire-provenance-ledger 起终态留痕、不再删行）。
 
-    终态 status ∈ {ok, failed, drift, quota}；``syncing`` 是在飞行标记
-    （begin 落行、commit 改终态、abort 删行），保证 chunk/commit 的
-    会话映射可跨请求查回。
+    终态 status ∈ {ok, failed, drift, quota, aborted}；``syncing`` 是在飞行
+    标记（begin 落行、commit/abort 改终态——中止落 ``aborted`` 含原因而非
+    删行），保证 chunk/commit 的会话映射可跨请求查回。终态行由触发器
+    禁改禁删（迁移 0013）。
     """
 
     __tablename__ = "dataset_syncs"
@@ -135,5 +138,7 @@ class Upload(DatasetsBase):
     size_bytes: Mapped[int] = mapped_column(Integer, default=0)
     #: api 侧暂存路径（CSV 原样存；Excel 转 CSV 暂存）
     stored_path: Mapped[str] = mapped_column(String(1024))
+    #: 原始文件内容哈希 sha256:<hex>（存量行无原件、如实置 NULL——wire-provenance-ledger）
+    content_sha256: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

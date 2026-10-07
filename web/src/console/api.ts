@@ -497,3 +497,179 @@ export function revokeConnector(
     customerId,
   }) as Promise<Connector>;
 }
+
+// ── 溯源账本客户面（wire-provenance-ledger 任务组 8）────────────────────
+// 路径/载荷/头严格对齐冻结契约：/api/v1/provenance/*（X-Customer-Id 隔离）。
+
+/** 溯源档位四档（off 不入账；已入账事件不因调档被清除）。 */
+export const PROVENANCE_TIERS = [
+  "off",
+  "chain_only",
+  "anchored_batch",
+  "anchored_realtime",
+] as const;
+
+export type ProvenanceTier = (typeof PROVENANCE_TIERS)[number];
+
+/** 事件操作者（v1 无签名，签名位为信封预留字段）。 */
+export interface ProvenanceActor {
+  kind: string;
+  id: string;
+}
+
+/** 事件主体（kind 如 dataset / cell，key 即主体键）。 */
+export interface ProvenanceSubject {
+  kind: string;
+  key: string;
+}
+
+/** 账本事件信封（面向控制台的呈现字段；哈希链字段不在此响应中）。 */
+export interface ProvenanceEvent {
+  /** 账本内单调序号（倒序分页游标 before_seq 用）。 */
+  seq: number;
+  event_id: string;
+  /** 命名空间化类型，如 dataset.correction.added / cell.registered。 */
+  type: string;
+  ts_platform: string;
+  actor: ProvenanceActor;
+  subject: ProvenanceSubject;
+  payload: Record<string, unknown>;
+}
+
+export interface ProvenanceEventsPage {
+  /** 按 seq 倒序。 */
+  events: ProvenanceEvent[];
+  has_more: boolean;
+}
+
+export interface ProvenanceStatus {
+  tier: ProvenanceTier;
+  integrity: { ok: boolean; checked: number };
+  anchored_through: { epoch: number | null; backend: string | null };
+  /** 该数据集首条入账事件时间（溯源起点）。 */
+  first_event_ts: string | null;
+  /** 非空时如实展示（如启用前无历史事件——不伪造起点）。 */
+  note: string | null;
+}
+
+export interface ProvenanceOverview {
+  ledger: string;
+  last_seq: number;
+  integrity: { ok: boolean; checked: number };
+  anchoring: {
+    backend: string | null;
+    last_sealed_epoch: number | null;
+    lag_events: number;
+  };
+}
+
+/** 数据集事件时间线（倒序；before_seq 为上一页最小 seq，向更早翻页）。 */
+export function fetchProvenanceEvents(
+  customerId: string,
+  datasetKey: string,
+  beforeSeq?: number,
+  limit = 50,
+): Promise<ProvenanceEventsPage> {
+  const params = new URLSearchParams();
+  if (beforeSeq != null) params.set("before_seq", String(beforeSeq));
+  params.set("limit", String(limit));
+  return requestJson(
+    `${API_BASE}/v1/provenance/datasets/${encodeURIComponent(datasetKey)}/events?${params}`,
+    { method: "GET", customerId },
+  ) as Promise<ProvenanceEventsPage>;
+}
+
+/** 数据集溯源状态（档位/链完整性/锚定进度/起点标注）。 */
+export function fetchProvenanceStatus(
+  customerId: string,
+  datasetKey: string,
+): Promise<ProvenanceStatus> {
+  return requestJson(
+    `${API_BASE}/v1/provenance/datasets/${encodeURIComponent(datasetKey)}/status`,
+    { method: "GET", customerId },
+  ) as Promise<ProvenanceStatus>;
+}
+
+/** 调整数据集溯源档位（存活期内可调；已入账事件不受影响）。 */
+export function updateProvenanceTier(
+  customerId: string,
+  datasetKey: string,
+  tier: ProvenanceTier,
+): Promise<{ tier: ProvenanceTier }> {
+  return requestJson(
+    `${API_BASE}/v1/provenance/datasets/${encodeURIComponent(datasetKey)}/tier`,
+    { method: "POST", customerId, body: { tier } },
+  ) as Promise<{ tier: ProvenanceTier }>;
+}
+
+/** 企业级账本总览（全局 last_seq/完整性/锚定滞后）。 */
+export function fetchProvenanceOverview(
+  customerId: string,
+): Promise<ProvenanceOverview> {
+  return requestJson(`${API_BASE}/v1/provenance/overview`, {
+    method: "GET",
+    customerId,
+  }) as Promise<ProvenanceOverview>;
+}
+
+/** 证据包二进制内容 + 下载文件名（无 Content-Disposition 时按约定命名）。 */
+export interface EvidencePackage {
+  blob: Blob;
+  filename: string;
+}
+
+/**
+ * 导出企业级证据包（机器可读账本导出 + 全部锚定回执 + 离线核验工具，
+ * 二进制流）。带鉴权头用 fetch 拉取后转 blob 交给调用方触发下载；
+ * 文件名优先取响应 Content-Disposition，缺省按
+ * evidence-package-<客户>-<日期>.jsonl.bin 约定命名。
+ */
+export async function fetchEvidencePackage(
+  customerId: string,
+): Promise<EvidencePackage> {
+  const url = `${API_BASE}/v1/provenance/evidence-package`;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/octet-stream",
+        "X-Customer-Id": customerId,
+      },
+    });
+  } catch (err) {
+    throw new ConsoleApiError(
+      `network error fetching ${url}: ${(err as Error).message}`,
+    );
+  }
+  if (!response.ok) {
+    let detail: string | undefined;
+    try {
+      const data: unknown = await response.json();
+      if (
+        data &&
+        typeof data === "object" &&
+        typeof (data as { detail?: unknown }).detail === "string"
+      ) {
+        detail = (data as { detail: string }).detail;
+      }
+    } catch {
+      /* 无 JSON body：保留 undefined */
+    }
+    throw new ConsoleApiError(
+      `console api ${response.status} for ${url}`,
+      response.status,
+      detail,
+    );
+  }
+  const disposition = response.headers?.get?.("content-disposition") ?? "";
+  const match = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  const date = new Date().toISOString().slice(0, 10);
+  const filename =
+    match?.[1] ?? `evidence-package-${customerId}-${date}.jsonl.bin`;
+  try {
+    return { blob: await response.blob(), filename };
+  } catch (err) {
+    throw new ConsoleApiError(`invalid body from ${url}: ${(err as Error).message}`);
+  }
+}

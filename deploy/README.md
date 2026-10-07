@@ -62,6 +62,79 @@
 - `fd-wire-api` 只暴露 ClusterIP；`/api` 由边缘 Caddy 承接直指 api，web nginx 刻意不设 `/api` 反代（同域双路由是隐患，注释占位保留仅作文档）。
 - 回滚：清单回退 git tag/commit → ArgoCD 滚回；镜像按不可变 sha- tag 永远可指回。
 
+## datasets 迁出 /tmp（wire-provenance-ledger D8.1）
+
+背景：datasets 模块的 sqlite 库（`/tmp/fd_wire.db`）与上传原件目录
+（`/tmp/fd_wire_dataset_uploads`）原落容器临时层——pod 重建即丢登记、同步
+历史与上传原件。新清单（`deploy/k8s/fd-wire-api.yaml`）已改挂 PVC
+`fd-wire-datasets-data`（`/var/lib/fd-wire/{db,uploads}`）。迁移工件：
+`fd-wire/scripts/datasets_off_tmp.py`（自包含标准库，`--help` 自解释；
+`--selftest` 本地演练）。备份/恢复均在 pod 内执行，镜像 slim 无 tar，
+文件进出一律走 `kubectl exec -i … cat`（不用 `kubectl cp`）。
+
+前置：`kubectl --context cheap -n fd-prod get pvc` 确认目标 PVC 名未占用；
+旧 pod 健康（迁移期间 datasets 面短暂只读，告知控制台侧）。
+
+1. **备份导出（旧 pod → 本地）**：
+
+   ```bash
+   POD=$(kubectl --context cheap -n fd-prod get pod -l app.kubernetes.io/name=fd-wire-api -o jsonpath='{.items[0].metadata.name}')
+   # 脚本送进旧 pod（exec cat 流式；kubectl cp 依赖容器内 tar，slim 镜像没有）
+   kubectl --context cheap -n fd-prod exec -i "$POD" -- sh -c 'cat > /tmp/datasets_off_tmp.py' < scripts/datasets_off_tmp.py
+   kubectl --context cheap -n fd-prod exec "$POD" -- python3 /tmp/datasets_off_tmp.py backup \
+     --db /tmp/fd_wire.db --uploads /tmp/fd_wire_dataset_uploads --out /tmp/datasets_off_tmp_backup
+   mkdir -p datasets_off_tmp_backup
+   for f in db.sqlite uploads.tar.gz MANIFEST.json; do
+     kubectl --context cheap -n fd-prod exec -i "$POD" -- cat /tmp/datasets_off_tmp_backup/$f > datasets_off_tmp_backup/$f
+   done
+   sha256sum datasets_off_tmp_backup/*   # 留档；restore 侧会再验 MANIFEST 哈希
+   ```
+
+2. **部署新清单（挂 PVC）**：提交 `deploy/k8s/fd-wire-api.yaml` 到 gitee
+   main → ArgoCD 同步：PVC `fd-wire-datasets-data`（local-path，10Gi）创建、
+   api 滚起到 `/var/lib/fd-wire/*`（空卷、新库由进程自动建表）。确认
+   `kubectl --context cheap -n fd-prod get pvc fd-wire-datasets-data` 为
+   Bound、新 pod Ready（`/health` 200）再进下一步。
+
+3. **一次性恢复（备份灌入 PVC）**——在挂 PVC 的新 pod 内执行（PVC 为
+   RWO 单写者，api pod 即恢复执行位；备份文件在本地，独立 Job 对象拿不
+   到本地文件，exec 注入等价且少一亲清单）：
+
+   ```bash
+   NEWPOD=$(kubectl --context cheap -n fd-prod get pod -l app.kubernetes.io/name=fd-wire-api -o jsonpath='{.items[0].metadata.name}')
+   kubectl --context cheap -n fd-prod exec -i "$NEWPOD" -- sh -c 'cat > /tmp/datasets_off_tmp.py' < scripts/datasets_off_tmp.py
+   kubectl --context cheap -n fd-prod exec "$NEWPOD" -- mkdir -p /tmp/datasets_off_tmp_backup
+   for f in db.sqlite uploads.tar.gz MANIFEST.json; do
+     kubectl --context cheap -n fd-prod exec -i "$NEWPOD" -- sh -c "cat > /tmp/datasets_off_tmp_backup/$f" < datasets_off_tmp_backup/$f
+   done
+   kubectl --context cheap -n fd-prod exec "$NEWPOD" -- python3 /tmp/datasets_off_tmp.py restore \
+     --backup-dir /tmp/datasets_off_tmp_backup \
+     --db /var/lib/fd-wire/db/fd_wire_datasets.db \
+     --uploads /var/lib/fd-wire/uploads
+   # 库文件被整体替换，重启让进程重开句柄（restore 幂等，失败可原样重跑）
+   kubectl --context cheap -n fd-prod rollout restart deploy/fd-wire-api
+   ```
+
+4. **回归验证**：
+   `kubectl --context cheap -n fd-prod exec deploy/fd-wire-api -- python3 -c "import sqlite3; print(sqlite3.connect('/var/lib/fd-wire/db/fd_wire_datasets.db').execute('select count(*) from uploads').fetchone())"`
+   行数与备份口径一致；控制台「我的数据」数据集列表与同步历史可见；
+   新传一个测试 CSV（uploads 行 `content_sha256` 应有 `sha256:` 值）；
+   `ls /var/lib/fd-wire/uploads` 有原件暂存。旧 pod 的 /tmp 数据暂不动
+   （回滚介质之一，收口前保留）。
+
+5. **回滚**：git revert 本次清单提交 → ArgoCD 自动滚回（env 指回
+   `/tmp`，PVC 留着不删）；旧 /tmp 数据若仍在即原样可用；若旧 pod 已
+   重建（/tmp 已空），用步骤 1 的本地备份反向灌回
+   （`restore --db /tmp/fd_wire.db --uploads /tmp/fd_wire_dataset_uploads`）。
+   备份目录 `datasets_off_tmp_backup/` 保留至迁移收口（D8.1：回滚=配置
+   回切，备份保留）。
+
+> 备注：恢复是旧库逐字节落位——库结构随备份（当前生产 datasets 库由
+> `create_all` 兜底建表，api 镜像不带 alembic 工件）。0013 的
+> `dataset_syncs` 终态触发器与新列要在该库生效，需另行以 alembic 链
+> （`api/alembic`，head=0013）对该库执行 upgrade；执行前应用层行为已按
+> 触发器约束改写（abort 留痕不删行），不依赖触发器在场。
+
 ## 连接器 fd-wire-connector（客户内网单二进制，仅出站连接）
 
 上游能力：`specs/wire-local-connector/`；代码 `connector/`（Go module，随本仓 CI 独立构建；详细行为见该目录各包注释）。

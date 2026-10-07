@@ -31,6 +31,7 @@ from cell_manager.config import CellManagerConfig, validate_customer_id
 from cell_manager.db import init_volume
 from cell_manager.drivers.base import BindMount, ContainerDriver, ContainerSpec
 from cell_manager.errors import CellManagerError, InvalidCellStateError, UnknownCellError
+from cell_manager.provenance import ProvenanceForwarder
 from cell_manager.registry.base import RegistryClient, ServerEntry
 from cell_manager.state import ACTIVE, PAUSED, RETENTION, StateStore
 
@@ -90,6 +91,7 @@ class CellManager:
         clock: Callable[[], datetime] | None = None,
         audit_log: AuditLog | None = None,
         state_store: StateStore | None = None,
+        provenance_forwarder: "ProvenanceForwarder | None" = None,
     ) -> None:
         self._driver = driver
         self._registry = registry
@@ -97,6 +99,9 @@ class CellManager:
         self._clock = clock or _default_clock
         self._audit = audit_log or AuditLog(config.audit_log)
         self._state = state_store or StateStore(config.state_file)
+        #: 生命周期事件 → 平台溯源账本（wire-provenance-ledger 任务 4.2）。
+        #: env 未配置 CELL_PROVENANCE_URL 时为 None（纯 JSONL 审计）。
+        self._provenance = provenance_forwarder
 
     # ==================== 生命周期操作（均落审计） ====================
 
@@ -317,6 +322,9 @@ class CellManager:
             )
             raise
         self._audit.append(action=action, customer_id=str(customer_id), result="ok", detail=detail or None)
+        if self._provenance is not None:
+            # 成功 op 才入账（失败已留 JSONL）；转发 best-effort，绝不打断生命周期。
+            self._provenance.emit(action, str(customer_id), detail)
         return status
 
     def _record_status(self, record: dict[str, Any]) -> CellStatus:

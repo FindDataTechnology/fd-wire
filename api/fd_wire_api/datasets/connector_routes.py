@@ -339,9 +339,10 @@ def begin_sync(
         return drift_response(reason, differences)
 
     client = engine_factory(dataset.customer_id)
-    # 同一数据集的上一次在飞同步（未 abort 就重来）：清理旧登记与会话，
-    # 并 best-effort 让引擎 abort 其 __staging（引擎 ingest_begin 自身幂等，
-    # 这里只是把 api 侧历史清干净，避免历史里留下永远 syncing 的行）。
+    # 同一数据集的上一次在飞同步（未 abort 就重来）：旧会话清理 + 旧在飞行
+    # **终态化为 aborted**（含原因，不删行——dataset_syncs append-only，
+    # 触发器层禁删，wire-provenance-ledger「不可变登记基线」），并
+    # best-effort 让引擎 abort 其 __staging（引擎 ingest_begin 自身幂等）。
     stale_rows = (
         db.execute(
             select(DatasetSync).where(
@@ -359,7 +360,10 @@ def begin_sync(
                 client.call(TOOL_INGEST_ABORT, {"ingest_id": stale_session.engine_ingest_id})
             except (EngineUnavailable, EngineCallError):
                 pass
-        db.delete(stale)
+        # syncing → aborted：终态留痕（触发器允许 syncing 行迁移到终态）
+        stale.status = "aborted"
+        stale.error = "被新同步取代（未中止即重新 begin）"
+        stale.finished_at = service.utcnow()
     if stale_rows:
         db.commit()
     try:
@@ -542,7 +546,11 @@ def abort_sync(
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> AbortOut:
-    """中止：引擎 ``ingest_abort`` 清理暂存 + 清理在飞登记（幂等）。"""
+    """中止：引擎 ``ingest_abort`` 清理暂存 + 在飞行终态化 aborted（幂等）。
+
+    不删历史行——中止 SHALL 落含原因的终态行（wire-provenance-ledger
+    「不可变登记基线」；dataset_syncs 触发器层禁删，删行在 PG 会 RAISE）。
+    """
     row = _sync_or_404(db, connector, sync_id)
     session = _SYNC_SESSIONS.pop(sync_id, None)
     dataset = db.get(Dataset, row.dataset_id)
@@ -554,7 +562,10 @@ def abort_sync(
         except (EngineUnavailable, EngineCallError):
             pass  # 暂存清理失败不阻断本地清理（引擎 commit 前的 __staging 不对外可见）
     if row.status == "syncing":
-        db.delete(row)
+        # syncing → aborted 允许过触发器；终态行到此处不动（幂等重入）
+        row.status = "aborted"
+        row.error = "同步被连接器中止（abort）"
+        row.finished_at = service.utcnow()
     if dataset is not None and dataset.sync_status == "syncing":
         dataset.sync_status = "idle"
         dataset.paused_reason = None

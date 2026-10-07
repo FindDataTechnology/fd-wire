@@ -3,6 +3,9 @@
 # 借用契约端点全走 env → Secret fd-wire-env（清单不含明文 Secret，
 # wanxing-fleet 同纪律；集群内创建命令见 deploy/README.md 步骤 6）。
 # 镜像 tag 待首次 GHA 构建后回填（TODO(go-live)，README 步骤 4-5）。
+# datasets 模块（库 + 上传暂存）已迁出 /tmp 落持久卷（wire-provenance-ledger
+# D8.1）——/tmp 是容器临时层，pod 重建即丢登记与原件；迁移 runbook 见
+# deploy/README.md「datasets 迁出 /tmp」。
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,6 +27,11 @@ spec:
         app.kubernetes.io/part-of: finddata
         app.kubernetes.io/environment: production
     spec:
+      # 非 root 运行（appuser uid 10001）：local-path PV 落盘 root:root，
+      # fsGroup 让 kubelet 挂载时把卷归属改到该组，否则 sqlite/上传路径
+      # 首写即 PermissionError（与旧 /tmp 坑同类，提前堵死）。
+      securityContext:
+        fsGroup: 10001
       containers:
         - name: api
           # 不可变标签纪律（mcp-service-deploy spec：禁 latest/浮动标签）。
@@ -37,15 +45,15 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: database_url }
-            # datasets 模块库：与主库同文件（/tmp 共享库是平台一期既有口径；
-            # sqlite URL 非敏感，走清单字面值。缺它默认 ./ 相对路径在 /app 不可写
-            # —— CrashLoopBackOff 实证）
+            # datasets 模块库：sqlite 落持久卷 PVC fd-wire-datasets-data
+            # （wire-provenance-ledger D8.1 迁出 /tmp——登记与同步历史随 pod
+            # 重建存续；sqlite URL 非敏感，走清单字面值。迁移/回滚见
+            # deploy/README.md「datasets 迁出 /tmp」）
             - name: FD_WIRE_DATASETS_DATABASE_URL
-              value: sqlite:////tmp/fd_wire.db
-            # 上传原件目录：默认 ./ 相对路径在只读 /app 不可写（上传路径
-            # 首次生产实弹即 PermissionError——同 datasets DB 同类坑）
+              value: sqlite:////var/lib/fd-wire/db/fd_wire_datasets.db
+            # 上传原件暂存目录：同一 PVC（原件哈希登记后文件即证据，不在 /tmp）
             - name: FD_WIRE_DATASETS_UPLOAD_DIR
-              value: /tmp/fd_wire_dataset_uploads
+              value: /var/lib/fd-wire/uploads
             # 借用契约（fd_wire_api.config：同名环境变量优先于占位默认值）
             - name: BUSINESS_MCP_URL
               valueFrom:
@@ -120,9 +128,44 @@ spec:
           livenessProbe:
             httpGet: { path: /health, port: http }
             initialDelaySeconds: 10
+          volumeMounts:
+            # 同一 PVC 两个 subPath（db / uploads 分目录，互不掺混）；
+            # subPath 目录由 kubelet 在卷上补建，容器内路径必存在。
+            - name: datasets-data
+              mountPath: /var/lib/fd-wire/db
+              subPath: db
+            - name: datasets-data
+              mountPath: /var/lib/fd-wire/uploads
+              subPath: uploads
           resources:
             requests: { cpu: 100m, memory: 192Mi }
             limits: { memory: 512Mi }
+      volumes:
+        - name: datasets-data
+          persistentVolumeClaim:
+            claimName: fd-wire-datasets-data
+---
+# datasets 模块持久卷（wire-provenance-ledger D8.1）：sqlite 库 + 上传
+# 原件暂存，迁出 /tmp（容器临时层 pod 重建即丢）。容量口径：客户级存储
+# 配额默认 1GiB/企业（FD_WIRE_DATASET_STORAGE_LIMIT_BYTES），10Gi 为初期
+# 多企业余量；涨容量走 PVC 扩容（local-path 需重建卷，提前留足）。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fd-wire-datasets-data
+  namespace: fd-prod
+  labels:
+    app.kubernetes.io/name: fd-wire-api
+    app.kubernetes.io/part-of: finddata
+spec:
+  accessModes: [ReadWriteOnce]
+  # local-path 是集群默认 StorageClass，本可缺省；显式写出的原因同
+  # fd-infra-deploy 的 fd-daas-mcp-cust1：留空会让 ArgoCD 对不可变 PVC
+  # spec 永远 diff（desired=null vs 存储值），报 out-of-sync 噪音。
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
 ---
 apiVersion: v1
 kind: Service

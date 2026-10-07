@@ -48,7 +48,7 @@ def test_chain_head_follows_catalog_source_db(migrated_sqlite) -> None:
     engine = create_engine(migrated_sqlite)
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    assert version == "0011_datasets"
+    assert version == "0013_provenance_foundation"
     engine.dispose()
 
 

@@ -3,15 +3,22 @@
 覆盖：
 - CSV 预览：列名 + 保守类型推断（INTEGER/REAL/TEXT）+ 行数与样例行；
 - Excel（openpyxl 造 .xlsx）走同一通道；
+- 原件 content_sha256 登记（wire-provenance-ledger「不可变登记基线」）：
+  CSV 哈希=客户端发送字节；Excel 哈希=.xlsx 原件（非转换后 CSV）——
+  登记值与本地 sha256sum 口径一致、客户侧可独立复算；
 - 50 万行上限（此处以设置注入小上限验证）与存储配额 → fail-closed 拒收；
 - 不支持扩展名/重名表头/保留前缀/空文件 → 400；
 - 建档：分块（2000 行）ingest 引擎、值按声明类型转换、consumed_at 置位、
   同一 upload 二次消费 409；dataset_key 生成与冲突后缀；
+- 上传事件入账（wire-provenance-ledger 任务 4.1）：dataset.upload.registered
+  与 uploads 落行同事务（payload 哈希可复算、链衔接；入账失败/拒收时
+  同事务回滚，不留半条事件）；
 - 跨企业 upload/connector 一律 404；缺客户头 401。
 """
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -22,10 +29,14 @@ import pytest
 from openpyxl import Workbook
 from sqlalchemy import select
 
+from fd_wire_api.datasets import routes as datasets_routes
 from fd_wire_api.datasets.db import get_session
 from fd_wire_api.datasets.ingest import TOOL_INGEST_BEGIN, TOOL_INGEST_CHUNK, TOOL_INGEST_COMMIT
 from fd_wire_api.datasets.models import Dataset, Upload
 from fd_wire_api.datasets.uploads import infer_type
+from fd_wire_api.provenance import envelope
+from fd_wire_api.provenance.ledger import verify_chain
+from fd_wire_api.provenance.models import LedgerEvent
 from test_datasets_common import (
     CUSTOMER_A,
     CUSTOMER_B,
@@ -44,6 +55,19 @@ CSV_SAMPLE = (
     "2,20.75,beta,\n"
     "3,30,gamma,world\n"
 )
+
+
+def _local_sha256(payload: bytes) -> str:
+    """客户侧复算口径：对发送的原始字节算 sha256:<hex>。"""
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+def _upload_row(upload_id: str) -> Upload:
+    session = get_session()
+    try:
+        return session.get(Upload, upload_id)
+    finally:
+        session.close()
 
 
 def _csv_rows_arg(env) -> list[dict]:
@@ -114,6 +138,48 @@ def test_upload_csv_preview_columns_types_and_samples(datasets_env) -> None:
         assert os.path.exists(record.stored_path)
     finally:
         session.close()
+
+
+def test_upload_csv_registers_original_content_sha256(datasets_env) -> None:
+    """CSV：登记哈希=客户端发送的原始字节（客户 sha256sum 口径一致）。"""
+    payload = CSV_SAMPLE.encode("utf-8")
+    resp = upload_csv(datasets_env, payload)
+    assert resp.status_code == 201, resp.text
+    record = _upload_row(resp.json()["upload_id"])
+    assert record.content_sha256 == _local_sha256(payload)
+    # 原件原样暂存：暂存件哈希与登记值一致（暂存期间内容不变）
+    with open(record.stored_path, "rb") as fh:
+        assert f"sha256:{hashlib.sha256(fh.read()).hexdigest()}" == record.content_sha256
+
+
+def test_upload_excel_hash_is_original_workbook_not_converted_csv(datasets_env) -> None:
+    """Excel：登记哈希=.xlsx 原件（转换前落定），与转换后 CSV 不同。"""
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["city", "pop"])
+    sheet.append(["Beijing", 21540000])
+    buf = io.BytesIO()
+    workbook.save(buf)
+    xlsx_bytes = buf.getvalue()
+    resp = datasets_env.client.post(
+        "/api/v1/datasets/uploads",
+        headers=CUSTOMER_A,
+        files={
+            "file": (
+                "cities.xlsx",
+                xlsx_bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    record = _upload_row(resp.json()["upload_id"])
+    # 哈希是原件的——客户对收到的 .xlsx 复算即得登记值
+    assert record.content_sha256 == _local_sha256(xlsx_bytes)
+    # 且确实不是转换后暂存 CSV 的哈希（Excel 暂存是 CSV，字节形态不同）
+    with open(record.stored_path, "rb") as fh:
+        converted = f"sha256:{hashlib.sha256(fh.read()).hexdigest()}"
+    assert converted != record.content_sha256
 
 
 def test_upload_excel_preview_and_create(datasets_env) -> None:
@@ -350,3 +416,88 @@ def test_dataset_list_is_customer_scoped(datasets_env) -> None:
         "updated_at",
     } <= set(listed[0].keys())
     assert json.dumps(listed[0])  # JSON-safe
+
+
+# ------------------------------------------------------------------ 上传事件入账
+
+
+def _ledger_events(ledger: str = "cust-001") -> list[LedgerEvent]:
+    session = get_session()
+    try:
+        return list(
+            session.execute(
+                select(LedgerEvent)
+                .where(LedgerEvent.ledger == ledger)
+                .order_by(LedgerEvent.seq)
+            )
+            .scalars()
+        )
+    finally:
+        session.close()
+
+
+def test_upload_registers_dataset_upload_registered_event(datasets_env) -> None:
+    """建档成功 → 账本出现 dataset.upload.registered，payload 哈希可复算。"""
+    payload = CSV_SAMPLE.encode("utf-8")
+    resp = upload_csv(datasets_env, payload)
+    assert resp.status_code == 201, resp.text
+    upload_id = resp.json()["upload_id"]
+    record = _upload_row(upload_id)
+
+    events = _ledger_events()
+    assert len(events) == 1
+    event = events[0]
+    assert event.type == "dataset.upload.registered"
+    assert event.ledger == "cust-001"
+    assert event.actor == {"kind": "customer", "id": "cust-001", "sig": None}
+    assert event.subject == {"kind": "upload", "id": upload_id}
+    assert event.payload == {
+        "filename": "data.csv",
+        "content_sha256": _local_sha256(payload),
+        "size_bytes": record.size_bytes,
+        "row_count": record.row_count,
+    }
+    assert record.row_count == 3
+    assert envelope.payload_hash(event.payload) == event.payload_hash  # 哈希可复算
+
+    # 再传一次 → 同账本 seq 2 且链衔接
+    again = upload_csv(datasets_env, "id\n9\n")
+    assert again.status_code == 201
+    events = _ledger_events()
+    assert [e.seq for e in events] == [1, 2]
+    assert events[1].prev_hash == events[0].event_hash
+    chain = verify_chain(get_session(), "cust-001")
+    assert (chain.ok, chain.checked) == (True, 2)
+
+
+def test_failed_upload_leaves_no_event_same_transaction(
+    datasets_env, monkeypatch
+) -> None:
+    """入账失败 → 同事务回滚：不留上传行、不留半条事件。"""
+
+    def broken_append(*args, **kwargs):
+        raise RuntimeError("ledger down")
+
+    monkeypatch.setattr(datasets_routes, "append_event", broken_append)
+    with pytest.raises(RuntimeError, match="ledger down"):
+        upload_csv(datasets_env, CSV_SAMPLE)
+    session = get_session()
+    try:
+        assert session.query(Upload).count() == 0
+        assert session.query(LedgerEvent).count() == 0
+    finally:
+        session.close()
+
+
+def test_rejected_upload_leaves_no_event(datasets_env, monkeypatch) -> None:
+    """解析/配额拒收（未到落行）→ 账本无事件。"""
+    patch_dataset_settings(monkeypatch, dataset_storage_limit_bytes=8)
+    assert upload_csv(datasets_env, CSV_SAMPLE).status_code == 429
+    bad = upload_csv(datasets_env, "id,id\n1,2\n", filename="dup.csv")
+    assert bad.status_code == 400
+    session = get_session()
+    try:
+        assert session.query(Upload).count() == 0
+        assert session.query(LedgerEvent).count() == 0
+    finally:
+        session.close()
