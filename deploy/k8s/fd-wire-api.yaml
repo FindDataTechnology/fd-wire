@@ -57,7 +57,12 @@ spec:
             # 溯源账本（wire-provenance-ledger）：OTS 公链锚定后端（免费，
             # BTC 确认异步）；私有化部署改 customer（客户自持检查点，零出站）。
             - name: FD_WIRE_PROVENANCE_ANCHOR_BACKEND
-              value: ots
+              value: customer
+            # 客户自持检查点：签名钥（k8s secret，永不入 git）+ 检查点落 PVC
+            - name: FD_WIRE_PROVENANCE_SIGNING_KEY_PATH
+              value: /etc/fd-wire-provenance/signing_key.pem
+            - name: FD_WIRE_PROVENANCE_CHECKPOINT_DIR
+              value: /var/lib/fd-wire/checkpoints
             # 借用契约（fd_wire_api.config：同名环境变量优先于占位默认值）
             - name: BUSINESS_MCP_URL
               valueFrom:
@@ -150,12 +155,21 @@ spec:
               mountPath: /var/lib/fd-wire/db
               subPath: db
             - name: datasets-data
+              mountPath: /var/lib/fd-wire/checkpoints
+              subPath: checkpoints
+            - name: provenance-key
+              mountPath: /etc/fd-wire-provenance
+              readOnly: true
+            - name: datasets-data
               mountPath: /var/lib/fd-wire/uploads
               subPath: uploads
           resources:
             requests: { cpu: 100m, memory: 192Mi }
             limits: { memory: 512Mi }
       volumes:
+        - name: provenance-key
+          secret:
+            secretName: fd-wire-provenance-key
         - name: datasets-data
           persistentVolumeClaim:
             claimName: fd-wire-datasets-data
