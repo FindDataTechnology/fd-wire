@@ -42,6 +42,10 @@ spec:
             # —— CrashLoopBackOff 实证）
             - name: FD_WIRE_DATASETS_DATABASE_URL
               value: sqlite:////tmp/fd_wire.db
+            # 上传原件目录：默认 ./ 相对路径在只读 /app 不可写（上传路径
+            # 首次生产实弹即 PermissionError——同 datasets DB 同类坑）
+            - name: FD_WIRE_DATASETS_UPLOAD_DIR
+              value: /tmp/fd_wire_dataset_uploads
             # 借用契约（fd_wire_api.config：同名环境变量优先于占位默认值）
             - name: BUSINESS_MCP_URL
               valueFrom:
