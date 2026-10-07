@@ -24,6 +24,9 @@
   ``REGISTRY_MONGO_COLLECTION``：registry Mongo 直读轮询（可选路径）；
   URI 未配置时该路径禁用。
 - ``METERING_POLL_LIMIT``：单次轮询批量上限，默认 500。
+- ``METERING_DRIVER_ENABLED``：入账驱动（poll→settle 周期循环，metering/driver.py）
+  总开关，默认 true；false 时启动跳过。
+- ``METERING_DRIVER_INTERVAL_SECONDS``：驱动 tick 间隔秒，默认 300。
 - ``METERING_AUTO_CREATE_TABLES``：启动时 ``create_all``（默认 true，
   便于开发；生产用 Alembic 迁移并可关闭）。
 """
@@ -94,6 +97,8 @@ class MeteringSettings(BaseSettings):
     registry_mongo_db: str | None = None
     registry_mongo_collection: str = "audit_events"
     metering_poll_limit: int = 500
+    metering_driver_enabled: bool = True
+    metering_driver_interval_seconds: int = 300
     metering_auto_create_tables: bool = True
 
     @field_validator("metering_source_map")
@@ -143,4 +148,6 @@ def describe() -> dict[str, Any]:
         "registry_mongo_configured": bool(s.registry_mongo_uri and s.registry_mongo_db),
         "registry_mongo_collection": s.registry_mongo_collection,
         "poll_limit": s.metering_poll_limit,
+        "driver_enabled": s.metering_driver_enabled,
+        "driver_interval_seconds": s.metering_driver_interval_seconds,
     }
