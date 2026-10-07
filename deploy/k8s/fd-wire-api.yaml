@@ -35,7 +35,7 @@ spec:
       containers:
         - name: api
           # 不可变标签纪律（mcp-service-deploy spec：禁 latest/浮动标签）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-30ba42d
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-2bb0ae0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -54,6 +54,10 @@ spec:
             # 上传原件暂存目录：同一 PVC（原件哈希登记后文件即证据，不在 /tmp）
             - name: FD_WIRE_DATASETS_UPLOAD_DIR
               value: /var/lib/fd-wire/uploads
+            # 溯源账本（wire-provenance-ledger）：OTS 公链锚定后端（免费，
+            # BTC 确认异步）；私有化部署改 customer（客户自持检查点，零出站）。
+            - name: FD_WIRE_PROVENANCE_ANCHOR_BACKEND
+              value: ots
             # 借用契约（fd_wire_api.config：同名环境变量优先于占位默认值）
             - name: BUSINESS_MCP_URL
               valueFrom:
