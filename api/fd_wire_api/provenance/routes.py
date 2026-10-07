@@ -37,6 +37,7 @@ from ..datasets.db import get_session
 from ..datasets.models import Dataset
 from . import envelope, export, ledger, selfcheck
 from .models import LedgerEvent
+from .sealing import RECEIPT_TYPE
 from .schemas import (
     AnchoringOut,
     DatasetStatusOut,
@@ -126,16 +127,33 @@ def provenance_overview(
     """企业溯源概览：账本末位 seq、链完整性、锚定进度（滞后如实计数）。"""
     last_seq = _last_seq(db, customer_id)
     verify = ledger.verify_chain(db, customer_id)
+    last_receipt = _last_receipt(db, customer_id)
+    sealed_through = last_receipt["last_seq"] if last_receipt else 0
     return OverviewOut(
         ledger=customer_id,
         last_seq=last_seq,
         integrity=IntegrityOut(ok=verify.ok, checked=verify.checked),
         anchoring=AnchoringOut(
             backend=get_settings().anchor_backend,
-            last_sealed_epoch=None,  # 封存器未上线（任务组 5 落地后回填）
-            lag_events=last_seq,  # 尚无已封存区间：全部事件计为未覆盖
+            last_sealed_epoch=last_receipt["epoch"] if last_receipt else None,
+            lag_events=max(0, last_seq - sealed_through),
         ),
     )
+
+
+def _last_receipt(db: Session, customer_id: str) -> dict | None:
+    """账本最新一条回执事件的 payload（无回执返回 None）。
+
+    封存器（sealing.seal_ledger）落地的回填点：锚定进度即由此推导——
+    last_sealed_epoch=回执 epoch，滞后=last_seq-回执区间末。
+    """
+    row = (
+        db.query(LedgerEvent)
+        .filter(LedgerEvent.ledger == customer_id, LedgerEvent.type == RECEIPT_TYPE)
+        .order_by(LedgerEvent.seq.desc())
+        .first()
+    )
+    return row.payload if row is not None else None
 
 
 # ------------------------------------------------------------- 时间线 / 状态
@@ -197,10 +215,15 @@ def dataset_status(
         envelope.event_hash(envelope.envelope_from_row(row)) == row.event_hash
         for row in rows
     )
+    last_receipt = _last_receipt(db, customer_id)
     return DatasetStatusOut(
         tier=dataset.provenance_tier,
         integrity=IntegrityOut(ok=ok, checked=len(rows)),
-        anchored_through=None,  # 锚定未上线（任务组 5），不伪造进度
+        anchored_through=(
+            {"epoch": last_receipt["epoch"], "backend": last_receipt["backend"]}
+            if last_receipt
+            else None
+        ),
         first_event_ts=rows[0].ts_platform if rows else None,
         note=None if rows else "启用前无历史事件（溯源起点=启用时点）",
     )

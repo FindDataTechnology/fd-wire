@@ -21,6 +21,13 @@ class IntegrityOut(BaseModel):
     checked: int
 
 
+class AnchoredThroughOut(BaseModel):
+    """数据集视图的锚定落点：最近回执的 epoch 与后端（账本级）。"""
+
+    epoch: int
+    backend: str
+
+
 class AnchoringOut(BaseModel):
     """锚定进度：后端、最近已封存 epoch、滞后事件数（未覆盖事件如实计数）。"""
 
@@ -67,8 +74,8 @@ class DatasetStatusOut(BaseModel):
 
     tier: ProvenanceTier
     integrity: IntegrityOut
-    #: 已锚定至的 seq（封存/锚定为任务组 5，未上线时如实为 None）
-    anchored_through: int | None = None
+    #: 已锚定至的 epoch 与后端（最近回执推导；无回执如实为 None）
+    anchored_through: "AnchoredThroughOut | None" = None
     #: 溯源起点（首条事件平台时间；启用前无历史、不伪造）
     first_event_ts: str | None = None
     note: str | None = None
