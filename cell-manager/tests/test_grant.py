@@ -36,7 +36,7 @@ from cell_manager.keys import (
     load_secret_key,
     sign_self_signed_jwt,
 )
-from cell_manager.registry.base import ScopeDoc
+from cell_manager.registry.base import ScopeDoc, ServerEntry
 
 # ---- 测试配置（含身份映射） ----
 
@@ -459,3 +459,28 @@ def test_grant_aborts_when_caller_map_write_unavailable(home):
     grant_face = CellGrant(registry=NoCallerMapRegistry(), config=cfg)
     with pytest.raises(ConfigError, match="put_caller_map"):
         grant_face.grant("acme")
+
+
+def test_teardown_surfaces_scope_residue_without_aborting(config, registry, grant_face):
+    """删 scope 失败（如边缘拦 DELETE→405）：残留如实入 detail，注销照做。
+
+    没有这条防护时，deprovision 会整步失败——容器还在跑、条目还在线、
+    映射还在库（2026-10-08 生产实证），退租卡死在半途。
+    """
+    from cell_manager.errors import RegistryError
+
+    class FailingScopeRegistry(FakeRegistryClient):
+        def delete_scope(self, scope_name):  # type: ignore[no-untyped-def]
+            raise RegistryError("registry DELETE /api/iam/groups/x -> HTTP 405")
+
+    reg = FailingScopeRegistry()
+    reg.register(
+        ServerEntry(path="fd-wire-cell-acme", target_url="http://x:8000/mcp")
+    )
+    face = CellGrant(registry=reg, config=config)
+    detail = face.teardown_registry_face("acme")
+
+    assert detail["scope_deleted"] is False
+    assert "405" in (detail["scope_error"] or "")
+    # 注销照做：不因 scope 失败而放弃条目回收
+    assert detail["registry_unregistered"] is True

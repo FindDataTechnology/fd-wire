@@ -180,13 +180,32 @@ class CellGrant:
         return self._run("revoke-keys", customer_id, _do)
 
     def teardown_registry_face(self, customer_id: str) -> dict[str, Any]:
-        """回收授权束的 registry 半边：删 scope → 注销条目（宽幂等）。"""
+        """回收授权束的 registry 半边：删 scope → 注销条目（宽幂等）。
+
+        **删 scope 失败不吞也不中止整体**：退租的授权残留必须可见可补，
+        但「删不掉 scope 就放弃注销条目」会把退租卡死在半途（容器还在跑、
+        条目还在线、映射还在库——2026-10-08 生产实证：DELETE
+        /api/iam/groups 被边缘拦 405，deprovision 整步失败）。故：scope
+        失败以 ``scope_error`` 如实入 detail 与审计，条目注销与后续清理照做；
+        调用方（decommission）据此把残留呈现在退租回执里。
+        """
 
         def _do() -> dict[str, Any]:
             validate_customer_id(customer_id)
-            scope_deleted = self._registry.delete_scope(self._config.scope_name(customer_id))
+            scope_error: str | None = None
+            try:
+                scope_deleted = self._registry.delete_scope(
+                    self._config.scope_name(customer_id)
+                )
+            except Exception as exc:  # noqa: BLE001 —— 残留可见优先于整体中止
+                scope_deleted = False
+                scope_error = f"{type(exc).__name__}: {exc}"
             unregistered = self._registry.unregister(self._config.registry_path(customer_id))
-            return {"scope_deleted": scope_deleted, "registry_unregistered": unregistered}
+            return {
+                "scope_deleted": scope_deleted,
+                "scope_error": scope_error,
+                "registry_unregistered": unregistered,
+            }
 
         return self._run("teardown", customer_id, _do)
 
