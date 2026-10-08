@@ -206,10 +206,19 @@ ecosystem-bridge 3.1）按 `REGISTRY_MONGO_URI` 直读 registry 的
 NodePort 或 tailscale IP）或 b) registry 侧加 HTTP 推送（audit 流 → wire
 internal endpoint）。**session 里拍板并落地**。
 
-### 验收判据
+### 交付状态（2026-10-08 复核：已落地，待配 Secret 后生效验证）
 
-- [ ] 一次真实客户调用后 10 分钟内，wire 的 `metering_records` 出现对应行
-      （来源标注正确）。
+直读口径已选定并落地（切片二 5.1-5.4）：
+
+- 只读账号已建（集合级角色 `wireMeteringRO`，仅
+  `mcp_registry.audit_events_default` find 权限；写/他集合实证 Unauthorized）
+- mongo 绑 tailnet `100.64.0.11:27017`（公网不可达），闸门探针从 fd-prod
+  临时 pod 实探**通过**
+- api 镜像已带 pymongo（sha-5d3c2fa），`REGISTRY_MONGO_COLLECTION` 已配
+  `audit_events_default`
+- **仍缺**：`fd-wire-env` 的 `registry_mongo_uri` / `registry_mongo_db`
+  两键当前为空 —— 直读驱动 poll 段自动跳过（HTTP 推送路径喂同表）。
+  待配后验证入账时延（他们实测水位追平后 7 秒入账）。
 
 ---
 
@@ -275,3 +284,62 @@ registry 生成的 per-server location 之外，加一条通配/默认 MCP 前�
 
 - [ ] 客户 key 请求别家 cell 路径 → 403（且 body 带授权语义说明）
 - [ ] 本企业 cell 与共享业务面仍 200；未注册路径的控制台其他路由不受影响
+
+---
+
+## R5【P0】退租链路的 scope 删除被边缘拦（405）→ 授权面残留
+
+### 现状（2026-10-08 生产实证，acme001 退租）
+
+cell-manager 退租编排最后一步删授权 scope：
+`DELETE /api/iam/groups/mcp-wire-cell-<cid>` → **405 Method Not Allowed**，
+响应头 `Allow: GET`（经 Caddy/边缘，nginx 侧端点存在：
+`registry/api/management_routes.py:847`）。
+
+后果（严重）：teardown 抛错 → `deprovision` 整步失败 → **容器还在跑、
+registry 条目还在线、caller-map 映射还在库**，退租卡死在半途，客户授权面
+完整残留。
+
+**wire 侧已做的缓解**（不等 registry 修）：cell-manager 的
+`teardown_registry_face` 改为「删 scope 失败不中止」——以 `scope_error`
+如实入回执与审计，条目注销与后续清理照做（残留可见可补优于卡死半途）。
+**但 scope 文档本身仍在库里**，需 registry 侧解决根因。
+
+### 期望行为
+
+`DELETE /api/iam/groups/{group_name}` 经公网入口可达（与
+`POST /api/servers/remove`、`DELETE /api/sub2api-caller-map/{username}`
+同等放行——后两者实测可用，仅 iam/groups 的 DELETE 被拦）。
+
+### 验收判据
+
+- [ ] admin patch key 经入口 `DELETE /api/iam/groups/<测试组>` → 200
+      （非 405，`Allow` 头含 DELETE）
+- [ ] 退租演练重跑：scope 文档被真删（`mcp_scopes_default` 查不到），
+      回执无 `scope_error`
+- [ ] 不影响 GET/POST/PATCH 等其它方法的现有行为
+
+## R6【P1】预检把「计费面查不到用户」误分类为额度不足
+
+### 现状
+
+映射已生效但 sub2api 里没有对应账户时（开户漏建账户 / 用户 id 填错），
+preflight 返回 `402 INSUFFICIENT_BALANCE`，审计 reason 记的是
+`readUser refused (code=404, HTTP 404)`。
+
+fail-closed 方向是对的（拒了），但**语义误导**：对接方文档说 402 =
+「需要充值」，客户会去充值；实际是开户配置缺口（应联系平台）。审计日志
+里的 404 才是真相，对接方看不到。
+
+### 期望行为
+
+计费面查不到用户（404）→ 独立错误码（如 `402 BILLING_ACCOUNT_MISSING`
+或 `409`），消息明确指向「开户配置缺口，请联系平台」，与
+`INSUFFICIENT_BALANCE`（真没钱）区分开。
+
+### 验收判据
+
+- [ ] 映射存在但账户不存在 → 返回具名的账户缺失错误（非
+      INSUFFICIENT_BALANCE），审计 reason 一致
+- [ ] 真余额耗尽仍返回 INSUFFICIENT_BALANCE（不回归）
+- [ ] 对接方文档同步补该错误码语义
