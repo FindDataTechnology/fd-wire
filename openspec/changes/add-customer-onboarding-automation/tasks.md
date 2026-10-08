@@ -16,23 +16,23 @@
 
 ## 3. 切片二 · registry 预检映射（gitee/main @ dbf213e 新分支，跨仓）
 
-- [ ] 3.1 caller-map admin API：registry app 新端点（`nginx_proxied_auth` + `_require_admin` + audit，对齐 `/iam/groups` 模式）读写 `sub2api_caller_map` 集合（username → sub2api_user_id）；验证：admin wgk- 可写可读、非 admin 403，单测随迁
-- [ ] 3.2 preflight 读集合：`_caller_map` 改为集合读取 + 30-60s TTL 缓存，env `SUB2API_CALLER_MAP` 降为覆盖层（env 优先）；验证：单测覆盖「集合写入→TTL 过期→生效」「env 覆盖集合」「集合不可达时行为」
-- [ ] 3.3 `PREFLIGHT_UNMAPPED` 开关（pass|warn|deny，默认 pass）：deny 下未映射非 admin 调用者拒绝、admin scope 保持 skip-pass；验证：单测三分支 + 生产切 deny 后漏配身份即时 402/deny
-- [ ] 3.4 gitee 线交付：cherry-pick 纪律（同 lex-legal da4c6cf7 先例）、CN 镜像配方重建、cheap-1 ff + `up -d --no-deps --no-build`、合并 gitee main；验证：容器内冒烟（venv python 配方）+ 生产探针复跑 2.2
+- [x] 3.1 caller-map admin API（PUT/GET/DELETE /api/sub2api-caller-map，生产实锤 admin 200/非 admin 403）：registry app 新端点（`nginx_proxied_auth` + `_require_admin` + audit，对齐 `/iam/groups` 模式）读写 `sub2api_caller_map` 集合（username → sub2api_user_id）；验证：admin wgk- 可写可读、非 admin 403，单测随迁
+- [x] 3.2 preflight 读集合（两层+TTL+2s 有界读+fail-open；生产实锤 drill 仅 Mongo 映射 200）：`_caller_map` 改为集合读取 + 30-60s TTL 缓存，env `SUB2API_CALLER_MAP` 降为覆盖层（env 优先）；验证：单测覆盖「集合写入→TTL 过期→生效」「env 覆盖集合」「集合不可达时行为」
+- [x] 3.3 `PREFLIGHT_UNMAPPED` 开关（生产 deny：未映射非 admin 402 CALLER_NOT_MAPPED 具名留痕、admin 豁免直通）（pass|warn|deny，默认 pass）：deny 下未映射非 admin 调用者拒绝、admin scope 保持 skip-pass；验证：单测三分支 + 生产切 deny 后漏配身份即时 402/deny
+- [ ] 3.4 **部分完成（2026-10-08）**：代码在 github 线 wire-onboarding@1ffa7cb（基座=部署镜像 63126fe），镜像经 scs001 仓 GHA→hkccr→ccr 中继线构建 sha-1ffa7cb，cheap-1 prebuilt 已滚、五项冒烟绿；**gitee 线同步遗留**（两线谱系无关，cherry-pick 需理 4 文件冲突——运行时以 github 线为准，/opt 树仅簿记）：cherry-pick 纪律（同 lex-legal da4c6cf7 先例）、CN 镜像配方重建、cheap-1 ff + `up -d --no-deps --no-build`、合并 gitee main；验证：容器内冒烟（venv python 配方）+ 生产探针复跑 2.2
 
 ## 4. 切片二 · registry 代铸与代吊（同分支同船）
 
-- [ ] 4.1 `POST /api/patch-keys` 增 admin-only 可选字段 `{username?, groups?}`（成对语义：代铸即指定归属与组快照；非 admin 传字段 → 403 忽略拒绝）；验证：单测覆盖代铸归属正确、非 admin 拒绝、特权组写防护（wire-cust-* 不得映 admin scope）
-- [ ] 4.2 DELETE 加 admin 旁路：admin 可吊任意 key（owner 校验对 admin 放行），重复吊销仍 409；验证：单测 + 真实退租演练（drillcust001 旧 key 代吊）
-- [ ] 4.3 与 3.4 同船交付；验证：`cell-manager` 铸 key 子步骤切换到代铸 API（1.4 的 TODO 收口），探针复跑
+- [x] 4.1 代铸字段（生产实锤：admin 代铸归属/组精确、非 admin 403、半对 schema 拒绝） `{username?, groups?}`（成对语义：代铸即指定归属与组快照；非 admin 传字段 → 403 忽略拒绝）；验证：单测覆盖代铸归属正确、非 admin 拒绝、特权组写防护（wire-cust-* 不得映 admin scope）
+- [x] 4.2 admin 旁路（生产实锤：代吊外属 key 200 → 即时 401；非 admin 仍 404）admin 可吊任意 key（owner 校验对 admin 放行），重复吊销仍 409；验证：单测 + 真实退租演练（drillcust001 旧 key 代吊）
+- [x] 4.3 cell-manager 收口（AdminMintChannel 代铸+put_caller_map 写映射；生产 grant preflight_map=written；116 测试绿）：验证：`cell-manager` 铸 key 子步骤切换到代铸 API（1.4 的 TODO 收口），探针复跑
 
 ## 5. 切片二 · infra 直读通道（探针闸门）
 
-- [ ] 5.1 cheap-1 mongo 只读账号：仅 `mcp_registry.audit_events_default` 读权限、authSource=admin；验证：该账号读集合成功、写/读他集合被拒
-- [ ] 5.2 compose 端口发布到 tailnet IP（单滚 mongo，`--no-deps --no-build`，预告短停）；验证：cheap-1 本机 + tailnet 另一主机可达、公网不可达
-- [ ] 5.3 **闸门探针**：cheap 集群临时 pod（`kubectl --context cheap -n fd-prod run`）对 cheap-1 tailnet IP:27017 真实出站探测；验证：探针结果留档——**通过 → 5.4；失败 → 直读挂起、推送口径另立 change（本 change 到此收口）**
-- [ ] 5.4 开闸：Secret `fd-wire-env` 填 `REGISTRY_MONGO_URI/DB` → 滚动 fd-wire-api；验证：真实客户调用后 10 分钟内 wire `metering_records` 出现对应行、来源标注正确
+- [x] 5.1 只读账号（集合级角色 wireMeteringRO：audit_events_default find-only，写/他集合 Unauthorized 实证）：仅 `mcp_registry.audit_events_default` 读权限、authSource=admin；验证：该账号读集合成功、写/读他集合被拒
+- [x] 5.2 tailnet 绑定（HOST_BIND_IP=100.64.0.11 逃生口，零 compose 改动；mongo healthy）：（单滚 mongo，`--no-deps --no-build`，预告短停）；验证：cheap-1 本机 + tailnet 另一主机可达、公网不可达
+- [x] 5.3 闸门探针 **PASS**（fd-prod 临时 pod → 100.64.0.11:27017 出站 OK）：cheap 集群临时 pod（`kubectl --context cheap -n fd-prod run`）对 cheap-1 tailnet IP:27017 真实出站探测；验证：探针结果留档——**通过 → 5.4；失败 → 直读挂起、推送口径另立 change（本 change 到此收口）**
+- [x] 5.4 开闸（三层坑连环修：Secret 键名小写 registry_mongo_uri、镜像缺 pymongo→api 镜像装 .[mongo] 经 scs001+hkccr→ccr 线 sha-5d3c2fa、poller 集合名 audit_events_default 显式 env；**14:56 起实拉入账**，7 天水位回填中——追平后满足「10 分钟入账」判据）：Secret `fd-wire-env` 填 `REGISTRY_MONGO_URI/DB` → 滚动 fd-wire-api；验证：真实客户调用后 10 分钟内 wire `metering_records` 出现对应行、来源标注正确
 
 ## 6. 终验
 
