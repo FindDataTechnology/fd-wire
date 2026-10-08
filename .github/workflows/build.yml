@@ -32,7 +32,11 @@ permissions:
   contents: read
 
 env:
-  REGISTRY: ccr.ccs.tencentyun.com
+  # 标准中继通道（2026-10-08 定为正道）：runner 推 hkccr（港，跨洋快）→
+  # cheap-3 tcr-relay 每 5 分钟回灌 ccr（广州）→ 部署侧从 ccr 拉取。
+  # 直推 ccr 的 US→广州 ~0.14MB/s 慢腿已废弃（api 镜像 20 分钟+）。
+  # 前置：cheap-3 /etc/tcr-relay/repos.conf 需登记 fd-wire/api、fd-wire/web。
+  REGISTRY: hkccr.ccs.tencentyun.com
   NAMESPACE: fd-wire
 
 jobs:
