@@ -64,3 +64,7 @@ _Avoid_: gateway 混称（简化报文形态已随 registry 定版镜像退役�
 **源适配器（source adapter）**:
 连接器内可插拔的一类客户源驱动：内网数据库、本地文件、业务系统 API 各为其一种实现。
 _Avoid_: 驱动泛称、spider 混称
+
+**cell 授权（cell grant）**:
+cell 在 registry 侧的授权束：入口条目可见性 + 专属 scope 文档 + 长命 key 的组快照，三者同铸同收——开通时全自动铸造，退租时全自动回收。客户经 wire 入口只能调用自己的 cell 与共享业务面，看不见别家 cell。
+_Avoid_: 私有 scope（那是需求单交付指标的隔离域）、权限（泛指）、scope 文档（registry 实现词汇，不进领域层）

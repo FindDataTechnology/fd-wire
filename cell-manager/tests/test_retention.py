@@ -57,7 +57,10 @@ def test_purge_expired_removes_volume_and_registry_entry(manager, fake_driver, f
     assert not (config.data_root / "acme").exists()
     # registry 条目已摘除
     assert not fake_registry.is_registered("fd-wire-cell-acme")
-    assert fake_registry.calls[-1] == ("unregister", "fd-wire-cell-acme")
+    # 授权束同步回收（1.6）：注销条目后删授权 scope（宽幂等兜底）
+    assert fake_registry.calls[-2] == ("unregister", "fd-wire-cell-acme")
+    assert fake_registry.calls[-1] == ("delete_scope", "mcp-wire-cell-acme")
+    assert fake_registry.scope("mcp-wire-cell-acme") is None
     # 簿记清除 → 不存在
     assert manager.status("acme").state == "not_found"
     # 容器已移除

@@ -78,13 +78,18 @@ cell-manager/
 ### CLI
 
 ```bash
-python -m cell_manager provision  <customer_id>   # 开通（幂等）
+python -m cell_manager provision  <customer_id>   # 开通（幂等；条目自带组受限可见性）
 python -m cell_manager pause      <customer_id>   # 暂停（数据保留）
 python -m cell_manager resume     <customer_id>   # 恢复
-python -m cell_manager deprovision <customer_id>  # 申请注销 → 保留期
-python -m cell_manager cancel-deprovision <customer_id>  # 保留期内恢复
+python -m cell_manager deprovision <customer_id>  # 退租编排：吊key→删scope→注条目→保留期（幂等可重跑）
+python -m cell_manager cancel-deprovision <customer_id>  # 保留期内恢复（授权面需重跑 grant）
 python -m cell_manager status     <customer_id>   # 状态查询
 python -m cell_manager purge-expired              # 清除到期 retention cell（定时任务）
+
+# cell 授权束（add-customer-onboarding-automation；需 CELL_CUSTOMER_IDENTITY_MAP）
+python -m cell_manager grant     <customer_id>   # 铸授权束 registry 半边：scope+条目可见性+预检映射（幂等）
+python -m cell_manager mint-key  <customer_id>   # 铸客户 key（明文仅本次 stdout，立即转存/交付，勿入日志 git）
+python -m cell_manager revoke-key <customer_id> <key_id>  # 吊一把 key（owner 通道，404/409 幂等成功）
 ```
 
 输出一律 JSON；成功 exit 0，失败 exit 1 且 `{"ok": false, "error": {"type", "message"}}`。
@@ -129,6 +134,10 @@ python -m cell_manager provision acme && python -m cell_manager status acme
 | `CELL_DRIVER` | `docker` | `docker` \| `fake` |
 | `CELL_CUSTOMER_CREDENTIAL_MAP` | -（空） | 客户轨凭据 JSON（`customer_id → key`），provision 时注入容器 `WIRE_CUSTOMER_KEY` |
 | `CELL_PLATFORM_CREDENTIAL` | -（空） | 平台轨凭据单值（全部 cell 共用），provision 时注入容器 `WIRE_PLATFORM_KEY` |
+| `CELL_CUSTOMER_IDENTITY_MAP` | -（空） | 开户身份 JSON（`customer_id → {username, sub2api_user_id}`），cell 授权束（grant/mint-key/退租）的输入 |
+| `CELL_REGISTRY_SECRET_KEY_FILE` | -（空） | registry 根信任材料文件（mint-key 用）：registry `.env`（摘 `SECRET_KEY=` 行）或裸 secret（0600）；仅 cheap-1 本机配置 |
+| `CELL_PREFLIGHT_MAP_PATH` | -（空） | registry 预检映射写入 API 路径（切片二任务 3.1 交付后配置）；未配置时 grant 显式跳过该步并审计留痕 |
+| `CELL_SCOPE_IMPORT_PATH` / `CELL_SCOPE_DELETE_PATH` | `/api/servers/groups/import` / `/api/iam/groups` | 授权 scope 端点微调（契约可重指纪律） |
 
 容器 env 隔离注入：`DAAS_DATABASE_URL=sqlite:////data/daas.db`（指向本 cell 卷挂载）+ `WIRE_GATEWAY_URL`（wire 入口）+ 凭据双轨（`WIRE_CUSTOMER_KEY` / `WIRE_PLATFORM_KEY`，来自上表两项）。卷以 bind mount 挂到容器 `/data`。
 

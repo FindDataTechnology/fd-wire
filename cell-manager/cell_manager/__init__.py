@@ -11,7 +11,7 @@ cell = 企业（ADR-0002）：一个隔离容器实例 + 一个独立 SQLite WAL
 '.[docker]'``），缺失时 import 本包不炸、实例化 DockerDriver 才报错。
 """
 
-from cell_manager import audit, config, db, drivers, errors, registry, state
+from cell_manager import audit, config, db, drivers, errors, grant, keys, registry, state
 from cell_manager.audit import AuditLog
 from cell_manager.config import CellManagerConfig
 from cell_manager.drivers import (
@@ -32,6 +32,7 @@ from cell_manager.errors import (
     RegistryError,
     UnknownCellError,
 )
+from cell_manager.grant import CellGrant, decommission
 from cell_manager.manager import (
     NOT_FOUND,
     CellManager,
@@ -41,6 +42,7 @@ from cell_manager.registry import (
     FakeRegistryClient,
     HttpRegistryClient,
     RegistryClient,
+    ScopeDoc,
     ServerEntry,
     build_registry_client,
 )
@@ -70,8 +72,13 @@ __all__ = [
     "FakeRegistryClient",
     "HttpRegistryClient",
     "RegistryClient",
+    "ScopeDoc",
     "ServerEntry",
     "build_registry_client",
+    # 授权束（add-customer-onboarding-automation）
+    "CellGrant",
+    "decommission",
+    "default_grant_manager",
     # 管理面
     "AuditLog",
     "CellManager",
@@ -102,6 +109,12 @@ def default_manager() -> CellManager:
         registry=build_registry_client(cfg),
         config=cfg,
     )
+
+
+def default_grant_manager() -> CellGrant:
+    """按 env 构造授权束编排面（与 default_manager 共配置/审计/簿记）。"""
+    cfg = CellManagerConfig.from_env()
+    return CellGrant(registry=build_registry_client(cfg), config=cfg)
 
 
 def provision(customer_id: str) -> CellStatus:

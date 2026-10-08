@@ -177,6 +177,10 @@ class CellManager:
                         path=registry_path,
                         target_url=self._config.target_url(customer_id),
                         display_name=f"柏讯 cell · {customer_id}",
+                        # cell 授权束·发现面（group-restricted + 本客户合成组）；
+                        # 调用面半边由 grant 铸 scope 文档（ADR 0005）。
+                        visibility="group-restricted",
+                        allowed_groups=(self._config.cell_group(customer_id),),
                     )
                 )
             except Exception:
@@ -261,7 +265,7 @@ class CellManager:
         return self._run("cancel_deprovision", customer_id, _do)
 
     def purge(self, customer_id: str) -> CellStatus:
-        """清除（不可逆）：删容器 + 删卷 + 摘 registry 条目 + 删簿记；审计留档。"""
+        """清除（不可逆）：删容器 + 删卷 + 摘 registry 条目 + 删授权 scope + 删簿记；审计留档。"""
 
         def _do() -> tuple[CellStatus, dict[str, Any]]:
             record = self._require(customer_id, expect=RETENTION, action="purge")
@@ -272,10 +276,14 @@ class CellManager:
             if volume_path.exists():
                 shutil.rmtree(volume_path)
             unregistered = self._registry.unregister(record["registry_path"])
+            # 授权束回收兜底（正常路径 deprovision 阶段已删；此处幂等再删一次，
+            # 防中途 cancel 后直奔 purge 的绕行）
+            scope_deleted = self._registry.delete_scope(self._config.scope_name(customer_id))
             self._state.delete(customer_id)
             return _not_found(customer_id), {
                 "volume_removed": str(volume_path),
                 "registry_unregistered": unregistered,
+                "scope_deleted": scope_deleted,
                 "irreversible": True,
             }
 

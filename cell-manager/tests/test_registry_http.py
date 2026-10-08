@@ -396,3 +396,77 @@ def test_factory_wires_console_session_and_custom_paths(tmp_path):
 def test_factory_bad_timeout_is_config_error(tmp_path):
     with pytest.raises(ConfigError):
         build_registry_client(_http_config(tmp_path), env={"CELL_REGISTRY_TIMEOUT": "abc"})
+
+
+# ---- cell 授权束（add-customer-onboarding-automation 任务 1.2/1.3） ----
+
+
+def test_register_includes_group_restricted_visibility_fields(monkeypatch, client):
+    """带 allowed_groups 的条目：form 必须带 visibility=group-restricted + 逗号组。"""
+    entry = ServerEntry(
+        path="fd-wire-cell-acme",
+        target_url="http://fd-wire-cell-acme:8000/mcp",
+        display_name="柏讯 cell · acme",
+        visibility="group-restricted",
+        allowed_groups=("wire-cust-acme",),
+    )
+    spy = UrlopenSpy([FakeResponse(201), FakeResponse(200)])
+    monkeypatch.setattr(urllib.request, "urlopen", spy)
+
+    client.register(entry)
+
+    form = dict(urllib.parse.parse_qs(spy.requests[0].data.decode("utf-8")))
+    assert form["visibility"] == ["group-restricted"]
+    assert form["allowed_groups"] == ["wire-cust-acme"]
+
+
+def test_register_without_groups_sends_no_visibility_fields(monkeypatch, client):
+    """无 allowed_groups（默认 public）：不带 visibility/allowed_groups 字段（服务端默认 public）。"""
+    spy = UrlopenSpy([FakeResponse(201), FakeResponse(200)])
+    monkeypatch.setattr(urllib.request, "urlopen", spy)
+
+    client.register(ENTRY)
+
+    form = dict(urllib.parse.parse_qs(spy.requests[0].data.decode("utf-8")))
+    assert "visibility" not in form
+    assert "allowed_groups" not in form
+
+
+def test_upsert_scope_posts_import_payload_with_create_in_idp_false(monkeypatch, client):
+    """upsert_scope = POST /api/servers/groups/import 的全量 upsert；关键：
+    create_in_idp 必须 false（默认 true 会去 IdP 建 scope_name 组）。"""
+    spy = UrlopenSpy(FakeResponse(200, b'{"ok": true}'))
+    monkeypatch.setattr(urllib.request, "urlopen", spy)
+
+    from cell_manager.registry.base import ScopeDoc
+
+    client.upsert_scope(
+        ScopeDoc(scope_name="mcp-wire-cell-acme", server="fd-wire-cell-acme", group="wire-cust-acme")
+    )
+
+    req = spy.last
+    assert req.full_url == f"{BASE}/api/servers/groups/import"
+    assert req.get_method() == "POST"
+    assert req.headers["Content-type"] == "application/json"
+    body = json.loads(req.data.decode("utf-8"))
+    assert body == {
+        "scope_name": "mcp-wire-cell-acme",
+        "scope_type": "server_scope",
+        "server_access": [
+            {"server": "fd-wire-cell-acme", "methods": ["all"], "tools": ["all"]}
+        ],
+        "group_mappings": ["wire-cust-acme"],
+        "create_in_idp": False,
+    }
+
+
+def test_delete_scope_true_on_200_false_on_404(monkeypatch, client):
+    """delete_scope 宽幂等：200/204 → True；404（不存在）→ False 不报错。"""
+    spy = UrlopenSpy(FakeResponse(200))
+    monkeypatch.setattr(urllib.request, "urlopen", spy)
+    assert client.delete_scope("mcp-wire-cell-acme") is True
+    assert spy.last.full_url == f"{BASE}/api/iam/groups/mcp-wire-cell-acme"
+    assert spy.last.get_method() == "DELETE"
+
+    monkeypatch.setattr(urllib.request, "urlopen", UrlopenSpy(http_error(404)))
+    assert client.delete_scope("mcp-wire-cell-acme") is False

@@ -24,6 +24,19 @@
                                   provision 时注入容器 WIRE_CUSTOMER_KEY；
                                   未配置则不注入（cell 内代理客户轨 fail-closed，
                                   生产必须配置——见 README）
+    CELL_CUSTOMER_IDENTITY_MAP    开户身份 JSON（customer_id →
+                                  {"username": ..., "sub2api_user_id": ...}），
+                                  cell 授权束（grant/mint-key/退租）的输入；
+                                  username=registry/Logto 侧身份（铸 key 的 sub），
+                                  sub2api_user_id=wire api 建户时已持有的账户标识。
+                                  未配置则 grant/mint-key 明确报错（不静默降级）
+    CELL_REGISTRY_SECRET_KEY_FILE registry 根信任材料位置（mint-key 用）：
+                                  指向 registry .env（含 SECRET_KEY= 行，自动摘取）
+                                  或裸 secret 文件（0600）。仅在 cheap-1 本机配置；
+                                  未配置则 mint-key 不可用（铸 key 需手工通道）
+    CELL_PREFLIGHT_MAP_PATH       registry 预检映射写入 API 路径（切片二 3.1 交付），
+                                  如 /api/sub2api-caller-map；未配置则 grant 跳过
+                                  该步并在审计留痕（切片一验收走 env 覆盖层）
     CELL_PLATFORM_CREDENTIAL     平台轨凭据单值（全部 cell 共用），
                                   provision 时注入容器 WIRE_PLATFORM_KEY；
                                   未配置则不注入（同上，生产必须配置）
@@ -46,6 +59,12 @@ _CUSTOMER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 #: registry server 条目路径与容器名共用前缀（wire 入口同门计量，任务 5.2 对齐）
 CELL_NAME_PREFIX = "fd-wire-cell-"
+
+#: cell 授权束命名约定（add-customer-onboarding-automation / ADR 0005）：
+#: 合成组只活在 key 组快照与 scope 文档 group_mappings，不经 Logto。
+WIRE_CUSTOMERS_GROUP = "wire-customers"
+CELL_GROUP_PREFIX = "wire-cust-"
+CELL_SCOPE_PREFIX = "mcp-wire-cell-"
 
 DEFAULT_IMAGE = "registry.tencentyun.com/finddata/fd-daas-mcp:placeholder"
 DEFAULT_GATEWAY_URL = "https://wire.finddatatech.cloud/mcp"
@@ -94,6 +113,59 @@ def _parse_customer_credential_map(raw: str) -> dict[str, str]:
 
 
 @dataclass(frozen=True)
+class CustomerIdentity:
+    """开户身份（``CELL_CUSTOMER_IDENTITY_MAP`` 的值）：cell 授权束的输入。
+
+    username = registry/Logto 侧身份（铸客户 key 的 sub、预检映射的键）；
+    sub2api_user_id = wire api 建 sub2api 账户时已持有的账户标识（预检映射的值，
+    不做二次查询——设计 D3）。
+    """
+
+    username: str
+    sub2api_user_id: str
+
+
+def _parse_customer_identity_map(raw: str) -> dict[str, CustomerIdentity]:
+    """解析 ``CELL_CUSTOMER_IDENTITY_MAP``（JSON：customer_id → 身份对象）。
+
+    空/未配置 → 空映射（grant/mint-key 对缺失客户明确报错，不静默降级）。
+    值形状 ``{"username": 非空, "sub2api_user_id": 非空}``；多余键忽略
+    （前向兼容：身份对象将来可扩展，如连接器信息）。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ConfigError(
+            f"CELL_CUSTOMER_IDENTITY_MAP must be a JSON object (customer_id -> identity): {exc}"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise ConfigError(
+            "CELL_CUSTOMER_IDENTITY_MAP must be a JSON object of "
+            "customer_id -> {username, sub2api_user_id}"
+        )
+    mapping: dict[str, CustomerIdentity] = {}
+    for key, value in parsed.items():
+        validate_customer_id(key)
+        if not isinstance(value, dict):
+            raise ConfigError(
+                f"CELL_CUSTOMER_IDENTITY_MAP[{key!r}] must be an object "
+                "{username, sub2api_user_id}"
+            )
+        username = str(value.get("username") or "").strip()
+        user_id = str(value.get("sub2api_user_id") or "").strip()
+        if not username or not user_id:
+            raise ConfigError(
+                f"CELL_CUSTOMER_IDENTITY_MAP[{key!r}] needs non-empty "
+                f"username and sub2api_user_id"
+            )
+        mapping[key] = CustomerIdentity(username=username, sub2api_user_id=user_id)
+    return mapping
+
+
+@dataclass(frozen=True)
 class CellManagerConfig:
     """运行时配置（不可变；``from_env`` 构造，测试可直构或注入 env mapping）。"""
 
@@ -111,6 +183,12 @@ class CellManagerConfig:
     #: customer_id → 客户轨凭据（CELL_CUSTOMER_CREDENTIAL_MAP 解析；
     #: 空映射=不注入 WIRE_CUSTOMER_KEY，cell 内代理客户轨 fail-closed）
     customer_credential_map: Mapping[str, str] = field(default_factory=dict)
+    #: customer_id → 开户身份（CELL_CUSTOMER_IDENTITY_MAP 解析；授权束输入）
+    customer_identity_map: Mapping[str, CustomerIdentity] = field(default_factory=dict)
+    #: registry 根信任材料文件（CELL_REGISTRY_SECRET_KEY_FILE；""=mint-key 不可用）
+    registry_secret_key_file: str = ""
+    #: registry 预检映射写入 API 路径（CELL_PREFLIGHT_MAP_PATH；""=grant 跳过该步）
+    preflight_map_path: str = ""
     #: 平台轨凭据单值（CELL_PLATFORM_CREDENTIAL；空=不注入 WIRE_PLATFORM_KEY）
     platform_credential: str = ""
     #: docker 网络名（CELL_NETWORK；None=驱动缺省网络）。wire cell 必须与
@@ -145,6 +223,9 @@ class CellManagerConfig:
         customer_credential_map = _parse_customer_credential_map(
             e.get("CELL_CUSTOMER_CREDENTIAL_MAP", "")
         )
+        customer_identity_map = _parse_customer_identity_map(
+            e.get("CELL_CUSTOMER_IDENTITY_MAP", "")
+        )
         platform_credential = e.get("CELL_PLATFORM_CREDENTIAL", "").strip()
         raw_readiness = e.get("CELL_READINESS_TIMEOUT", "120")
         try:
@@ -171,6 +252,9 @@ class CellManagerConfig:
             retention_days=retention_days,
             driver_name=driver_name,
             customer_credential_map=customer_credential_map,
+            customer_identity_map=customer_identity_map,
+            registry_secret_key_file=e.get("CELL_REGISTRY_SECRET_KEY_FILE", "").strip(),
+            preflight_map_path=e.get("CELL_PREFLIGHT_MAP_PATH", "").strip(),
             platform_credential=platform_credential,
             readiness_timeout_seconds=readiness_timeout,
         )
@@ -185,6 +269,21 @@ class CellManagerConfig:
 
     def registry_path(self, customer_id: str) -> str:
         return CELL_NAME_PREFIX + validate_customer_id(customer_id)
+
+    # ---- cell 授权束命名（add-customer-onboarding-automation / ADR 0005） ----
+    # 三处派生（组、scope 名、条目可见组）单一来源，杜绝拼字漂移。
+
+    def cell_group(self, customer_id: str) -> str:
+        """合成组名：只活在 key 组快照与 scope 文档 group_mappings（不经 Logto）。"""
+        return CELL_GROUP_PREFIX + validate_customer_id(customer_id)
+
+    def scope_name(self, customer_id: str) -> str:
+        """registry 侧 per-customer scope 文档名（server_access 精确名匹配 cell 条目）。"""
+        return CELL_SCOPE_PREFIX + validate_customer_id(customer_id)
+
+    def customer_key_groups(self, customer_id: str) -> list[str]:
+        """客户 key 组快照：共享组（业务面 scope）+ 合成组（自己的 cell scope）。"""
+        return [WIRE_CUSTOMERS_GROUP, self.cell_group(customer_id)]
 
     def target_url(self, customer_id: str) -> str:
         return self.target_url_template.format(container_name=self.container_name(customer_id))

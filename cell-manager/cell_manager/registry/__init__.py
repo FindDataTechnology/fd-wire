@@ -7,12 +7,13 @@ from typing import Mapping
 
 from cell_manager.config import CellManagerConfig
 from cell_manager.errors import ConfigError
-from cell_manager.registry.base import RegistryClient, ServerEntry
+from cell_manager.registry.base import RegistryClient, ScopeDoc, ServerEntry
 from cell_manager.registry.fake import FakeRegistryClient
 from cell_manager.registry.http import HttpRegistryClient, auth_from_env
 
 __all__ = [
     "RegistryClient",
+    "ScopeDoc",
     "ServerEntry",
     "FakeRegistryClient",
     "HttpRegistryClient",
@@ -48,6 +49,8 @@ def build_registry_client(
             register_path=e.get("CELL_REGISTRY_REGISTER_PATH"),
             remove_path=e.get("CELL_REGISTRY_REMOVE_PATH"),
             servers_path=e.get("CELL_REGISTRY_SERVERS_PATH"),
+            scope_import_path=e.get("CELL_SCOPE_IMPORT_PATH"),
+            scope_delete_path=e.get("CELL_SCOPE_DELETE_PATH"),
             **({"timeout": timeout} if timeout is not None else {}),
         )
     raise ConfigError(f"unknown registry mode: {config.registry_mode!r}")

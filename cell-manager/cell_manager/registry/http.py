@@ -8,8 +8,25 @@
   ``name``/``description``/``path`` 必填，remote 部署 ``proxy_pass_url`` 必填；
   ``overwrite`` 缺省即 true（server_routes.py:4283）——同 path 重复注册是干净覆写，
   即协议要求的幂等。path 无前导斜杠会被服务端补齐（server_routes.py:4429）。
+  ``visibility``/``allowed_groups`` Form 字段（server_routes.py:1425-1426）：
+  组受限发现面隔离——``group-restricted`` 必须带至少一个组（_validate_visibility_
+  and_groups）；不传则条目落库 public。
   成功 201（server_routes.py:4761）；403 = 无 register_service 权限或覆写他人条目
   （server_routes.py:4403/4672）；409 = overwrite=false 撞已存在（server_routes.py:4699）。
+- 授权  ``POST /api/servers/groups/import``  registry/api/server_routes.py:5356
+  JSON 一次性全量 upsert scope 文档（``server_access``+``group_mappings`` verbatim；
+  admin 门 + Bearer 免 CSRF）。**必须 ``create_in_idp:false``**——默认 true 会
+  事后尝试去 IdP 建组（非致命吞异常，但没必要）。仓库层对 group_mappings
+  不做任何 IdP 校验（scope_repository.py:1126-1145 replace_one upsert）——
+  合成组 wire-cust-* 安全。
+  对比坑：``POST /api/iam/groups`` 会**忽略** client 的 group_mappings（强制
+  ``[name]``，management_routes.py:783）——不要用它建授权文档。
+- 删授权 ``DELETE /api/iam/groups/{name}``  registry/api/management_routes.py:847
+  admin 门；文档不存在时服务端返回失败形态 → 宽松 False（同 unregister 语义）。
+- 铸 key  ``POST /api/patch-keys``  registry/api/patch_key_routes.py:65
+  Bearer 自签短命 JWT（groups claims 即快照来源）；响应对 ``{key, info:{key_id}}``,
+  明文仅出现这一次。吊销 ``DELETE /api/patch-keys/{id}``：200 已吊 / 404 不存在
+  或**跨用户**（owner 限定——owner 之外一律 404 防探测）/ 409 已吊过。
 - 启用  ``POST /api/servers/toggle``  registry/api/server_routes.py:4556
   form 表单 ``path`` + ``new_state``（bool 字符串）。**控制台注册创建的条目
   默认 disabled**（`is_enabled=false`，nginx location 整条不生成——仅内部
@@ -52,12 +69,14 @@ import urllib.request
 from typing import Mapping, Protocol
 
 from cell_manager.errors import ConfigError, RegistryError
-from cell_manager.registry.base import ServerEntry
+from cell_manager.registry.base import ScopeDoc, ServerEntry
 
 DEFAULT_REGISTER_PATH = "/api/servers/register"
 DEFAULT_TOGGLE_PATH = "/api/servers/toggle"
 DEFAULT_REMOVE_PATH = "/api/servers/remove"
 DEFAULT_SERVERS_PATH = "/api/servers"
+DEFAULT_SCOPE_IMPORT_PATH = "/api/servers/groups/import"
+DEFAULT_SCOPE_DELETE_PATH = "/api/iam/groups"
 DEFAULT_TIMEOUT = 15.0  # 秒；注册在服务端是同步写（DB+搜索索引），给足余量
 
 #: 注册条目的默认 description（registry 该字段必填；ServerEntry 协议不含描述）。
@@ -105,6 +124,8 @@ class HttpRegistryClient:
         toggle_path: str | None = None,
         remove_path: str | None = None,
         servers_path: str | None = None,
+        scope_import_path: str | None = None,
+        scope_delete_path: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
         self._base = base_url.rstrip("/")
@@ -113,28 +134,59 @@ class HttpRegistryClient:
         self._toggle_path = toggle_path or DEFAULT_TOGGLE_PATH
         self._remove_path = remove_path or DEFAULT_REMOVE_PATH
         self._servers_path = servers_path or DEFAULT_SERVERS_PATH
+        self._scope_import_path = scope_import_path or DEFAULT_SCOPE_IMPORT_PATH
+        self._scope_delete_path = (scope_delete_path or DEFAULT_SCOPE_DELETE_PATH).rstrip("/")
         self._timeout = timeout
 
     def register(self, entry: ServerEntry) -> None:
         """注册（幂等）+ **启用**（控制台注册创建的条目默认 disabled——
         开通即可用语义要求显式置 true，10-07 生产实证）。"""
         name = entry.display_name or entry.path.strip("/")
-        self._post_form(
-            self._register_path,
-            {
-                "name": name,
-                "description": DEFAULT_DESCRIPTION,
-                "path": entry.path,
-                "proxy_pass_url": entry.target_url,
-                "overwrite": "true",
-            },
-            ok=(200, 201),
-        )
+        fields: dict[str, str] = {
+            "name": name,
+            "description": DEFAULT_DESCRIPTION,
+            "path": entry.path,
+            "proxy_pass_url": entry.target_url,
+            "overwrite": "true",
+        }
+        if entry.allowed_groups:
+            # 发现面隔离：group-restricted + 本客户合成组（服务端要求至少一组）
+            fields["visibility"] = entry.visibility
+            fields["allowed_groups"] = ",".join(entry.allowed_groups)
+        self._post_form(self._register_path, fields, ok=(200, 201))
         self._post_form(
             self._toggle_path,
             {"path": entry.path, "new_state": "true"},
             ok=(200,),
         )
+
+    def upsert_scope(self, scope: ScopeDoc) -> None:
+        """铸造/更新授权 scope 文档（幂等 upsert，不触碰 IdP）。"""
+        payload = {
+            "scope_name": scope.scope_name,
+            "scope_type": "server_scope",
+            "server_access": [
+                {
+                    "server": scope.server,
+                    "methods": list(scope.methods),
+                    "tools": list(scope.tools),
+                }
+            ],
+            "group_mappings": [scope.group],
+            # 关键：默认 true 会事后尝试去 IdP 建 scope_name 组（吞异常非致命，
+            # 但合成组轨道不该惊动 IdP——ADR 0005）。
+            "create_in_idp": False,
+        }
+        self._request(
+            "POST", self._scope_import_path, data=payload, ok=(200, 201)
+        )
+
+    def delete_scope(self, scope_name: str) -> bool:
+        """删除授权 scope 文档；不存在 → 宽松 False（与 unregister 语义一致）。"""
+        status = self._request(
+            "DELETE", f"{self._scope_delete_path}/{scope_name}", ok=(200, 204, 404)
+        )
+        return status != 404
 
     def unregister(self, path: str) -> bool:
         """摘除；404 = 本就不存在 → 宽松返回 False（与 FakeClient 语义一致）。"""
@@ -160,11 +212,13 @@ class HttpRegistryClient:
         method: str,
         path: str,
         *,
-        data: bytes | None = None,
+        data: bytes | dict | None = None,
         ok: tuple[int, ...],
         content_type: str = "application/json",
         read_json: bool = False,
     ) -> int | dict:
+        if isinstance(data, dict):
+            data = json.dumps(data).encode("utf-8")
         url = f"{self._base}{path}"
         headers = {"Accept": "application/json"}
         if data is not None:

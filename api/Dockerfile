@@ -16,9 +16,11 @@ COPY pyproject.toml ./
 COPY fd_wire_api ./fd_wire_api
 COPY fd_mcp_client ./fd_mcp_client
 # 依赖闭包全为纯/pydantic-core 轮子，无需编译工具链（fd-proxy-service 同判）。
+# [mongo] extra：计量入账驱动 registry Mongo 直读的 pymongo（驱动惰性导入，
+# 缺了 poll 段静默重试——add-customer-onboarding-automation 5.4 实锤后进镜像）。
 RUN python -m venv /opt/venv \
  && /opt/venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
- && /opt/venv/bin/pip install --no-cache-dir .
+ && /opt/venv/bin/pip install --no-cache-dir '.[mongo]'
 
 FROM ${BASE_IMAGE}
 # 非 root 运行（任务要求；fd-find-data-business-mcp 的 appuser 同法）。
