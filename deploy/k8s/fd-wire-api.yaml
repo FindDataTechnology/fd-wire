@@ -107,10 +107,9 @@ spec:
             - name: WIRE_ENTRY_URL
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: wire_entry_url }
-            # ai 模块库（缺省相对路径在容器 CWD 不可写——显式指 /tmp 平台库）
+            # ai 模块库：落 PVC（与平台主库同卷；原 /tmp 容器层，pod 重建即丢）
             - name: AI_DATABASE_URL
-              valueFrom:
-                secretKeyRef: { name: fd-wire-env, key: ai_database_url }
+              value: sqlite:////var/lib/fd-wire/db/fd_wire_platform.db
             # AI 构建循环引擎通道（wire-native-channel-cutover）：
             # 端点约定派生基址=registry 公网入口（非密，字面值）；
             # 平台服务凭据=registry patch key（wgk-，永不过期，Secret），
@@ -120,10 +119,9 @@ spec:
             - name: AI_PLATFORM_CREDENTIAL
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: ai_platform_credential }
-            # 双库口径合一：demands 等模块的库名与计量库同库（平台库）
+            # 双库口径合一：demands 等模块的库名与计量库同库（平台库，落 PVC）
             - name: FD_WIRE_DATABASE_URL
-              valueFrom:
-                secretKeyRef: { name: fd-wire-env, key: fd_wire_database_url }
+              value: sqlite:////var/lib/fd-wire/db/fd_wire_platform.db
             # 目录镜像（权威源 fd-open-data-mcp 的 MCP streamable-http 入口；
             # 客户端自动补 /mcp 后缀。同步开关与凭据均在 Secret）
             - name: INDICATOR_REGISTRY_URL
