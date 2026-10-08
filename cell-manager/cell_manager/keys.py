@@ -224,6 +224,12 @@ def sign_internal_jwt(secret: str, *, subject: str, purpose: str, instance: str 
     R5（2026-10-09）：退租删授权 scope 走 POST /api/internal/delete-group，
     其 IdP 跳过参数 delete_from_keycloak=false 使合成组轨道完全不碰 Logto。
     """
+    import uuid
+
+    # 签名密钥派生（registry/auth/internal.py 同式）：HMAC-SHA256(SECRET_KEY,
+    # "mcp-internal-token-v1") —— 裸 SECRET_KEY 签的 user token 在此验不过。
+    signing_key = hmac.new(secret.encode(), b"mcp-internal-token-v1", hashlib.sha256).digest()
+
     now = int(time.time())
     payload = {
         "iss": INTERNAL_JWT_ISSUER,
@@ -232,6 +238,11 @@ def sign_internal_jwt(secret: str, *, subject: str, purpose: str, instance: str 
         "instance_id": instance,
         "purpose": purpose,
         "token_use": "access",
+        # 纵深守卫（Security Finding 1）：必须是显式 internal-service token，
+        # user/resource-kind 一律拒
+        "token_kind": "internal-service",
+        # 单次使用防重放（registry validate_internal_auth fail-closed：无 jti 即拒）
+        "jti": uuid.uuid4().hex,
         "iat": now,
         "exp": now + INTERNAL_JWT_TTL_SECONDS,
     }
@@ -239,7 +250,7 @@ def sign_internal_jwt(secret: str, *, subject: str, purpose: str, instance: str 
     signing_input = (
         f"{_b64url(json.dumps(header).encode())}.{_b64url(json.dumps(payload).encode())}"
     )
-    signature = hmac.new(secret.encode(), signing_input.encode(), hashlib.sha256).digest()
+    signature = hmac.new(signing_key, signing_input.encode(), hashlib.sha256).digest()
     return f"{signing_input}.{_b64url(signature)}"
 
 
