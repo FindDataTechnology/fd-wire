@@ -162,6 +162,28 @@ class HttpRegistryClient:
             ok=(200,),
         )
 
+    def put_caller_map(self, username: str, value: str) -> None:
+        """写入预检计费映射（entrance caller → sub2api 账户），幂等 upsert。
+
+        开户不写这一条 = 新客户在 ``PREFLIGHT_UNMAPPED=deny`` 下从第一次入口
+        调用起就被 402 CALLER_NOT_MAPPED 挡住（2026-10-08 生产实弹）——
+        开户流程 SHALL NOT 静默跳过本步。
+
+        端点 ``PUT /api/sub2api-caller-map``（admin 门禁 + CSRF；patch key
+        无会话 cookie 时 CSRF 免检），JSON body；写入后经服务端 TTL
+        （默认 30s）对预检生效，无需重启。
+        """
+        if self._caller_map_path is None:
+            raise RegistryError(
+                "caller-map write unavailable: CELL_PREFLIGHT_MAP_PATH not configured"
+            )
+        self._request(
+            "PUT",
+            self._caller_map_path,
+            data={"username": username, "value": value},
+            ok=(200, 201),
+        )
+
     def upsert_scope(self, scope: ScopeDoc) -> None:
         """铸造/更新授权 scope 文档（幂等 upsert，不触碰 IdP）。"""
         payload = {

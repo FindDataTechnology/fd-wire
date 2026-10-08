@@ -1,6 +1,6 @@
 """cell 授权束单测（add-customer-onboarding-automation 任务 1.1/1.4/1.5/1.6）。
 
-覆盖：身份映射解析与命名派生、grant 三步（scope/条目可见性/预检映射跳过留痕）、
+覆盖：身份映射解析与命名派生、grant 三步（scope/条目可见性/预检映射写入，失败即中止）、
 JWT-claims 铸造通道（claims 形状/secret 装载/明文不落审计）、退租编排顺序与幂等。
 全测试无网：registry 用 Fake，key 通道注入桩。
 """
@@ -145,8 +145,10 @@ def test_grant_upserts_scope_and_reregisters_with_visibility(config, registry, g
     assert entry is not None
     assert entry.visibility == "group-restricted"
     assert entry.allowed_groups == ("wire-cust-acme",)
-    # 预检映射：API 路径未配置 → 显式 skipped（切片二 3.1 前的正解），不静默
-    assert detail["preflight_map"]["status"] == "skipped"
+    # 预检映射：写入正道（开户漏配即 402 不可用——失败必须中止，不静默跳过）
+    assert detail["preflight_map"]["status"] == "written"
+    assert detail["preflight_map"]["username"] == "acme-user"
+    assert ("put_caller_map", "acme-user") in registry.calls
     # 幂等重跑无副作用差异
     grant_face.grant("acme")
     assert registry.calls.count(("upsert_scope", "mcp-wire-cell-acme")) == 2  # 宽幂等
@@ -440,3 +442,20 @@ def test_mint_channel_prefers_admin_api_over_jwt(monkeypatch, tmp_path, registry
     channel = face._key_channel_or_fail()
     assert created, "admin API channel not selected"
     assert isinstance(channel, Spy)
+
+
+def test_grant_aborts_when_caller_map_write_unavailable(home):
+    """预检映射写不了 → 开户中止（不静默跳过）。
+
+    隐患闭环：skipped 的后果是新客户从第一次入口调用起被 402
+    CALLER_NOT_MAPPED 挡住（生产实弹），即「开户成功却不可用」。
+    """
+    from cell_manager.registry.base import ServerEntry
+
+    class NoCallerMapRegistry(FakeRegistryClient):
+        put_caller_map = None  # 客户端不支持写入（如旧版 Http）
+
+    cfg = grant_config(home)
+    grant_face = CellGrant(registry=NoCallerMapRegistry(), config=cfg)
+    with pytest.raises(ConfigError, match="put_caller_map"):
+        grant_face.grant("acme")

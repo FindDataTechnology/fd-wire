@@ -195,15 +195,19 @@ class CellGrant:
     def _write_preflight_map(
         self, customer_id: str, identity: CustomerIdentity
     ) -> dict[str, Any]:
-        """预检映射写入（切片二 API 落地前可显式跳过，审计留痕不静默）。"""
-        if not self._config.preflight_map_path:
-            return {
-                "status": "skipped",
-                "reason": "CELL_PREFLIGHT_MAP_PATH not configured",
-            }
+        """预检计费映射写入：**失败即中止开户**（不静默跳过）。
+
+        背景（2026-10-08 隐患闭环）：本步曾以「切片二 API 未落地」为由
+        skipped+留痕——但预检策略已是 deny，skipped 的后果是**新客户从第一次
+        入口调用起就被 402 CALLER_NOT_MAPPED 挡住**（生产实弹确认），即
+        「开户成功却不可用」。开户是计费可用性的唯一写入点，SHALL NOT 静默。
+        """
         put = getattr(self._registry, "put_caller_map", None)
         if put is None:
-            return {"status": "skipped", "reason": "registry client lacks put_caller_map"}
+            raise ConfigError(
+                "preflight caller-map write unavailable: registry client lacks "
+                "put_caller_map (配置 CELL_PREFLIGHT_MAP_PATH 指向 caller-map API)"
+            )
         put(identity.username, identity.sub2api_user_id)
         return {"status": "written", "username": identity.username}
 

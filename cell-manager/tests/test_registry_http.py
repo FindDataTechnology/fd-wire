@@ -471,3 +471,56 @@ def test_delete_scope_true_on_200_false_on_404(monkeypatch, client):
 
     monkeypatch.setattr(urllib.request, "urlopen", UrlopenSpy(http_error(404)))
     assert client.delete_scope("mcp-wire-cell-acme") is False
+
+
+# ---- caller-map（预检计费映射）----
+
+
+def test_put_caller_map_puts_json(monkeypatch, client_with_caller_map):
+    """开户写入计费映射：PUT + JSON body {username, value}（admin API 契约）。
+
+    不写这条 = 新客户在 deny 策略下从第一次入口调用起被 402 挡住。"""
+    spy = UrlopenSpy(FakeResponse(200, b'{"ok": true}'))
+    monkeypatch.setattr(urllib.request, "urlopen", spy)
+
+    client_with_caller_map.put_caller_map("acme-user", "701")
+
+    req = spy.last
+    assert req.get_method() == "PUT"
+    assert req.full_url.endswith("/api/sub2api-caller-map")
+    assert req.headers["Content-type"] == "application/json"
+    assert json.loads(req.data.decode("utf-8")) == {
+        "username": "acme-user",
+        "value": "701",
+    }
+
+
+def test_put_caller_map_unavailable_raises(monkeypatch, client):
+    """未配置 CELL_PREFLIGHT_MAP_PATH → 显式报错（开户不得静默跳过）。
+
+    cell-manager 侧在 grant 前把「客户端缺 put_caller_map」也转成 ConfigError，
+    与此处同款 fail-closed（见 test_grant.py 的中止用例）。
+    """
+    monkeypatch.setattr(urllib.request, "urlopen", UrlopenSpy(FakeResponse(200)))
+    with pytest.raises((ConfigError, RegistryError), match="caller-map write unavailable|not configured"):
+        client.put_caller_map("acme-user", "701")
+
+
+def test_put_caller_map_non_admin_403_surfaces(monkeypatch, client_with_caller_map):
+    """非 admin 凭据写映射 → RegistryError（服务端 403 如实上抛）。"""
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        UrlopenSpy(http_error(403, {"detail": "Administrator privileges required"})),
+    )
+    with pytest.raises(RegistryError, match="HTTP 403"):
+        client_with_caller_map.put_caller_map("acme-user", "701")
+
+
+@pytest.fixture
+def client_with_caller_map() -> HttpRegistryClient:
+    return HttpRegistryClient(
+        BASE,
+        auth=BearerTokenAuth("jwt-123"),
+        caller_map_path="/api/sub2api-caller-map",
+    )
