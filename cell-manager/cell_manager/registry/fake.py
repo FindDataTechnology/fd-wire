@@ -26,6 +26,7 @@ class FakeRegistryClient:
         self.calls: list[tuple[str, str]] = []
         self._entries: dict[str, ServerEntry] = {}
         self._scopes: dict[str, ScopeDoc] = {}
+        self.caller_map: dict[str, str] = {}
         self._load()
 
     def register(self, entry: ServerEntry) -> None:
@@ -54,6 +55,10 @@ class FakeRegistryClient:
         removed = self._scopes.pop(scope_name, None) is not None
         self._save()
         return removed
+
+    def put_caller_map(self, username: str, value: str) -> None:
+        self.calls.append(("put_caller_map", username))
+        self.caller_map[username] = value
 
     # ---- 测试辅助 ----
 

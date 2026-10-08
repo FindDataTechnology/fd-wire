@@ -51,6 +51,7 @@ def build_registry_client(
             servers_path=e.get("CELL_REGISTRY_SERVERS_PATH"),
             scope_import_path=e.get("CELL_SCOPE_IMPORT_PATH"),
             scope_delete_path=e.get("CELL_SCOPE_DELETE_PATH"),
+            caller_map_path=e.get("CELL_PREFLIGHT_MAP_PATH"),
             **({"timeout": timeout} if timeout is not None else {}),
         )
     raise ConfigError(f"unknown registry mode: {config.registry_mode!r}")

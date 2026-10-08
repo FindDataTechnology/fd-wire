@@ -126,6 +126,7 @@ class HttpRegistryClient:
         servers_path: str | None = None,
         scope_import_path: str | None = None,
         scope_delete_path: str | None = None,
+        caller_map_path: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
         self._base = base_url.rstrip("/")
@@ -136,6 +137,7 @@ class HttpRegistryClient:
         self._servers_path = servers_path or DEFAULT_SERVERS_PATH
         self._scope_import_path = scope_import_path or DEFAULT_SCOPE_IMPORT_PATH
         self._scope_delete_path = (scope_delete_path or DEFAULT_SCOPE_DELETE_PATH).rstrip("/")
+        self._caller_map_path = (caller_map_path or "").strip() or None
         self._timeout = timeout
 
     def register(self, entry: ServerEntry) -> None:
@@ -192,6 +194,15 @@ class HttpRegistryClient:
         """摘除；404 = 本就不存在 → 宽松返回 False（与 FakeClient 语义一致）。"""
         status = self._post_form(self._remove_path, {"path": path}, ok=(200, 404))
         return status != 404
+
+    def put_caller_map(self, username: str, value: str) -> None:
+        """预检映射写入（registry 切片二 3.1 的 admin API；路径经
+        CELL_PREFLIGHT_MAP_PATH 配置，默认 /api/sub2api-caller-map）。"""
+        if not self._caller_map_path:
+            raise ConfigError("CELL_PREFLIGHT_MAP_PATH not configured")
+        self._request(
+            "PUT", self._caller_map_path, data={"username": username, "value": value}, ok=(200, 201)
+        )
 
     def list_servers(self, *, limit: int = 1, include_tools: bool = False) -> dict:
         """只读探测：``GET /api/servers``（部署联调 / 健康检查用；需鉴权）。"""

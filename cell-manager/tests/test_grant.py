@@ -397,3 +397,46 @@ def test_decommission_without_keys_tears_down_anyway(config, registry):
     # grant 从未跑过 → 无 scope 可删（宽幂等 False 是正解）；条目照注销
     assert result["teardown"]["scope_deleted"] is False
     assert result["teardown"]["registry_unregistered"] is True
+
+
+def test_grant_writes_preflight_map_when_configured(tmp_path, registry):
+    cfg_env = {
+        "CELL_MANAGER_HOME": str(tmp_path),
+        "CELL_DRIVER": "fake",
+        "CELL_REGISTRY_MODE": "fake",
+        "CELL_CUSTOMER_IDENTITY_MAP": '{"acme": {"username": "acme-user", "sub2api_user_id": "701"}}',
+        "CELL_PREFLIGHT_MAP_PATH": "/api/sub2api-caller-map",
+    }
+    cfg = CellManagerConfig.from_env(env=cfg_env)
+    face = CellGrant(registry=registry, config=cfg)
+    detail = face.grant("acme")
+    assert detail["preflight_map"] == {"status": "written", "username": "acme-user"}
+    assert registry.caller_map == {"acme-user": "701"}
+
+
+def test_mint_channel_prefers_admin_api_over_jwt(monkeypatch, tmp_path, registry):
+    """CELL_REGISTRY_TOKEN 在场 → AdminMintChannel（代铸 API），不读 SECRET_KEY 文件。"""
+    import cell_manager.grant as grant_mod
+    from cell_manager.keys import AdminMintChannel
+
+    cfg_env = {
+        "CELL_MANAGER_HOME": str(tmp_path),
+        "CELL_DRIVER": "fake",
+        "CELL_REGISTRY_MODE": "fake",
+        "CELL_CUSTOMER_IDENTITY_MAP": '{"acme": {"username": "acme-user", "sub2api_user_id": "701"}}',
+    }
+    cfg = CellManagerConfig.from_env(env=cfg_env)
+    face = CellGrant(registry=registry, config=cfg)
+    monkeypatch.setenv("CELL_REGISTRY_TOKEN", "wgk-admin")
+    created = []
+
+    class Spy(AdminMintChannel):
+        def __init__(self, *a, **k):
+            created.append(True)
+
+    import cell_manager.keys as keys_mod
+
+    monkeypatch.setattr(keys_mod, "AdminMintChannel", Spy)  # 函数内 import 从源模块解析
+    channel = face._key_channel_or_fail()
+    assert created, "admin API channel not selected"
+    assert isinstance(channel, Spy)

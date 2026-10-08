@@ -166,3 +166,46 @@ class PatchKeyChannel:
         if status == 409:
             return "already_revoked"
         return "revoked"
+
+
+class AdminMintChannel:
+    """铸/吊客户 key 的正式通道（registry 切片二 4.1/4.2 落地后）：
+
+    以平台 admin 凭据（CELL_REGISTRY_TOKEN 的 wgk-）调 ``POST /api/patch-keys``
+    的 ``{username, groups}`` 代铸字段与 DELETE 的 admin 旁路——取代 §2.1
+    自签 JWT 通道（根信任材料不再进 cell-manager 内存）。同接口形状，
+    与 :class:`PatchKeyChannel` 可互换。
+    """
+
+    def __init__(self, base_url: str, admin_token: str, *, timeout: float = DEFAULT_TIMEOUT) -> None:
+        from cell_manager.registry.http import BearerTokenAuth, HttpRegistryClient
+
+        self._path = DEFAULT_PATCH_KEYS_PATH
+        self._client = HttpRegistryClient(base_url, auth=BearerTokenAuth(admin_token), timeout=timeout)
+
+    def mint(self, *, sub: str, groups: list[str], name: str) -> dict[str, Any]:
+        body = self._client._request(  # noqa: SLF001 —— 复用管线是本类存在的理由
+            "POST",
+            self._path,
+            data={"name": name, "username": sub, "groups": list(groups)},
+            ok=(200, 201),
+            read_json=True,
+        )
+        doc = body if isinstance(body, dict) else {}
+        plaintext = doc.get("key")
+        info = doc.get("info") or {}
+        key_id = info.get("key_id") or doc.get("key_id")
+        if not isinstance(plaintext, str) or not plaintext or not key_id:
+            raise RegistryError(f"patch-key mint response missing key/key_id: {sorted(doc)}")
+        return {"key_id": str(key_id), "key": plaintext}
+
+    def revoke(self, *, sub: str, groups: list[str], key_id: str) -> str:
+        """admin 旁路吊销（服务端 owner miss + admin → 不限 owner）。"""
+        status = self._client._request(  # noqa: SLF001 —— 同上
+            "DELETE", f"{self._path}/{key_id}", ok=(200, 404, 409)
+        )
+        if status == 404:
+            return "not_found"
+        if status == 409:
+            return "already_revoked"
+        return "revoked"

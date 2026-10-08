@@ -70,16 +70,27 @@ class CellGrant:
         return identity
 
     def _key_channel_or_fail(self) -> PatchKeyChannel:
+        """铸 key 通道选择（任务 4.3）：admin 代铸 API 为正道（registry 切片二
+        落地后），自签 JWT 通道降为无 admin 凭据时的兼容回退。"""
         if self._key_channel is not None:
             return self._key_channel
-        if not self._config.registry_secret_key_file:
-            raise ConfigError(
-                "CELL_REGISTRY_SECRET_KEY_FILE not configured; "
-                "customer-key minting unavailable (manual channel only)"
-            )
-        secret = load_secret_key(self._config.registry_secret_key_file)
-        self._key_channel = PatchKeyChannel(self._config.registry_url, secret)
-        return self._key_channel
+        import os
+
+        admin_token = (os.getenv("CELL_REGISTRY_TOKEN") or "").strip()
+        if admin_token:
+            from cell_manager.keys import AdminMintChannel
+
+            self._key_channel = AdminMintChannel(self._config.registry_url, admin_token)
+            return self._key_channel
+        if self._config.registry_secret_key_file:
+            secret = load_secret_key(self._config.registry_secret_key_file)
+            self._key_channel = PatchKeyChannel(self._config.registry_url, secret)
+            return self._key_channel
+        raise ConfigError(
+            "customer-key minting unavailable: set CELL_REGISTRY_TOKEN (admin "
+            "on-behalf-of API, preferred) or CELL_REGISTRY_SECRET_KEY_FILE "
+            "(self-signed JWT fallback)"
+        )
 
     # ---- 授权束 ----
 
@@ -185,18 +196,16 @@ class CellGrant:
         self, customer_id: str, identity: CustomerIdentity
     ) -> dict[str, Any]:
         """预检映射写入（切片二 API 落地前可显式跳过，审计留痕不静默）。"""
-        path = self._config.preflight_map_path
-        if not path:
+        if not self._config.preflight_map_path:
             return {
                 "status": "skipped",
-                "reason": "CELL_PREFLIGHT_MAP_PATH not configured (slice-2 registry API pending)",
+                "reason": "CELL_PREFLIGHT_MAP_PATH not configured",
             }
-        # 切片二任务 3.1 交付后的正式通道（registry admin API，admin wgk- 鉴权
-        # 由 self._registry 携带）。fake client 没有 PUT；http client 到时补方法。
-        raise ConfigError(
-            "preflight map write path configured but not yet implemented "
-            "(slice-2 task 3.1); unset CELL_PREFLIGHT_MAP_PATH for now"
-        )
+        put = getattr(self._registry, "put_caller_map", None)
+        if put is None:
+            return {"status": "skipped", "reason": "registry client lacks put_caller_map"}
+        put(identity.username, identity.sub2api_user_id)
+        return {"status": "written", "username": identity.username}
 
     def _record_key_id(self, customer_id: str, key_id: str) -> None:
         record = self._state.get(customer_id)
