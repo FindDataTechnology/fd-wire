@@ -129,24 +129,38 @@ PY
 `WIRE_CUSTOMER_KEY`——cell 内引擎的委托读经回环代理携带它，计量落
 `credential_track=customer`，进客户账单。
 
-### 5.1 开户 ceremony（每客户一次）
+### 5.1 开户 ceremony（每客户一次，2026-10-08 起一条命令）
 
-1. **建客户身份**：在 Logto `wire-customers` 组织下建该客户的用户
-   （组织 id 见 INFRA-NOTES；外部客户开户全归此 org）。
-2. **铸客户 key**：按第 2.1 节配方的**无浏览器通道**铸造 patch key
-   （`sub` = 该客户的 username，`name` = `<customer_id>-customer-track`）。
-   **不要用平台服务身份的 key 顶替**——那样客户物化会错归平台轨、
-   账单为零（演练期 drillcust001 曾以平台 key 顶替，仅作演练）。
-3. **注入 cell-manager**：把明文写进 `CELL_CUSTOMER_CREDENTIAL_MAP`
-   （JSON：`{"<customer_id>": "wgk-..."}`），落 cheap-1
-   `/opt/cell-manager/secrets/`（0600），provision 时注入容器
-   `WIRE_CUSTOMER_KEY`。**明文永不进 git / 对话**。
-4. **预检映射（registry 侧）**：把该 username 加进 auth-server 的
-   `SUB2API_CALLER_MAP`（当前仅映射了 2 个身份，**未映射 = 预检对其
-   不生效**，硬停形同虚设）。该项属 registry 侧改动，见
-   `docs/registry-requirements.md`。
-5. **验证**：以该 key 打一次 cell 入口工具调用 → registry 审计侧应出现
-   该身份记录；wire 侧 `usage/overview` 应计入 customer 轨。
+前置（每客户一次性输入，cheap-1 `/opt/cell-manager/env.sh`）：
+
+- `CELL_CUSTOMER_IDENTITY_MAP` 加一行 `"<customer_id>": {"username": ..., "sub2api_user_id": ...}`
+  （sub2api 账户由 wire api 建户时返回 user_id，`name=wire-<customer_id>`）
+- sub2api 充值：`POST /api/v1/admin/users/{id}/balance {"operation":"add","balance":N}`
+
+然后两步（cell-manager，cheap-1）：
+
+```bash
+source /opt/cell-manager/env.sh
+python -m cell_manager provision <customer_id>   # 建容器+卷+注册（条目自带 group-restricted 可见性）
+python -m cell_manager grant <customer_id>       # cell 授权束：scope 文档（含发现面声明）+
+                                                 # 条目可见性重申 + 预检映射（经 admin API 写
+                                                 # sub2api_caller_map，下一请求即生效）
+python -m cell_manager mint-key <customer_id>    # 客户 key：admin 代铸 API（归属/组快照精确），
+                                                 # 明文仅本次 stdout —— 立即写入 0600 secret 文件
+                                                 # 并加入 CELL_CUSTOMER_CREDENTIAL_MAP 后删除终端记录
+python -m cell_manager revoke-key <customer_id> <key_id>   # 吊销（admin 旁路，幂等）
+```
+
+要点（均已自动化，不再是手工步骤）：
+
+- 组快照 = `["wire-customers", "wire-cust-<customer_id>"]`（合成组不经 Logto，ADR 0005）；
+  调用面/发现面由 per-customer scope 文档同时闭环，目录只见业务面+自己 cell
+- 预检映射走 registry `PUT /api/sub2api-caller-map`（`CELL_PREFLIGHT_MAP_PATH`），
+  **不再手改 auth-server 的 .env**；`PREFLIGHT_UNMAPPED=deny` 下漏配即时 402 CALLER_NOT_MAPPED
+- 退租：`python -m cell_manager deprovision <customer_id>` 一条命令完成
+  「吊 key → 删 scope → 注销条目 → 保留期」，幂等可重跑（cancel 后需重跑 grant）
+- 旧五步手工 ceremony（Logto 建号→自签 JWT 铸 key→手改凭据 map→手改 .env→手工验证）
+  已退役；2.1 节配方保留为无 admin 凭据时的应急通道
 
 ### 5.2 轮换 / 吊销
 

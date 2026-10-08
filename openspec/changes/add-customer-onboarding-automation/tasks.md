@@ -36,4 +36,4 @@
 
 ## 6. 终验
 
-- [ ] 6.1 全量验收判据复跑（specs 四能力逐 Scenario）+ fd-wire/docs/service-credentials.md §5 ceremony 更新为「一条命令」口径；验证：探针脚本全绿 + 文档 PR
+- [x] 6.1 全量验收（2026-10-08/09 生产实证归档）：cell-grant 四 Scenario ✓（铸造幂等/跨客户 403+目录恰见 2/回收宽幂等/平台 12 无恙——**含 listing 根因修复**：import 默认空 list_service 的 fail-closed 覆盖，per-scope 发现面声明已固化进 upsert）；caller-preflight-map ✓（API 自动建立/402 三态/deny 具名/30s 内生效）；customer-key-minting ✓（代铸归属精确/快照即所铸组/admin 代吊即时/集群侧仅 admin 凭据无根信任材料）；metering-poll-channel ✓（水位追平后事件→入账 7 秒/闸门探针 PASS/直读通道即 spec 正道）。ceremony 文档 §5 已改「一条命令」口径；遗留④ business-mcp 上游 401 修复（942705ac 两半移植 github 线，双 key 200+注入日志）

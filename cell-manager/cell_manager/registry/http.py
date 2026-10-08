@@ -175,6 +175,10 @@ class HttpRegistryClient:
                 }
             ],
             "group_mappings": [scope.group],
+            # 发现面（listing）声明：cell scope 声明自己 cell 可发现。import 端点
+            # 缺省会写入空列表（fail-closed 覆盖，客户目录里连自己的 cell 都不见
+            # ——2026-10-08 生产实锤）；显式带上，与 server_access 精确对齐。
+            "ui_permissions": {"list_service": [scope.server]},
             # 关键：默认 true 会事后尝试去 IdP 建 scope_name 组（吞异常非致命，
             # 但合成组轨道不该惊动 IdP——ADR 0005）。
             "create_in_idp": False,

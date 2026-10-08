@@ -456,6 +456,7 @@ def test_upsert_scope_posts_import_payload_with_create_in_idp_false(monkeypatch,
             {"server": "fd-wire-cell-acme", "methods": ["all"], "tools": ["all"]}
         ],
         "group_mappings": ["wire-cust-acme"],
+        "ui_permissions": {"list_service": ["fd-wire-cell-acme"]},
         "create_in_idp": False,
     }
 
