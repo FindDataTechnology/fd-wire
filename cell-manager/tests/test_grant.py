@@ -484,3 +484,64 @@ def test_teardown_surfaces_scope_residue_without_aborting(config, registry, gran
     assert "405" in (detail["scope_error"] or "")
     # 注销照做：不因 scope 失败而放弃条目回收
     assert detail["registry_unregistered"] is True
+
+
+class TestInternalScopeDeleter:
+    """R5：scope 删除通道——internal JWT 形状 + IdP 跳过参数。"""
+
+    def test_delete_posts_internal_jwt_and_skips_idp(self, monkeypatch):
+        import base64 as _b64
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        from cell_manager.keys import INTERNAL_JWT_AUDIENCE, INTERNAL_JWT_ISSUER, InternalScopeDeleter
+
+        captured = {}
+
+        class _Resp:
+            status = 200
+
+            def read(self):
+                return b"{}"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def _urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["body"] = req.data.decode()
+            captured["auth"] = req.headers.get("Authorization")
+            return _Resp()
+
+        monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
+        ok = InternalScopeDeleter("https://registry.example.test", "s3cret").delete(
+            "mcp-wire-cell-acme"
+        )
+        assert ok is True
+        assert captured["url"].endswith("/api/internal/delete-group")
+        assert "group_name=mcp-wire-cell-acme" in captured["body"]
+        assert "delete_from_keycloak=false" in captured["body"]  # 不碰 Logto
+        token = captured["auth"].split(" ", 1)[1]
+        payload_b64 = token.split(".")[1]
+        payload = _json.loads(_b64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4)))
+        assert payload["iss"] == INTERNAL_JWT_ISSUER == "mcp-auth-server"
+        assert payload["aud"] == INTERNAL_JWT_AUDIENCE == "mcp-internal"
+        assert payload["purpose"] == "scope-teardown"
+
+    def test_delete_404_is_false(self, monkeypatch):
+        import urllib.error
+        import urllib.request
+
+        from cell_manager.keys import InternalScopeDeleter
+
+        def _urlopen(req, timeout=None):
+            raise urllib.error.HTTPError(
+                req.full_url, 404, "nope", None, None  # type: ignore[arg-type]
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
+        assert InternalScopeDeleter("https://r.example", "s").delete("x") is False

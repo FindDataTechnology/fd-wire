@@ -209,3 +209,72 @@ class AdminMintChannel:
         if status == 409:
             return "already_revoked"
         return "revoked"
+
+
+#: registry 内部 JWT 常量（registry/auth/internal.py 的同形状复刻——
+#: iss/aud 与 60s TTL 必须逐字一致，否则 validate_internal_auth 拒收）
+INTERNAL_JWT_ISSUER = "mcp-auth-server"
+INTERNAL_JWT_AUDIENCE = "mcp-internal"
+INTERNAL_JWT_TTL_SECONDS = 60
+
+
+def sign_internal_jwt(secret: str, *, subject: str, purpose: str, instance: str = "cell-manager") -> str:
+    """签 registry internal JWT（/api/internal/* 端点的 validate_internal_auth 认它）。
+
+    R5（2026-10-09）：退租删授权 scope 走 POST /api/internal/delete-group，
+    其 IdP 跳过参数 delete_from_keycloak=false 使合成组轨道完全不碰 Logto。
+    """
+    now = int(time.time())
+    payload = {
+        "iss": INTERNAL_JWT_ISSUER,
+        "aud": INTERNAL_JWT_AUDIENCE,
+        "sub": f"{subject}@{instance}",
+        "instance_id": instance,
+        "purpose": purpose,
+        "token_use": "access",
+        "iat": now,
+        "exp": now + INTERNAL_JWT_TTL_SECONDS,
+    }
+    header = {"alg": "HS256", "typ": "JWT"}
+    signing_input = (
+        f"{_b64url(json.dumps(header).encode())}.{_b64url(json.dumps(payload).encode())}"
+    )
+    signature = hmac.new(secret.encode(), signing_input.encode(), hashlib.sha256).digest()
+    return f"{signing_input}.{_b64url(signature)}"
+
+
+class InternalScopeDeleter:
+    """R5 的 scope 删除通道：POST /api/internal/delete-group（公网精确 location）。
+
+    与 HttpRegistryClient.delete_scope（/api/management 面，对合成组因 IdP
+    同步删除而 502、且旧路径 405）不同，本通道带 delete_from_keycloak=false
+    完全跳过 IdP——只删 Mongo scope 文档，正是合成组轨道要的语义。
+    鉴权：SECRET_KEY 现签短命 internal JWT（材料不出 cheap-1）。
+    """
+
+    def __init__(self, base_url: str, secret: str, *, timeout: float = DEFAULT_TIMEOUT) -> None:
+        self._base_url = base_url
+        self._secret = secret
+        self._timeout = timeout
+
+    def delete(self, scope_name: str) -> bool:
+        """删 scope；404 形态（组不存在）→ False，其余失败抛 RegistryError。"""
+        import urllib.parse
+
+        from cell_manager.registry.http import BearerTokenAuth, HttpRegistryClient
+
+        token = sign_internal_jwt(self._secret, subject="cell-manager", purpose="scope-teardown")
+        client = HttpRegistryClient(
+            self._base_url, auth=BearerTokenAuth(token), timeout=self._timeout
+        )
+        data = urllib.parse.urlencode(
+            {"group_name": scope_name, "delete_from_keycloak": "false"}
+        ).encode("utf-8")
+        status = client._request(  # noqa: SLF001 —— 复用管线是本类存在的理由
+            "POST",
+            "/api/internal/delete-group",
+            data=data,
+            ok=(200, 404),
+            content_type="application/x-www-form-urlencoded",
+        )
+        return status != 404

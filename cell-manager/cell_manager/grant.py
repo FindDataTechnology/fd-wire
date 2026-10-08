@@ -194,9 +194,7 @@ class CellGrant:
             validate_customer_id(customer_id)
             scope_error: str | None = None
             try:
-                scope_deleted = self._registry.delete_scope(
-                    self._config.scope_name(customer_id)
-                )
+                scope_deleted = self._delete_scope(customer_id)
             except Exception as exc:  # noqa: BLE001 —— 残留可见优先于整体中止
                 scope_deleted = False
                 scope_error = f"{type(exc).__name__}: {exc}"
@@ -210,6 +208,35 @@ class CellGrant:
         return self._run("teardown", customer_id, _do)
 
     # ---- 内部 ----
+
+    def _delete_scope(self, customer_id: str) -> bool:
+        """删授权 scope 的通道选择（R5 根因修复，2026-10-09）。
+
+        首选 InternalScopeDeleter：POST /api/internal/delete-group（公网精确
+        location 放行）+ delete_from_keycloak=false——只删 Mongo scope，不碰
+        Logto。旧通道（DELETE /api/iam/groups|management 面）对合成组必败
+        （前者 405 路由遮蔽，后者因 IdP 同步删除 502 IAM provider error）。
+        SECRET_KEY 材料不在场时退化旧通道（scope_error 缓解语义不变）。
+        """
+        from cell_manager.registry.fake import FakeRegistryClient
+
+        if isinstance(self._registry, FakeRegistryClient):
+            return self._registry.delete_scope(self._config.scope_name(customer_id))
+        if self._config.registry_secret_key_file:
+            from cell_manager.keys import InternalScopeDeleter, load_secret_key
+
+            try:
+                secret = load_secret_key(self._config.registry_secret_key_file)
+                return InternalScopeDeleter(self._config.registry_url, secret).delete(
+                    self._config.scope_name(customer_id)
+                )
+            except Exception as exc:  # noqa: BLE001 —— 退化旧通道，残留可见
+                logger.warning(
+                    "internal scope delete failed (%s: %s); falling back to legacy",
+                    type(exc).__name__,
+                    exc,
+                )
+        return self._registry.delete_scope(self._config.scope_name(customer_id))
 
     def _write_preflight_map(
         self, customer_id: str, identity: CustomerIdentity
