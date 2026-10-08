@@ -28,8 +28,8 @@
 | `TOKEN_GATEWAY_URL` | `token_gateway_url` | token 网关（AI 构建循环） |
 | `METERING_INGEST_TOKEN` | `metering_ingest_token` | 计量管道上报凭据 |
 | `FD_WIRE_INTERNAL_TOKEN` | `fd_wire_internal_token` | 内部端点令牌（catalog sync / demands / ai 共用） |
-| `AI_DATABASE_URL` | `ai_database_url` | ai 模块库（容器 CWD 不可写，显式指 /tmp 平台库） |
-| `FD_WIRE_DATABASE_URL` | `fd_wire_database_url` | demands 等模块库名（与计量库同库的双库口径合一） |
+| `AI_DATABASE_URL` | `ai_database_url` | ai 模块库（落 PVC `/var/lib/fd-wire/db/fd_wire_platform.db`，与平台主库同文件） |
+| `FD_WIRE_DATABASE_URL` | `fd_wire_database_url` | demands 等模块库名（与计量库同库，落 PVC，pod 重建存续） |
 | `INDICATOR_REGISTRY_URL` | `indicator_registry_url` | 目录镜像权威源（fd-open-data-mcp 的 MCP 入口） |
 | `INDICATOR_REGISTRY_TOKEN` | `indicator_registry_token` | 目录镜像权威源访问凭据 |
 | `CATALOG_SYNC_ENABLED` | `catalog_sync_enabled` | 目录同步开关（默认关闭，权威源就绪后开） |
@@ -46,7 +46,7 @@
 4. **首次构建**：push main → GHA `build` 出双镜像 `sha-<7>` tag（步骤 1-3 就绪后自然触发）。
 5. **回填 tag**：`deploy/k8s/fd-wire-{api,web}.yaml` 的 `sha-0000000` 占位改为实际 tag，提交 gitee main。
 6. 【外发】**集群 Secret**（15 键与上表逐键一致，缺一即 pod CreateContainerConfigError）：
-   `kubectl --context cheap -n fd-prod create secret generic fd-wire-env --from-literal=database_url=... --from-literal=business_mcp_url=http://business-mcp.fd-prod.svc/execution --from-literal=registry_url=https://mcp.finddatatech.cloud --from-literal=sub2api_base=https://router.finddatatech.cloud --from-literal=sub2api_admin_key=... --from-literal=token_gateway_url=https://token.finddatatech.cloud --from-literal=metering_ingest_token=... --from-literal=fd_wire_internal_token=... --from-literal=ai_database_url=sqlite:////tmp/fd_wire_ai.db --from-literal=fd_wire_database_url=... --from-literal=indicator_registry_url=http://fd-open-data-mcp.fd-prod.svc --from-literal=indicator_registry_token=... --from-literal=catalog_sync_enabled=false --from-literal=platform_identities=... --from-literal='metering_source_map=business-mcp=yizuo,wanxing-*=wanxing'`
+   `kubectl --context cheap -n fd-prod create secret generic fd-wire-env --from-literal=database_url=... --from-literal=business_mcp_url=http://business-mcp.fd-prod.svc/execution --from-literal=registry_url=https://mcp.finddatatech.cloud --from-literal=sub2api_base=https://router.finddatatech.cloud --from-literal=sub2api_admin_key=... --from-literal=token_gateway_url=https://token.finddatatech.cloud --from-literal=metering_ingest_token=... --from-literal=fd_wire_internal_token=... --from-literal=ai_database_url=sqlite:////var/lib/fd-wire/db/fd_wire_platform.db --from-literal=fd_wire_database_url=... --from-literal=indicator_registry_url=http://fd-open-data-mcp.fd-prod.svc --from-literal=indicator_registry_token=... --from-literal=catalog_sync_enabled=false --from-literal=platform_identities=... --from-literal='metering_source_map=business-mcp=yizuo,wanxing-*=wanxing'`
    （敏感值从 `~/finddata/secrets` 台账取，命令行历史勿留明文；`platform_identities` 的取值口径与发放联动见 `docs/service-credentials.md`。）
 7. 【外发】**端口台账先行**：`fd-infra-deploy/PORTS.md` 第 1 节登记 `31881 fd-prod/fd-wire-web 8080 柏讯门面`（台账先行纪律；若 31881 已被占，改 `deploy/k8s/fd-wire-web.yaml` 的 nodePort 并同步台账）。
 8. 【外发】**ArgoCD app**：`kubectl --context cheap -n argocd apply -f deploy/argocd/application.yaml` → UI/CLI 观察 fd-prod 两 Deployment 滚起，`/health` 探活。

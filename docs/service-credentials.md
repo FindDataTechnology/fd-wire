@@ -26,25 +26,59 @@
   新增生态线 = 新前缀 + 映射条目，不改代码。
 - 一个服务一个身份：不共用、不复用客户身份；服务下线即吊销并从名单摘除。
 
-## 2. 发放通道（v1：registry 控制台 UI）
+## 2. 发放通道
 
 registry（mcp-gateway-registry fork，cheap-1 compose，基址
 `https://mcp.finddatatech.cloud`）的 wire 门只认 header 凭据：
-`Authorization: Bearer <per-user 长命 key>`（auth_server `/validate` 子请求
-校验；不支持 URL query 传 key）。
+`Authorization: Bearer <key>`（auth_server `/validate` 子请求校验；不支持
+URL query 传 key）。
 
-发放步骤：
+### 2.1 首选：patch key（`wgk-`，无浏览器铸造，2026-10-07 起可用）
 
-1. 管理员在 registry 控制台以 OAuth2 流登入，为服务建用户 / 选用既有服务账号，
-   username 按第 1 节规范（如 `yizuo-market`）。
-2. 控制台 `POST /api/tokens/generate`（UI 表单）铸 key：**JWT**（默认 8h、
-   上限 7d，到期需人工重铸）或 **PAT 长命 key**（服务形态推荐）。
-   ——控制台操作细节见 `cell-manager/README.md`「registry 真实 API」节。
-3. **patch-key 通道**（`registry/api/patch_key_routes.py`，机器友好的
-   铸造/吊销 API）**未部署在 cheap-1**——v1 一律控制台 UI 人工铸造，
-   不假设 patch-key 存在；其上线后服务身份优先切 patch-key 并更新本文。
-4. 台账登记：`~/finddata/secrets` 记录（服务名、username、key 形态、铸造
-   日期、到期、责任人、用途）；**凭据明文永不入 git**。
+**patch key 是服务凭据的正解**——registry 定版镜像已默认开启
+（`PATCH_KEY_AUTH_ENABLED` 默认 true、铸出前惰性）：
+
+- 形态 `wgk-` 前缀（43 位 url-safe 随机），**永不过期**，库里只存 SHA-256
+  哈希（明文仅在铸造响应中出现一次），吊销即时生效（下次调用即拒）
+- 同时被 **MCP 入口**（`/<server>/mcp`）与 **registry `/api/`** 双面接受
+- 每用户上限 20 把；吊销走 `DELETE /api/patch-keys/{key_id}`
+
+**无浏览器铸造通道**（服务身份无人值守的正解，cheap-1 实测配方）：
+
+```bash
+# 在 cheap-1 /opt/mcp-gateway-registry 下执行（SECRET_KEY 不出主机）
+python3 - <<'PY'
+import base64, hmac, hashlib, json, time, urllib.request
+secret = [l.split("=",1)[1].strip() for l in open(".env") if l.startswith("SECRET_KEY=")][0].strip("\"'")
+b64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+now = int(time.time())
+claims = {"iss":"mcp-auth-server","aud":"mcp-registry","sub":"<service-username>",
+  "groups":["mcp-registry-admin"],
+  "scope":"mcp-registry-admin mcp-servers-unrestricted/read mcp-servers-unrestricted/execute",
+  "token_use":"access","token_kind":"user","iat":now,"exp":now+600}
+h, p = b64(json.dumps({"alg":"HS256","typ":"JWT"}).encode()), b64(json.dumps(claims).encode())
+tok = f"{h}.{p}.{b64(hmac.new(secret.encode(), f'{h}.{p}'.encode(), hashlib.sha256).digest())}"
+req = urllib.request.Request("https://mcp.finddatatech.cloud/api/patch-keys",
+    method="POST", data=json.dumps({"name":"<用途标签>"}).encode())
+req.add_header("Authorization", f"Bearer {tok}")   # 无会话 cookie → CSRF 免检
+req.add_header("Content-Type", "application/json")
+print(json.loads(urllib.request.urlopen(req, timeout=20).read()))  # 明文只出现一次
+PY
+```
+
+要点：自签 JWT 仅 10 分钟、只用于铸造这一次（密钥不出主机，用完即弃）；
+**明文立即写入受限文件（0600）或目标 Secret，绝不进对话、日志与 git**。
+
+### 2.2 备选：控制台 JWT（人工，不推荐常驻服务）
+
+控制台 OAuth2 登录 → `POST /api/tokens/generate`：**默认 8h、上限 7d**，
+到期即全线 401（历史上「MCP 挂了」的头号误报源）。仅用于临时排查，常驻
+服务一律用 2.1 的 patch key。
+
+### 2.3 台账与登记（两种通道共用）
+
+台账登记（`~/finddata/secrets`）：服务名、username、key 形态与前缀、铸造
+日期、用途、责任人、存放位置。**凭据明文永不入 git**。
 
 ## 3. 轮换流程
 
@@ -88,7 +122,54 @@ registry（mcp-gateway-registry fork，cheap-1 compose，基址
    （映射接入前为 `platform-internal`）。
 5. 台账登记回填完成（谁、何时、改了哪些键）。
 
-## 5. cell 内双轨凭据（发放物的另一处消费）
+## 5. 客户轨凭据（per-customer，计费到客户账单）
+
+客户轨与平台轨**严格分轨**（ADR-0003：计量归属跟着凭据走，探索归平台、
+物化归客户）。客户轨凭据 = 该客户的长命 key，注入 cell 的
+`WIRE_CUSTOMER_KEY`——cell 内引擎的委托读经回环代理携带它，计量落
+`credential_track=customer`，进客户账单。
+
+### 5.1 开户 ceremony（每客户一次）
+
+1. **建客户身份**：在 Logto `wire-customers` 组织下建该客户的用户
+   （组织 id 见 INFRA-NOTES；外部客户开户全归此 org）。
+2. **铸客户 key**：按第 2.1 节配方的**无浏览器通道**铸造 patch key
+   （`sub` = 该客户的 username，`name` = `<customer_id>-customer-track`）。
+   **不要用平台服务身份的 key 顶替**——那样客户物化会错归平台轨、
+   账单为零（演练期 drillcust001 曾以平台 key 顶替，仅作演练）。
+3. **注入 cell-manager**：把明文写进 `CELL_CUSTOMER_CREDENTIAL_MAP`
+   （JSON：`{"<customer_id>": "wgk-..."}`），落 cheap-1
+   `/opt/cell-manager/secrets/`（0600），provision 时注入容器
+   `WIRE_CUSTOMER_KEY`。**明文永不进 git / 对话**。
+4. **预检映射（registry 侧）**：把该 username 加进 auth-server 的
+   `SUB2API_CALLER_MAP`（当前仅映射了 2 个身份，**未映射 = 预检对其
+   不生效**，硬停形同虚设）。该项属 registry 侧改动，见
+   `docs/registry-requirements.md`。
+5. **验证**：以该 key 打一次 cell 入口工具调用 → registry 审计侧应出现
+   该身份记录；wire 侧 `usage/overview` 应计入 customer 轨。
+
+### 5.2 轮换 / 吊销
+
+- 轮换：铸新 key → 更新 `CELL_CUSTOMER_CREDENTIAL_MAP` → **重建 cell 容器**
+  （凭据在容器创建时注入，改 env 不生效；cell-manager 当前无热更新通道）
+  → 吊销旧 key。
+- 客户退租：先吊销 key（即时生效），再走 deprovision → purge 流程。
+
+## 6. 平台服务凭据轮换 runbook（wgk- 形态）
+
+1. 铸新 patch key（第 2.1 节配方，name 带日期便于台账区分）。
+2. **wire 侧**：patch Secret `fd-wire-env` 的 `ai_platform_credential`
+   → 滚动 `fd-wire-api`（ArgoCD 同步，约 3 分钟）。
+3. **cell-manager 侧**：更新 `CELL_REGISTRY_TOKEN`（注册轨，若同身份）
+   → 无需重启（进程内读取 env.sh）。
+4. 验证：公网入口打一次 cell 工具调用（应 200）+ registry 审计侧出现新
+   身份记录。
+5. 吊销旧 key（`DELETE /api/patch-keys/{key_id}`），台账登记。
+
+> 注意：轮换**不改 username** 时，wire 集群的 `platform_identities` 名单
+> 无需改动（轨道判定按 username 名单，不按 key 值）。
+
+## 7. cell 内双轨凭据（发放物的另一处消费，原第 5 节）
 
 cell（企业隔离单元）内的回环代理 `wire_auth_proxy`（见
 `cell-image/wire_auth_proxy.py`）按路径路由双轨：`/mcp` →
