@@ -9,6 +9,13 @@
 > cell-manager 全自动 provision 并注册进 registry；平台服务凭据（patch key
 > `wgk-`）与入口标准 MCP 形态均已闭环。**接真实客户前，registry 侧有四个
 > 缺口**，按优先级排列如下。
+>
+> **2026-10-08 状态更新（已复验）**：R1、R2 已由另一个 session 交付
+> （`add-customer-onboarding-automation`，per-customer scope + Mongo
+> caller-map + `PREFLIGHT_UNMAPPED` 开关），本 session 已按生产实态复验并
+> 收口，详见各节末「交付状态」。R3、R4 仍待办。
+
+
 
 ---
 
@@ -72,6 +79,21 @@
       新客户的 key 即可调通自己的 cell（全自动闭环延续）。
 - [ ] 平台服务凭据（wire-platform-service）不受影响（admin 组全通）。
 
+### 交付状态（2026-10-08 复验：通过）
+
+采纳了方案 A（per-customer scope）。生产实态：
+
+- `mcp-wire-cell-drillcust001` scope 已建
+  （`groups=["wire-cust-drillcust001"]`，
+  `server_access=[{server:"fd-wire-cell-drillcust001",...}]`）
+- 客户 key（代铸，groups 双组 `wire-customers` + `wire-cust-<cid>`）
+  实弹：本企业 cell 200 / 共享业务面 200 / 别家 cell 不可达 /
+  平台内部 server 403；
+  **目录恰见 2 条**（自己的 cell + 共享业务面），无别家条目——
+  「互不可见、互不可调」成立。
+- 遗留小偏差：跨企业路径返回 **405**（nginx 无该 location → 控制台兜底）
+  而非 403；对外文档写的是 403，需一致化（见下节 R1a）。
+
 ---
 
 ## R2【P0】预检硬停的调用者映射（现在对 99% 客户不生效）
@@ -110,6 +132,24 @@ sub2api 余额预检约束；映射关系随开户自动建立，不靠手工改
 - [ ] 未映射客户（新开户漏配）的行为明确：要么 fail-closed（推荐，
       加 `PREFLIGHT_UNMAPPED=deny` 开关），要么至少告警——**现状是静默
       放行，必须改**。
+
+### 交付状态（2026-10-08 复验：通过，且已收口为 deny）
+
+采纳了方案 A（Mongo 集合 `sub2api_caller_map` + admin API
+`PUT/GET/DELETE /api/sub2api-caller-map`），并新增
+`PREFLIGHT_UNMAPPED=pass|warn|deny` 开关。
+
+本 session 复验 + 收口：
+
+- 交付后生产默认仍是 `pass`（未映射放行）；本 session 已切 **`deny`**
+  并重载 auth-server（备份 `.env.bak-unmapped-20261008`；prebuilt 形态用
+  `docker compose -f docker-compose.prebuilt.yml up -d auth-server
+  --no-deps --no-build`）
+- 实弹：摘掉 drillcust001 映射 → 真实客户 key 调共享面
+  **402 CALLER_NOT_MAPPED**（带中文说明「未完成计费开户映射」）；
+  恢复映射后 cell/共享面均回 200（TTL 30-60s 内生效）
+- admin 语义（平台服务凭据）豁免直通不受 deny 影响——符合双轨设计
+- 调用顺序正确：scope 授权先于计费判定（403 不会被 402 掩盖）
 
 ---
 
@@ -206,3 +246,32 @@ internal endpoint）。**session 里拍板并落地**。
   cheap-1 /opt 是 ff 部署；重建镜像参考 dbf213e 的 CN 镜像配方；compose
   操作 `docker compose up -d --no-deps --no-build`（alpine 依赖镜像国内
   拉不到，禁 --build）。
+
+---
+
+## R1a【P2】跨企业路径的错误码一致化（新增，复验发现）
+
+### 现状
+
+客户 key 请求一个**不存在/未授权**的 cell 路径（如
+`/fd-wire-cell-cust999/mcp`）→ **405 Method Not Allowed**
+（nginx 无该 server 的 location，落到控制台兜底路由 `location /`，
+FastAPI 对 POST /mcp 无该方法）。而对外文档
+`docs/customer-onboarding-integration.md` 第 4 节承诺的是 **403**。
+
+### 期望
+
+跨企业（或不存在）的 cell 路径返回 403（授权语义），不要返回 405
+（路由语义）——agent 侧按文档把 403 当「越权/写错路径」，405 会被误判为
+「端点不支持」从而重试。
+
+### 方案方向
+
+registry 生成的 per-server location 之外，加一条通配/默认 MCP 前缀路由
+（`/fd-wire-cell-*`）返回 403，或让控制台兜底对 `/mcp` 后缀路径返回 403。
+注意不要影响 business-mcp 等既有条目的路由。
+
+### 验收判据
+
+- [ ] 客户 key 请求别家 cell 路径 → 403（且 body 带授权语义说明）
+- [ ] 本企业 cell 与共享业务面仍 200；未注册路径的控制台其他路由不受影响
