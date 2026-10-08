@@ -85,6 +85,10 @@ spec:
             - name: REGISTRY_MONGO_DB
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: registry_mongo_db, optional: true }
+            # 生产集合带 _default 后缀（settings 默认 audit_events 不匹配）；
+            # 只读账号按最小面只授这一集合（add-customer-onboarding-automation 5.4）
+            - name: REGISTRY_MONGO_COLLECTION
+              value: "audit_events_default"
             - name: METERING_DRIVER_INTERVAL_SECONDS
               value: "300"
             - name: TOKEN_GATEWAY_URL
