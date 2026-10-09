@@ -154,6 +154,16 @@ class CellManager:
                 env["WIRE_CUSTOMER_KEY"] = customer_credential
             if self._config.platform_credential:
                 env["WIRE_PLATFORM_KEY"] = self._config.platform_credential
+            # 指标拉取通道（wire-customer-data-engine §4/7.4）：join_indicators
+            # 经 wire 入口读平台指标——入口=registry 的共享业务面条目（计量轨，
+            # 与产物物化同构），凭据=本 cell 的客户 wgk key。env 缺失时引擎
+            # join 工具如实报「通道未配置」（fail-closed，不降级本地拉数）。
+            if customer_credential:
+                env["FD_CELL_WGK_KEY"] = customer_credential
+                env["FD_WIRE_ENTRANCE_URL"] = (
+                    f"{self._config.registry_url.rstrip('/')}"
+                    "/fd-find-data-business-mcp/mcp"
+                )
 
             spec = ContainerSpec(
                 name=container_name,
