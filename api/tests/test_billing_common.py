@@ -68,7 +68,9 @@ def insert_metering(engine, *, customer_ref: str, ts: str, rows: int,
 
 
 class FakeSub2Api:
-    """sub2api admin 面的内存假件：记账真实余额 + Idempotency-Key 去重。"""
+    """sub2api admin 面的内存假件（2026-10-09 真契约形态）：
+    x-api-key 鉴权、`/api/v1/admin/*` 路径、envelope {code:0,message,data}、
+    email 唯一建户 + balance{balance,operation} 幂等更新。"""
 
     def __init__(self) -> None:
         self.users: dict[str, dict] = {}
@@ -80,15 +82,18 @@ class FakeSub2Api:
     # -- 数据准备 -----------------------------------------------------------
 
     def add_user(self, user_id: str, *, name: str = "user",
-                 balance_micro: int = 0) -> str:
-        self.users[user_id] = {"name": name, "balance_micro": balance_micro}
+                 balance_micro: int = 0, email: str | None = None) -> str:
+        self.users[user_id] = {
+            "name": name, "balance_micro": balance_micro,
+            "email": email or f"{user_id}@fake.internal", "status": "active",
+        }
         return user_id
 
     @property
     def adjust_calls(self) -> list[dict]:
         return [
             c for c in self.calls
-            if c["op"] == "POST" and "balance-adjustments" in c["url"]
+            if c["op"] == "POST" and c["url"].endswith("/balance")
         ]
 
     def balance(self, user_id: str) -> int:
@@ -96,48 +101,67 @@ class FakeSub2Api:
 
     # -- HTTP 面 ------------------------------------------------------------
 
+    @staticmethod
+    def _envelope(data) -> httpx.Response:
+        return httpx.Response(200, json={"code": 0, "message": "success", "data": data})
+
     def handler(self, request: httpx.Request) -> httpx.Response:
         op, url = request.method, str(request.url)
         idem = request.headers.get("Idempotency-Key")
         self.calls.append({"op": op, "url": url, "idem": idem,
                            "body": request.content.decode() if request.content else None})
-        if op == "GET" and "/admin/api/users/" in url:
+        api = "/api/v1/admin/users"
+        if op == "GET" and f"{api}/" in url:
             if self.fail_reads_left > 0:
                 self.fail_reads_left -= 1
                 return httpx.Response(503, text="billing plane down")
             user_id = url.rstrip("/").rsplit("/", 1)[-1]
             user = self.users.get(user_id)
             if user is None:
-                return httpx.Response(404, json={"error": "no such user"})
-            return httpx.Response(200, json={"id": user_id, **user})
-        if op == "POST" and url.endswith("/admin/api/users"):
-            if idem and idem in self.idem_cache:
-                return httpx.Response(200, json=self.idem_cache[idem])
+                return httpx.Response(404, json={"code": 1, "message": "no such user"})
+            return self._envelope({"id": user_id, **user})
+        if op == "GET" and url.split("?")[0].endswith(api):
+            search = request.url.params.get("search", "")
+            items = [
+                {"id": uid, **u} for uid, u in self.users.items()
+                if search.lower() in str(u.get("email", "")).lower()
+            ]
+            return self._envelope({"items": items})
+        if op == "POST" and url.endswith(api):
             body = json.loads(request.content or b"{}")
-            digest = hashlib.sha1((idem or body.get("name", "?")).encode()).hexdigest()[:8]
+            email = str(body.get("email") or "")
+            if any(u["email"].lower() == email.lower() for u in self.users.values()):
+                return httpx.Response(200, json={"code": 1, "message": "email already exists"})
+            digest = hashlib.sha1(email.encode()).hexdigest()[:8]
             user_id = f"su-{digest}"
-            self.users[user_id] = {"name": body.get("name", ""), "balance_micro": 0}
-            payload = {"id": user_id, **self.users[user_id]}
-            if idem:
-                self.idem_cache[idem] = payload
-            return httpx.Response(201, json=payload)
-        if op == "POST" and "/balance-adjustments" in url:
+            self.users[user_id] = {
+                "name": body.get("username", ""), "balance_micro": int(body.get("balance") or 0),
+                "email": email, "status": "active",
+            }
+            return self._envelope({"id": user_id, **self.users[user_id]})
+        if op == "POST" and "/balance" in url:
             if self.fail_adjust_left > 0:
                 self.fail_adjust_left -= 1
                 return httpx.Response(503, text="adjust boom")
             user_id = url.rstrip("/").rsplit("/users/", 1)[-1].split("/")[0]
             if idem and idem in self.idem_cache:
-                return httpx.Response(200, json=self.idem_cache[idem])
+                return self._envelope(self.idem_cache[idem])
             user = self.users.get(user_id)
             if user is None:
-                return httpx.Response(404, json={"error": "no such user"})
+                return httpx.Response(404, json={"code": 1, "message": "no such user"})
             body = json.loads(request.content or b"{}")
-            user["balance_micro"] += int(body["amount_micro"])
+            amount = int(body["balance"])
+            operation = body.get("operation", "set")
+            user["balance_micro"] = (
+                amount if operation == "set"
+                else user["balance_micro"] + amount if operation == "add"
+                else user["balance_micro"] - amount
+            )
             payload = {"id": user_id, **user}
             if idem:
                 self.idem_cache[idem] = payload
-            return httpx.Response(200, json=payload)
-        return httpx.Response(404, json={"error": f"unmatched {op} {url}"})
+            return self._envelope(payload)
+        return httpx.Response(404, json={"code": 1, "message": f"unmatched {op} {url}"})
 
     def client(self) -> Sub2ApiClient:
         return Sub2ApiClient(

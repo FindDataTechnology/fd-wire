@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import re
+import secrets
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -20,19 +22,35 @@ def _default_idempotency_key(name: str) -> str:
     return f"customer:{digest}"
 
 
+def _default_username(name: str) -> str:
+    """客户名 → 可打印 ASCII 用户名（中文名降级为散列短 slug）。"""
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    if len(slug) >= 3:
+        return slug[:64]
+    return "wire-" + hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
+
+
+def _default_email(name: str, plan_code: str) -> str:
+    """未给邮箱时的确定性占位（运营侧最好传客户真实邮箱以对齐 SSO）。"""
+    digest = hashlib.sha256(f"{name}:{plan_code}".encode("utf-8")).hexdigest()[:16]
+    return f"customer-{digest}@customers.wire.internal"
+
+
 def ensure_customer(
     session: Session,
     sub2api: Sub2ApiClient,
     *,
     name: str,
     plan_code: str,
+    email: str | None = None,
+    username: str | None = None,
     idempotency_key: str | None = None,
 ) -> tuple[Customer, bool]:
-    """建客户（幂等）：已存在（同名同档）直接返回；否则 sub2api 建户后落库。
+    """建客户（幂等）：已存在（同名同档）直接返回；否则 sub2api 认领/建户后落库。
 
-    sub2api 侧以 Idempotency-Key 幂等兜底：重试不会重复建支付账户。
-    缺省键按客户名确定性派生且恒 ASCII（HTTP 头不接受非 ASCII；
-    中文名走 sha256，重试仍同键）。
+    sub2api 真契约（2026-10-09 实测）：email 必填唯一、create 面无幂等头——
+    重复建户由 find_user_by_email 前置消解；password 仅满足建户约束不留存。
+    缺省幂等键按客户名确定性派生且恒 ASCII。
     """
     plan = get_plan(session, plan_code)
     existing = session.execute(
@@ -41,8 +59,17 @@ def ensure_customer(
     if existing is not None:
         return existing, False
 
-    key = idempotency_key or _default_idempotency_key(name)
-    user = sub2api.create_user(name=name, idempotency_key=key, plan_code=plan.code)
+    key = idempotency_key or _default_idempotency_key(f"{name}:{plan.code}")
+    resolved_email = (email or "").strip() or _default_email(name, plan.code)
+    user = sub2api.find_user_by_email(resolved_email)
+    if user is None:
+        user = sub2api.create_user(
+            email=resolved_email,
+            password=secrets.token_urlsafe(24),
+            username=(username or "").strip() or _default_username(name),
+            notes=f"wire customer: {name} (plan={plan.code})",
+            idempotency_key=key,
+        )
 
     # 同键并发重试：对手可能已插入同 sub2api_user_id 的行
     dup = session.execute(

@@ -1,4 +1,9 @@
-"""sub2api admin 客户端：全 mock 覆盖（建户/读取/幂等调额/探针/错误面）。"""
+"""sub2api admin 客户端：全 mock 覆盖（真契约：x-api-key + /api/v1/admin + envelope）。
+
+2026-10-09 随跨线挂账销账重写——v1 约定（/admin/api/users + Bearer +
+amount_micro）在真实面不存在，见 billing/sub2api.py 模块文档与
+lex-platform-v1 5.3 演练报告。
+"""
 
 from __future__ import annotations
 
@@ -8,6 +13,7 @@ import httpx
 import pytest
 
 from fd_wire_api.billing.sub2api import (
+    MIN_PASSWORD_LENGTH,
     Sub2ApiClient,
     Sub2ApiError,
     Sub2ApiUnavailable,
@@ -21,32 +27,52 @@ def make_client(fake: FakeSub2Api) -> Sub2ApiClient:
     return fake.client()
 
 
-def test_create_user_sends_idempotency_key_and_bearer() -> None:
+def test_create_user_posts_email_password_with_x_api_key() -> None:
     fake = FakeSub2Api()
     with make_client(fake) as client:
-        user = client.create_user(name="壹座集团", idempotency_key="cust-1")
-    assert user.id.startswith("su-") and user.name == "壹座集团"
+        user = client.create_user(
+            email="cust@wire.internal", password="secret-pw", username="cust",
+            idempotency_key="cust-1",
+        )
+    assert user.id.startswith("su-") and user.email == "cust@wire.internal"
     call = fake.calls[0]
-    assert call["op"] == "POST" and call["url"].endswith("/admin/api/users")
-    assert call["idem"] == "cust-1"
-    # Bearer admin key 已随行
-    assert json.loads(call["body"]) == {"name": "壹座集团", "plan": None}
+    assert call["op"] == "POST" and call["url"].endswith("/api/v1/admin/users")
+    body = json.loads(call["body"])
+    assert body["email"] == "cust@wire.internal" and body["password"] == "secret-pw"
 
 
-def test_create_user_server_side_idempotent() -> None:
+def test_create_user_rejects_short_password() -> None:
     fake = FakeSub2Api()
     with make_client(fake) as client:
-        u1 = client.create_user(name="A", idempotency_key="same-key")
-        u2 = client.create_user(name="A", idempotency_key="same-key")
-    assert u1.id == u2.id
-    assert len(fake.users) == 1  # 服务端按 Idempotency-Key 去重
+        with pytest.raises(ValueError):
+            client.create_user(email="a@b.c", password="x" * (MIN_PASSWORD_LENGTH - 1))
+
+
+def test_duplicate_email_is_business_error() -> None:
+    fake = FakeSub2Api()
+    with make_client(fake) as client:
+        client.create_user(email="dup@wire.internal", password="secret-pw")
+        with pytest.raises(Sub2ApiError, match="already exists"):
+            client.create_user(email="dup@wire.internal", password="secret-pw")
+
+
+def test_find_user_by_email_hits_exactly() -> None:
+    fake = FakeSub2Api()
+    fake.add_user("u1", email="hit@wire.internal")
+    fake.add_user("u2", email="other@wire.internal")
+    with make_client(fake) as client:
+        hit = client.find_user_by_email("HIT@wire.internal")  # 大小写不敏感
+        miss = client.find_user_by_email("ghost@wire.internal")
+    assert hit is not None and hit.id == "u1"
+    assert miss is None
 
 
 def test_read_user_parses_flat_and_wrapped_payloads() -> None:
     assert parse_user({"id": "u1", "name": "n", "balance_micro": -390_000_000}).balance_micro == -390_000_000
-    # 兼容元单位（balance=12.5 元）
-    assert parse_user({"user": {"id": "u1", "name": "n", "balance": "12.5"}}).balance_micro == 12_500_000
+    # 实测契约：数值单位与写入一致、无换算（float 字面按微元取整；round=银行家舍入）
+    assert parse_user({"user": {"id": "u1", "name": "n", "balance": "12.5"}}).balance_micro == 12
     assert parse_user({"user": {"id": 7, "balance_micro": 0}}).id == "7"
+    assert parse_user({"id": "u8", "balance": 3, "email": "e@x", "status": "active"}).email == "e@x"
 
 
 def test_adjust_balance_applies_once_per_idempotency_key() -> None:
@@ -59,19 +85,20 @@ def test_adjust_balance_applies_once_per_idempotency_key() -> None:
                                        idempotency_key="settle-1")
     assert after1.balance_micro == after2.balance_micro == 600_000  # 只扣一次
     assert fake.balance("u1") == 600_000
-    adjust_calls = [c for c in fake.calls if "balance-adjustments" in c["url"]]
+    adjust_calls = [c for c in fake.calls if c["url"].endswith("/balance")]
     assert all(c["idem"] == "settle-1" for c in adjust_calls)
-    assert json.loads(adjust_calls[0]["body"]) == {"amount_micro": -400_000}
+    # 符号折进 operation、数值发绝对值（契约 balance>0）
+    assert json.loads(adjust_calls[0]["body"]) == {"balance": 400_000, "operation": "subtract"}
 
 
-def test_adjust_balance_requires_idempotency_key() -> None:
+def test_adjust_balance_requires_idempotency_key_and_nonzero() -> None:
     fake = FakeSub2Api()
     fake.add_user("u1")
     with make_client(fake) as client:
         with pytest.raises(ValueError):
             client.adjust_balance(user_id="u1", amount_micro=-1, idempotency_key="")
         with pytest.raises(ValueError):
-            client.create_user(name="x", idempotency_key="")
+            client.adjust_balance(user_id="u1", amount_micro=0, idempotency_key="k")
 
 
 def test_probe_sufficient_and_insufficient() -> None:
@@ -164,7 +191,7 @@ def test_ensure_customer_end_to_end_with_mock_http() -> None:
         )
         session.commit()
         assert not created2 and again.id == customer.id
-        assert len(fake.users) == 1  # 重试未重复建支付账户
+        assert len(fake.users) == 1  # 重试未重复建支付账户（email 前置消解）
 
         with pytest.raises(ValueError):
             ensure_customer(session, client, name="X", plan_code="platinum")
