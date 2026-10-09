@@ -16,7 +16,7 @@
 
 - [x] 3.1 wire 额度查询端点 `GET /internal/quota/{caller}`：当月 metering_records 聚合 rows_returned vs 档位 included_lines，返回 {used, included, remaining, plan_code}；服务内测试 + 与 admin usage 聚合同源断言
 - [x] 3.2 registry 预检行数门探针：到量拒绝（月度额度耗尽语义）、分钟级 TTL、探针闸门、额度服务不可达 fail-closed；余额门条件化（仅 overage>0 档检查）；registry 侧测试 + 独立开关（可先关灰度）
-- [ ] 3.3 端到端实弹：免费 key 消耗至 1,000 行后调用被拒（额度耗尽语义、不达上游）、免费档零余额在未到量时放行；证据存 `reports/`
+- [x] 3.3 端到端实弹：免费 key 消耗至 1,000 行后调用被拒（额度耗尽语义、不达上游）、免费档零余额在未到量时放行；证据存 `reports/`
 
 ## 4. 正式登录与自助开户（api + web）
 
@@ -49,5 +49,5 @@
 ## 8. 发布与验收
 
 - [x] 8.1 构建与全量测试：api pytest 全绿 + web vitest 全绿 + 镜像构建（Jenkins/GHA 按 fd-wire 既有通道）
-- [ ] 8.2 部署滚动：api/web 滚动 + registry 探针独立 PR 灰度（先 wire 端点后探针）；生产冒烟（定价页四卡、登录流、旧三档 404）
+- [x] 8.2 部署滚动：api/web 滚动 + registry 探针独立 PR 灰度（先 wire 端点后探针）；生产冒烟（定价页四卡、登录流、旧三档 404）
 - [ ] 8.3 验收汇总：`reports/final-acceptance.md`（四档全链、行数门实弹、首登开户实弹、双闸、占位退位清单、令牌轮换记录）；`openspec validate wire-self-serve-launch --strict` 通过
