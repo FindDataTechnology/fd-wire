@@ -359,6 +359,7 @@ def test_decommission_revoke_first_then_teardown_then_retention(config, registry
     ]
     assert registry.calls == [
         ("delete_scope", "mcp-wire-cell-acme"),
+        ("delete_caller_map", "acme-user"),
         ("unregister", "fd-wire-cell-acme"),
     ]
     assert result["state"] == "retention"
@@ -381,6 +382,7 @@ def test_decommission_is_idempotent_on_rerun(config, registry):
     # 授权面再清一遍（宽幂等：已不存在 → 服务端/假体不报错）
     assert registry.calls == [
         ("delete_scope", "mcp-wire-cell-acme"),
+        ("delete_caller_map", "acme-user"),
         ("unregister", "fd-wire-cell-acme"),
     ]
 
@@ -545,3 +547,35 @@ class TestInternalScopeDeleter:
 
         monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
         assert InternalScopeDeleter("https://r.example", "s").delete("x") is False
+
+
+def test_teardown_removes_caller_map(config, registry, grant_face):
+    """退租摘预检映射（与开户写入成对）：残留 = username 永久占位。
+
+    2026-10-09 实证：e2e001 退租后映射残留（teardown/purge 都没删）。
+    """
+    registry.put_caller_map("acme-user", "701")
+    assert registry.caller_map == {"acme-user": "701"}
+
+    detail = grant_face.teardown_registry_face("acme")
+
+    assert detail["caller_map_deleted"] is True
+    assert detail["caller_map_error"] is None
+    assert registry.caller_map == {}
+    assert ("delete_caller_map", "acme-user") in registry.calls
+
+
+def test_teardown_caller_map_failure_surfaces_not_aborts(config, registry, grant_face):
+    """摘映射失败：map_error 如实留痕、其余步骤照做（同 scope 残留语义）。"""
+    registry.put_caller_map("acme-user", "701")
+    registry.register(ServerEntry(path="fd-wire-cell-acme", target_url="http://x:8000/mcp"))
+
+    def boom(username):  # type: ignore[no-untyped-def]
+        raise RuntimeError("caller-map API 503")
+
+    registry.delete_caller_map = boom  # type: ignore[method-assign]
+    detail = grant_face.teardown_registry_face("acme")
+
+    assert detail["caller_map_deleted"] is False
+    assert "503" in (detail["caller_map_error"] or "")
+    assert detail["registry_unregistered"] is True

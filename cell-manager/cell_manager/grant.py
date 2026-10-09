@@ -198,10 +198,25 @@ class CellGrant:
             except Exception as exc:  # noqa: BLE001 —— 残留可见优先于整体中止
                 scope_deleted = False
                 scope_error = f"{type(exc).__name__}: {exc}"
+            # 预检映射摘除（与开户写入成对）：残留 = username 永久占位 +
+            # 未来同 id 重开被旧映射误导（2026-10-09 实证：e2e001 退租后
+            # 映射残留）。失败同样不中止，以 map_error 如实留痕。
+            map_error: str | None = None
+            map_deleted: bool | None = None
+            identity = self._config.customer_identity_map.get(customer_id)
+            delete_map = getattr(self._registry, "delete_caller_map", None)
+            if identity is not None and delete_map is not None:
+                try:
+                    map_deleted = delete_map(identity.username)
+                except Exception as exc:  # noqa: BLE001
+                    map_deleted = False
+                    map_error = f"{type(exc).__name__}: {exc}"
             unregistered = self._registry.unregister(self._config.registry_path(customer_id))
             return {
                 "scope_deleted": scope_deleted,
                 "scope_error": scope_error,
+                "caller_map_deleted": map_deleted,
+                "caller_map_error": map_error,
                 "registry_unregistered": unregistered,
             }
 

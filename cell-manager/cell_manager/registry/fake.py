@@ -60,6 +60,10 @@ class FakeRegistryClient:
         self.calls.append(("put_caller_map", username))
         self.caller_map[username] = value
 
+    def delete_caller_map(self, username: str) -> bool:
+        self.calls.append(("delete_caller_map", username))
+        return self.caller_map.pop(username, None) is not None
+
     # ---- 测试辅助 ----
 
     def is_registered(self, path: str) -> bool:

@@ -277,17 +277,46 @@ class CellManager:
                 shutil.rmtree(volume_path)
             unregistered = self._registry.unregister(record["registry_path"])
             # 授权束回收兜底（正常路径 deprovision 阶段已删；此处幂等再删一次，
-            # 防中途 cancel 后直奔 purge 的绕行）
-            scope_deleted = self._registry.delete_scope(self._config.scope_name(customer_id))
+            # 防中途 cancel 后直奔 purge 的绕行）。
+            # 通道与 CellGrant.teardown_registry_face 对齐（R5）：旧
+            # DELETE /api/iam/groups 被边缘拦 405，必须走 internal delete-group；
+            # 删不掉不中止其余清理（残留可见可补 > 卡死半途），但如实留痕。
+            scope_deleted, scope_error = self._delete_scope_resilient(customer_id)
             self._state.delete(customer_id)
             return _not_found(customer_id), {
                 "volume_removed": str(volume_path),
                 "registry_unregistered": unregistered,
                 "scope_deleted": scope_deleted,
+                "scope_error": scope_error,
                 "irreversible": True,
             }
 
         return self._run("purge", customer_id, _do)
+
+    def _delete_scope_resilient(self, customer_id: str) -> tuple[bool, str | None]:
+        """删授权 scope（R5 通道优先，失败不抛）：返回 (deleted, error)。
+
+        - ``CELL_REGISTRY_SECRET_KEY_FILE`` 已配 → ``InternalScopeDeleter``
+          （POST /api/internal/delete-group + delete_from_keycloak=false，
+          合成组轨道完全不碰 IdP；旧 /api/iam/groups 路径被边缘拦 405）。
+        - 未配 → 回落既有 registry 客户端（保留旧部署可用的兼容面）。
+        """
+        scope_name = self._config.scope_name(customer_id)
+        secret_key_file = getattr(self._config, "registry_secret_key_file", "")
+        if secret_key_file:
+            try:
+                from cell_manager.keys import InternalScopeDeleter, load_secret_key
+
+                deleter = InternalScopeDeleter(
+                    self._config.registry_url, load_secret_key(secret_key_file)
+                )
+                return deleter.delete(scope_name), None
+            except Exception as exc:  # noqa: BLE001 —— 残留可见优先于中止
+                return False, f"{type(exc).__name__}: {exc}"
+        try:
+            return self._registry.delete_scope(scope_name), None
+        except Exception as exc:  # noqa: BLE001
+            return False, f"{type(exc).__name__}: {exc}"
 
     def purge_expired(self) -> list[CellStatus]:
         """批量清除所有到期 retention cell（后台定时任务入口）。"""

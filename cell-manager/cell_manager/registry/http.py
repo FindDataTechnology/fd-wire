@@ -221,14 +221,21 @@ class HttpRegistryClient:
         status = self._post_form(self._remove_path, {"path": path}, ok=(200, 404))
         return status != 404
 
-    def put_caller_map(self, username: str, value: str) -> None:
-        """预检映射写入（registry 切片二 3.1 的 admin API；路径经
-        CELL_PREFLIGHT_MAP_PATH 配置，默认 /api/sub2api-caller-map）。"""
+    def delete_caller_map(self, username: str) -> bool:
+        """预检映射摘除（退租收口）；404 = 本就不存在 → 宽松 False。
+
+        与 put_caller_map 成对：退租不摘映射 = 该 username 永久占用映射位，
+        且同一客户 id 未来重开时会被旧映射误导（2026-10-09 实证：e2e001
+        退租后映射残留）。路径同 CELL_PREFLIGHT_MAP_PATH 派生。
+        """
         if not self._caller_map_path:
             raise ConfigError("CELL_PREFLIGHT_MAP_PATH not configured")
-        self._request(
-            "PUT", self._caller_map_path, data={"username": username, "value": value}, ok=(200, 201)
+        status = self._request(
+            "DELETE",
+            f"{self._caller_map_path}/{urllib.parse.quote(username, safe='')}",
+            ok=(200, 204, 404),
         )
+        return status != 404
 
     def list_servers(self, *, limit: int = 1, include_tools: bool = False) -> dict:
         """只读探测：``GET /api/servers``（部署联调 / 健康检查用；需鉴权）。"""
