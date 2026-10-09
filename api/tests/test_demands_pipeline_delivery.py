@@ -49,7 +49,12 @@ from fd_wire_api.delivery.scope_client import (
 
 INTERNAL_TOKEN = "wire-internal-dev"
 INTERNAL = {"X-Internal-Token": INTERNAL_TOKEN}
-CUST = {"X-Customer-Id": "cust-001"}
+from console_fixture import bearer, install_fake_jwks, make_console_env, mint_id_token
+
+SUB_CUST = "sub-cust-001"
+SUB_OTHER = "sub-cust-002"
+CUST = bearer(mint_id_token(SUB_CUST))
+OTHER = bearer(mint_id_token(SUB_OTHER))
 
 API_DIR = Path(__file__).resolve().parent.parent
 
@@ -58,8 +63,8 @@ API_DIR = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture()
-def client():
-    """每个用例独立的内存库 + 覆盖 get_db 的 TestClient。"""
+def client(tmp_path, monkeypatch):
+    """每个用例独立的内存库 + 覆盖 get_db 的 TestClient（外加平台库身份种子）。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -76,6 +81,11 @@ def client():
             db.close()
 
     app.dependency_overrides[get_db] = override_get_db
+    install_fake_jwks(monkeypatch)
+    make_console_env(
+        tmp_path, monkeypatch,
+        customers=[(SUB_CUST, "cust-001"), (SUB_OTHER, "cust-002")],
+    )
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
@@ -165,7 +175,7 @@ def submit(client, customer="cust-001") -> dict:
         "linked_indicators": ["IND-CPI-001", "IND-AUTO-014"],
     }
     resp = client.post(
-        "/api/v1/demands", json=payload, headers=CUST | {"X-Customer-Id": customer}
+        "/api/v1/demands", json=payload, headers=CUST if customer == "cust-001" else OTHER
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
@@ -792,4 +802,4 @@ def test_migration_0008_adds_demand_pipeline_columns(migrated_demands_sqlite):
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
     # 链头唯一且随链推进（wire-customer-local-data 任务 2.1 起 = 0011_datasets）
-    assert version == "0013_provenance_foundation"
+    assert version == "0015_console_onboarding"

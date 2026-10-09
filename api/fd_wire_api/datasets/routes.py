@@ -1,6 +1,7 @@
-"""客户数据集客户面端点（契约 §3.3）。
+"""客户数据集客户面端点（契约 §3.3；wire-self-serve-launch 4.5 身份切换）。
 
-客户面（``X-Customer-Id``，缺失 401；跨企业一律 404）：
+客户面（Bearer ID token → logto_sub → Customer，缺失/未映射 401；跨企业
+一律 404；X-Customer-Id 占位头退位不再接受）：
 - 列表/详情/删除（删除调引擎 ``delete``，引擎不可达即 502 fail-closed）
 - 上传（multipart：CSV/Excel 解析 + 保守类型推断 + 样例预览 + 上限拒收）
 - 建档（upload 类立即分块 ingest 引擎；connector 类只登记白名单与调度）
@@ -64,23 +65,12 @@ from .schemas import (
     UploadOut,
 )
 from .settings import get_settings
+from ..console.auth import require_console_customer_id
 from ..provenance.ledger import append_event
 
 router = APIRouter(tags=["datasets"])
 
 _DEFAULT_INTERNAL_TOKEN = "wire-internal-dev"
-
-
-def _customer_id(
-    x_customer_id: str | None = Header(default=None, alias="X-Customer-Id"),
-) -> str:
-    """客户身份：与 demands 切片同款骨架鉴权，缺失即 401。"""
-    if not x_customer_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="缺少 X-Customer-Id（客户身份头）",
-        )
-    return x_customer_id
 
 
 def require_internal(
@@ -155,7 +145,7 @@ def _ensure_engine_ok(exc: Exception) -> HTTPException:
 )
 def upload_dataset_file(
     file: UploadFile = File(...),
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> UploadOut:
     """上传 CSV/Excel：解析全量、列与类型预览、50 万行与存储配额 fail-closed。"""
@@ -249,7 +239,7 @@ def _raise_quota(exc: service.QuotaExceeded):
 )
 def create_dataset(
     payload: DatasetCreateIn,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> DatasetOut:
@@ -399,7 +389,7 @@ def _create_from_upload(
 
 @router.get("/api/v1/datasets", response_model=list[DatasetOut])
 def list_datasets(
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> list[DatasetOut]:
     """本企业数据集列表（卡片）。"""
@@ -418,7 +408,7 @@ def list_datasets(
 @router.get("/api/v1/datasets/{dataset_id}", response_model=DatasetOut)
 def get_dataset(
     dataset_id: str,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> DatasetOut:
     return DatasetOut.from_dataset(_dataset_or_404(db, dataset_id, customer_id))
@@ -427,7 +417,7 @@ def get_dataset(
 @router.delete("/api/v1/datasets/{dataset_id}")
 def delete_dataset(
     dataset_id: str,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> dict:
@@ -456,7 +446,7 @@ def preview_rows(
     dataset_id: str,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> dict:
@@ -486,7 +476,7 @@ def preview_rows(
 def add_correction(
     dataset_id: str,
     payload: CorrectionIn,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> CorrectionOut:
@@ -542,7 +532,7 @@ def list_corrections(
     dataset_id: str,
     include_reverted: bool = Query(default=True),
     include_dangling: bool = Query(default=True),
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> dict:
@@ -567,7 +557,7 @@ def list_corrections(
 def revert_correction(
     dataset_id: str,
     correction_id: int,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> dict:
@@ -594,7 +584,7 @@ def revert_correction(
 @router.get("/api/v1/datasets/{dataset_id}/syncs", response_model=list[SyncOut])
 def list_syncs(
     dataset_id: str,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> list[SyncOut]:
     dataset = _dataset_or_404(db, dataset_id, customer_id)
@@ -614,7 +604,7 @@ def list_syncs(
 def resume_dataset(
     dataset_id: str,
     payload: ResumeIn,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> DatasetOut:
     """漂移人工确认：接受新 schema（``accept_columns``）后恢复同步。"""
@@ -641,7 +631,7 @@ def resume_dataset(
     response_model=PairingTokenOut,
 )
 def create_pairing_token(
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> PairingTokenOut:
     """签发配对令牌：15 分钟、单次；库内只存 sha256。"""
@@ -657,7 +647,7 @@ def create_pairing_token(
 
 @router.get("/api/v1/connectors", response_model=list[ConnectorOut])
 def list_connectors(
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> list[ConnectorOut]:
     """连接器列表：状态由心跳推导（online/offline/revoked）。"""
@@ -696,7 +686,7 @@ def list_connectors(
 def rename_connector(
     connector_id: str,
     payload: ConnectorPatchIn,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> ConnectorOut:
     connector = _connector_or_404(db, connector_id, customer_id)
@@ -717,7 +707,7 @@ def rename_connector(
 @router.delete("/api/v1/connectors/{connector_id}")
 def revoke_connector(
     connector_id: str,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> dict:
     """吊销：连接器与其全部 key 即时失效（后续推送 401；动作留档）。"""

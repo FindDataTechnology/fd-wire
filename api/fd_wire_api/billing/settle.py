@@ -157,7 +157,15 @@ class SettlementService:
         result.status = "settled" if grant.created else "replayed"
 
         # 2) 超额判定与幂等扣减
+        # 无超额档（超额单价 0，含四档新定价全部公开档）：超出部分不产生任何
+        # 超额账目、不动 sub2api——硬停由当月行数门承担（portal-pricing
+        # 「计费模型无超额」；闭月结算金额=月费 grant 条目）。
         result.overage_lines = max(0, usage.rows - plan.included_lines)
+        if plan.overage_unit_price_micro <= 0:
+            result.overage_amount_micro = 0
+            result.status = "settled" if grant.created else "replayed"
+            self._notify(period, customer, usage.rows, plan.included_lines, result)
+            return result
         if result.overage_lines <= 0:
             result.status = "settled" if grant.created else "replayed"
             self._notify(period, customer, usage.rows, plan.included_lines, result)

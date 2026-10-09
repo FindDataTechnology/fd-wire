@@ -6,7 +6,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import "../i18n";
 import i18n from "../i18n";
 import { ArtifactsPage } from "./ArtifactsPage";
-import { installConsoleBackend } from "./testing";
+import { installConsoleBackend, seedConsoleSession } from "./testing";
 import type { Conversation } from "./api";
 
 const CONVERSATIONS: Conversation[] = [
@@ -40,12 +40,16 @@ function openViewerForKind(kind: string): void {
 beforeEach(() => {
   i18n.changeLanguage("zh");
   localStorage.clear();
+  sessionStorage.clear();
+  // 登录会话种子：假后端以 Bearer 的 sub 为客户身份（demo-customer）。
+  seedConsoleSession({ sub: "demo-customer" });
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   localStorage.clear();
+  sessionStorage.clear();
 });
 
 function install() {
@@ -87,7 +91,7 @@ function install() {
 describe("ArtifactsPage（产物草稿列表）", () => {
   it("三类产物渲染：kind 徽标语义分级、spec 摘要、来源会话链接、草稿标注", async () => {
     install();
-    render(<ArtifactsPage customerId="demo-customer" />);
+    render(<ArtifactsPage />);
 
     const items = await screen.findAllByTestId("artifact-item");
     expect(items.length).toBe(3);
@@ -127,7 +131,7 @@ describe("ArtifactsPage（产物草稿列表）", () => {
 
   it("kind 筛选收窄列表", async () => {
     install();
-    render(<ArtifactsPage customerId="demo-customer" />);
+    render(<ArtifactsPage />);
     await screen.findAllByTestId("artifact-item");
     expect(screen.getAllByTestId("artifact-item").length).toBe(3);
 
@@ -142,7 +146,7 @@ describe("ArtifactsPage（产物草稿列表）", () => {
 
   it("spec 查看器：格式化 JSON 展示，编辑保存 localStorage，恢复原始", async () => {
     install();
-    render(<ArtifactsPage customerId="demo-customer" />);
+    render(<ArtifactsPage />);
     await screen.findAllByTestId("artifact-item");
 
     openViewerForKind("dashboard");
@@ -188,7 +192,7 @@ describe("ArtifactsPage（产物草稿列表）", () => {
       '{"title":"本地改过的仪表盘","spec":{}}',
     );
     install();
-    render(<ArtifactsPage customerId="demo-customer" />);
+    render(<ArtifactsPage />);
     await screen.findAllByTestId("artifact-item");
     openViewerForKind("dashboard");
     expect(
@@ -204,7 +208,7 @@ describe("ArtifactsPage（产物草稿列表）", () => {
       "fetch",
       installConsoleBackend(CONVERSATIONS).fetchImpl,
     );
-    render(<ArtifactsPage customerId="demo-customer" />);
+    render(<ArtifactsPage />);
     expect(await screen.findByTestId("artifacts-empty")).toBeTruthy();
   });
 });

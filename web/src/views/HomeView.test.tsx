@@ -40,7 +40,14 @@ describe("HomeView（官网首页 · 柏讯产品叙事）", () => {
     // 千位向下取整：57,553 → 57,000（数字来自 /v1/catalog/stats，非手写）
     expect(await screen.findByText("57,000+ 指标目录")).toBeTruthy();
     expect(screen.getByText("MCP 直连数据")).toBeTruthy();
-    expect(screen.getByText("AI 构建分析与爬虫需求闭环")).toBeTruthy();
+    // 价值主张三覆盖已上线服务：AI 对话构建 × 我的数据（上传物化/产物）
+    expect(screen.getByText("AI 对话构建 × 我的数据")).toBeTruthy();
+    const value3Desc = screen.getByText(/AI 对话构建分析产物并即时预览/);
+    expect(value3Desc.textContent).toContain("上传");
+    expect(value3Desc.textContent).toContain("物化");
+    // 控制台已上线的口径（不再有「控制台上线中」过时占位口径）
+    expect(value3Desc.textContent).toContain("控制台已上线");
+    expect(screen.queryByText(/控制台上线中/)).toBeNull();
     // 五线站位一句（不展开叙事）
     expect(screen.getByText(/壹座之上、萬星闪耀/)).toBeTruthy();
   });

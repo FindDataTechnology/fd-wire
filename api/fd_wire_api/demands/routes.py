@@ -1,6 +1,7 @@
 """需求单 API 路由。
 
-客户侧（``X-Customer-Id`` 头标识企业，暂为骨架鉴权，接 wire-customer-identity 后替换）：
+客户侧（Bearer ID token → logto_sub → Customer，wire-self-serve-launch 4.5
+身份切换；X-Customer-Id 占位头退位不再接受，缺失/未映射 401）：
 - ``POST /api/v1/demands``            提交（可带目录预填 linked_indicators）
 - ``GET  /api/v1/demands``            本企业列表（含当前状态+时间线）
 - ``GET  /api/v1/demands/{id}``       详情（非本企业一律 404；只含客户可见字段，
@@ -30,6 +31,7 @@ from sqlalchemy.orm import Session
 from . import delivery as delivery_service
 from . import evaluation, service
 from .db import get_db
+from ..console.auth import require_console_customer_id
 from ..delivery.scope_client import ScopeClient, scope_client_dep
 from .schemas import (
     DemandCreate,
@@ -44,18 +46,6 @@ from .statemachine import DemandStatus, TransitionError
 router = APIRouter(tags=["demands"])
 
 _DEFAULT_INTERNAL_TOKEN = "wire-internal-dev"
-
-
-def _customer_id(
-    x_customer_id: str | None = Header(default=None, alias="X-Customer-Id"),
-) -> str:
-    """客户身份：骨架阶段用显式头，缺失即 401。"""
-    if not x_customer_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="缺少 X-Customer-Id（客户身份头）",
-        )
-    return x_customer_id
 
 
 def _require_internal(
@@ -91,7 +81,7 @@ def _conflict(exc: TransitionError) -> HTTPException:
 )
 def submit_demand(
     payload: DemandCreate,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> DemandOut:
     """提交需求单：初始 submitted，可携带目录导流的 indicator code 列表。"""
@@ -102,7 +92,7 @@ def submit_demand(
 @router.get("/api/v1/demands", response_model=list[DemandOut])
 def list_demands(
     status_filter: DemandStatus | None = Query(default=None, alias="status"),
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> list[DemandOut]:
     """本企业需求单列表：当前状态 + 完整时间线。"""
@@ -115,7 +105,7 @@ def list_demands(
 @router.get("/api/v1/demands/{demand_id}", response_model=DemandOut)
 def get_demand(
     demand_id: int,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> DemandOut:
     """需求单详情（仅本企业可见；他企或不存在一律 404）。"""

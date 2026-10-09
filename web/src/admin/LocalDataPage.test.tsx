@@ -7,7 +7,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import "../i18n";
 import i18n from "../i18n";
 import { LocalDataPage } from "./LocalDataPage";
-import { installAdminBackend } from "./testing";
+import { installAdminBackend, seedAdminSession } from "./testing";
 import type { CustomerLocalDataOverview } from "./api";
 
 const TOKEN = "test-admin-token";
@@ -41,22 +41,27 @@ const OVERVIEW: CustomerLocalDataOverview[] = [
 beforeEach(() => {
   i18n.changeLanguage("zh");
   localStorage.clear();
+  sessionStorage.clear();
+  // admin 双闸（web 半边）：登录会话持 wire-admin 角色，idToken 与假后端
+  // 的期望 Bearer 一致（X-Admin-Token 由 nginx 服务端注入，前端不持）。
+  seedAdminSession();
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   localStorage.clear();
+  sessionStorage.clear();
 });
 
 describe("LocalDataPage（客户本地数据只读视图）", () => {
-  it("per-cell 渲染：数据集数/存储用量/连接器状态与最后心跳，请求带双鉴权头", async () => {
+  it("per-cell 渲染：数据集数/存储用量/连接器状态与最后心跳，请求仅带登录 Bearer（双闸的令牌半边由网关注入）", async () => {
     const backend = installAdminBackend({
       datasetOverviews: OVERVIEW,
-      adminToken: TOKEN,
+      bearerToken: TOKEN,
     });
     vi.stubGlobal("fetch", backend.fetchImpl);
-    const { container } = render(<LocalDataPage token={TOKEN} />);
+    const { container } = render(<LocalDataPage />);
 
     const rows = await screen.findAllByTestId("admin-localdata-row");
     expect(rows.length).toBe(2);
@@ -104,8 +109,11 @@ describe("LocalDataPage（客户本地数据只读视图）", () => {
     const call = backend.calls[0]!;
     expect(call.method).toBe("GET");
     expect(call.url.pathname).toBe("/internal/datasets/overview");
-    expect(call.headers["x-admin-token"]).toBe(TOKEN);
-    expect(call.headers["x-internal-token"]).toBe(TOKEN);
+    // admin 双闸后的 web 侧口径：仅登录 Bearer（X-Admin-Token 由 nginx 注入，
+    // 浏览器不再携带 X-Internal-Token）。
+    expect(call.headers["authorization"]).toBe(`Bearer ${TOKEN}`);
+    expect(call.headers["x-internal-token"]).toBeUndefined();
+    expect(call.headers["x-admin-token"]).toBeUndefined();
 
     // 只读视图归入用量职能：整页无任何按钮（含顶栏外管理入口）
     expect(container.querySelectorAll("button").length).toBe(0);
@@ -114,10 +122,10 @@ describe("LocalDataPage（客户本地数据只读视图）", () => {
   it("spec 红线：不存在吊销/删除/白名单修改等任何管理操作入口", async () => {
     const backend = installAdminBackend({
       datasetOverviews: OVERVIEW,
-      adminToken: TOKEN,
+      bearerToken: TOKEN,
     });
     vi.stubGlobal("fetch", backend.fetchImpl);
-    const { container } = render(<LocalDataPage token={TOKEN} />);
+    const { container } = render(<LocalDataPage />);
     await screen.findAllByTestId("admin-localdata-row");
 
     // 只读标注在场
@@ -152,7 +160,7 @@ describe("LocalDataPage（客户本地数据只读视图）", () => {
   it("403（fail-closed）/ 500 如实呈现：鉴权失败态带 detail，非鉴权走通用错误态", async () => {
     const forbidden = installAdminBackend({ forceStatus: 403 });
     vi.stubGlobal("fetch", forbidden.fetchImpl);
-    const first = render(<LocalDataPage token={TOKEN} />);
+    const first = render(<LocalDataPage />);
     const box = await screen.findByTestId("admin-auth-error");
     expect(box.textContent).toContain("鉴权失败");
     expect(box.textContent).toContain("forced 403");
@@ -161,17 +169,17 @@ describe("LocalDataPage（客户本地数据只读视图）", () => {
 
     const broken = installAdminBackend({ forceStatus: 500 });
     vi.stubGlobal("fetch", broken.fetchImpl);
-    render(<LocalDataPage token={TOKEN} />);
+    render(<LocalDataPage />);
     expect(await screen.findByTestId("admin-error")).toBeTruthy();
   });
 
   it("空数据：api 返回空数组时如实呈现空态（不假装有数据）", async () => {
     const backend = installAdminBackend({
       datasetOverviews: [],
-      adminToken: TOKEN,
+      bearerToken: TOKEN,
     });
     vi.stubGlobal("fetch", backend.fetchImpl);
-    render(<LocalDataPage token={TOKEN} />);
+    render(<LocalDataPage />);
     expect(await screen.findByTestId("admin-localdata-empty")).toBeTruthy();
     expect(screen.queryByTestId("admin-localdata-table")).toBeNull();
   });

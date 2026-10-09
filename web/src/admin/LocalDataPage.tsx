@@ -31,7 +31,7 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / TB).toFixed(1)} TB`;
 }
 
-export function LocalDataPage({ token }: { token: string }) {
+export function LocalDataPage() {
   const { t } = useTranslation();
   const [overview, setOverview] = useState<CustomerLocalDataOverview[] | null>(
     null,
@@ -46,12 +46,12 @@ export function LocalDataPage({ token }: { token: string }) {
     setError(null);
     setOverview(null);
     try {
-      const data = await fetchCustomerLocalDataOverview(token);
+      const data = await fetchCustomerLocalDataOverview();
       setOverview(data);
     } catch (err) {
       setError(err as { status?: number; message: string });
     }
-  }, [token]);
+  }, []);
 
   useEffect(() => {
     void load();

@@ -3,6 +3,8 @@
 // - 输入发送：未选会话=新建并跑首轮循环（POST /conversations），已选=续聊
 //   （POST .../messages）。错误如实呈现：网络错/429 每日限额/cell 未开通的
 //   常量回复（后者以 assistant 消息原样落流，天然如实）。
+// - 身份：请求自动附 Authorization: Bearer（登录会话，见 auth.ts）——
+//   本组件不再持有任何客户标识 prop。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -28,13 +30,7 @@ function toSendError(err: unknown): SendError {
   return { detail: (err as Error).message };
 }
 
-export function ChatPage({
-  customerId,
-  conversationId,
-}: {
-  customerId: string;
-  conversationId: number | null;
-}) {
+export function ChatPage({ conversationId }: { conversationId: number | null }) {
   const { t } = useTranslation();
   const [conversations, setConversations] = useState<Conversation[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -48,12 +44,12 @@ export function ChatPage({
   const loadConversations = useCallback(async () => {
     setListError(null);
     try {
-      setConversations(await fetchConversations(customerId));
+      setConversations(await fetchConversations());
     } catch {
       setConversations([]);
       setListError("list");
     }
-  }, [customerId]);
+  }, []);
 
   useEffect(() => {
     setConversations(null);
@@ -69,7 +65,7 @@ export function ChatPage({
     let cancelled = false;
     setMessages(null);
     setMessagesError(null);
-    fetchMessages(customerId, conversationId)
+    fetchMessages(conversationId)
       .then((rows) => {
         if (!cancelled) setMessages(sortMessages(rows));
       })
@@ -79,7 +75,7 @@ export function ChatPage({
     return () => {
       cancelled = true;
     };
-  }, [customerId, conversationId]);
+  }, [conversationId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
@@ -93,18 +89,18 @@ export function ChatPage({
     try {
       if (conversationId == null) {
         // 新建对话：发送首条消息即创建并跑一轮构建循环。
-        const detail = await createConversation(customerId, { message: content });
+        const detail = await createConversation({ message: content });
         window.location.hash = `#/console/chat?c=${detail.id}`;
         return; // 路由变化触发重挂载，新会话消息随挂载加载
       }
-      const appended = await postMessage(customerId, conversationId, content);
+      const appended = await postMessage(conversationId, content);
       setMessages((prev) => [...(prev ?? []), ...sortMessages(appended)]);
       setInput("");
     } catch (err) {
       setSendError(toSendError(err));
       // 发送失败时尽力同步服务端已落库的消息（用户消息可能已持久化）。
       if (conversationId != null) {
-        fetchMessages(customerId, conversationId)
+        fetchMessages(conversationId)
           .then((rows) => setMessages(sortMessages(rows)))
           .catch(() => undefined);
       }
@@ -198,7 +194,7 @@ export function ChatPage({
                 data-testid="messages-retry"
                 onClick={() => {
                   setMessagesError(null);
-                  fetchMessages(customerId, conversationId!)
+                  fetchMessages(conversationId!)
                     .then((rows) => setMessages(sortMessages(rows)))
                     .catch(() => setMessagesError("messages"));
                 }}

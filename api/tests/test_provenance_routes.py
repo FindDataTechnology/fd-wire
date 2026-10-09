@@ -5,8 +5,9 @@ event_id 幂等、时间线（倒序/before_seq/主体过滤/鉴权 401/跨企�
 status（档位/完整性/无事件如实标注）、tier 调档（含非法档 422）、
 overview 概览。
 
-鉴权走 datasets 路由同款骨架（X-Customer-Id 头），无需绕过依赖；
-数据集行经同库会话直插（本组端点不经引擎通道）。
+鉴权走 datasets 路由同款身份（Bearer ID token → logto_sub → Customer，
+wire-self-serve-launch 4.5）；数据集行经同库会话直插（本组端点不经引擎
+通道）。
 """
 
 from __future__ import annotations
@@ -22,8 +23,12 @@ from fd_wire_api.datasets.models import Dataset
 from fd_wire_api.provenance import reset_provenance_runtime
 from fd_wire_api.provenance.settings import get_settings
 
-CUSTOMER_A = {"X-Customer-Id": "cust-001"}
-CUSTOMER_B = {"X-Customer-Id": "cust-002"}
+from console_fixture import bearer, install_fake_jwks, make_console_env, mint_id_token
+
+SUB_A = "sub-cust-001"
+SUB_B = "sub-cust-002"
+CUSTOMER_A = bearer(mint_id_token(SUB_A))
+CUSTOMER_B = bearer(mint_id_token(SUB_B))
 
 
 @pytest.fixture()
@@ -33,6 +38,11 @@ def provenance_env(tmp_path, monkeypatch):
     monkeypatch.setenv("FD_WIRE_DATASETS_AUTO_CREATE_TABLES", "1")
     monkeypatch.setenv("FD_WIRE_DATASETS_UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.delenv("FD_WIRE_PROVENANCE_INGEST_TOKEN", raising=False)
+    install_fake_jwks(monkeypatch)
+    make_console_env(
+        tmp_path, monkeypatch,
+        customers=[(SUB_A, "cust-001"), (SUB_B, "cust-002")],
+    )
     reset_datasets_runtime()
     reset_provenance_runtime()
     with TestClient(fastapi_app) as client:

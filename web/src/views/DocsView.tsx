@@ -157,13 +157,13 @@ export function DocsView() {
         </div>
       </section>
 
-      {/* 能力上线状态——如实呈现，未上线不发卡 */}
+      {/* 能力上线状态——如实呈现，未上线不发卡。控制台（AI 对话构建/我的数据/
+          产物预览）已上线，不再挂「上线中」徽标（wire-self-serve-launch 7.3/7.4）。 */}
       <section className="space-y-3">
         <h2 className="text-sm font-medium text-slate-400">
           {t("docs.statusTitle")}
         </h2>
         <ul className="space-y-2">
-          <StatusRow label={t("docs.statusConsoleLabel")} />
           <StatusRow label={t("docs.demands.cellLabel")} />
           <StatusRow label={t("docs.statusDemandLabel")} />
         </ul>

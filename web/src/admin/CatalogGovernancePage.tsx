@@ -14,7 +14,7 @@ import {
 
 type MirrorStatus = "registered" | "verified";
 
-export function CatalogGovernancePage({ token }: { token: string }) {
+export function CatalogGovernancePage() {
   const { t } = useTranslation();
   const [status, setStatus] = useState<MirrorStatus>("registered");
   const [items, setItems] = useState<IndicatorPendingItem[] | null>(null);
@@ -26,12 +26,12 @@ export function CatalogGovernancePage({ token }: { token: string }) {
     setError(null);
     setItems(null);
     try {
-      const response = await fetchCatalogPending(token, status);
+      const response = await fetchCatalogPending(status);
       setItems(response.items);
     } catch (err) {
       setError(err as { status?: number; message: string });
     }
-  }, [token, status]);
+  }, [status]);
 
   useEffect(() => {
     void load();
@@ -44,7 +44,7 @@ export function CatalogGovernancePage({ token }: { token: string }) {
     }
     setOpenId(indicatorId);
     try {
-      const notes = await fetchReviewNotes(token, indicatorId);
+      const notes = await fetchReviewNotes(indicatorId);
       setNotesByIndicator((prev) => ({ ...prev, [indicatorId]: notes }));
     } catch (err) {
       setError(err as { status?: number; message: string });
@@ -52,7 +52,7 @@ export function CatalogGovernancePage({ token }: { token: string }) {
   };
 
   const refreshNotes = async (indicatorId: string) => {
-    const notes = await fetchReviewNotes(token, indicatorId);
+    const notes = await fetchReviewNotes(indicatorId);
     setNotesByIndicator((prev) => ({ ...prev, [indicatorId]: notes }));
   };
 
@@ -163,7 +163,6 @@ export function CatalogGovernancePage({ token }: { token: string }) {
                     )}
                   </ul>
                   <NoteInput
-                    token={token}
                     indicatorId={item.indicator_id}
                     onSaved={() => void refreshNotes(item.indicator_id)}
                     onError={(err) => setError(err)}
@@ -180,12 +179,10 @@ export function CatalogGovernancePage({ token }: { token: string }) {
 }
 
 function NoteInput({
-  token,
   indicatorId,
   onSaved,
   onError,
 }: {
-  token: string;
   indicatorId: string;
   onSaved: () => void;
   onError: (err: { status?: number; message: string }) => void;
@@ -198,7 +195,7 @@ function NoteInput({
     if (!text.trim()) return;
     setBusy(true);
     try {
-      await addVerifyNote(token, indicatorId, text.trim());
+      await addVerifyNote(indicatorId, text.trim());
       setText("");
       onSaved();
     } catch (err) {

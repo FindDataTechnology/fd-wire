@@ -8,10 +8,13 @@ from . import __version__
 from .admin import router as admin_router
 from .ai import init_db as init_ai_db
 from .ai import router as ai_router
+from .billing.routes import router as billing_router
 from .catalog import init_db as init_catalog_db
 from .catalog import register_catalog
 from .catalog import shutdown_catalog, startup_catalog
 from .config import settings
+from .console import init_db as init_console_db
+from .console import router as console_router
 from .datasets import connector_router as datasets_connector_router
 from .datasets import init_datasets_db
 from .datasets import router as datasets_router
@@ -48,10 +51,14 @@ async def lifespan(_: FastAPI):
     # register_catalog 挂的 add_event_handler 不会触发，故在此显式调）。
     init_catalog_db()
     startup_catalog()
-    # 计费（任务 4.2）：billing_* 三表 + 三档 seed（幂等）。
+    # 计费（任务 4.2）：billing_* 三表 + 档位 seed（幂等；公开三档 + 旧三档
+    # 禁用，见 billing/plans.py）。
     from .billing import init_billing
 
     init_billing()
+    # 控制台域（wire-self-serve-launch 4.3）：console_onboardings 断点簿记表
+    # 幂等建表兜底（生产走 alembic 0015）。
+    init_console_db()
     # 内部后台（任务 7.1）：审核意见表幂等建表兜底（生产走 0007）。
     from .admin import init_db as init_admin_db
 
@@ -96,6 +103,11 @@ app = FastAPI(
 
 app.include_router(example.router)
 app.include_router(metering_router)
+# billing 域路由（wire-self-serve-launch 1.3/3.1）：公开档位 + 内部额度查询
+app.include_router(billing_router)
+# 控制台面（wire-self-serve-launch 4.2/4.3/6.1）：登录配置下发 + 首登自动
+# 开户 + 客户自助用量（Bearer ID token 身份）
+app.include_router(console_router)
 app.include_router(demands_router)
 # 需求单 AI 预评估与人工报价（任务 6.4）：评估独立触发 + 确认台内部视图
 app.include_router(demands_admin_router)
@@ -107,17 +119,19 @@ app.include_router(ai_router)
 # 指标目录镜像（任务 6.1）：公开目录查询 + internal 同步触发 + 每日调度
 register_catalog(app)
 # 内部后台（任务 7.1）：客户/账本/需求单派发/目录治理/用量分轨
-# （X-Admin-Token 鉴权，未配置 fail-closed；表迁移走 alembic 0007）
+# （双闸鉴权 wire-self-serve-launch 5.1：X-Admin-Token + Bearer 角色闸；
+# 未配置 fail-closed；表迁移走 alembic 0007）
 app.include_router(admin_router)
 # 产物物化计量（任务 5.6）：draft 转正 + 运行摘要内部端点
 # （X-Internal-Token 鉴权，未配置 fail-closed；表迁移走 alembic 0009）
 app.include_router(materialization_router)
-# 客户数据集（wire-customer-local-data 任务组 2）：客户面（X-Customer-Id）
+# 客户数据集（wire-customer-local-data 任务组 2）：客户面（Bearer ID token，
+# wire-self-serve-launch 4.5 身份切换）
 app.include_router(datasets_router)
 # 连接器面（Bearer fwc_...）与内部只读概览；客户数据读写全经引擎 MCP 通道
 app.include_router(datasets_connector_router)
 # 溯源账本（wire-provenance-ledger 任务组 2）：客户面概览/时间线/状态/调档
-# + 内部 ingest 入账端点（X-Customer-Id / X-Provenance-Token）
+# （Bearer 身份，4.5）+ 内部 ingest 入账端点（X-Provenance-Token）
 app.include_router(provenance_router)
 
 

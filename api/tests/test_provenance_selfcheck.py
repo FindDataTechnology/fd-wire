@@ -30,7 +30,10 @@ from fd_wire_api.provenance import (
 from fd_wire_api.provenance.selfcheck import reset_selfcheck_runtime
 from fd_wire_api.provenance.models import LedgerEvent
 
-CUSTOMER_A = {"X-Customer-Id": "cust-001"}
+from console_fixture import bearer, install_fake_jwks, make_console_env, mint_id_token
+
+SUB_A = "sub-cust-001"
+CUSTOMER_A = bearer(mint_id_token(SUB_A))
 
 
 @pytest.fixture()
@@ -61,6 +64,8 @@ def client_env(tmp_path, monkeypatch):
     monkeypatch.delenv(
         selfcheck.SELFCHECK_INTERVAL_ENV, raising=False
     )
+    install_fake_jwks(monkeypatch)
+    make_console_env(tmp_path, monkeypatch, customers=[(SUB_A, "cust-001")])
     reset_datasets_runtime()
     reset_provenance_runtime()
     selfcheck.reset_selfcheck_runtime()

@@ -1,7 +1,8 @@
 // 测试专用：控制台 API 的内存假后端（语义对齐 api 仓 fd_wire_api 路由：
-// X-Customer-Id 隔离、创建即跑一轮循环、消息 append-only、产物草稿列表；
-// wire-customer-local-data 任务组 3 追加 数据集/上传/修正/同步/连接器 路由，
-// 路径与载荷对齐 reports/interfaces.md §3.3——纯内存、零网络）。
+// Authorization: Bearer <ID token> 身份（解码 sub 即客户标识）、创建即跑
+// 一轮循环、消息 append-only、产物草稿列表；wire-customer-local-data 任务组 3
+// 追加 数据集/上传/修正/同步/连接器 路由；wire-self-serve-launch 追加
+// /api/console/{auth/config,session,usage} 路由——纯内存、零网络）。
 import type {
   ChatMessage,
   Connector,
@@ -17,6 +18,7 @@ import type {
   SyncRecord,
   UploadPreview,
 } from "./api";
+import { saveSession, type ConsoleSession } from "./auth";
 
 export type FakeResponse = {
   ok: boolean;
@@ -60,6 +62,28 @@ export interface ConsoleBackendOptions {
   /** 强制 POST /ai/conversations 返回该状态（如 429 每日限额）。 */
   failCreateStatus?: number;
   failCreateDetail?: string;
+  /** /api/console/auth/config 下发体（缺省 configured=true 的可用配置；false=阻塞态）。 */
+  authConfig?: { configured: boolean };
+  /** 强制 auth/config 返回该状态（配置端点故障态）。 */
+  failAuthConfigStatus?: number;
+  /** 会话建立返回的客户 plan_code（免费档门禁测试用，默认 basic）。 */
+  planCode?: string;
+  /** 会话建立返回的客户名（默认 演示客户）。 */
+  customerName?: string;
+  /** 会话建立下发的明文密钥（仅开户那次；缺省 null）。 */
+  keyOnce?: string | null;
+  /** 强制 POST /api/console/session 返回 502 failed（开户链路断言）。 */
+  sessionFailReason?: string;
+  /** GET /api/console/usage 响应体覆盖（用量页测试）。 */
+  usage?: {
+    period: string;
+    plan_code: string;
+    included_lines: number;
+    used_lines: number;
+    remaining_lines: number;
+  };
+  /** 强制 /api/console/usage 返回该状态。 */
+  failUsageStatus?: number;
   /** 种子数据集（带 customer_id 的仅对同客户可见）。 */
   datasets?: Dataset[];
   /** 种子连接器（带 customer_id 的仅对同客户可见）。 */
@@ -214,12 +238,86 @@ export function installConsoleBackend(
       formData: isForm ? rawBody : undefined,
     });
 
-    const customerId = headers["x-customer-id"];
-    if (!customerId) {
+    const path = url.pathname;
+
+    // ── 控制台登录/会话/用量（wire-self-serve-launch 4.4 / 6.2 契约）──
+    if (path === "/api/console/auth/config" && method === "GET") {
+      if (options.failAuthConfigStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `auth config ${options.failAuthConfigStatus}` },
+            options.failAuthConfigStatus,
+          ),
+        );
+      }
       return Promise.resolve(
-        jsonResponse({ detail: "缺少 X-Customer-Id（客户身份头）" }, 401),
+        jsonResponse(
+          options.authConfig ?? {
+            configured: true,
+            issuer: "https://auth.test/oidc",
+            client_id: "test-client",
+            scopes: ["openid", "profile", "email", "roles", "offline_access"],
+            organization_required: false,
+          },
+        ),
       );
     }
+    if (path === "/api/console/session" && method === "POST") {
+      if (options.sessionFailReason) {
+        return Promise.resolve(
+          jsonResponse(
+            { status: "failed", reason: options.sessionFailReason },
+            502,
+          ),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse({
+          status: "ready",
+          customer: {
+            id: 1,
+            name: options.customerName ?? "演示客户",
+            plan_code: options.planCode ?? "basic",
+          },
+          key_once: options.keyOnce ?? null,
+        }),
+      );
+    }
+
+    const customerId = subOfBearer(headers);
+    if (!customerId) {
+      return Promise.resolve(
+        jsonResponse(
+          { detail: "缺少 Authorization: Bearer <ID token>（登录会话）" },
+          401,
+        ),
+      );
+    }
+
+
+    if (path === "/api/console/usage" && method === "GET") {
+      if (options.failUsageStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `usage ${options.failUsageStatus}` },
+            options.failUsageStatus,
+          ),
+        );
+      }
+      const planCode = options.planCode ?? "basic";
+      return Promise.resolve(
+        jsonResponse(
+          options.usage ?? {
+            period: "2026-10",
+            plan_code: planCode,
+            included_lines: 100_000,
+            used_lines: 123,
+            remaining_lines: 99_877,
+          },
+        ),
+      );
+    }
+
     /** 本客户可见性：带 customer_id 的种子仅同客户可见（跨企业 404）。 */
     const ownDataset = (id: string): Dataset | undefined => {
       const dataset = datasets.get(id);
@@ -229,7 +327,6 @@ export function installConsoleBackend(
         : dataset;
     };
 
-    const path = url.pathname;
     if (path === "/api/v1/ai/conversations" && method === "POST") {
       if (options.failCreateStatus) {
         return Promise.resolve(
@@ -561,4 +658,80 @@ export function consoleFailingBackend(
 ): typeof fetch {
   return (() =>
     Promise.resolve(jsonResponse({ detail }, status))) as unknown as typeof fetch;
+}
+
+// ---------------------------------------------------------------------------
+// 登录会话测试件（wire-self-serve-launch 4.4/4.6/5.2/6.2）
+// ---------------------------------------------------------------------------
+
+function b64urlJson(value: unknown): string {
+  return btoa(JSON.stringify(value))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+/** 造测试 ID token（JWT 形状，payload base64url；签名段无意义——校验在服务端）。 */
+export function makeIdToken(
+  claims: { sub?: string; roles?: string[]; email?: string; name?: string } = {},
+): string {
+  const payload = {
+    sub: claims.sub ?? "demo-customer",
+    ...(claims.roles ? { roles: claims.roles } : {}),
+    ...(claims.email ? { email: claims.email } : {}),
+    ...(claims.name ? { name: claims.name } : {}),
+  };
+  return `${b64urlJson({ alg: "HS256", typ: "JWT" })}.${b64urlJson(payload)}.test-signature`;
+}
+
+/** 从请求头解出 Bearer token 的 sub claim（即客户标识；无/坏 token → null）。 */
+export function subOfBearer(headers: Record<string, string>): string | null {
+  const authorization = headers["authorization"] ?? "";
+  const match = authorization.match(/^Bearer (.+)$/);
+  if (!match) return null;
+  try {
+    const payload = match[1]!.split(".")[1];
+    if (!payload) return null;
+    const padded = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(
+      padded.padEnd(padded.length + ((4 - (padded.length % 4)) % 4), "="),
+    );
+    const claims = JSON.parse(new TextDecoder().decode(Uint8Array.from(binary, (c) => c.charCodeAt(0)))) as {
+      sub?: string;
+    };
+    return typeof claims.sub === "string" && claims.sub ? claims.sub : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 种子登录会话（sessionStorage）：idToken = makeIdToken(claims)，
+ * customer 回填 plan_code（免费档门禁/用量页测试用）。返回会话对象便于断言。
+ */
+export function seedConsoleSession(
+  overrides: {
+    sub?: string;
+    roles?: string[];
+    email?: string;
+    planCode?: string;
+    customerName?: string;
+    idToken?: string;
+  } = {},
+): ConsoleSession {
+  const idToken = overrides.idToken ?? makeIdToken(overrides);
+  const session: ConsoleSession = {
+    idToken,
+    expiresAt: Date.now() + 3600_000,
+    identity: overrides.email ?? overrides.sub ?? "demo-customer",
+    email: overrides.email,
+    roles: overrides.roles ?? [],
+    customer: {
+      id: 1,
+      name: overrides.customerName ?? "演示客户",
+      plan_code: overrides.planCode ?? "basic",
+    },
+  };
+  saveSession(session);
+  return session;
 }

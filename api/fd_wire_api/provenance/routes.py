@@ -1,6 +1,8 @@
-"""溯源账本端点：客户面 + 内部入账（wire-provenance-ledger 任务组 2）。
+"""溯源账本端点：客户面 + 内部入账（wire-provenance-ledger 任务组 2；
+wire-self-serve-launch 4.5 客户面身份切换）。
 
-- 客户面（``X-Customer-Id``，与 datasets 切片同款骨架鉴权，缺失 401）：
+- 客户面（Bearer ID token → logto_sub → Customer，与 datasets 切片同款
+  身份依赖，缺失/未映射 401；X-Customer-Id 占位头退位不再接受）：
   ``/overview`` 企业概览、``/datasets/{key}/events`` 时间线（倒序分页）、
   ``/datasets/{key}/status`` 溯源状态、``/datasets/{key}/tier`` 调档。
 - 内部面：``POST /ingest`` 供 cell-manager/转发器远端入账
@@ -33,6 +35,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
+from ..console.auth import require_console_customer_id
 from ..datasets.db import get_session
 from ..datasets.models import Dataset
 from . import envelope, export, ledger, selfcheck
@@ -52,18 +55,6 @@ from .schemas import (
 from .settings import get_settings
 
 router = APIRouter(tags=["provenance"])
-
-
-def _customer_id(
-    x_customer_id: str | None = Header(default=None, alias="X-Customer-Id"),
-) -> str:
-    """客户身份：与 datasets 切片同款骨架鉴权，缺失即 401。"""
-    if not x_customer_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="缺少 X-Customer-Id（客户身份头）",
-        )
-    return x_customer_id
 
 
 def require_ingest_token(
@@ -121,7 +112,7 @@ def _last_seq(db: Session, ledger: str) -> int:
 
 @router.get("/api/v1/provenance/overview", response_model=OverviewOut)
 def provenance_overview(
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_provenance_db),
 ) -> OverviewOut:
     """企业溯源概览：账本末位 seq、链完整性、锚定进度（滞后如实计数）。"""
@@ -167,7 +158,7 @@ def dataset_events(
     key: str,
     before_seq: int | None = Query(default=None, ge=1, description="取 seq 小于该值的事件（向上翻页）"),
     limit: int = Query(default=50, ge=1, le=500),
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_provenance_db),
 ) -> list[TimelineEventOut]:
     """数据集事件时间线：仅 subject 指向本数据集的事件，seq 倒序分页。"""
@@ -189,7 +180,7 @@ def dataset_events(
 )
 def dataset_status(
     key: str,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_provenance_db),
 ) -> DatasetStatusOut:
     """数据集溯源状态：档位 + 时间线事件哈希自洽 + 溯源起点如实标注。
@@ -236,7 +227,7 @@ def dataset_status(
 def set_dataset_tier(
     key: str,
     payload: TierIn,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_provenance_db),
 ) -> TierOut:
     """调档：写 ``datasets.provenance_tier``，即时生效于后续事件。
@@ -290,7 +281,7 @@ def _safe_filename_part(value: str) -> str:
 
 @router.get("/api/v1/provenance/evidence-package")
 def export_evidence_package(
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_provenance_db),
 ) -> FileResponse:
     """导出本企业完整证据包（zip 下载；离线核验脚本可直接消费）。
@@ -334,7 +325,7 @@ def export_evidence_package(
 @router.get("/api/v1/provenance/checkpoints/{epoch}")
 def download_checkpoint(
     epoch: int,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
 ) -> FileResponse:
     """客户自持检查点单文件下载（``epoch-<N>.json``；不存在 404）。
 
@@ -362,7 +353,7 @@ def download_checkpoint(
 
 
 @router.get("/api/v1/provenance/selfcheck")
-def get_selfcheck_report(customer_id: str = Depends(_customer_id)) -> dict:
+def get_selfcheck_report(customer_id: str = Depends(require_console_customer_id)) -> dict:
     """最近一次账本完整性自检报告（尚未运行过 → 404）。
 
     admin 侧语义：生产应挂 admin 鉴权（如 ``admin.auth.require_admin_token``
@@ -379,7 +370,7 @@ def get_selfcheck_report(customer_id: str = Depends(_customer_id)) -> dict:
 
 @router.post("/api/v1/provenance/selfcheck/run")
 def run_selfcheck_now(
-    customer_id: str = Depends(_customer_id),  # noqa: ARG001 —— 鉴权占位（同上）
+    customer_id: str = Depends(require_console_customer_id),  # noqa: ARG001 —— 鉴权占位（同上）
     db: Session = Depends(get_provenance_db),
 ) -> dict:
     """立即执行一次全量自检并返回报告（只读：不 append/改写/commit）。

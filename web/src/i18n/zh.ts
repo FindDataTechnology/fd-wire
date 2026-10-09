@@ -28,42 +28,46 @@ const zh = {
     value2Title: "MCP 直连数据",
     value2Desc:
       "以 MCP 协议把数据直连进你的工具链与 Agent，行级回流，不做人工搬运。",
-    value3Title: "AI 构建分析与爬虫需求闭环",
+    value3Title: "AI 对话构建 × 我的数据",
     value3Desc:
-      "AI 对话构建分析产物；目录没有的指标提需求单，爬虫流水线构建后交付私有范围（控制台上线中）。",
+      "控制台已上线：AI 对话构建分析产物并即时预览；公网上传或经连接器同步「我的数据」物化后参与分析——目录没有的指标提需求单，交付私有范围。",
     lineNote: "寻数五线并进：壹座之上、萬星闪耀——Wire 以数据行讫，直连商业决策。",
   },
   pricing: {
     title: "定价",
-    subtitle:
-      "月费含额度、超额阶梯单价、按行计量——档位数字后台可配，如下为当前生效口径。",
+    // 用完即停口径（wire-self-serve-launch 任务 7.1）：全部档位无超额单价。
+    subtitle: "月费含额度、按行计量、用完即停、次月恢复——档位数字后台可配，如下为当前生效口径。",
     perMonth: "/月",
-    recommended: "推荐",
     cta: "联系开通",
+    loading: "档位加载中…",
+    // 活取失败回退：呈现不带数字的能力卡片（源码零档位面量）。
+    loadFailedNote: "档位数据暂时不可用——以下为能力概览，额度数字请稍后再试或联系开通获取。",
+    // {{count}} 由 GET /api/v1/plans 的 included_lines 千分位渲染（非源码面量）。
+    includedLines: "含 {{count}} 行/月",
+    stopAtQuotaLine: "用完即停、次月恢复——无超额单价。",
+    customQuote: "询价",
     featCatalog: "{{total}}+ 指标目录全量浏览",
     featCatalogNoCount: "指标目录全量浏览",
     featMcp: "MCP 直连数据读取",
     featDemand: "数据需求单（独立报价）",
-    starter: {
-      name: "入门版",
-      price: "¥1,999",
-      rows: "含 50 万行/月",
-      overage: "超额 ¥0.004/行",
-      desc: "小团队起步，验证数据价值。",
-    },
-    pro: {
-      name: "专业版",
-      price: "¥6,999",
-      rows: "含 300 万行/月",
-      overage: "超额 ¥0.003/行",
-      desc: "成长期团队的常用档位。",
-    },
-    enterprise: {
-      name: "企业版",
-      price: "¥19,999",
-      rows: "含 1,200 万行/月",
-      overage: "超额 ¥0.002/行",
-      desc: "高强度用量的规模档位。",
+    // 档位名/描述按 code（free/basic/standard/custom）；价格与行数一律活取。
+    tiers: {
+      free: {
+        name: "免费版",
+        desc: "自助注册即得，验证数据价值。",
+      },
+      basic: {
+        name: "基础版",
+        desc: "小团队起步，开通我的数据。",
+      },
+      standard: {
+        name: "标准版",
+        desc: "成长期团队的常用档位。",
+      },
+      custom: {
+        name: "自定义",
+        desc: "定制额度按需定案，联系开通询价。",
+      },
     },
     fnDemand: "* 数据需求单独立报价，不计入套餐行数额度。",
     fnLegal: "* 法律域数据默认询价开通，不进入公开目录直读。",
@@ -96,8 +100,9 @@ const zh = {
         "当月行数达到额度的 80% 与 95% 时，分别向客户负责人发送预警，服务不中断。",
       hardStopTitle: "硬停语义",
       hardStopDesc:
-        "额度耗尽后数据读取 fail-closed 硬停（含产物定时刷新）；补充额度或调整套餐后恢复。",
-      pricingNote: "套餐档位与超额单价，详见定价页 →",
+        "额度耗尽后数据读取 fail-closed 硬停（含产物定时刷新）——无需任何操作，次月自动恢复满额；急需更高额度可升档。",
+      pricingNote:
+        "四档套餐（免费/基础/标准/自定义）月费含额、用完即停、次月恢复——详见定价页 →",
     },
     demands: {
       title: "需求单流程",
@@ -116,7 +121,6 @@ const zh = {
       cellLabel: "cell 开通（私有范围交付）",
     },
     statusTitle: "能力上线状态",
-    statusConsoleLabel: "控制台分析构建",
     statusDemandLabel: "需求单提交",
   },
   badge: {
@@ -186,7 +190,7 @@ const zh = {
   demandNew: {
     title: "提交数据需求单",
     placeholder:
-      "需求单提交建设中——控制台上线后，此处将以预填指标提交需求单，状态全程可见，交付进入私有 scope。",
+      "需求单提交建设中——此处将以预填指标提交需求单，状态全程可见，交付进入私有 scope。",
     prefilled: "预填指标",
     back: "返回目录",
   },
@@ -202,11 +206,34 @@ const zh = {
       usage: "用量",
     },
     topbar: {
-      org: "企业标识（占位）",
-      customerLabel: "X-Customer-Id",
-      customerHint: "开发占位值，仅开发用——鉴权上线后由登录态提供",
-      save: "保存",
-      login: "登录（占位）",
+      org: "客户",
+      plan: "档位",
+      logout: "登出",
+    },
+    auth: {
+      loading: "控制台启动中…",
+      anonymousTitle: "请先登录",
+      anonymousBody: "登录后即可进入控制台：AI 对话构建、我的数据、产物与用量。",
+      signIn: "前往登录",
+      loginPageLink: "前往登录页 →",
+      blockedTitle: "登录暂未开放",
+      blockedBody:
+        "服务端尚未下发登录配置（configured=false）——控制台登录暂不可用，请联系平台管理员。",
+      configErrorTitle: "登录配置获取失败",
+      sessionErrorTitle: "会话建立失败",
+      upgradeHint: "开户可能暂时不可用——可稍后重试或联系开通。",
+      retry: "重试",
+    },
+    callback: {
+      processing: "登录回调处理中…",
+      success: "登录成功，正在进入控制台…",
+      errorTitle: "登录失败",
+      backToLogin: "返回登录重试",
+    },
+    keyOnce: {
+      title: "你的平台密钥（仅展示一次）",
+      hint: "请立即复制并妥善保存——出于安全考虑，明文密钥关闭后不再提供查询。",
+      copy: "复制",
     },
     chat: {
       conversations: "会话列表",
@@ -273,6 +300,11 @@ const zh = {
       title: "我的数据",
       subtitle:
         "上传文件或经连接器同步的客户数据集——仅本企业可见；读取不计入套餐额度。",
+      upgrade: {
+        title: "「我的数据」面向付费档开放",
+        body: "当前为免费档：仅含公网指标读取额度，不含我的数据（上传 / 连接器）能力。升档至基础版即开通。",
+        cta: "联系开通升档",
+      },
       loading: "数据集加载中…",
       errorTitle: "数据集加载失败",
       retry: "重试",
@@ -494,9 +526,23 @@ const zh = {
       title: "需求单",
       body: "需求单管理建设中——目录外指标的需求提交与八态时间线将在此上线（当前可从指标目录详情发起占位提交）。",
     },
-    usagePlaceholder: {
+    usage: {
       title: "用量",
-      body: "用量视图建设中——行级计量、额度预警与分轨用量将在此上线。",
+      subtitle: "当月读取用量与档位额度（rows_returned 口径，与行数门、结算同源）。",
+      periodLabel: "账期",
+      planLabel: "当前档位",
+      includedLabel: "含额行数",
+      usedLabel: "已用行数",
+      remainingLabel: "剩余额度",
+      stopNote: "用完即停、次月恢复——超出档位含额的读取会被拒绝，不产生超额费用。",
+      lowWarning: "本月额度余量不足 20%——注意用量节奏；需要更高额度可升档。",
+      exhaustedTitle: "本月额度已用完",
+      exhaustedBody:
+        "档位含额已用尽，数据读取暂时停止——次月自动恢复满额，无需任何操作；也可升档获得更高额度。",
+      upgradeCta: "联系开通升档",
+      loading: "用量加载中…",
+      errorTitle: "用量加载失败",
+      retry: "重试",
     },
   },
   admin: {
@@ -507,12 +553,16 @@ const zh = {
       demands: "需求单",
       catalog: "目录治理",
       usage: "用量",
+      localData: "本地数据",
     },
     topbar: {
-      tokenLabel: "X-Admin-Token",
-      save: "保存",
-      tokenHint: "令牌为开发占位（localStorage，仅开发用）；生产由正式鉴权替换。",
+      identity: "登录身份",
+      gateNote: "双闸通道：登录角色 + 服务端令牌（由网关注入，浏览器不可见）。",
       exit: "返回前台",
+    },
+    roleGate: {
+      title: "需要内部后台权限",
+      body: "当前登录账号不含 wire-admin 角色——如需访问，请联系管理员在 Logto 挂角色。",
     },
     common: {
       loading: "加载中…",
@@ -522,7 +572,7 @@ const zh = {
     error: {
       title: "加载失败",
       authTitle: "鉴权失败",
-      authHint: "检查右上角 X-Admin-Token 是否正确（服务端未配置令牌时一律拒绝）。",
+      authHint: "登录态无效或缺少 wire-admin 角色；服务端第二道令牌闸由网关注入校验。",
       retry: "重试",
     },
     customers: {
@@ -659,8 +709,16 @@ const zh = {
   },
   login: {
     title: "登录",
-    placeholder: "客户登录建设中——将以企业账户（owner / member）进入控制台。",
-    cta: "联系我们开通",
+    loading: "登录配置加载中…",
+    subtitle: "登录柏讯控制台——AI 对话构建、我的数据、产物与用量一站管理。",
+    cta: "使用 Logto 登录",
+    blockedBody: "服务端尚未下发登录配置（configured=false），暂无法登录。",
+    blockedHint: "这不是你的问题——请联系平台管理员完成部署配置。",
+    signedInAs: "当前登录：{{identity}}",
+    goConsole: "进入控制台",
+    signOut: "登出",
+    errorTitle: "登录配置获取失败",
+    errorHint: "请稍后重试；若持续失败请联系平台管理员。",
   },
   footer: "© FindData · 柏讯 Wire · 寻数科技 wire 线",
 };

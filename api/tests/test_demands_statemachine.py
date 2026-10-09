@@ -29,17 +29,22 @@ from fd_wire_api.demands import DemandStatus, get_db
 from fd_wire_api.demands.db import Base
 from fd_wire_api.demands.statemachine import ALLOWED_TRANSITIONS
 
+from console_fixture import bearer, install_fake_jwks, make_console_env, mint_id_token
+
 INTERNAL_TOKEN = "wire-internal-dev"
 INTERNAL = {"X-Internal-Token": INTERNAL_TOKEN}
-CUST = {"X-Customer-Id": "cust-001"}
+SUB_CUST = "sub-cust-001"
+SUB_OTHER = "sub-cust-002"
+CUST = bearer(mint_id_token(SUB_CUST))
+OTHER = bearer(mint_id_token(SUB_OTHER))
 
 ALL_STATUSES = list(DemandStatus)
 CODE_RE = re.compile(r"^DE-\d{8}-\d{2,}$")
 
 
 @pytest.fixture()
-def client():
-    """每个用例独立的内存库 + 覆盖 get_db 的 TestClient。"""
+def client(tmp_path, monkeypatch):
+    """每个用例独立的内存库 + 覆盖 get_db 的 TestClient（外加平台库身份种子）。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -56,6 +61,11 @@ def client():
             db.close()
 
     app.dependency_overrides[get_db] = override_get_db
+    install_fake_jwks(monkeypatch)
+    make_console_env(
+        tmp_path, monkeypatch,
+        customers=[(SUB_CUST, "cust-001"), (SUB_OTHER, "cust-002")],
+    )
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
@@ -73,7 +83,7 @@ def submit(client, customer="cust-001", **overrides) -> dict:
         "linked_indicators": ["IND-CPI-001", "IND-AUTO-014"],
     }
     payload.update(overrides)
-    resp = client.post("/api/v1/demands", json=payload, headers=CUST | {"X-Customer-Id": customer})
+    resp = client.post("/api/v1/demands", json=payload, headers=CUST if customer == "cust-001" else OTHER)
     assert resp.status_code == 201, resp.text
     return resp.json()
 
@@ -159,7 +169,7 @@ def demand_at(client, target: DemandStatus) -> int:
 
 def get_detail(client, demand_id: int, customer="cust-001") -> dict:
     resp = client.get(
-        f"/api/v1/demands/{demand_id}", headers=CUST | {"X-Customer-Id": customer}
+        f"/api/v1/demands/{demand_id}", headers=CUST if customer == "cust-001" else OTHER
     )
     assert resp.status_code == 200, resp.text
     return resp.json()
@@ -388,7 +398,7 @@ def test_customer_scoping_and_auth(client):
     submit(client, customer="cust-002")
 
     # 各自列表隔离，且带当前状态与时间线
-    resp = client.get("/api/v1/demands", headers={"X-Customer-Id": "cust-001"})
+    resp = client.get("/api/v1/demands", headers=CUST)
     assert resp.status_code == 200
     items = resp.json()
     assert [i["id"] for i in items] == [d_a["id"]]
@@ -397,7 +407,7 @@ def test_customer_scoping_and_auth(client):
 
     # 他企详情一律 404（不泄露存在性）
     resp = client.get(
-        f"/api/v1/demands/{d_a['id']}", headers={"X-Customer-Id": "cust-002"}
+        f"/api/v1/demands/{d_a['id']}", headers=OTHER
     )
     assert resp.status_code == 404
 
@@ -416,7 +426,7 @@ def test_customer_scoping_and_auth(client):
 
     # 状态筛选（?status=）
     resp = client.get(
-        "/api/v1/demands", params={"status": "evaluating"}, headers={"X-Customer-Id": "cust-001"}
+        "/api/v1/demands", params={"status": "evaluating"}, headers=CUST
     )
     assert resp.status_code == 200
     assert resp.json() == []

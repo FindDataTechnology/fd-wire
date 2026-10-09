@@ -15,13 +15,7 @@ import {
 } from "./api";
 import { formatServerDate } from "./util";
 
-export function ConnectorsSection({
-  customerId,
-  onCreated,
-}: {
-  customerId: string;
-  onCreated: () => void;
-}) {
+export function ConnectorsSection({ onCreated }: { onCreated: () => void }) {
   const { t } = useTranslation();
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
   const [listError, setListError] = useState(false);
@@ -34,12 +28,12 @@ export function ConnectorsSection({
   const load = useCallback(async () => {
     setListError(false);
     try {
-      setConnectors(await fetchConnectors(customerId));
+      setConnectors(await fetchConnectors());
     } catch {
       setConnectors([]);
       setListError(true);
     }
-  }, [customerId]);
+  }, []);
 
   useEffect(() => {
     setConnectors(null);
@@ -50,7 +44,7 @@ export function ConnectorsSection({
     setGenerating(true);
     setPairError(null);
     try {
-      setToken(await createPairingToken(customerId));
+      setToken(await createPairingToken());
     } catch (err) {
       setPairError(
         apiErrorText(err, t("console.datasets.connectors.pairing.errorTitle")),
@@ -64,7 +58,7 @@ export function ConnectorsSection({
     setRevokingId(connectorId);
     setActionError(null);
     try {
-      await revokeConnector(customerId, connectorId);
+      await revokeConnector(connectorId);
       await load();
     } catch (err) {
       setActionError(
@@ -221,7 +215,6 @@ export function ConnectorsSection({
       </div>
 
       <WhitelistForm
-        customerId={customerId}
         connectors={active}
         loading={connectors == null}
         onCreated={onCreated}
@@ -311,12 +304,10 @@ function PairingTokenPanel({
 }
 
 function WhitelistForm({
-  customerId,
   connectors,
   loading,
   onCreated,
 }: {
-  customerId: string;
   connectors: Connector[];
   loading: boolean;
   onCreated: () => void;
@@ -344,7 +335,7 @@ function WhitelistForm({
     setError(null);
     setCreated(false);
     try {
-      await createDataset(customerId, {
+      await createDataset({
         name: name.trim(),
         source: {
           kind: "connector",

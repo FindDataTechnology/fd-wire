@@ -34,7 +34,10 @@ from fd_wire_api.provenance import (
 #: 离线核验脚本（格式权威）：api/tests/ → 上两级 = fd-wire 根
 EVIDENCE_VERIFY = Path(__file__).resolve().parents[2] / "scripts" / "evidence_verify.py"
 
-CUSTOMER_A = {"X-Customer-Id": "cust-001"}
+from console_fixture import bearer, install_fake_jwks, make_console_env, mint_id_token
+
+SUB_A = "sub-cust-001"
+CUSTOMER_A = bearer(mint_id_token(SUB_A))
 
 #: 信封哈希基字段（重组 event_hash 用，与 envelope.envelope_from_row 同构）
 _ENV_KEYS = (
@@ -77,6 +80,8 @@ def client_env(tmp_path, monkeypatch):
     monkeypatch.setenv("FD_WIRE_DATASETS_AUTO_CREATE_TABLES", "1")
     monkeypatch.setenv("FD_WIRE_DATASETS_UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.delenv("FD_WIRE_PROVENANCE_INGEST_TOKEN", raising=False)
+    install_fake_jwks(monkeypatch)
+    make_console_env(tmp_path, monkeypatch, customers=[(SUB_A, "cust-001")])
     reset_datasets_runtime()
     reset_provenance_runtime()
     with TestClient(fastapi_app) as client:

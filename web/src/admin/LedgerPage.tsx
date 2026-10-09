@@ -23,7 +23,7 @@ const KIND_BADGE_CLASS: Record<LedgerKind, string> = {
 
 const ALL_KINDS = Object.keys(KIND_BADGE_CLASS) as LedgerKind[];
 
-export function LedgerPage({ token }: { token: string }) {
+export function LedgerPage() {
   const { t } = useTranslation();
   const [customers, setCustomers] = useState<AdminCustomer[]>([]);
   const [entries, setEntries] = useState<LedgerEntry[] | null>(null);
@@ -37,16 +37,16 @@ export function LedgerPage({ token }: { token: string }) {
     setEntries(null);
     setUsage(null);
     try {
-      const customerList = await fetchCustomers(token);
+      const customerList = await fetchCustomers();
       setCustomers(customerList);
       const id = customerId ? Number(customerId) : undefined;
       const [rows, usageData] = await Promise.all([
-        fetchLedger(token, {
+        fetchLedger({
           ...(id != null ? { customer_id: id } : {}),
           ...(period.trim() ? { period: period.trim() } : {}),
         }),
         id != null
-          ? fetchCustomerUsage(token, id)
+          ? fetchCustomerUsage(id)
           : Promise.resolve(null),
       ]);
       setEntries(rows);
@@ -54,7 +54,7 @@ export function LedgerPage({ token }: { token: string }) {
     } catch (err) {
       setError(err as { status?: number; message: string });
     }
-  }, [token, customerId, period]);
+  }, [customerId, period]);
 
   useEffect(() => {
     void load();

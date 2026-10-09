@@ -7,7 +7,9 @@ import { parseHash } from "../App";
 import { LedgerPage } from "./LedgerPage";
 import { CatalogGovernancePage } from "./CatalogGovernancePage";
 import { UsageOverviewPage } from "./UsageOverviewPage";
-import { installAdminBackend } from "./testing";
+import { installAdminBackend, seedAdminSession } from "./testing";
+import { seedConsoleSession } from "../console/testing";
+import { AdminView } from "./AdminView";
 import type { AdminCustomer, LedgerEntry } from "./api";
 
 const TOKEN = "test-admin-token";
@@ -83,12 +85,17 @@ const LEDGER: LedgerEntry[] = [
 beforeEach(() => {
   i18n.changeLanguage("zh");
   localStorage.clear();
+  sessionStorage.clear();
+  // admin 双闸（web 半边）：登录会话持 wire-admin 角色，idToken 与假后端
+  // 的期望 Bearer 一致（X-Admin-Token 由 nginx 服务端注入，前端不持）。
+  seedAdminSession();
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   localStorage.clear();
+  sessionStorage.clear();
 });
 
 describe("LedgerPage（账本流水）", () => {
@@ -96,10 +103,10 @@ describe("LedgerPage（账本流水）", () => {
     const backend = installAdminBackend({
       customers: CUSTOMERS,
       ledger: LEDGER,
-      adminToken: TOKEN,
+      bearerToken: TOKEN,
     });
     vi.stubGlobal("fetch", backend.fetchImpl);
-    render(<LedgerPage token={TOKEN} />);
+    render(<LedgerPage />);
 
     const rows = await screen.findAllByTestId("admin-ledger-row");
     expect(rows.length).toBe(3);
@@ -139,10 +146,10 @@ describe("LedgerPage（账本流水）", () => {
     const backend = installAdminBackend({
       customers: [],
       ledger: [],
-      adminToken: TOKEN,
+      bearerToken: TOKEN,
     });
     vi.stubGlobal("fetch", backend.fetchImpl);
-    render(<LedgerPage token={TOKEN} />);
+    render(<LedgerPage />);
     expect(await screen.findByTestId("admin-ledger-empty")).toBeTruthy();
 
     fireEvent.change(screen.getByTestId("ledger-period-filter"), {
@@ -159,9 +166,9 @@ describe("LedgerPage（账本流水）", () => {
 
 describe("CatalogGovernancePage（目录治理）", () => {
   it("registered 列表 + 只读标注 + 审核意见录入调用形状与追加展示", async () => {
-    const backend = installAdminBackend({ adminToken: TOKEN });
+    const backend = installAdminBackend({ bearerToken: TOKEN });
     vi.stubGlobal("fetch", backend.fetchImpl);
-    render(<CatalogGovernancePage token={TOKEN} />);
+    render(<CatalogGovernancePage />);
 
     const items = await screen.findAllByTestId("admin-catalog-item");
     expect(items.length).toBe(1);
@@ -189,7 +196,7 @@ describe("CatalogGovernancePage（目录治理）", () => {
     expect(noteCall.url.pathname).toBe(
       "/internal/admin/catalog/ind-reg-1/verify-note",
     );
-    expect(noteCall.headers["x-admin-token"]).toBe(TOKEN);
+    expect(noteCall.headers["authorization"]).toBe(`Bearer ${TOKEN}`);
     expect(noteCall.body).toEqual({
       note: "口径核对通过，待权威库复核",
       author: "admin-console",
@@ -200,7 +207,7 @@ describe("CatalogGovernancePage（目录治理）", () => {
 describe("UsageOverviewPage（用量分轨）", () => {
   it("两轨数字卡 + 来源分布 + 轨道过滤查询形状", async () => {
     const backend = installAdminBackend({
-      adminToken: TOKEN,
+      bearerToken: TOKEN,
       tracks: [
         { key: "customer", calls: 12, rows: 3400 },
         { key: "platform", calls: 5, rows: 800 },
@@ -212,7 +219,7 @@ describe("UsageOverviewPage（用量分轨）", () => {
       ],
     });
     vi.stubGlobal("fetch", backend.fetchImpl);
-    render(<UsageOverviewPage token={TOKEN} />);
+    render(<UsageOverviewPage />);
 
     expect(await screen.findByTestId("admin-usage-card-customer")).toBeTruthy();
     expect(screen.getByTestId("admin-usage-card-customer-rows").textContent).toBe(
@@ -244,7 +251,7 @@ describe("UsageOverviewPage（用量分轨）", () => {
       "fetch",
       installAdminBackend({ forceStatus: 401 }).fetchImpl,
     );
-    render(<UsageOverviewPage token={TOKEN} />);
+    render(<UsageOverviewPage />);
     expect(await screen.findByTestId("admin-auth-error")).toBeTruthy();
   });
 });
@@ -269,6 +276,52 @@ describe("#/admin 路由解析", () => {
     expect(parseHash("#/admin/whatever")).toEqual({
       name: "admin",
       section: "customers",
+    });
+  });
+});
+
+describe("AdminView（admin 双闸 · web 半边角色门禁）", () => {
+  afterEach(cleanup);
+
+  it("无登录会话 → 角色门禁拦下：不渲染任何页面、不发任何 /internal 请求", () => {
+    sessionStorage.clear(); // 文件级 beforeEach 已种 admin 会话——本用例验无会话面
+    const backend = installAdminBackend({ bearerToken: TOKEN });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<AdminView section="customers" />);
+
+    expect(screen.getByTestId("admin-role-gate")).toBeTruthy();
+    expect(screen.queryByTestId("admin-nav")).toBeNull();
+    expect(
+      backend.calls.filter((c) => c.url.pathname.startsWith("/internal")),
+    ).toEqual([]);
+  });
+
+  it("会话无 wire-admin 角色 → 角色门禁拦下（路由直达也进不来）", () => {
+    seedConsoleSession({ sub: "plain-customer", roles: [] });
+    const backend = installAdminBackend({ bearerToken: "plain-token" });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<AdminView section="customers" />);
+
+    expect(screen.getByTestId("admin-role-gate")).toBeTruthy();
+    expect(
+      backend.calls.filter((c) => c.url.pathname.startsWith("/internal")),
+    ).toEqual([]);
+  });
+
+  it("持 wire-admin 角色 → 通过门禁渲染后台（子页请求自动附登录 Bearer）", async () => {
+    const backend = installAdminBackend({ bearerToken: TOKEN });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<AdminView section="customers" />);
+
+    expect(await screen.findByTestId("admin-nav")).toBeTruthy();
+    expect(screen.getByTestId("admin-identity").textContent).toContain(
+      "admin@finddatatech.cloud",
+    );
+    await waitFor(() => {
+      const call = backend.calls.find(
+        (c) => c.url.pathname === "/internal/admin/customers",
+      );
+      expect(call?.headers["authorization"]).toBe(`Bearer ${TOKEN}`);
     });
   });
 });

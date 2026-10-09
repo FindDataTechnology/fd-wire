@@ -1,6 +1,9 @@
 """datasets 切片测试的共享环境（本文件自身不含测试）。
 
 - 内存 SQLite 库（``FD_WIRE_DATASETS_DATABASE_URL=sqlite://``，StaticPool）；
+- 平台库临时文件（console 身份映射：Bearer ID token → logto_sub →
+  Customer，wire-self-serve-launch 4.5；客户面命名空间键=Customer.name，
+  故种子客户名沿用 cust-001/cust-002 字面量）；
 - 挂了 datasets 客户面 + 连接器面的 FastAPI 应用（全量 app，路由真身）；
 - ``FakeEngine``：引擎 MCP 客户端假实现——记录 ``tools/call`` 调用序列
   （工具全名 ``customer_dataset_*``）、可注入指定工具的失败。
@@ -37,9 +40,16 @@ from fd_wire_api.datasets.ingest import (
     get_engine_client_factory,
 )
 
+from console_fixture import bearer, install_fake_jwks, make_console_env, mint_id_token
+
 INTERNAL_TOKEN = "wire-internal-dev"
-CUSTOMER_A = {"X-Customer-Id": "cust-001"}
-CUSTOMER_B = {"X-Customer-Id": "cust-002"}
+SUB_A = "sub-cust-001"
+SUB_B = "sub-cust-002"
+# token 在模块导入期铸好（RSA 进程缓存；iss/aud 在 fixture 里以 env 对齐），
+# 客户面命名空间键 = Customer.name（种子客户名 cust-001/cust-002）
+CUSTOMER_A = bearer(mint_id_token(SUB_A))
+CUSTOMER_B = bearer(mint_id_token(SUB_B))
+CUST_HEADERS = {"cust-001": CUSTOMER_A, "cust-002": CUSTOMER_B}
 INTERNAL = {"X-Internal-Token": INTERNAL_TOKEN}
 
 
@@ -132,6 +142,13 @@ def datasets_env(tmp_path, monkeypatch):
     monkeypatch.setenv("FD_WIRE_DATASETS_UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("FD_WIRE_DATASETS_AUTO_CREATE_TABLES", "1")
     monkeypatch.setenv("FD_WIRE_INTERNAL_TOKEN", INTERNAL_TOKEN)
+    install_fake_jwks(monkeypatch)
+    make_console_env(
+        tmp_path,
+        monkeypatch,
+        customers=[(SUB_A, "cust-001"), (SUB_B, "cust-002")],
+        internal_token=INTERNAL_TOKEN,
+    )
     reset_datasets_runtime()
     connector_routes._SYNC_SESSIONS.clear()
 
@@ -162,7 +179,7 @@ def datasets_env(tmp_path, monkeypatch):
 
 def pairing_token(env, customer: str = "cust-001") -> str:
     resp = env.client.post(
-        "/api/v1/connectors/pairing-tokens", headers={"X-Customer-Id": customer}
+        "/api/v1/connectors/pairing-tokens", headers=CUST_HEADERS[customer]
     )
     assert resp.status_code == 201, resp.text
     return resp.json()["token"]
@@ -202,7 +219,7 @@ def create_connector_dataset(
 ) -> dict:
     resp = env.client.post(
         "/api/v1/datasets",
-        headers={"X-Customer-Id": customer},
+        headers=CUST_HEADERS[customer],
         json={
             "name": name,
             "source": {
@@ -263,7 +280,7 @@ def upload_csv(env, content: bytes | str, *, filename: str = "data.csv", custome
     payload = content.encode("utf-8") if isinstance(content, str) else content
     return env.client.post(
         "/api/v1/datasets/uploads",
-        headers={"X-Customer-Id": customer},
+        headers=CUST_HEADERS[customer],
         files={"file": (filename, payload, "text/csv")},
     )
 
@@ -273,7 +290,7 @@ def create_upload_dataset(
 ):
     return env.client.post(
         "/api/v1/datasets",
-        headers={"X-Customer-Id": customer},
+        headers=CUST_HEADERS[customer],
         json={"name": name, "source": {"kind": "upload", "upload_id": upload_id}},
     )
 
@@ -292,6 +309,7 @@ def make_uploaded_dataset(env, *, customer: str = "cust-001", name: str = "Uploa
 __all__ = [
     "CUSTOMER_A",
     "CUSTOMER_B",
+    "CUST_HEADERS",
     "INTERNAL",
     "EngineCallError",
     "EngineUnavailable",

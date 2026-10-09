@@ -34,7 +34,10 @@ from fd_wire_api.demands.db import Base
 
 INTERNAL_TOKEN = "wire-internal-dev"
 INTERNAL = {"X-Internal-Token": INTERNAL_TOKEN}
-CUST = {"X-Customer-Id": "cust-001"}
+from console_fixture import bearer, install_fake_jwks, make_console_env, mint_id_token
+
+SUB_CUST = "sub-cust-001"
+CUST = bearer(mint_id_token(SUB_CUST))
 
 #: 客户响应绝不应携带的内部字段（任务 6.4 客户/内部视图分工）。
 FORBIDDEN_CUSTOMER_KEYS = {
@@ -97,8 +100,8 @@ class FakeLlm:
 
 
 @pytest.fixture()
-def client():
-    """每个用例独立的内存库 + 覆盖 get_db 的 TestClient。"""
+def client(tmp_path, monkeypatch):
+    """每个用例独立的内存库 + 覆盖 get_db 的 TestClient（外加平台库身份种子）。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -115,6 +118,8 @@ def client():
             db.close()
 
     app.dependency_overrides[get_db] = override_get_db
+    install_fake_jwks(monkeypatch)
+    make_console_env(tmp_path, monkeypatch, customers=[(SUB_CUST, "cust-001")])
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

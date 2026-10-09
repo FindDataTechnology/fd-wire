@@ -1,7 +1,8 @@
-// 控制台布局：左侧栏（对话构建 / 产物 / 需求单占位 / 用量占位）+ 顶栏
-// （企业标识占位 = X-Customer-Id 可编辑的开发占位值 + 登录占位）+ 内容区。
-// 鉴权上线后顶栏客户标识编辑退场，由登录态提供（本组件注明「仅开发用」）。
-import { useEffect, useState, type ReactNode } from "react";
+// 控制台布局：左侧栏（对话构建 / 产物 / 我的数据 / 需求单占位 / 用量）+ 顶栏
+// （登录客户标识 + 当前档位 + 登出）+ 内容区。
+// 身份来自登录会话（auth.ts，Authorization: Bearer）；X-Customer-Id 可编辑的
+// 开发占位顶栏已退场（wire-self-serve-launch 任务 4.4）。
+import { type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 export type ConsoleTab = "chat" | "artifacts" | "datasets" | "demands" | "usage";
@@ -25,12 +26,8 @@ export const CONSOLE_TABS: ReadonlyArray<{
     labelKey: "console.nav.demands",
     placeholder: true,
   },
-  {
-    id: "usage",
-    href: "#/console/usage",
-    labelKey: "console.nav.usage",
-    placeholder: true,
-  },
+  // 用量页已正式化（usage-transparency 6.2）：不再是「上线中」占位。
+  { id: "usage", href: "#/console/usage", labelKey: "console.nav.usage" },
 ];
 
 export function ConsolePlaceholder({
@@ -59,22 +56,23 @@ export function ConsolePlaceholder({
 
 export function ConsoleLayout({
   tab,
-  customerId,
-  onCustomerIdSave,
+  customerName,
+  planCode,
+  identity,
+  onLogout,
   children,
 }: {
   tab: ConsoleTab;
-  customerId: string;
-  onCustomerIdSave: (raw: string) => void;
+  /** 登录映射客户名（会话建立响应 customer.name）。 */
+  customerName: string;
+  /** 当前档位 code（免费档门禁/档位徽标）。 */
+  planCode: string;
+  /** 登录身份展示（ID token claims 的 email/username）。 */
+  identity: string;
+  onLogout: () => void;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
-  const [draft, setDraft] = useState(customerId);
-
-  // 外部变更（如恢复默认）同步进编辑框。
-  useEffect(() => {
-    setDraft(customerId);
-  }, [customerId]);
 
   return (
     <div className="flex min-h-[32rem] rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -123,42 +121,35 @@ export function ConsoleLayout({
               data-testid="console-org"
               className="rounded bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700"
             >
-              {customerId}
+              {customerName}
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <label
-              htmlFor="customer-id-input"
-              className="text-xs text-slate-500"
+            <span className="text-xs text-slate-500">
+              {t("console.topbar.plan")}
+            </span>
+            <span
+              data-testid="console-plan"
+              className="rounded bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700"
             >
-              {t("console.topbar.customerLabel")}
-            </label>
-            <input
-              id="customer-id-input"
-              data-testid="customer-id-input"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              className="w-44 rounded-md border border-slate-300 px-2 py-1 font-mono text-xs"
-            />
-            <button
-              type="button"
-              data-testid="customer-id-save"
-              onClick={() => onCustomerIdSave(draft)}
-              className="rounded-md border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100"
-            >
-              {t("console.topbar.save")}
-            </button>
+              {planCode}
+            </span>
           </div>
-          <span className="text-[11px] text-amber-600">
-            {t("console.topbar.customerHint")}
+          <span
+            data-testid="console-identity"
+            className="truncate text-xs text-slate-500"
+            title={identity}
+          >
+            {identity}
           </span>
-          <a
-            href="#/login"
-            data-testid="console-login-placeholder"
+          <button
+            type="button"
+            data-testid="console-logout"
+            onClick={onLogout}
             className="ml-auto rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:bg-slate-100"
           >
-            {t("console.topbar.login")}
-          </a>
+            {t("console.topbar.logout")}
+          </button>
         </div>
         <div className="min-w-0 flex-1 p-6">{children}</div>
       </div>

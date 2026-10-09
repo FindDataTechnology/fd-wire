@@ -1,6 +1,7 @@
-// 测试专用：内部后台 API 的内存假后端（语义对齐 api 仓 fd_wire_api.admin：
-// X-Admin-Token 鉴权、客户 CRUD、账本只读、需求单派发（状态机白名单）、
-// 目录治理 append-only 审核意见、分轨用量聚合）。
+// 测试专用：内部后台 API 的内存假后端（语义对齐 api 仓 fd_wire_api.admin
+// admin 双闸后的 web 侧口径：Authorization: Bearer <ID token> 鉴权（浏览器
+// 不持 X-Admin-Token——那由 nginx 服务端注入）、客户 CRUD、账本只读、
+// 需求单派发（状态机白名单）、目录治理 append-only 审核意见、分轨用量聚合）。
 import type {
   AdminCustomer,
   AdminDemand,
@@ -15,6 +16,7 @@ import type {
   UsageOverview,
 } from "./api";
 import { ALLOWED_TRANSITIONS as MACHINE_TRANSITIONS } from "./demandsMachine";
+import { saveSession } from "../console/auth";
 
 export type FakeResponse = {
   ok: boolean;
@@ -66,8 +68,8 @@ export const DEFAULT_PLANS: AdminPlan[] = [
 ];
 
 export interface AdminBackendOptions {
-  /** 期望的 X-Admin-Token（请求头不匹配 → 401）。 */
-  adminToken?: string;
+  /** 期望的 Bearer 凭据（测试会话的 idToken；请求头不匹配 → 401）。 */
+  bearerToken?: string;
   /** 强制全部请求返回该状态（如 403 模拟 env 未配置的 fail-closed）。 */
   forceStatus?: number;
   /** 强制 transition 端点返回该状态（如 409 冲突回显测试）。 */
@@ -100,7 +102,7 @@ export function installAdminBackend(options: AdminBackendOptions = {}): {
   fetchImpl: typeof fetch;
   notes: ReviewNote[];
 } {
-  const adminToken = options.adminToken ?? "test-admin-token";
+  const bearerToken = options.bearerToken ?? "test-admin-token";
   const customers = [...(options.customers ?? [])];
   const demands = [...(options.demands ?? [])];
   const ledger = [...(options.ledger ?? [])];
@@ -136,14 +138,17 @@ export function installAdminBackend(options: AdminBackendOptions = {}): {
       );
     }
 
-    const token = headers["x-admin-token"];
-    if (!token) {
+    const authorization = headers["authorization"] ?? "";
+    if (!authorization) {
       return Promise.resolve(
-        jsonResponse({ detail: "缺少 X-Admin-Token（内部后台鉴权头）" }, 401),
+        jsonResponse(
+          { detail: "缺少 Authorization: Bearer <ID token>（登录会话）" },
+          401,
+        ),
       );
     }
-    if (token !== adminToken) {
-      return Promise.resolve(jsonResponse({ detail: "无效的 X-Admin-Token" }, 401));
+    if (authorization !== `Bearer ${bearerToken}`) {
+      return Promise.resolve(jsonResponse({ detail: "无效的登录凭据" }, 401));
     }
 
     const path = url.pathname;
@@ -314,13 +319,9 @@ export function installAdminBackend(options: AdminBackendOptions = {}): {
     }
 
     // -- 客户本地数据只读概览 ----------------------------------------------
-    // 端点在 datasets 内部面：鉴权头是 X-Internal-Token（同一后台令牌值）。
+    // admin 双闸后的 web 侧口径：与其它 /internal 端点同走登录 Bearer
+    // （X-Admin-Token 由 nginx 注入，浏览器不再携带 X-Internal-Token）。
     if (path === "/internal/datasets/overview" && method === "GET") {
-      if (headers["x-internal-token"] !== adminToken) {
-        return Promise.resolve(
-          jsonResponse({ detail: "内部端点需要有效的 X-Internal-Token" }, 401),
-        );
-      }
       const overview: CustomerLocalDataOverview[] = options.datasetOverviews ?? [
         {
           customer_id: "cust-alpha",
@@ -373,4 +374,18 @@ export function installAdminBackend(options: AdminBackendOptions = {}): {
   }) as unknown as typeof fetch;
 
   return { calls, fetchImpl, notes };
+}
+
+/**
+ * 种子 admin 登录会话（sessionStorage）：idToken 与假后端期望 Bearer 一致
+ * （默认 test-admin-token），roles 含 wire-admin（角色门禁放行）。
+ * X-Admin-Token 由 nginx 服务端注入——测试面不存在该头。
+ */
+export function seedAdminSession(idToken = "test-admin-token"): void {
+  saveSession({
+    idToken,
+    expiresAt: Date.now() + 3600_000,
+    identity: "admin@finddatatech.cloud",
+    roles: ["wire-admin"],
+  });
 }

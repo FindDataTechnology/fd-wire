@@ -1,10 +1,13 @@
 // 控制台 AI 对话构建 / 产物草稿 API 客户端（wire-platform-v1 任务 5.5 web 面）。
 // - 基址与 catalog/api.ts 同约定：VITE_API_BASE 覆盖，默认 /api 同源
 //   （dev 由 vite proxy 转发到 127.0.0.1:8000，生产同源由网关承接）。
-// - 客户身份：X-Customer-Id 头（开发占位，鉴权上线后由登录态替换）。
+// - 客户身份：Authorization: Bearer <ID token>（Logto 登录会话，见 auth.ts）；
+//   开发占位 X-Customer-Id 已彻底弃用（wire-self-serve-launch 任务 4.4），
+//   服务端以校验后的 Logto sub 经映射解析客户，跨客户一律 404。
 // - 错误如实：非 2xx 一律抛 ConsoleApiError（携带 status 与后端 detail
 //   文案，如 429 的每日限额说明），由 UI 原样呈现、绝不静默吞掉。
 import { API_BASE } from "../catalog/api";
+import { loadSession } from "./auth";
 
 export type MessageRole = "user" | "assistant" | "tool_trace";
 
@@ -67,8 +70,16 @@ export class ConsoleApiError extends Error {
 
 interface RequestOptions {
   method: "GET" | "POST" | "DELETE";
-  customerId: string;
   body?: unknown;
+}
+
+/** 登录会话 Bearer 头（无会话即 401 如实上抛，绝不携带占位身份）。 */
+function bearerHeaders(): Record<string, string> {
+  const session = loadSession();
+  if (!session?.idToken) {
+    throw new ConsoleApiError("no console session (sign in required)", 401);
+  }
+  return { Authorization: `Bearer ${session.idToken}` };
 }
 
 /** 统一响应处理：非 2xx 抛 ConsoleApiError（带后端 detail），204 返回 null。 */
@@ -102,19 +113,20 @@ async function readResponse(response: Response, url: string): Promise<unknown> {
 }
 
 async function requestJson(url: string, options: RequestOptions): Promise<unknown> {
-  const { method, customerId, body } = options;
+  const { method, body } = options;
   let response: Response;
   try {
     response = await fetch(url, {
       method,
       headers: {
         Accept: "application/json",
-        "X-Customer-Id": customerId,
+        ...bearerHeaders(),
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
   } catch (err) {
+    if (err instanceof ConsoleApiError) throw err;
     throw new ConsoleApiError(
       `network error fetching ${url}: ${(err as Error).message}`,
     );
@@ -125,17 +137,17 @@ async function requestJson(url: string, options: RequestOptions): Promise<unknow
 /** multipart 上传（浏览器自定 Content-Type boundary，绝不手写头）。 */
 async function requestMultipart(
   url: string,
-  customerId: string,
   form: FormData,
 ): Promise<unknown> {
   let response: Response;
   try {
     response = await fetch(url, {
       method: "POST",
-      headers: { Accept: "application/json", "X-Customer-Id": customerId },
+      headers: { Accept: "application/json", ...bearerHeaders() },
       body: form,
     });
   } catch (err) {
+    if (err instanceof ConsoleApiError) throw err;
     throw new ConsoleApiError(
       `network error fetching ${url}: ${(err as Error).message}`,
     );
@@ -150,65 +162,58 @@ export function apiErrorText(err: unknown, fallback: string): string {
 
 /** 新开对话（带 message 即当场跑一轮构建循环）。 */
 export function createConversation(
-  customerId: string,
   payload: ConversationCreateInput,
 ): Promise<ConversationDetail> {
   return requestJson(`${API_BASE}/v1/ai/conversations`, {
     method: "POST",
-    customerId,
     body: payload,
   }) as Promise<ConversationDetail>;
 }
 
 /** 本企业对话列表（按创建时间倒序）。 */
-export function fetchConversations(customerId: string): Promise<Conversation[]> {
+export function fetchConversations(): Promise<Conversation[]> {
   return requestJson(`${API_BASE}/v1/ai/conversations`, {
     method: "GET",
-    customerId,
   }) as Promise<Conversation[]>;
 }
 
 /** 会话全部消息（user / assistant / tool_trace 三角色）。 */
 export function fetchMessages(
-  customerId: string,
   conversationId: number,
 ): Promise<ChatMessage[]> {
   return requestJson(
     `${API_BASE}/v1/ai/conversations/${conversationId}/messages`,
-    { method: "GET", customerId },
+    { method: "GET" },
   ) as Promise<ChatMessage[]>;
 }
 
 /** 追加用户消息并驱动一轮构建循环（返回本轮落库的消息序列）。 */
 export function postMessage(
-  customerId: string,
   conversationId: number,
   content: string,
 ): Promise<ChatMessage[]> {
   return requestJson(
     `${API_BASE}/v1/ai/conversations/${conversationId}/messages`,
-    { method: "POST", customerId, body: { content } },
+    { method: "POST", body: { content } },
   ) as Promise<ChatMessage[]>;
 }
 
 /** 单个会话的产物草稿列表。 */
 export function fetchArtifacts(
-  customerId: string,
   conversationId: number,
 ): Promise<DraftArtifact[]> {
   return requestJson(
     `${API_BASE}/v1/ai/conversations/${conversationId}/artifacts`,
-    { method: "GET", customerId },
+    { method: "GET" },
   ) as Promise<DraftArtifact[]>;
 }
 
 /** 聚合本企业全部会话的产物草稿（任一会话失败即如实上抛）。 */
 export async function fetchAllArtifacts(
-  customerId: string,
   conversations: Conversation[],
 ): Promise<DraftArtifact[]> {
   const grouped = await Promise.all(
-    conversations.map((c) => fetchArtifacts(customerId, c.id)),
+    conversations.map((c) => fetchArtifacts(c.id)),
   );
   return grouped
     .flat()
@@ -216,7 +221,7 @@ export async function fetchAllArtifacts(
 }
 
 // ── 我的数据：客户数据集与连接器（wire-customer-local-data 任务组 3）────────
-// 路径/载荷/头严格对齐冻结契约 reports/interfaces.md §3.3 客户面（X-Customer-Id）。
+// 路径/载荷严格对齐冻结契约 reports/interfaces.md §3.3 客户面（Bearer 登录身份）。
 
 export type DatasetSourceKind = "upload" | "connector";
 
@@ -345,161 +350,138 @@ export interface CreateDatasetInput {
 }
 
 /** 列表卡片（来源/行数/大小/同步状态/最近更新）。 */
-export function fetchDatasets(customerId: string): Promise<Dataset[]> {
+export function fetchDatasets(): Promise<Dataset[]> {
   return requestJson(`${API_BASE}/v1/datasets`, {
     method: "GET",
-    customerId,
   }) as Promise<Dataset[]>;
 }
 
 /** 上传文件解析预览（multipart 字段名 `file`；超限由后端 400 如实拒收）。 */
 export async function uploadDataset(
-  customerId: string,
   file: File,
 ): Promise<UploadPreview> {
   const form = new FormData();
   form.append("file", file);
   return (await requestMultipart(
     `${API_BASE}/v1/datasets/uploads`,
-    customerId,
     form,
   )) as UploadPreview;
 }
 
 /** 建档：upload 类立即 ingest 引擎；connector 类下发白名单与调度。 */
 export function createDataset(
-  customerId: string,
   payload: CreateDatasetInput,
 ): Promise<Dataset> {
   return requestJson(`${API_BASE}/v1/datasets`, {
     method: "POST",
-    customerId,
     body: payload,
   }) as Promise<Dataset>;
 }
 
 export function fetchDataset(
-  customerId: string,
   datasetId: string,
 ): Promise<Dataset> {
   return requestJson(`${API_BASE}/v1/datasets/${datasetId}`, {
     method: "GET",
-    customerId,
   }) as Promise<Dataset>;
 }
 
 /** 删除数据集（引擎删表 + 元数据；连接器白名单移除≠删除）。 */
 export function deleteDataset(
-  customerId: string,
   datasetId: string,
 ): Promise<{ deleted: boolean }> {
   return requestJson(`${API_BASE}/v1/datasets/${datasetId}`, {
     method: "DELETE",
-    customerId,
   }) as Promise<{ deleted: boolean }>;
 }
 
 /** 预览分页（透传引擎 preview；每行带行锚 `__row_id`）。 */
 export function fetchDatasetRows(
-  customerId: string,
   datasetId: string,
   page = 1,
   pageSize = 50,
 ): Promise<DatasetRows> {
   return requestJson(
     `${API_BASE}/v1/datasets/${datasetId}/rows?page=${page}&page_size=${pageSize}`,
-    { method: "GET", customerId },
+    { method: "GET" },
   ) as Promise<DatasetRows>;
 }
 
 /** 写修正层（改值/删行/加行）；不回写客户源。 */
 export function addCorrection(
-  customerId: string,
   datasetId: string,
   payload: CorrectionInput,
 ): Promise<{ correction_id: number }> {
   return requestJson(`${API_BASE}/v1/datasets/${datasetId}/corrections`, {
     method: "POST",
-    customerId,
     body: payload,
   }) as Promise<{ correction_id: number }>;
 }
 
 /** 修正历史（含悬空与已回滚）。 */
 export function fetchCorrections(
-  customerId: string,
   datasetId: string,
 ): Promise<Correction[]> {
   return requestJson(`${API_BASE}/v1/datasets/${datasetId}/corrections`, {
     method: "GET",
-    customerId,
   }) as Promise<Correction[]>;
 }
 
 /** 单条回滚（标记失效 + 重建有效表在 api/引擎侧完成）。 */
 export function revertCorrection(
-  customerId: string,
   datasetId: string,
   correctionId: number,
 ): Promise<{ reverted: boolean }> {
   return requestJson(
     `${API_BASE}/v1/datasets/${datasetId}/corrections/${correctionId}/revert`,
-    { method: "POST", customerId },
+    { method: "POST" },
   ) as Promise<{ reverted: boolean }>;
 }
 
 export function fetchSyncs(
-  customerId: string,
   datasetId: string,
 ): Promise<SyncRecord[]> {
   return requestJson(`${API_BASE}/v1/datasets/${datasetId}/syncs`, {
     method: "GET",
-    customerId,
   }) as Promise<SyncRecord[]>;
 }
 
 /** 漂移人工确认恢复：accept_columns = 客户确认接受的新结构列。 */
 export function resumeDataset(
-  customerId: string,
   datasetId: string,
   acceptColumns: string[],
 ): Promise<Dataset> {
   return requestJson(`${API_BASE}/v1/datasets/${datasetId}/resume`, {
     method: "POST",
-    customerId,
     body: { accept_columns: acceptColumns },
   }) as Promise<Dataset>;
 }
 
 /** 生成一次性配对令牌（15 分钟、单次；明文仅此一次）。 */
-export function createPairingToken(customerId: string): Promise<PairingToken> {
+export function createPairingToken(): Promise<PairingToken> {
   return requestJson(`${API_BASE}/v1/connectors/pairing-tokens`, {
     method: "POST",
-    customerId,
   }) as Promise<PairingToken>;
 }
 
 /** 连接器列表（在线/离线由心跳推导）。 */
-export function fetchConnectors(customerId: string): Promise<Connector[]> {
+export function fetchConnectors(): Promise<Connector[]> {
   return requestJson(`${API_BASE}/v1/connectors`, {
     method: "GET",
-    customerId,
   }) as Promise<Connector[]>;
 }
 
 /** 吊销连接器（连 key 一起即时失效）。 */
 export function revokeConnector(
-  customerId: string,
   connectorId: string,
 ): Promise<Connector> {
   return requestJson(`${API_BASE}/v1/connectors/${connectorId}`, {
     method: "DELETE",
-    customerId,
   }) as Promise<Connector>;
 }
 
 // ── 溯源账本客户面（wire-provenance-ledger 任务组 8）────────────────────
-// 路径/载荷/头严格对齐冻结契约：/api/v1/provenance/*（X-Customer-Id 隔离）。
+// 路径/载荷严格对齐冻结契约：/api/v1/provenance/*（Bearer 登录身份隔离）。
 
 /** 溯源档位四档（off 不入账；已入账事件不因调档被清除）。 */
 export const PROVENANCE_TIERS = [
@@ -565,7 +547,6 @@ export interface ProvenanceOverview {
 
 /** 数据集事件时间线（倒序；before_seq 为上一页最小 seq，向更早翻页）。 */
 export function fetchProvenanceEvents(
-  customerId: string,
   datasetKey: string,
   beforeSeq?: number,
   limit = 50,
@@ -575,40 +556,36 @@ export function fetchProvenanceEvents(
   params.set("limit", String(limit));
   return requestJson(
     `${API_BASE}/v1/provenance/datasets/${encodeURIComponent(datasetKey)}/events?${params}`,
-    { method: "GET", customerId },
+    { method: "GET" },
   ) as Promise<ProvenanceEventsPage>;
 }
 
 /** 数据集溯源状态（档位/链完整性/锚定进度/起点标注）。 */
 export function fetchProvenanceStatus(
-  customerId: string,
   datasetKey: string,
 ): Promise<ProvenanceStatus> {
   return requestJson(
     `${API_BASE}/v1/provenance/datasets/${encodeURIComponent(datasetKey)}/status`,
-    { method: "GET", customerId },
+    { method: "GET" },
   ) as Promise<ProvenanceStatus>;
 }
 
 /** 调整数据集溯源档位（存活期内可调；已入账事件不受影响）。 */
 export function updateProvenanceTier(
-  customerId: string,
   datasetKey: string,
   tier: ProvenanceTier,
 ): Promise<{ tier: ProvenanceTier }> {
   return requestJson(
     `${API_BASE}/v1/provenance/datasets/${encodeURIComponent(datasetKey)}/tier`,
-    { method: "POST", customerId, body: { tier } },
+    { method: "POST", body: { tier } },
   ) as Promise<{ tier: ProvenanceTier }>;
 }
 
 /** 企业级账本总览（全局 last_seq/完整性/锚定滞后）。 */
 export function fetchProvenanceOverview(
-  customerId: string,
 ): Promise<ProvenanceOverview> {
   return requestJson(`${API_BASE}/v1/provenance/overview`, {
     method: "GET",
-    customerId,
   }) as Promise<ProvenanceOverview>;
 }
 
@@ -622,10 +599,9 @@ export interface EvidencePackage {
  * 导出企业级证据包（机器可读账本导出 + 全部锚定回执 + 离线核验工具，
  * 二进制流）。带鉴权头用 fetch 拉取后转 blob 交给调用方触发下载；
  * 文件名优先取响应 Content-Disposition，缺省按
- * evidence-package-<客户>-<日期>.jsonl.bin 约定命名。
+ * evidence-package-<日期>.jsonl.bin 约定命名。
  */
 export async function fetchEvidencePackage(
-  customerId: string,
 ): Promise<EvidencePackage> {
   const url = `${API_BASE}/v1/provenance/evidence-package`;
   let response: Response;
@@ -634,10 +610,11 @@ export async function fetchEvidencePackage(
       method: "GET",
       headers: {
         Accept: "application/octet-stream",
-        "X-Customer-Id": customerId,
+        ...bearerHeaders(),
       },
     });
   } catch (err) {
+    if (err instanceof ConsoleApiError) throw err;
     throw new ConsoleApiError(
       `network error fetching ${url}: ${(err as Error).message}`,
     );
@@ -665,11 +642,30 @@ export async function fetchEvidencePackage(
   const disposition = response.headers?.get?.("content-disposition") ?? "";
   const match = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
   const date = new Date().toISOString().slice(0, 10);
-  const filename =
-    match?.[1] ?? `evidence-package-${customerId}-${date}.jsonl.bin`;
+  const filename = match?.[1] ?? `evidence-package-${date}.jsonl.bin`;
   try {
     return { blob: await response.blob(), filename };
   } catch (err) {
     throw new ConsoleApiError(`invalid body from ${url}: ${(err as Error).message}`);
   }
+}
+
+// ── 客户侧用量（usage-transparency 任务 6.2；口径与行数门/结算同源）──────
+// 契约：GET /api/console/usage → { period, plan_code, included_lines,
+// used_lines, remaining_lines }（登录映射客户自己且仅自己的当月聚合）。
+
+export interface ConsoleUsage {
+  /** 账期（自然月，如 2026-10）。 */
+  period: string;
+  plan_code: string;
+  included_lines: number;
+  used_lines: number;
+  remaining_lines: number;
+}
+
+/** 登录客户当月用量（已用/含额/余量，rows_returned 口径）。 */
+export function fetchConsoleUsage(): Promise<ConsoleUsage> {
+  return requestJson(`${API_BASE}/console/usage`, {
+    method: "GET",
+  }) as Promise<ConsoleUsage>;
 }

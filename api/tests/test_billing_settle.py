@@ -278,3 +278,56 @@ def test_settle_rejects_bad_period(bad: str) -> None:
     engine, session, fake, service = build_env({"u-starter": 1})
     with pytest.raises(ValueError):
         service.settle(bad)
+
+
+# ---------------------------------------------------------------------------
+# 无超额档口径（wire-self-serve-launch 2.3）：公开三档超额单价一律 0——
+# 超出含额不产生任何超额账目、不动 sub2api；闭月结算金额=月费（grant）。
+# ---------------------------------------------------------------------------
+
+
+def test_zero_overage_plan_no_overage_entries_no_sub2api_calls() -> None:
+    """免费档客户用量超出含额（1,000 行）：无 overage 条目、sub2api 零调用。"""
+    engine, session, fake, service = build_env({"u-free": 1_234},
+                                               plan_by_ref={"u-free": "free"})
+    fake.add_user("u-free", balance_micro=0)  # 免费档 sub2api 余额恒零
+    report = service.settle(PERIOD)
+    result = report.results[0]
+    assert result.ok
+    assert result.overage_lines == 234
+    assert result.overage_amount_micro == 0
+    assert report.sub2api_call_count == 0
+    assert len(fake.adjust_calls) == 0
+    entries = Ledger(session).entries(customer_by_ref(session, "u-free").id, PERIOD)
+    assert [en.kind for en in entries] == ["grant"]  # 无超额账目
+    # 闭月结算金额=月费（免费档 ¥0）
+    assert entries[0].amount_micro == 0
+
+
+def test_zero_overage_basic_plan_settlement_amounts_monthly_fee() -> None:
+    """基础档：闭月结算账目=grant 一条、金额=月费 ¥10（行数门之外无账目）。"""
+    engine, session, fake, service = build_env(
+        {"u-basic": 150_000}, plan_by_ref={"u-basic": "basic"}  # 超含额 50k 行
+    )
+    report = service.settle(PERIOD)
+    result = report.results[0]
+    assert result.ok and result.overage_lines == 50_000
+    assert result.overage_amount_micro == 0
+    assert len(fake.adjust_calls) == 0
+    entries = Ledger(session).entries(customer_by_ref(session, "u-basic").id, PERIOD)
+    assert [en.kind for en in entries] == ["grant"]
+    assert entries[0].amount_micro == yuan_to_micro("10")
+    assert entries[0].quantity == 100_000
+    assert fake.balance("u-basic") == OPENING  # 余额分文未动
+
+
+def test_zero_overage_settlement_idempotent_replay() -> None:
+    """无超额档重放：同月再结算不重复落 grant、不产生超额账目。"""
+    engine, session, fake, service = build_env(
+        {"u-free": 2_000}, plan_by_ref={"u-free": "free"}
+    )
+    r1 = service.settle(PERIOD)
+    r2 = service.settle(PERIOD)
+    assert r1.results[0].ok and r2.results[0].status == "replayed"
+    entries = Ledger(session).entries(customer_by_ref(session, "u-free").id, PERIOD)
+    assert [en.kind for en in entries] == ["grant"]

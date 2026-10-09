@@ -61,7 +61,11 @@ class CustomerStatus(str, enum.Enum):
 
 
 class Plan(Base):
-    """套餐档位（已裁决默认值见 plans.SEEDS；后台可改不发版）。"""
+    """套餐档位（已裁决默认值见 plans.SEEDS；后台可改不发版）。
+
+    ``is_public``：公开档位标记（wire-self-serve-launch 1.1）——公开档位
+    端点只返回 ``is_public && is_active``；自定义档（admin 建档）恒 false。
+    """
 
     __tablename__ = "billing_plans"
 
@@ -72,6 +76,7 @@ class Plan(Base):
     included_lines: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     overage_unit_price_micro: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
@@ -83,13 +88,19 @@ class Plan(Base):
 
 
 class Customer(Base):
-    """客户与支付侧（sub2api）账户映射。"""
+    """客户与支付侧（sub2api）账户映射。
+
+    ``logto_sub``（wire-self-serve-launch 1.1）：控制台登录身份 → Customer
+    的唯一映射键（可空——人工开户的历史行允许暂无登录身份；首登自动
+    开户/绑定时回写）。唯一 sub 至多映射一个客户。
+    """
 
     __tablename__ = "billing_customers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     sub2api_user_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+    logto_sub: Mapped[str | None] = mapped_column(String(64), unique=True)
     plan_id: Mapped[int] = mapped_column(ForeignKey("billing_plans.id"), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default=CustomerStatus.ACTIVE.value)
     created_at: Mapped[datetime] = mapped_column(

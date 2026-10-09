@@ -22,7 +22,7 @@ const TRACK_CARD_CLASS: Record<string, string> = {
   platform: "border-violet-200 bg-violet-50/60",
 };
 
-export function UsageOverviewPage({ token }: { token: string }) {
+export function UsageOverviewPage() {
   const { t } = useTranslation();
   const [overview, setOverview] = useState<UsageOverview | null>(null);
   const [error, setError] = useState<{ status?: number; message: string; detail?: string } | null>(null);
@@ -34,7 +34,7 @@ export function UsageOverviewPage({ token }: { token: string }) {
     setError(null);
     setOverview(null);
     try {
-      const data = await fetchUsageOverview(token, {
+      const data = await fetchUsageOverview({
         ...(track ? { credential_track: track } : {}),
         ...(start.trim() ? { start: start.trim() } : {}),
         ...(end.trim() ? { end: end.trim() } : {}),
@@ -43,7 +43,7 @@ export function UsageOverviewPage({ token }: { token: string }) {
     } catch (err) {
       setError(err as { status?: number; message: string });
     }
-  }, [token, track, start, end]);
+  }, [track, start, end]);
 
   useEffect(() => {
     void load();

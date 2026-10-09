@@ -39,6 +39,14 @@ spec:
           resources:
             requests: { cpu: 20m, memory: 64Mi }
             limits: { cpu: 100m, memory: 128Mi }
+          env:
+            # admin 第二道闸的服务端注入源（wire-self-serve-launch 5.2 附带）：
+            # nginx envsubst 模板把它渲染进 /internal/ 反代的
+            # proxy_set_header X-Admin-Token——值只存在容器 env，永不下发浏览器。
+            # 复用既有 fd-wire-env Secret 键（与 fd-wire-api 同源，轮换同步滚动）。
+            - name: FD_WIRE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: fd_wire_admin_token }
 ---
 apiVersion: v1
 kind: Service

@@ -3,6 +3,8 @@
 //   空态引导上传。
 // - 上传流：拖拽或选择文件 → 上传解析预览（列名+推断类型+行数）→ 命名建档 → 刷新。
 // - 连接器管理在 DatasetsConnectors.tsx、数据集详情在 DatasetDetail.tsx（本页组合三者）。
+// - 免费档边界（wire-self-serve-launch 任务 4.6）：plan_code=free 呈现升级引导
+//   （CTA=联系开通 mailto），且不发起任何 cell/数据集请求——免费档无 cell 配给。
 // 契约：openspec/changes/wire-customer-local-data/reports/interfaces.md §3.3/§4。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -18,6 +20,7 @@ import {
 import { formatServerDate } from "./util";
 import { ConnectorsSection } from "./DatasetsConnectors";
 import { DatasetDetail } from "./DatasetDetail";
+import { CONTACT_MAILTO } from "../views/HomeView";
 
 const SYNC_BADGE_CLASS: Record<SyncStatus, string> = {
   idle: "bg-slate-100 text-slate-600 ring-slate-200",
@@ -41,37 +44,63 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${units[unit]}`;
 }
 
-export function DatasetsPage({ customerId }: { customerId: string }) {
+export function DatasetsPage({ planCode }: { planCode: string }) {
   const { t } = useTranslation();
   const [datasets, setDatasets] = useState<Dataset[] | null>(null);
   const [error, setError] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  // 免费档门禁：升级引导优先于一切数据请求（不为免费用户创建/查询 cell）。
+  const gated = planCode === "free";
+
   const load = useCallback(async () => {
     setError(false);
     try {
-      setDatasets(await fetchDatasets(customerId));
+      setDatasets(await fetchDatasets());
     } catch {
       setDatasets([]);
       setError(true);
     }
-  }, [customerId]);
+  }, []);
 
   useEffect(() => {
+    if (gated) return;
     setDatasets(null);
     void load();
-  }, [load]);
+  }, [gated, load]);
 
-  if (selectedId != null) {
+  if (!gated && selectedId != null) {
     return (
       <DatasetDetail
-        customerId={customerId}
         datasetId={selectedId}
         onBack={() => {
           setSelectedId(null);
           void load();
         }}
       />
+    );
+  }
+
+  if (gated) {
+    return (
+      <div
+        data-testid="datasets-upgrade"
+        className="max-w-xl rounded-lg border border-amber-200 bg-amber-50/50 p-8"
+      >
+        <h1 className="text-lg font-semibold">
+          {t("console.datasets.upgrade.title")}
+        </h1>
+        <p className="mt-3 text-sm text-slate-600">
+          {t("console.datasets.upgrade.body")}
+        </p>
+        <a
+          data-testid="datasets-upgrade-cta"
+          href={CONTACT_MAILTO}
+          className="mt-4 inline-block rounded-md bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700"
+        >
+          {t("console.datasets.upgrade.cta")}
+        </a>
+      </div>
     );
   }
 
@@ -129,9 +158,9 @@ export function DatasetsPage({ customerId }: { customerId: string }) {
         </ul>
       )}
 
-      <UploadPanel customerId={customerId} onCreated={() => void load()} />
+      <UploadPanel onCreated={() => void load()} />
 
-      <ConnectorsSection customerId={customerId} onCreated={() => void load()} />
+      <ConnectorsSection onCreated={() => void load()} />
     </div>
   );
 }
@@ -223,13 +252,7 @@ function DatasetCard({
   );
 }
 
-function UploadPanel({
-  customerId,
-  onCreated,
-}: {
-  customerId: string;
-  onCreated: () => void;
-}) {
+function UploadPanel({ onCreated }: { onCreated: () => void }) {
   const { t } = useTranslation();
   const [preview, setPreview] = useState<UploadPreview | null>(null);
   const [parsing, setParsing] = useState(false);
@@ -246,7 +269,7 @@ function UploadPanel({
     setPreview(null);
     setCreated(false);
     try {
-      const result = await uploadDataset(customerId, file);
+      const result = await uploadDataset(file);
       setPreview(result);
       setName(file.name.replace(/\.[^.]+$/, ""));
     } catch (err) {
@@ -264,7 +287,7 @@ function UploadPanel({
     setCreating(true);
     setError(null);
     try {
-      await createDataset(customerId, {
+      await createDataset({
         name: name.trim(),
         source: { kind: "upload", upload_id: preview.upload_id },
       });

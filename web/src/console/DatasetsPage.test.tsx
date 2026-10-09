@@ -13,7 +13,7 @@ import {
 import "../i18n";
 import i18n from "../i18n";
 import { DatasetsPage } from "./DatasetsPage";
-import { installConsoleBackend, type FetchCall } from "./testing";
+import { installConsoleBackend, seedConsoleSession, type FetchCall } from "./testing";
 import type { Connector, Dataset } from "./api";
 import { CONSOLE_TABS } from "./ConsoleLayout";
 import { parseHash } from "../App";
@@ -77,12 +77,16 @@ function postCalls(
 beforeEach(() => {
   i18n.changeLanguage("zh");
   localStorage.clear();
+  sessionStorage.clear();
+  // 登录会话种子：假后端以 Bearer 的 sub 为客户身份（demo-customer）。
+  seedConsoleSession({ sub: "demo-customer" });
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   localStorage.clear();
+  sessionStorage.clear();
 });
 
 describe("DatasetsPage（我的数据列表与上传，任务 3.1/3.2）", () => {
@@ -106,7 +110,7 @@ describe("DatasetsPage（我的数据列表与上传，任务 3.1/3.2）", () =>
         makeDataset({ id: "ds-6", name: "配额暂停", sync_status: "paused_quota" }),
       ],
     });
-    render(<DatasetsPage customerId={CUSTOMER} />);
+    render(<DatasetsPage planCode="basic" />);
 
     const cards = await screen.findAllByTestId("dataset-card");
     expect(cards.length).toBe(6);
@@ -158,7 +162,7 @@ describe("DatasetsPage（我的数据列表与上传，任务 3.1/3.2）", () =>
 
   it("无数据集显示空态并引导上传", async () => {
     install({ datasets: [] });
-    render(<DatasetsPage customerId={CUSTOMER} />);
+    render(<DatasetsPage planCode="basic" />);
 
     const empty = await screen.findByTestId("datasets-empty");
     expect(empty.textContent).toContain("上传");
@@ -168,7 +172,7 @@ describe("DatasetsPage（我的数据列表与上传，任务 3.1/3.2）", () =>
 
   it("上传全流程：multipart 载荷、列与类型预览、命名建档载荷与列表刷新", async () => {
     const backend = install({ datasets: [] });
-    render(<DatasetsPage customerId={CUSTOMER} />);
+    render(<DatasetsPage planCode="basic" />);
     await screen.findByTestId("datasets-empty");
 
     const file = new File(["id,amount\n1,2"], "sales.csv", {
@@ -183,7 +187,7 @@ describe("DatasetsPage（我的数据列表与上传，任务 3.1/3.2）", () =>
       (call) => call.url.pathname === "/api/v1/datasets/uploads",
     );
     expect(uploadCall?.method).toBe("POST");
-    expect(uploadCall?.headers["x-customer-id"]).toBe(CUSTOMER);
+    expect(uploadCall?.headers["authorization"]).toMatch(/^Bearer /);
     expect((uploadCall?.formData?.get("file") as File).name).toBe("sales.csv");
     expect(screen.getByTestId("upload-preview-rows").textContent).toContain("120");
     expect(
@@ -222,7 +226,7 @@ describe("DatasetsPage（我的数据列表与上传，任务 3.1/3.2）", () =>
 
   it("上传超限：within_limit=false 提示拒收并禁用建档", async () => {
     install({ datasets: [], uploadPreview: { within_limit: false } });
-    render(<DatasetsPage customerId={CUSTOMER} />);
+    render(<DatasetsPage planCode="basic" />);
     await screen.findByTestId("datasets-empty");
 
     fireEvent.change(screen.getByTestId("upload-file-input"), {
@@ -243,7 +247,7 @@ describe("DatasetsPage（我的数据列表与上传，任务 3.1/3.2）", () =>
       failUploadStatus: 400,
       failUploadDetail: "行数超出上限（上限 500000），已拒收",
     });
-    render(<DatasetsPage customerId={CUSTOMER} />);
+    render(<DatasetsPage planCode="basic" />);
     await screen.findByTestId("datasets-empty");
 
     fireEvent.change(screen.getByTestId("upload-file-input"), {
@@ -272,7 +276,7 @@ describe("DatasetDetail（预览网格/修正/同步/悬空，任务 3.4）", ()
         },
       },
     });
-    render(<DatasetsPage customerId={CUSTOMER} />);
+    render(<DatasetsPage planCode="basic" />);
     fireEvent.click(await screen.findByTestId("dataset-open"));
     await screen.findByTestId("preview-grid");
 
@@ -357,7 +361,7 @@ describe("DatasetDetail（预览网格/修正/同步/悬空，任务 3.4）", ()
       error: drift,
     });
 
-    render(<DatasetsPage customerId={CUSTOMER} />);
+    render(<DatasetsPage planCode="basic" />);
     fireEvent.click(await screen.findByTestId("dataset-open"));
     expect(await screen.findByTestId("drift-banner")).toBeTruthy();
     expect((await screen.findByTestId("sync-row")).getAttribute("data-status")).toBe(
@@ -423,7 +427,7 @@ describe("DatasetDetail（预览网格/修正/同步/悬空，任务 3.4）", ()
       dangling_reason: "快照中无匹配行",
     });
 
-    render(<DatasetsPage customerId={CUSTOMER} />);
+    render(<DatasetsPage planCode="basic" />);
     fireEvent.click(await screen.findByTestId("dataset-open"));
     expect(await screen.findAllByTestId("correction-row")).toHaveLength(2);
     expect(screen.getAllByTestId("correction-dangling-badge")).toHaveLength(1);
@@ -449,7 +453,7 @@ describe("DatasetDetail（预览网格/修正/同步/悬空，任务 3.4）", ()
         },
       },
     });
-    render(<DatasetsPage customerId={CUSTOMER} />);
+    render(<DatasetsPage planCode="basic" />);
     fireEvent.click(await screen.findByTestId("dataset-open"));
     await screen.findByTestId("preview-grid");
 
@@ -493,7 +497,7 @@ describe("DatasetDetail（预览网格/修正/同步/悬空，任务 3.4）", ()
         }),
       ],
     });
-    render(<DatasetsPage customerId={CUSTOMER} />);
+    render(<DatasetsPage planCode="basic" />);
     fireEvent.click(await screen.findByTestId("dataset-open"));
     await screen.findByTestId("dataset-detail");
 
@@ -521,7 +525,7 @@ describe("Connectors（任务 3.3）", () => {
         makeConnector({ id: "cn-3", name: "revoked-connector", revoked_at: NOW }),
       ],
     });
-    render(<DatasetsPage customerId={CUSTOMER} />);
+    render(<DatasetsPage planCode="basic" />);
 
     const items = await screen.findAllByTestId("connector-item");
     expect(items.map((el) => el.getAttribute("data-status"))).toEqual([
@@ -541,7 +545,7 @@ describe("Connectors（任务 3.3）", () => {
 
   it("配对向导：令牌仅显示一次，关闭后不再展示，重新生成得到新令牌", async () => {
     const backend = install({ datasets: [] });
-    render(<DatasetsPage customerId={CUSTOMER} />);
+    render(<DatasetsPage planCode="basic" />);
     await screen.findByTestId("connectors-empty");
 
     fireEvent.click(screen.getByTestId("pairing-generate"));
@@ -578,7 +582,7 @@ describe("Connectors（任务 3.3）", () => {
       datasets: [],
       connectors: [makeConnector({ id: "cn-1", name: "erp-connector" })],
     });
-    render(<DatasetsPage customerId={CUSTOMER} />);
+    render(<DatasetsPage planCode="basic" />);
     await screen.findByTestId("connector-item");
 
     fireEvent.change(screen.getByTestId("whitelist-connector"), {
@@ -626,7 +630,7 @@ describe("Connectors（任务 3.3）", () => {
       datasets: [],
       connectors: [makeConnector({ id: "cn-1", name: "erp-connector" })],
     });
-    render(<DatasetsPage customerId={CUSTOMER} />);
+    render(<DatasetsPage planCode="basic" />);
     await screen.findByTestId("connector-item");
 
     const submit = () =>
@@ -679,5 +683,33 @@ describe("导航与路由接入（任务 3.1）", () => {
         pages: 1,
       }),
     ).toContain("3");
+  });
+});
+
+describe("DatasetsPage（免费档边界，wire-self-serve-launch 任务 4.6）", () => {
+  it("plan_code=free → 升级引导卡（mailto CTA），不发起任何数据集/连接器请求", async () => {
+    const backend = install();
+    render(<DatasetsPage planCode="free" />);
+
+    const gate = await screen.findByTestId("datasets-upgrade");
+    expect(gate.textContent).toContain("面向付费档开放");
+    expect(gate.textContent).toContain("免费档");
+    const cta = screen.getByTestId("datasets-upgrade-cta");
+    expect(cta.getAttribute("href")).toMatch(/^mailto:/);
+    // 绝不为免费用户发起 cell/数据集请求
+    const dataCalls = backend.calls.filter(
+      (c) =>
+        c.url.pathname.startsWith("/api/v1/datasets") ||
+        c.url.pathname.startsWith("/api/v1/connectors"),
+    );
+    expect(dataCalls).toEqual([]);
+    // 上传/连接器管理面不渲染
+    expect(screen.queryByTestId("upload-section")).toBeNull();
+  });
+
+  it("plan_code 未下发（空串）→ 不按免费档阻塞，正常渲染数据面", async () => {
+    install();
+    render(<DatasetsPage planCode="" />);
+    expect(await screen.findByTestId("upload-section")).toBeTruthy();
   });
 });

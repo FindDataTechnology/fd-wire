@@ -27,7 +27,7 @@
 | `SUB2API_ADMIN_KEY` | `sub2api_admin_key` | sub2api admin API（同 wanxing-fleet 借用键） |
 | `TOKEN_GATEWAY_URL` | `token_gateway_url` | token 网关（AI 构建循环） |
 | `METERING_INGEST_TOKEN` | `metering_ingest_token` | 计量管道上报凭据 |
-| `FD_WIRE_INTERNAL_TOKEN` | `fd_wire_internal_token` | 内部端点令牌（catalog sync / demands / ai 共用） |
+| `FD_WIRE_INTERNAL_TOKEN` | `fd_wire_internal_token` | 内部端点令牌（catalog sync / demands / ai / 额度查询共用） |
 | `AI_DATABASE_URL` | `ai_database_url` | ai 模块库（落 PVC `/var/lib/fd-wire/db/fd_wire_platform.db`，与平台主库同文件） |
 | `FD_WIRE_DATABASE_URL` | `fd_wire_database_url` | demands 等模块库名（与计量库同库，落 PVC，pod 重建存续） |
 | `INDICATOR_REGISTRY_URL` | `indicator_registry_url` | 目录镜像权威源（fd-open-data-mcp 的 MCP 入口） |
@@ -35,6 +35,10 @@
 | `CATALOG_SYNC_ENABLED` | `catalog_sync_enabled` | 目录同步开关（默认关闭，权威源就绪后开） |
 | `PLATFORM_IDENTITIES` | `platform_identities` | 平台服务身份名单（计量轨道判定，见 `docs/service-credentials.md`） |
 | `METERING_SOURCE_MAP` | `metering_source_map` | customer 轨 server → 来源映射（yizuo/wanxing） |
+| `FD_WIRE_LOGTO_ISSUER` | —（清单字面值 `https://auth.finddatatech.cloud`） | 控制台登录 IdP base（issuer claim 取其 `/oidc`；wire-self-serve-launch 4.2） |
+| `FD_WIRE_LOGTO_CLIENT_ID` | `fd_wire_logto_client_id`（optional：未配时 `/api/console/auth/config` 如实 `configured=false`） | Logto wire SPA 应用 client id |
+| `FD_WIRE_ADMIN_ROLE` | —（清单字面值 `wire-admin`） | admin 双闸第二道的角色名（ID token `roles` claim 须含它；5.1） |
+| `FD_WIRE_ADMIN_BEARER_GATE` | —（清单字面值 `on`） | admin Bearer 角色闸开关（默认 on；`off` 仅测试/开发用） |
 
 > 注：`PLATFORM_IDENTITY_SOURCE_MAP`（platform 轨「身份 → 来源」映射，api 侧 8.2 缺口修复已支持）**尚未接入** `fd-wire-api.yaml`——启用 platform 轨来源区分时需在 manifest 增补对应 secretKeyRef 并同步本表；发放/回填联动约定见 `docs/service-credentials.md`。
 
@@ -58,7 +62,7 @@
 ## 备注
 
 - Ingress（`deploy/k8s/ingress.yaml`）是占位：集群现无 ingress controller，真实入口是步骤 9-10 的 Caddy；清单为路由意图存档，controller 启用后即生效。
-- `/internal/`（内部后台端点族）**不经 Caddy 单列路由**：`web/nginx.conf` 的 `location /internal/` 直接反代 `fd-wire-api.fd-prod.svc.cluster.local:8000`（wire-internal-public-routing），门禁在后端令牌 `X-Admin-Token`（fail-closed：未配置 403/不匹配 401）。⚠️ 前端 bundle 公开含开发占位令牌 `dev-admin-token`——生产 secret `fd-wire-env` 键 `fd_wire_admin_token` 必须保持强随机值（10-07 核验为 48 位非占位）。
+- `/internal/`（内部后台端点族）**不经 Caddy 单列路由**：`web/nginx.conf` 的 `location /internal/` 直接反代 `fd-wire-api.fd-prod.svc.cluster.local:8000`（wire-internal-public-routing）。admin 双闸（wire-self-serve-launch 5.2）：第一道 = 请求自带 `Authorization: Bearer <ID token>`（照常透传，服务端校验 `wire-admin` 角色）；第二道 = `X-Admin-Token` 由 web 容器启动时经 envsubst 注入（env `FD_WIRE_ADMIN_TOKEN` ← secret `fd-wire-env` 键 `fd_wire_admin_token`，与 api 同源）——令牌只存在容器 env 与 nginx 渲染配置里，**前端 bundle 不含任何令牌值**（旧开发占位 `dev-admin-token` 已随 5.2 退场）；未配置该 env 时注入空值 → 后端 fail-closed 403。生产密钥保持强随机值（10-07 核验为 48 位非占位）。
 - `fd-wire-api` 只暴露 ClusterIP；`/api` 由边缘 Caddy 承接直指 api，web nginx 刻意不设 `/api` 反代（同域双路由是隐患，注释占位保留仅作文档）。
 - 回滚：清单回退 git tag/commit → ArgoCD 滚回；镜像按不可变 sha- tag 永远可指回。
 

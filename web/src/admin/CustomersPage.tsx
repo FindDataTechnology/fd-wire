@@ -18,7 +18,7 @@ import {
 
 const STATUS_OPTIONS = ["active", "suspended", "closed"] as const;
 
-export function CustomersPage({ token }: { token: string }) {
+export function CustomersPage() {
   const { t } = useTranslation();
   const [customers, setCustomers] = useState<AdminCustomer[] | null>(null);
   const [plans, setPlans] = useState<AdminPlan[]>([]);
@@ -34,15 +34,15 @@ export function CustomersPage({ token }: { token: string }) {
     setCustomers(null);
     try {
       const [items, planItems] = await Promise.all([
-        fetchCustomers(token),
-        fetchPlans(token),
+        fetchCustomers(),
+        fetchPlans(),
       ]);
       setCustomers(items);
       setPlans(planItems);
     } catch (err) {
       setError(err as { status?: number; message: string });
     }
-  }, [token]);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -53,7 +53,7 @@ export function CustomersPage({ token }: { token: string }) {
     setCreating(true);
     setNotice(null);
     try {
-      await createCustomer(token, {
+      await createCustomer({
         name: name.trim(),
         plan_code: planCode,
         ...(callerId.trim() ? { sub2api_user_id: callerId.trim() } : {}),
@@ -72,7 +72,7 @@ export function CustomersPage({ token }: { token: string }) {
   const changePlan = async (customer: AdminCustomer, nextPlan: string) => {
     setNotice(null);
     try {
-      await patchCustomer(token, customer.id, { plan_code: nextPlan });
+      await patchCustomer(customer.id, { plan_code: nextPlan });
       await load();
     } catch (err) {
       setError(err as { status?: number; message: string });
@@ -82,7 +82,7 @@ export function CustomersPage({ token }: { token: string }) {
   const changeStatus = async (customer: AdminCustomer, nextStatus: string) => {
     setNotice(null);
     try {
-      await patchCustomer(token, customer.id, { status: nextStatus });
+      await patchCustomer(customer.id, { status: nextStatus });
       await load();
     } catch (err) {
       setError(err as { status?: number; message: string });

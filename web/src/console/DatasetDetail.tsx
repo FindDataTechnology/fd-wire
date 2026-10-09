@@ -79,11 +79,9 @@ function describeCorrection(correction: Correction): string {
 }
 
 export function DatasetDetail({
-  customerId,
   datasetId,
   onBack,
 }: {
-  customerId: string;
   datasetId: string;
   onBack: () => void;
 }) {
@@ -100,28 +98,28 @@ export function DatasetDetail({
   const loadDataset = useCallback(async () => {
     setError(false);
     try {
-      setDataset(await fetchDataset(customerId, datasetId));
+      setDataset(await fetchDataset(datasetId));
     } catch {
       setDataset(null);
       setError(true);
     }
-  }, [customerId, datasetId]);
+  }, [datasetId]);
 
   const loadCorrections = useCallback(async () => {
     try {
-      setCorrections(await fetchCorrections(customerId, datasetId));
+      setCorrections(await fetchCorrections(datasetId));
     } catch {
       setCorrections([]);
     }
-  }, [customerId, datasetId]);
+  }, [datasetId]);
 
   const loadSyncs = useCallback(async () => {
     try {
-      setSyncs(await fetchSyncs(customerId, datasetId));
+      setSyncs(await fetchSyncs(datasetId));
     } catch {
       setSyncs([]);
     }
-  }, [customerId, datasetId]);
+  }, [datasetId]);
 
   useEffect(() => {
     setDataset(null);
@@ -145,17 +143,17 @@ export function DatasetDetail({
 
   const revert = useCallback(
     async (correctionId: number) => {
-      await revertCorrection(customerId, datasetId, correctionId);
+      await revertCorrection(datasetId, correctionId);
       afterCorrection();
     },
-    [customerId, datasetId, afterCorrection],
+    [datasetId, afterCorrection],
   );
 
   const confirmDelete = async () => {
     setDeleting(true);
     setDeleteError(null);
     try {
-      await deleteDataset(customerId, datasetId);
+      await deleteDataset(datasetId);
       setDeleteDialogOpen(false);
       // 回列表页（onBack 内会刷新列表，删除的数据集不再出现）。
       onBack();
@@ -304,14 +302,12 @@ export function DatasetDetail({
       )}
 
       <PreviewGrid
-        customerId={customerId}
         datasetId={datasetId}
         version={previewVersion}
         onChanged={afterCorrection}
       />
       <CorrectionsPanel corrections={corrections} revert={revert} />
       <SyncsPanel
-        customerId={customerId}
         datasetId={datasetId}
         dataset={dataset}
         syncs={syncs}
@@ -322,18 +318,16 @@ export function DatasetDetail({
         }}
       />
       <DanglingPanel corrections={corrections} revert={revert} />
-      <ProvenancePanel customerId={customerId} datasetKey={dataset.key} />
+      <ProvenancePanel datasetKey={dataset.key} />
     </div>
   );
 }
 
 function PreviewGrid({
-  customerId,
   datasetId,
   version,
   onChanged,
 }: {
-  customerId: string;
   datasetId: string;
   version: number;
   onChanged: () => void;
@@ -355,12 +349,12 @@ function PreviewGrid({
   const load = useCallback(async () => {
     setLoadError(false);
     try {
-      setData(await fetchDatasetRows(customerId, datasetId, page, PAGE_SIZE));
+      setData(await fetchDatasetRows(datasetId, page, PAGE_SIZE));
     } catch {
       setData(null);
       setLoadError(true);
     }
-  }, [customerId, datasetId, page]);
+  }, [datasetId, page]);
 
   useEffect(() => {
     setData(null);
@@ -372,7 +366,7 @@ function PreviewGrid({
     setBusy(true);
     setOpError(null);
     try {
-      await addCorrection(customerId, datasetId, payload);
+      await addCorrection(datasetId, payload);
       return true;
     } catch (err) {
       setOpError(
@@ -783,13 +777,11 @@ function CorrectionsPanel({
 }
 
 function SyncsPanel({
-  customerId,
   datasetId,
   dataset,
   syncs,
   onResumed,
 }: {
-  customerId: string;
   datasetId: string;
   dataset: Dataset;
   syncs: SyncRecord[] | null;
@@ -818,7 +810,6 @@ function SyncsPanel({
     setError(null);
     try {
       await resumeDataset(
-        customerId,
         datasetId,
         dialog.columns.filter((column) => checked[column]),
       );
@@ -1142,10 +1133,8 @@ export function summarizeProvenancePayload(
 }
 
 function ProvenancePanel({
-  customerId,
   datasetKey,
 }: {
-  customerId: string;
   datasetKey: string;
 }) {
   const { t } = useTranslation();
@@ -1165,36 +1154,36 @@ function ProvenancePanel({
   const loadStatus = useCallback(async () => {
     setStatusError(false);
     try {
-      const next = await fetchProvenanceStatus(customerId, datasetKey);
+      const next = await fetchProvenanceStatus(datasetKey);
       setStatus(next);
       setTier(next.tier);
     } catch {
       setStatus(null);
       setStatusError(true);
     }
-  }, [customerId, datasetKey]);
+  }, [datasetKey]);
 
   const loadEvents = useCallback(async () => {
     setEventsError(false);
     try {
-      const page = await fetchProvenanceEvents(customerId, datasetKey);
+      const page = await fetchProvenanceEvents(datasetKey);
       setEvents(page.events);
       setHasMore(page.has_more);
     } catch {
       setEvents(null);
       setEventsError(true);
     }
-  }, [customerId, datasetKey]);
+  }, [datasetKey]);
 
   useEffect(() => {
     setStatus(null);
     setOverview(null);
     setTierError(null);
     void loadStatus();
-    fetchProvenanceOverview(customerId)
+    fetchProvenanceOverview()
       .then(setOverview)
       .catch(() => setOverview(null));
-  }, [customerId, datasetKey, loadStatus]);
+  }, [datasetKey, loadStatus]);
 
   useEffect(() => {
     setEvents(null);
@@ -1207,7 +1196,7 @@ function ProvenancePanel({
     setTierBusy(true);
     setTierError(null);
     try {
-      const result = await updateProvenanceTier(customerId, datasetKey, next);
+      const result = await updateProvenanceTier(datasetKey, next);
       setTier(result.tier);
       await loadStatus();
     } catch (err) {
@@ -1224,7 +1213,7 @@ function ProvenancePanel({
     const oldest = events[events.length - 1]!.seq;
     setLoadingEarlier(true);
     try {
-      const page = await fetchProvenanceEvents(customerId, datasetKey, oldest);
+      const page = await fetchProvenanceEvents(datasetKey, oldest);
       setEvents((prev) => [...(prev ?? []), ...page.events]);
       setHasMore(page.has_more);
     } catch {
@@ -1239,7 +1228,7 @@ function ProvenancePanel({
     setEvidenceBusy(true);
     setEvidenceError(null);
     try {
-      const { blob, filename } = await fetchEvidencePackage(customerId);
+      const { blob, filename } = await fetchEvidencePackage();
       const objectUrl = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = objectUrl;

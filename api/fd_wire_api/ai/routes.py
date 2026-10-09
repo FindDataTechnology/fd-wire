@@ -1,6 +1,7 @@
 """AI 对话构建 API 路由（wire-platform-v1 任务 5.4）。
 
-客户侧（``X-Customer-Id`` 头标识企业，骨架鉴权同 demands 切片）：
+客户侧（Bearer ID token → logto_sub → Customer，wire-self-serve-launch 4.5
+身份切换，同 demands 切片；X-Customer-Id 占位头退位不再接受）：
 - ``POST /api/v1/ai/conversations``               新开对话（可带首条消息即跑循环）
 - ``GET  /api/v1/ai/conversations``               本企业对话列表
 - ``GET  /api/v1/ai/conversations/{id}/messages`` 会话消息（他企一律 404）
@@ -12,11 +13,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from . import service
 from .db import get_db
+from ..console.auth import require_console_customer_id
 from .executor import CellMcpExecutor
 from .llm import TokenGatewayLlmClient
 from .protocols import LlmClient, ToolExecutor
@@ -35,24 +37,12 @@ from .settings import get_settings
 router = APIRouter(tags=["ai"])
 
 
-def _customer_id(
-    x_customer_id: str | None = Header(default=None, alias="X-Customer-Id"),
-) -> str:
-    """客户身份：骨架阶段用显式头，缺失即 401。"""
-    if not x_customer_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="缺少 X-Customer-Id（客户身份头）",
-        )
-    return x_customer_id
-
-
 def get_llm_client() -> LlmClient:
     """LLM 出口依赖：token 网关 OpenAI 兼容面（测试覆写注入 mock）。"""
     return TokenGatewayLlmClient()
 
 
-def get_tool_executor(customer_id: str = Depends(_customer_id)) -> ToolExecutor:
+def get_tool_executor(customer_id: str = Depends(require_console_customer_id)) -> ToolExecutor:
     """工具执行出口依赖：该企业 cell 的 MCP 端点（测试覆写注入 mock）。
 
     计量归属：平台服务凭据轨道——AI 探索不计费。
@@ -81,7 +71,7 @@ def _conversation_or_404(db: Session, conversation_id: int, customer_id: str):
 )
 def create_conversation(
     payload: ConversationCreate,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
     llm: LlmClient = Depends(get_llm_client),
     tool_executor: ToolExecutor = Depends(get_tool_executor),
@@ -110,7 +100,7 @@ def create_conversation(
 
 @router.get("/api/v1/ai/conversations", response_model=list[ConversationOut])
 def list_conversations(
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> list[ConversationOut]:
     """本企业对话列表（按创建时间倒序）。"""
@@ -124,7 +114,7 @@ def list_conversations(
 )
 def list_messages(
     conversation_id: int,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> list[MessageOut]:
     """会话全部消息（仅本企业可见；他企或不存在一律 404）。"""
@@ -140,7 +130,7 @@ def list_messages(
 def append_and_run(
     conversation_id: int,
     payload: ChatIn,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
     llm: LlmClient = Depends(get_llm_client),
     tool_executor: ToolExecutor = Depends(get_tool_executor),
@@ -167,7 +157,7 @@ def append_and_run(
 )
 def list_artifacts(
     conversation_id: int,
-    customer_id: str = Depends(_customer_id),
+    customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> list[DraftArtifactOut]:
     """会话暂存的产物草稿（draft；物化到 cell 是后续任务的事）。"""

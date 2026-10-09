@@ -144,6 +144,19 @@ spec:
             - name: METERING_SOURCE_MAP
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: metering_source_map }
+            # 控制台登录（wire-self-serve-launch 4.2）：Logto wire SPA 应用
+            # （issuer 非密走字面值；client_id 非密，Secret 占位便于统轮）
+            - name: FD_WIRE_LOGTO_ISSUER
+              value: https://auth.finddatatech.cloud
+            - name: FD_WIRE_LOGTO_CLIENT_ID
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: fd_wire_logto_client_id, optional: true }
+            # admin 双闸（5.1）：Bearer 角色闸开关与角色名（非密，字面值；
+            # X-Admin-Token 第二道闸见上 FD_WIRE_ADMIN_TOKEN）
+            - name: FD_WIRE_ADMIN_ROLE
+              value: wire-admin
+            - name: FD_WIRE_ADMIN_BEARER_GATE
+              value: "on"
           readinessProbe:
             httpGet: { path: /health, port: http }
             initialDelaySeconds: 3

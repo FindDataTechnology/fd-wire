@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -189,3 +190,16 @@ class Sub2ApiClient:
             balance_micro=user.balance_micro,
             min_balance_micro=min_balance_micro,
         )
+
+
+def sub2api_client_dep() -> Iterator[Sub2ApiClient]:
+    """FastAPI 依赖：请求级 Sub2ApiClient（开户代建用；用完即关）。
+
+    测试以 ``app.dependency_overrides[sub2api_client_dep]`` 注入假件
+    （test_billing_common.FakeSub2Api 同款 httpx.MockTransport 形态）。
+    """
+    client = Sub2ApiClient()
+    try:
+        yield client
+    finally:
+        client.close()

@@ -11,6 +11,9 @@ dependencies = [
     "sqlalchemy>=2.0",
     "alembic>=1.13",
     "httpx>=0.27",
+    # 控制台登录（wire-self-serve-launch 4.2）：Logto ID token 本地校验
+    # （JWKS/iss/aud/exp；crypto extra 供 RS256/ES384 验签）
+    "pyjwt[crypto]>=2.8",
     # 客户数据集（wire-customer-local-data 任务组 2）：multipart 上传解析 +
     # Excel 解析（CSV 走 stdlib）。
     "python-multipart>=0.0.9",

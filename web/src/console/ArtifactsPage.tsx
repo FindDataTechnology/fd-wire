@@ -25,7 +25,7 @@ const KIND_BADGE_CLASS: Record<string, string> = {
   refresh_schedule: "bg-teal-50 text-teal-700 ring-teal-200",
 };
 
-export function ArtifactsPage({ customerId }: { customerId: string }) {
+export function ArtifactsPage() {
   const { t } = useTranslation();
   const [conversations, setConversations] = useState<Conversation[] | null>(null);
   const [artifacts, setArtifacts] = useState<DraftArtifact[] | null>(null);
@@ -38,14 +38,14 @@ export function ArtifactsPage({ customerId }: { customerId: string }) {
     setConversations(null);
     setArtifacts(null);
     try {
-      const convs = await fetchConversations(customerId);
-      const drafts = await fetchAllArtifacts(customerId, convs);
+      const convs = await fetchConversations();
+      const drafts = await fetchAllArtifacts(convs);
       setConversations(convs);
       setArtifacts(drafts);
     } catch {
       setError("artifacts");
     }
-  }, [customerId]);
+  }, []);
 
   useEffect(() => {
     void load();

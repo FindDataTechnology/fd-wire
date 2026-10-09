@@ -6,7 +6,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import "../i18n";
 import i18n from "../i18n";
 import { ChatPage } from "./ChatPage";
-import { installConsoleBackend } from "./testing";
+import { installConsoleBackend, seedConsoleSession } from "./testing";
 import type { Conversation } from "./api";
 
 const CONVERSATIONS: Conversation[] = [
@@ -26,12 +26,16 @@ const CONVERSATIONS: Conversation[] = [
 
 beforeEach(() => {
   i18n.changeLanguage("zh");
+  sessionStorage.clear();
+  // 登录会话种子：请求自动附 Authorization: Bearer，假后端按 sub 隔离。
+  seedConsoleSession({ sub: "demo-customer" });
   window.location.hash = "";
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  sessionStorage.clear();
   window.location.hash = "";
 });
 
@@ -52,7 +56,7 @@ describe("ChatPage（消息流渲染）", () => {
     backend.addMessage(1, "assistant", "已生成仪表盘草稿，可在产物页查看。");
     vi.stubGlobal("fetch", backend.fetchImpl);
 
-    render(<ChatPage customerId="demo-customer" conversationId={1} />);
+    render(<ChatPage conversationId={1} />);
 
     // 三类角色齐全
     expect(await screen.findByText("帮我建一个宏观仪表盘")).toBeTruthy();
@@ -82,7 +86,7 @@ describe("ChatPage（消息流渲染）", () => {
   it("会话列表渲染 + 点击选中会话链接；未选中显示新建引导", async () => {
     const backend = installConsoleBackend(CONVERSATIONS);
     vi.stubGlobal("fetch", backend.fetchImpl);
-    render(<ChatPage customerId="demo-customer" conversationId={null} />);
+    render(<ChatPage conversationId={null} />);
 
     expect(await screen.findByTestId("chat-start")).toBeTruthy();
     const items = await screen.findAllByTestId("conversation-item");
@@ -97,7 +101,7 @@ describe("ChatPage（消息流渲染）", () => {
     backend.addMessage(1, "user", "首轮消息");
     backend.addMessage(1, "assistant", "首轮回复");
     vi.stubGlobal("fetch", backend.fetchImpl);
-    render(<ChatPage customerId="demo-customer" conversationId={1} />);
+    render(<ChatPage conversationId={1} />);
     await screen.findByText("首轮回复");
 
     fireEvent.change(screen.getByTestId("chat-input"), {
@@ -113,7 +117,7 @@ describe("ChatPage（消息流渲染）", () => {
     );
     expect(post).toBeTruthy();
     expect(post!.body).toEqual({ content: "再加一个 PMI 图" });
-    expect(post!.headers["x-customer-id"]).toBe("demo-customer");
+    expect(post!.headers["authorization"]).toMatch(/^Bearer /);
     // 用户消息与回复都出现在流中
     expect(screen.getByText("再加一个 PMI 图")).toBeTruthy();
     // 输入框清空
@@ -123,7 +127,7 @@ describe("ChatPage（消息流渲染）", () => {
   it("新建对话：发送首条消息 → POST /ai/conversations 携带 message，成功后跳转 ?c=<id>", async () => {
     const backend = installConsoleBackend([]);
     vi.stubGlobal("fetch", backend.fetchImpl);
-    render(<ChatPage customerId="demo-customer" conversationId={null} />);
+    render(<ChatPage conversationId={null} />);
 
     fireEvent.change(screen.getByTestId("chat-input"), {
       target: { value: "建一个煤价监控仪表盘" },
@@ -154,7 +158,7 @@ describe("ChatPage（消息流渲染）", () => {
         "企业 demo-customer 今日已新开 50 个对话，达到每日上限（AI_DAILY_CONVERSATION_LIMIT=50）。请明日再试或联系平台调整限额。",
     });
     vi.stubGlobal("fetch", backend.fetchImpl);
-    render(<ChatPage customerId="demo-customer" conversationId={null} />);
+    render(<ChatPage conversationId={null} />);
 
     fireEvent.change(screen.getByTestId("chat-input"), {
       target: { value: "再来一个" },
@@ -180,7 +184,7 @@ describe("ChatPage（消息流渲染）", () => {
           json: () => Promise.resolve({ detail: "boom" }),
         })) as unknown as typeof fetch,
     );
-    render(<ChatPage customerId="demo-customer" conversationId={1} />);
+    render(<ChatPage conversationId={1} />);
     expect(await screen.findByTestId("chat-messages-error")).toBeTruthy();
     expect(screen.getByTestId("chat-messages-error").textContent).toContain(
       "消息加载失败",

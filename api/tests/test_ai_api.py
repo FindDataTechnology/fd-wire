@@ -26,8 +26,12 @@ from fd_wire_api.ai.protocols import LlmAssistantMessage, ToolCall
 from fd_wire_api.ai.routes import get_llm_client, get_tool_executor
 from fd_wire_api.app import app
 
-CUST = {"X-Customer-Id": "cust-001"}
-OTHER = {"X-Customer-Id": "cust-002"}
+from console_fixture import bearer, install_fake_jwks, make_console_env, mint_id_token
+
+SUB_CUST = "sub-cust-001"
+SUB_OTHER = "sub-cust-002"
+CUST = bearer(mint_id_token(SUB_CUST))
+OTHER = bearer(mint_id_token(SUB_OTHER))
 
 
 class FakeLlm:
@@ -81,7 +85,7 @@ def fake_executor():
 
 
 @pytest.fixture()
-def client(monkeypatch, fake_llm, fake_executor):
+def client(monkeypatch, tmp_path, fake_llm, fake_executor):
     """独立内存库 + 覆写 get_db/LLM/工具执行依赖的 TestClient。"""
     monkeypatch.setenv("AI_CELL_ENDPOINT_MAP", "cust-001=http://cell-001/mcp")
     engine = create_engine(
@@ -103,6 +107,11 @@ def client(monkeypatch, fake_llm, fake_executor):
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_llm_client] = lambda: fake_llm
     app.dependency_overrides[get_tool_executor] = lambda: fake_executor
+    install_fake_jwks(monkeypatch)
+    make_console_env(
+        tmp_path, monkeypatch,
+        customers=[(SUB_CUST, "cust-001"), (SUB_OTHER, "cust-002")],
+    )
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
@@ -319,7 +328,7 @@ def test_tenant_isolation(client, fake_llm) -> None:
 
 
 def test_customer_header_required(client) -> None:
-    """缺 X-Customer-Id 一律 401。"""
+    """缺 Bearer ID token 一律 401（X-Customer-Id 占位头退位）。"""
     assert client.post("/api/v1/ai/conversations", json={}).status_code == 401
     assert client.get("/api/v1/ai/conversations").status_code == 401
     assert client.get("/api/v1/ai/conversations/1/messages").status_code == 401

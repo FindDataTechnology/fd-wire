@@ -1,14 +1,17 @@
 // 内部后台 API 客户端（wire-platform-v1 任务 7.1 web 面）。
 // - 端点族：/internal/admin/*（api 仓 fd_wire_api.admin 路由）——客户管理 /
 //   账本 / 需求单派发 / 目录治理 / 用量分轨。
-// - 鉴权：X-Admin-Token 头（env FD_WIRE_ADMIN_TOKEN；未配置 fail-closed 403）。
-//   token 为 localStorage 可编辑的开发占位（鉴权上线后由正式登录态替换，
-//   UI 面注明「仅开发用」）。
+// - 鉴权（admin 双闸，wire-self-serve-launch 任务 5.2）：请求自动附
+//   Authorization: Bearer <ID token>（Logto 登录会话，服务端校验 wire-admin
+//   角色）；第二道 X-Admin-Token 闸由 web 容器 nginx 在 /internal/ 反代上
+//   服务端注入（env FD_WIRE_ADMIN_TOKEN）——浏览器永不持有该值，开发占位的
+//   DEFAULT_ADMIN_TOKEN / localStorage 令牌存储已整体退场。
 // - 基址：VITE_ADMIN_API_BASE 显式覆盖；缺省从 API_BASE 剥掉结尾 /api 推导
 //   （默认同源根——dev 本地直连可设 VITE_ADMIN_API_BASE=http://127.0.0.1:8000）。
 // - 错误如实：非 2xx 一律抛 AdminApiError（携带 status 与后端 detail），
 //   UI 原样呈现（401/403 = 鉴权失败态），绝不静默吞掉。
 import { API_BASE } from "../catalog/api";
+import { loadSession } from "../console/auth";
 
 function resolveAdminBase(): string {
   const explicit = String(import.meta.env.VITE_ADMIN_API_BASE ?? "").trim();
@@ -19,27 +22,13 @@ function resolveAdminBase(): string {
 
 export const ADMIN_API_BASE = resolveAdminBase();
 
-/** admin 令牌的开发占位存储（仅开发用；生产由登录态提供）。 */
-export const ADMIN_TOKEN_STORAGE_KEY = "wire-web-admin-token";
-export const DEFAULT_ADMIN_TOKEN = "dev-admin-token";
-
-export function loadAdminToken(): string {
-  try {
-    const raw = localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
-    return raw && raw.trim() ? raw.trim() : DEFAULT_ADMIN_TOKEN;
-  } catch {
-    return DEFAULT_ADMIN_TOKEN;
+/** 登录会话 Bearer 头（无会话即 401 如实上抛；不携带任何手填令牌）。 */
+function bearerHeaders(): Record<string, string> {
+  const session = loadSession();
+  if (!session?.idToken) {
+    throw new AdminApiError("no console session (sign in required)", 401);
   }
-}
-
-export function saveAdminToken(raw: string): string {
-  const normalized = raw.trim() || DEFAULT_ADMIN_TOKEN;
-  try {
-    localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, normalized);
-  } catch {
-    /* localStorage 不可用时仅本次会话生效 */
-  }
-  return normalized;
+  return { Authorization: `Bearer ${session.idToken}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -206,14 +195,13 @@ export class AdminApiError extends Error {
 
 interface RequestOptions {
   method: "GET" | "POST" | "PATCH";
-  token: string;
   body?: unknown;
-  /** 端点要求的额外头（如 datasets 内部面的 X-Internal-Token）。 */
+  /** 端点要求的额外头（一般不用——X-Admin-Token 由 nginx 服务端注入）。 */
   headers?: Record<string, string>;
 }
 
 async function requestJson<T>(path: string, options: RequestOptions): Promise<T> {
-  const { method, token, body } = options;
+  const { method, body } = options;
   const url = `${ADMIN_API_BASE}${path}`;
   let response: Response;
   try {
@@ -221,13 +209,14 @@ async function requestJson<T>(path: string, options: RequestOptions): Promise<T>
       method,
       headers: {
         Accept: "application/json",
-        "X-Admin-Token": token,
+        ...bearerHeaders(),
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
         ...(options.headers ?? {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
   } catch (err) {
+    if (err instanceof AdminApiError) throw err;
     throw new AdminApiError(
       `network error fetching ${url}: ${(err as Error).message}`,
     );
@@ -263,33 +252,29 @@ async function requestJson<T>(path: string, options: RequestOptions): Promise<T>
 // 客户管理
 // ---------------------------------------------------------------------------
 
-export function fetchPlans(token: string): Promise<AdminPlan[]> {
-  return requestJson("/internal/admin/plans", { method: "GET", token });
+export function fetchPlans(): Promise<AdminPlan[]> {
+  return requestJson("/internal/admin/plans", { method: "GET" });
 }
 
-export function fetchCustomers(token: string): Promise<AdminCustomer[]> {
-  return requestJson("/internal/admin/customers", { method: "GET", token });
+export function fetchCustomers(): Promise<AdminCustomer[]> {
+  return requestJson("/internal/admin/customers", { method: "GET" });
 }
 
 export function createCustomer(
-  token: string,
   payload: { name: string; plan_code: string; sub2api_user_id?: string | null },
 ): Promise<AdminCustomer> {
   return requestJson("/internal/admin/customers", {
     method: "POST",
-    token,
     body: payload,
   });
 }
 
 export function patchCustomer(
-  token: string,
   customerId: number,
   payload: { plan_code?: string; status?: string },
 ): Promise<AdminCustomer> {
   return requestJson(`/internal/admin/customers/${customerId}`, {
     method: "PATCH",
-    token,
     body: payload,
   });
 }
@@ -298,47 +283,37 @@ export function patchCustomer(
 // 额度与账本
 // ---------------------------------------------------------------------------
 
-export function fetchCustomerUsage(
-  token: string,
-  customerId: number,
-): Promise<CustomerUsage> {
+export function fetchCustomerUsage(customerId: number): Promise<CustomerUsage> {
   return requestJson(`/internal/admin/customers/${customerId}/usage`, {
     method: "GET",
-    token,
   });
 }
 
 export function fetchLedger(
-  token: string,
   params: { customer_id?: number; period?: string } = {},
 ): Promise<LedgerEntry[]> {
   const qs = new URLSearchParams();
   if (params.customer_id != null) qs.set("customer_id", String(params.customer_id));
   if (params.period) qs.set("period", params.period);
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
-  return requestJson(`/internal/admin/ledger${suffix}`, { method: "GET", token });
+  return requestJson(`/internal/admin/ledger${suffix}`, { method: "GET" });
 }
 
 // ---------------------------------------------------------------------------
 // 需求单派发台
 // ---------------------------------------------------------------------------
 
-export function fetchDemands(
-  token: string,
-  status?: DemandStatus,
-): Promise<AdminDemand[]> {
+export function fetchDemands(status?: DemandStatus): Promise<AdminDemand[]> {
   const suffix = status ? `?status=${status}` : "";
-  return requestJson(`/internal/admin/demands${suffix}`, { method: "GET", token });
+  return requestJson(`/internal/admin/demands${suffix}`, { method: "GET" });
 }
 
 export function transitionDemand(
-  token: string,
   demandId: number,
   payload: DemandTransitionInput,
 ): Promise<AdminDemand> {
   return requestJson(`/internal/admin/demands/${demandId}/transition`, {
     method: "POST",
-    token,
     body: payload,
   });
 }
@@ -348,34 +323,28 @@ export function transitionDemand(
 // ---------------------------------------------------------------------------
 
 export function fetchCatalogPending(
-  token: string,
   status: "registered" | "verified" = "registered",
 ): Promise<CatalogPendingResponse> {
   return requestJson(`/internal/admin/catalog/pending?status=${status}`, {
     method: "GET",
-    token,
   });
 }
 
 export function addVerifyNote(
-  token: string,
   indicatorId: string,
   note: string,
   author = "admin-console",
 ): Promise<ReviewNote> {
   return requestJson(
     `/internal/admin/catalog/${encodeURIComponent(indicatorId)}/verify-note`,
-    { method: "POST", token, body: { note, author } },
+    { method: "POST", body: { note, author } },
   );
 }
 
-export function fetchReviewNotes(
-  token: string,
-  indicatorId: string,
-): Promise<ReviewNote[]> {
+export function fetchReviewNotes(indicatorId: string): Promise<ReviewNote[]> {
   return requestJson(
     `/internal/admin/catalog/${encodeURIComponent(indicatorId)}/notes`,
-    { method: "GET", token },
+    { method: "GET" },
   );
 }
 
@@ -390,7 +359,6 @@ export interface UsageOverviewQuery {
 }
 
 export function fetchUsageOverview(
-  token: string,
   query: UsageOverviewQuery = {},
 ): Promise<UsageOverview> {
   const qs = new URLSearchParams();
@@ -400,7 +368,6 @@ export function fetchUsageOverview(
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return requestJson(`/internal/admin/usage/overview${suffix}`, {
     method: "GET",
-    token,
   });
 }
 
@@ -425,16 +392,14 @@ export interface CustomerLocalDataOverview {
 
 /**
  * per-cell 客户数据集存储用量与连接器同步健康（只读，无管理操作入口）。
- * 鉴权沿用后台单一令牌通道：既有 admin 端点认 ``X-Admin-Token``，本端点
- * （datasets 内部面）按冻结契约认 ``X-Internal-Token``——同一令牌值同时
- * 携带于两个头，不引入第二套令牌 UI/存储。
+ * 鉴权（admin 双闸后）：自动附登录 Bearer；X-Admin-Token 由 nginx 服务端注入。
+ * 浏览器不再携带任何 X-Internal-Token——datasets 内部面若仍要求该头，
+ * 由 api/网关侧把该端点并入双闸通道（前端不做令牌拼装）。
  */
-export function fetchCustomerLocalDataOverview(
-  token: string,
-): Promise<CustomerLocalDataOverview[]> {
+export function fetchCustomerLocalDataOverview(): Promise<
+  CustomerLocalDataOverview[]
+> {
   return requestJson("/internal/datasets/overview", {
     method: "GET",
-    token,
-    headers: { "X-Internal-Token": token },
   });
 }

@@ -28,7 +28,7 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
   rejected: "bg-rose-50 text-rose-700 ring-rose-200",
 };
 
-export function DemandsPage({ token }: { token: string }) {
+export function DemandsPage() {
   const { t } = useTranslation();
   const [demands, setDemands] = useState<AdminDemand[] | null>(null);
   const [statusFilter, setStatusFilter] = useState<DemandStatus | "all">("all");
@@ -41,14 +41,13 @@ export function DemandsPage({ token }: { token: string }) {
     setDemands(null);
     try {
       const items = await fetchDemands(
-        token,
         statusFilter === "all" ? undefined : statusFilter,
       );
       setDemands(items);
     } catch (err) {
       setError(err as { status?: number; message: string });
     }
-  }, [token, statusFilter]);
+  }, [statusFilter]);
 
   useEffect(() => {
     void load();
@@ -171,7 +170,6 @@ export function DemandsPage({ token }: { token: string }) {
                     await load();
                   }}
                   onConflict={(message) => setActionError(message)}
-                  token={token}
                 />
               )}
             </li>
@@ -185,12 +183,10 @@ export function DemandsPage({ token }: { token: string }) {
 
 function DispatchPanel({
   demand,
-  token,
   onDone,
   onConflict,
 }: {
   demand: AdminDemand;
-  token: string;
   onDone: () => Promise<void>;
   onConflict: (message: string) => void;
 }) {
@@ -204,7 +200,7 @@ function DispatchPanel({
   const submit = async () => {
     setBusy(true);
     try {
-      await transitionDemand(token, demand.id, {
+      await transitionDemand(demand.id, {
         target_status: target,
         by: "admin-console",
         ...(note.trim() ? { note: note.trim() } : {}),

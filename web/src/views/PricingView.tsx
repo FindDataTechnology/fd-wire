@@ -1,25 +1,61 @@
-// 定价页（#/pricing）——三档卡片，中档（专业版）标「推荐」。
-// 档位数字为 design.md 已裁决口径（后台可配不发版）；需求单独立报价、
-// 法律域询价为脚注如实呈现。CTA 一律 mailto 占位（联系开通）。
-// 目录规模数字活取 /v1/catalog/stats（千位向下取整）；取不到时回退
-// 不带数字的文案——源码不携带手写指标数字面量。
+// 定价页（#/pricing，wire-self-serve-launch 任务 7.1）——四卡活取。
+// - 三张公开卡从 GET /api/v1/plans 渲染（免费/基础/标准；价格与含额行数为
+//   后端数据，源码零档位面量）+ 一张静态「自定义」询价卡（CTA=联系开通）。
+// - 副标题为「用完即停、次月恢复」口径；全部档位无超额单价。
+// - 请求失败回退 = 无数字卡片（沿用目录页 fallback 范式：名字/能力仍在，
+//   数字退场），绝不回退到写死的价格字面量。
+// - 目录规模数字活取 /v1/catalog/stats（千位向下取整）；取不到时回退
+//   不带数字的文案。
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CONTACT_MAILTO } from "./HomeView";
+import {
+  fetchPublicPlans,
+  formatIncludedLines,
+  formatPlanPriceYuan,
+  type PublicPlan,
+} from "../pricing/api";
 import { formatCatalogTotal } from "../catalog/api";
 import { useCatalogStats } from "../catalog/useCatalogStats";
 
-type TierKey = "starter" | "pro" | "enterprise";
+/** 档位卡展示名：i18n 按 code 取；未登记的 code 兜底原样展示。 */
+function tierName(translate: (key: string) => string, code: string): string {
+  const key = `pricing.tiers.${code}.name`;
+  const label = translate(key);
+  return label === key ? code : label;
+}
 
-const TIERS: { key: TierKey; testid: string; featured: boolean }[] = [
-  { key: "starter", testid: "tier-starter", featured: false },
-  { key: "pro", testid: "tier-pro", featured: true },
-  { key: "enterprise", testid: "tier-enterprise", featured: false },
-];
+function tierDesc(translate: (key: string) => string, code: string): string {
+  const key = `pricing.tiers.${code}.desc`;
+  const label = translate(key);
+  return label === key ? "" : label;
+}
 
 export function PricingView() {
   const { t } = useTranslation();
   const stats = useCatalogStats();
   const catalogTotal = formatCatalogTotal(stats?.registered ?? 0);
+
+  // null = 加载中；failed = 活取失败（回退无数字卡片）。
+  const [plans, setPlans] = useState<PublicPlan[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchPublicPlans()
+      .then((value) => {
+        if (!cancelled) setPlans(value);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPlans([]);
+          setFailed(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const features = [
     catalogTotal
@@ -28,6 +64,15 @@ export function PricingView() {
     t("pricing.featMcp"),
     t("pricing.featDemand"),
   ];
+
+  const cardShell = (emphasized: boolean, dashed = false) =>
+    `relative rounded-lg border p-6 ${
+      emphasized
+        ? "border-slate-900 ring-1 ring-slate-900"
+        : dashed
+          ? "border-dashed border-slate-300"
+          : "border-slate-200"
+    }`;
 
   return (
     <div>
@@ -39,61 +84,94 @@ export function PricingView() {
           {t("pricing.subtitle")}
         </p>
       </section>
-      <section className="grid gap-4 sm:grid-cols-3 items-start">
-        {TIERS.map((tier) => (
-          <div
-            key={tier.key}
-            data-testid={tier.testid}
-            className={`relative rounded-lg border p-6 ${
-              tier.featured
-                ? "border-slate-900 ring-1 ring-slate-900"
-                : "border-slate-200"
-            }`}
+
+      {failed && (
+        <p
+          data-testid="pricing-load-failed"
+          className="mx-auto max-w-2xl rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs text-amber-700"
+        >
+          {t("pricing.loadFailedNote")}
+        </p>
+      )}
+
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 items-start">
+        {plans == null && failed === false && (
+          <p className="col-span-full text-center text-xs text-slate-400" data-testid="pricing-loading">
+            {t("pricing.loading")}
+          </p>
+        )}
+        {(plans ?? []).map((plan) => {
+          const showNumbers = !failed;
+          return (
+            <div key={plan.code} data-testid={`tier-${plan.code}`} className={cardShell(false)}>
+              <h2 className="font-medium">{tierName(t, plan.code)}</h2>
+              <p className="mt-1 text-xs text-slate-500">
+                {tierDesc(t, plan.code)}
+              </p>
+              {showNumbers && (
+                <>
+                  <p className="mt-4 text-3xl font-semibold tracking-tight">
+                    {formatPlanPriceYuan(plan.monthly_price_yuan)}
+                    <span className="ml-1 text-sm font-normal text-slate-400">
+                      {t("pricing.perMonth")}
+                    </span>
+                  </p>
+                  <p className="mt-2 text-sm text-slate-600">
+                    {t("pricing.includedLines", {
+                      count: formatIncludedLines(plan.included_lines),
+                    })}
+                  </p>
+                  <p className="text-sm text-slate-600">
+                    {t("pricing.stopAtQuotaLine")}
+                  </p>
+                </>
+              )}
+              <ul className="mt-4 space-y-2 border-t border-slate-100 pt-4">
+                {features.map((f) => (
+                  <li key={f} className="flex items-start gap-2 text-sm">
+                    <span
+                      aria-hidden
+                      className="mt-0.5 inline-block h-1.5 w-1.5 rounded-full bg-slate-400"
+                    />
+                    {f}
+                  </li>
+                ))}
+              </ul>
+              <a
+                href={CONTACT_MAILTO}
+                className="mt-6 block rounded-md px-4 py-2 text-center text-sm transition-colors border border-slate-300 hover:bg-slate-100"
+              >
+                {t("pricing.cta")}
+              </a>
+            </div>
+          );
+        })}
+
+        {/* 静态「自定义」询价卡：不进公开档位列表，CTA=联系开通。 */}
+        <div data-testid="tier-custom" className={cardShell(false, true)}>
+          <h2 className="font-medium">{tierName(t, "custom")}</h2>
+          <p className="mt-1 text-xs text-slate-500">{tierDesc(t, "custom")}</p>
+          <p className="mt-4 text-3xl font-semibold tracking-tight">
+            {t("pricing.customQuote")}
+          </p>
+          <ul className="mt-4 space-y-2 border-t border-slate-100 pt-4">
+            {features.map((f) => (
+              <li key={f} className="flex items-start gap-2 text-sm">
+                <span
+                  aria-hidden
+                  className="mt-0.5 inline-block h-1.5 w-1.5 rounded-full bg-slate-400"
+                />
+                {f}
+              </li>
+            ))}
+          </ul>
+          <a
+            href={CONTACT_MAILTO}
+            className="mt-6 block rounded-md bg-slate-900 px-4 py-2 text-center text-sm text-white hover:bg-slate-700 transition-colors"
           >
-            {tier.featured && (
-              <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-slate-900 px-3 py-0.5 text-xs font-medium text-white">
-                {t("pricing.recommended")}
-              </span>
-            )}
-            <h2 className="font-medium">{t(`pricing.${tier.key}.name`)}</h2>
-            <p className="mt-1 text-xs text-slate-500">
-              {t(`pricing.${tier.key}.desc`)}
-            </p>
-            <p className="mt-4 text-3xl font-semibold tracking-tight">
-              {t(`pricing.${tier.key}.price`)}
-              <span className="ml-1 text-sm font-normal text-slate-400">
-                {t("pricing.perMonth")}
-              </span>
-            </p>
-            <p className="mt-2 text-sm text-slate-600">
-              {t(`pricing.${tier.key}.rows`)}
-            </p>
-            <p className="text-sm text-slate-600">
-              {t(`pricing.${tier.key}.overage`)}
-            </p>
-            <ul className="mt-4 space-y-2 border-t border-slate-100 pt-4">
-              {features.map((f) => (
-                <li key={f} className="flex items-start gap-2 text-sm">
-                  <span
-                    aria-hidden
-                    className="mt-0.5 inline-block h-1.5 w-1.5 rounded-full bg-slate-400"
-                  />
-                  {f}
-                </li>
-              ))}
-            </ul>
-            <a
-              href={CONTACT_MAILTO}
-              className={`mt-6 block rounded-md px-4 py-2 text-center text-sm transition-colors ${
-                tier.featured
-                  ? "bg-slate-900 text-white hover:bg-slate-700"
-                  : "border border-slate-300 hover:bg-slate-100"
-              }`}
-            >
-              {t("pricing.cta")}
-            </a>
-          </div>
-        ))}
+            {t("pricing.cta")}
+          </a>
+        </div>
       </section>
       <section className="mt-8 space-y-1 text-xs text-slate-400">
         <p>{t("pricing.fnDemand")}</p>

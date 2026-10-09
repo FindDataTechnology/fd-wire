@@ -25,6 +25,7 @@ import {
   type ProvenanceStatus,
   type ProvenanceTier,
 } from "./api";
+import { makeIdToken } from "./testing";
 
 const CUSTOMER = "demo-customer";
 const NOW = "2026-10-05T10:00:00";
@@ -178,12 +179,25 @@ function callsOf(calls: FetchCall[], method: string, path: string): FetchCall[] 
 beforeEach(() => {
   i18n.changeLanguage("zh");
   localStorage.clear();
+  sessionStorage.clear();
+  // 登录会话种子：请求自动附 Authorization: Bearer（假后端不校验值，
+  // 证据包下载断言按 Bearer 前缀匹配）。
+  sessionStorage.setItem(
+    "wire.console.session",
+    JSON.stringify({
+      idToken: makeIdToken({ sub: CUSTOMER }),
+      expiresAt: Date.now() + 3600_000,
+      identity: CUSTOMER,
+      roles: [],
+    }),
+  );
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   localStorage.clear();
+  sessionStorage.clear();
 });
 
 describe("DatasetDetail 溯源区块：状态条（任务 8.1）", () => {
@@ -191,7 +205,7 @@ describe("DatasetDetail 溯源区块：状态条（任务 8.1）", () => {
     install({
       status: makeStatus({ tier: "anchored_batch", integrity: { ok: true, checked: 42 } }),
     });
-    render(<DatasetDetail customerId={CUSTOMER} datasetId="ds-1" onBack={() => {}} />);
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
 
     const section = await screen.findByTestId("provenance-section");
     expect(section).toBeTruthy();
@@ -229,7 +243,7 @@ describe("DatasetDetail 溯源区块：状态条（任务 8.1）", () => {
         anchored_through: { epoch: null, backend: null },
       }),
     });
-    render(<DatasetDetail customerId={CUSTOMER} datasetId="ds-1" onBack={() => {}} />);
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
 
     const integrity = await screen.findByTestId("provenance-integrity");
     expect(integrity.getAttribute("data-ok")).toBe("false");
@@ -241,7 +255,7 @@ describe("DatasetDetail 溯源区块：状态条（任务 8.1）", () => {
 
   it("调档：切换下拉即 POST tier 载荷，成功后刷新状态并回显新档位", async () => {
     const backend = install({ status: makeStatus({ tier: "chain_only" }) });
-    render(<DatasetDetail customerId={CUSTOMER} datasetId="ds-1" onBack={() => {}} />);
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
     const select = await screen.findByTestId("provenance-tier-select");
     expect((select as HTMLSelectElement).value).toBe("chain_only");
 
@@ -256,8 +270,8 @@ describe("DatasetDetail 溯源区块：状态条（任务 8.1）", () => {
     expect(callsOf(backend.calls, "POST", tierPath)[0]!.body).toEqual({
       tier: "anchored_batch",
     });
-    expect(callsOf(backend.calls, "POST", tierPath)[0]!.headers["x-customer-id"]).toBe(
-      CUSTOMER,
+    expect(callsOf(backend.calls, "POST", tierPath)[0]!.headers["authorization"]).toMatch(
+      /^Bearer /,
     );
     // 成功后刷新状态（status 再次 GET），下拉回显新档位
     await waitFor(() =>
@@ -298,7 +312,7 @@ describe("DatasetDetail 溯源区块：事件时间线（任务 8.1）", () => {
 
   it("倒序渲染：类型中文友好名（未知类型原样）、操作者、负载摘要平铺", async () => {
     install({ status: makeStatus(), events });
-    render(<DatasetDetail customerId={CUSTOMER} datasetId="ds-1" onBack={() => {}} />);
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
 
     const rows = await screen.findAllByTestId("provenance-event");
     expect(rows.length).toBe(5);
@@ -332,7 +346,7 @@ describe("DatasetDetail 溯源区块：事件时间线（任务 8.1）", () => {
       makeEvent({ seq: 60 - i, type: "dataset.snapshot.refreshed" }),
     );
     const backend = install({ status: makeStatus(), events: many });
-    render(<DatasetDetail customerId={CUSTOMER} datasetId="ds-1" onBack={() => {}} />);
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
 
     const eventsPath = `/api/v1/provenance/datasets/${KEY}/events`;
     await waitFor(() =>
@@ -358,7 +372,7 @@ describe("DatasetDetail 溯源区块：事件时间线（任务 8.1）", () => {
 
   it("空时间线如实展示「还没有入账事件」", async () => {
     install({ status: makeStatus({ note: "启用前无历史事件", first_event_ts: null }), events: [] });
-    render(<DatasetDetail customerId={CUSTOMER} datasetId="ds-1" onBack={() => {}} />);
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
     expect(await screen.findByTestId("provenance-timeline-empty")).toBeTruthy();
     expect(screen.queryByTestId("provenance-event")).toBeNull();
   });
@@ -372,7 +386,7 @@ describe("DatasetDetail 溯源区块：起点如实标注（任务 8.2）", () =
         first_event_ts: null,
       }),
     });
-    render(<DatasetDetail customerId={CUSTOMER} datasetId="ds-1" onBack={() => {}} />);
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
     const note = await screen.findByTestId("provenance-note");
     expect(note.textContent).toContain("启用前无历史事件");
     expect(note.textContent).toContain("自启用时点");
@@ -381,7 +395,7 @@ describe("DatasetDetail 溯源区块：起点如实标注（任务 8.2）", () =
 });
 
 describe("DatasetDetail 溯源区块：证据包下载（任务 8.1）", () => {
-  it("点击下载：带 X-Customer-Id 请求 evidence-package，blob 经 URL.createObjectURL 触发浏览器下载", async () => {
+  it("点击下载：带 Authorization Bearer 请求 evidence-package，blob 经 URL.createObjectURL 触发浏览器下载", async () => {
     const createObjectURL = vi.fn(() => "blob:evidence");
     const revokeObjectURL = vi.fn();
     vi.stubGlobal(
@@ -389,7 +403,7 @@ describe("DatasetDetail 溯源区块：证据包下载（任务 8.1）", () => {
       Object.assign(URL, { createObjectURL, revokeObjectURL }),
     );
     const backend = install({ status: makeStatus() });
-    render(<DatasetDetail customerId={CUSTOMER} datasetId="ds-1" onBack={() => {}} />);
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
 
     fireEvent.click(await screen.findByTestId("provenance-evidence-download"));
     await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
@@ -397,14 +411,14 @@ describe("DatasetDetail 溯源区块：证据包下载（任务 8.1）", () => {
       (c) => c.url.pathname === "/api/v1/provenance/evidence-package",
     );
     expect(call?.method).toBe("GET");
-    expect(call?.headers["x-customer-id"]).toBe(CUSTOMER);
+    expect(call?.headers["authorization"]).toMatch(/^Bearer /);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:evidence");
     expect(screen.queryByTestId("provenance-evidence-error")).toBeNull();
   });
 });
 
 describe("provenance API client 细节", () => {
-  it("fetchEvidencePackage：缺 Content-Disposition 时按 evidence-package-<客户>-<日期>.jsonl.bin 命名", async () => {
+  it("fetchEvidencePackage：缺 Content-Disposition 时按 evidence-package-<日期>.jsonl.bin 命名", async () => {
     const blob = new Blob(["ledger"]);
     vi.stubGlobal(
       "fetch",
@@ -417,10 +431,10 @@ describe("provenance API client 细节", () => {
           headers: new Headers(),
         } as unknown as Response)) as unknown as typeof fetch,
     );
-    const pkg = await fetchEvidencePackage(CUSTOMER);
+    const pkg = await fetchEvidencePackage();
     expect(pkg.blob).toBe(blob);
     expect(pkg.filename).toMatch(
-      /^evidence-package-demo-customer-\d{4}-\d{2}-\d{2}\.jsonl\.bin$/,
+      /^evidence-package-\d{4}-\d{2}-\d{2}\.jsonl\.bin$/,
     );
   });
 
@@ -438,7 +452,7 @@ describe("provenance API client 细节", () => {
           }),
         } as unknown as Response)) as unknown as typeof fetch,
     );
-    const pkg = await fetchEvidencePackage(CUSTOMER);
+    const pkg = await fetchEvidencePackage();
     expect(pkg.filename).toBe("evidence-42.bin");
   });
 

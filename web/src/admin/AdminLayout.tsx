@@ -1,6 +1,9 @@
-// 内部后台布局（#/admin/*）：左侧栏（客户 / 账本 / 需求单 / 目录治理 / 用量）
-// + 顶栏（X-Admin-Token 可编辑占位——仅开发用，注明生产由正式鉴权替换）+ 内容区。
-import { useEffect, useState, type ReactNode } from "react";
+// 内部后台布局（#/admin/*）：左侧栏（客户 / 账本 / 需求单 / 目录治理 / 用量 /
+// 本地数据）+ 顶栏（登录身份 + 返回前台 + 登出）+ 内容区。
+// admin 双闸（wire-self-serve-launch 任务 5.2）：X-Admin-Token 输入框与
+// dev-admin-token 默认值退场——浏览器只持登录 Bearer，服务端令牌由 nginx
+// 注入；本组件只负责按登录角色呈现（入口显隐在 App 导航与 AdminView 门禁）。
+import { type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 export type AdminSection =
@@ -44,22 +47,17 @@ export function parseAdminSection(segment: string | undefined): AdminSection {
 
 export function AdminLayout({
   section,
-  token,
-  onTokenSave,
+  identity,
+  onLogout,
   children,
 }: {
   section: AdminSection;
-  token: string;
-  onTokenSave: (raw: string) => void;
+  /** 登录身份展示（ID token claims 的 email/username）。 */
+  identity: string;
+  onLogout: () => void;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
-  const [draft, setDraft] = useState(token);
-
-  // 外部变更（恢复默认）同步进编辑框。
-  useEffect(() => {
-    setDraft(token);
-  }, [token]);
 
   return (
     <div className="flex min-h-[32rem] rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -90,35 +88,32 @@ export function AdminLayout({
           className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-200 px-6 py-3"
         >
           <div className="flex items-center gap-2">
-            <label
-              htmlFor="admin-token-input"
-              className="text-xs text-slate-500"
+            <span className="text-xs text-slate-500">
+              {t("admin.topbar.identity")}
+            </span>
+            <span
+              data-testid="admin-identity"
+              className="truncate rounded bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700"
+              title={identity}
             >
-              {t("admin.topbar.tokenLabel")}
-            </label>
-            <input
-              id="admin-token-input"
-              data-testid="admin-token-input"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              className="w-44 rounded-md border border-slate-300 px-2 py-1 font-mono text-xs"
-            />
-            <button
-              type="button"
-              data-testid="admin-token-save"
-              onClick={() => onTokenSave(draft)}
-              className="rounded-md border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100"
-            >
-              {t("admin.topbar.save")}
-            </button>
+              {identity}
+            </span>
           </div>
-          <span className="text-[11px] text-amber-600">
-            {t("admin.topbar.tokenHint")}
+          <span className="text-[11px] text-slate-400">
+            {t("admin.topbar.gateNote")}
           </span>
+          <button
+            type="button"
+            data-testid="admin-logout"
+            onClick={onLogout}
+            className="rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:bg-slate-100"
+          >
+            {t("console.topbar.logout")}
+          </button>
           <a
             href="#/"
             data-testid="admin-exit"
-            className="ml-auto rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:bg-slate-100"
+            className="rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:bg-slate-100"
           >
             {t("admin.topbar.exit")}
           </a>

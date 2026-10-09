@@ -2,6 +2,10 @@
 // over the views. Hash routing, deliberately no router dependency — parametrized
 // routes are parsed by parseHash below (catalog list, catalog detail, console
 // tabs with ?c=<conversationId>, demand placeholder).
+// 登录件（wire-self-serve-launch 4.4/5.2）：
+// - Logto 回调走真实路径 /console/callback（App 挂载时检测 pathname 进入
+//   CallbackView，完成后回 hash 路由）；
+// - 「内部后台」导航按登录角色显隐（ID token roles 含 wire-admin 才渲染）。
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { HomeView } from "./views/HomeView";
@@ -14,6 +18,8 @@ import { PricingView } from "./views/PricingView";
 import { DocsView } from "./views/DocsView";
 import { AdminView } from "./admin/AdminView";
 import { parseAdminSection, type AdminSection } from "./admin/AdminLayout";
+import { CallbackView } from "./console/CallbackView";
+import { hasAdminRole, loadSession } from "./console/auth";
 import type { ConsoleTab } from "./console/ConsoleLayout";
 import { switchLanguage, type Language } from "./i18n";
 
@@ -86,6 +92,11 @@ export function parseHash(rawHash: string): Route {
   return { name: "home" };
 }
 
+/** Logto 授权码回调走真实路径（非 hash）：命中即渲染回调页。 */
+export function isConsoleCallbackPath(pathname: string): boolean {
+  return pathname.replace(/\/+$/, "") === "/console/callback";
+}
+
 function renderRoute(route: Route) {
   switch (route.name) {
     case "pricing":
@@ -124,10 +135,16 @@ export function App() {
   const route = parseHash(hash);
   // 控制台/内部后台是工作台布局（自带侧栏与宽内容区），主容器放宽。
   const wideMain = route.name === "console" || route.name === "admin";
+  // Logto 回调：真实路径 /console/callback 优先于 hash 路由（完成后回 hash）。
+  const callbackActive = isConsoleCallbackPath(window.location.pathname);
+  // admin 导航门禁：登录会话含 wire-admin 角色才渲染「内部后台」入口
+  // （路由直达仍有 AdminView 的角色门禁兜底）。
+  const showAdminNav = hasAdminRole(loadSession());
 
-  const tab = (h: string, label: string, active: boolean) => (
+  const tab = (h: string, label: string, active: boolean, testid?: string) => (
     <a
       href={h}
+      data-testid={testid}
       className={`px-3 py-1.5 rounded-md text-sm transition-colors ${
         active ? "bg-slate-900 text-white" : "hover:bg-slate-200"
       }`}
@@ -150,6 +167,14 @@ export function App() {
     </button>
   );
 
+  if (callbackActive) {
+    return (
+      <div className="min-h-screen">
+        <CallbackView />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen">
       <header className="border-b border-slate-200">
@@ -166,7 +191,8 @@ export function App() {
             {tab("#/docs", t("nav.docs"), route.name === "docs")}
             {tab("#/catalog", t("nav.catalog"), route.name === "catalog" || route.name === "catalogDetail")}
             {tab("#/console", t("nav.console"), route.name === "console" || route.name === "demandNew")}
-            {tab("#/admin", t("nav.admin"), route.name === "admin")}
+            {showAdminNav &&
+              tab("#/admin", t("nav.admin"), route.name === "admin", "nav-admin")}
 
             <a
               href="#/login"

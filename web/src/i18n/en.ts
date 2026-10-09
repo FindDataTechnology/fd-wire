@@ -31,43 +31,50 @@ const en: Translation = {
     value2Title: "Data over MCP",
     value2Desc:
       "MCP protocol wires data straight into your toolchain and agents — rows flow in, no manual hauling.",
-    value3Title: "AI-built analytics + crawler demand loop",
+    value3Title: "AI builder × My data",
     value3Desc:
-      "Build analytical artifacts by conversation; file a demand for anything missing and the crawler pipeline delivers into your private scope (console in rollout).",
+      "Live in the console: build analytical artifacts through AI conversation with instant preview; upload over the public web or sync via connectors (My data) to materialize into your analysis — file a demand for anything missing, delivered into your private scope.",
     lineNote:
       "One of five FindData lines — Yizuo aggregates, Wanxing shines; Wire settles by the row, straight into decisions.",
   },
   pricing: {
     title: "Pricing",
+    // Stop-at-quota wording (wire-self-serve-launch task 7.1): no overage rate on any tier.
     subtitle:
-      "Monthly fee with included quota, tiered overage per row, metered by the row — plan figures are backend-configurable; below is the currently effective schedule.",
+      "Monthly fee with included quota, metered by the row, stop at quota, restored next month — plan figures are backend-configurable; below is the currently effective schedule.",
     perMonth: "/mo",
-    recommended: "Recommended",
     cta: "Contact us to get started",
+    loading: "Loading plans…",
+    // Live-fetch fallback: capability cards without figures (no hardcoded plan figures).
+    loadFailedNote:
+      "Plan figures are temporarily unavailable — showing capabilities only; retry later or contact us for quota details.",
+    // {{count}} renders included_lines from GET /api/v1/plans (not a source literal).
+    includedLines: "{{count}} rows/mo included",
+    stopAtQuotaLine: "Stop at quota, restored next month — no overage rate.",
+    customQuote: "Enquiry",
     featCatalog: "Full access to the {{total}}+ indicator catalog",
     featCatalogNoCount: "Full access to the indicator catalog",
     featMcp: "Data reads over MCP",
     featDemand: "Data demands (quoted separately)",
-    starter: {
-      name: "Starter",
-      price: "¥1,999",
-      rows: "500K rows/mo included",
-      overage: "Overage ¥0.004/row",
-      desc: "For small teams validating data value.",
-    },
-    pro: {
-      name: "Professional",
-      price: "¥6,999",
-      rows: "3M rows/mo included",
-      overage: "Overage ¥0.003/row",
-      desc: "The usual fit for growing teams.",
-    },
-    enterprise: {
-      name: "Enterprise",
-      price: "¥19,999",
-      rows: "12M rows/mo included",
-      overage: "Overage ¥0.002/row",
-      desc: "For high-volume, at-scale usage.",
+    // Tier names/descriptions keyed by code (free/basic/standard/custom);
+    // prices and included lines are always live-fetched.
+    tiers: {
+      free: {
+        name: "Free",
+        desc: "Self-serve sign-up, validate the value.",
+      },
+      basic: {
+        name: "Basic",
+        desc: "For small teams getting started, with My data.",
+      },
+      standard: {
+        name: "Standard",
+        desc: "The usual fit for growing teams.",
+      },
+      custom: {
+        name: "Custom",
+        desc: "Tailored quota settled case by case — contact us.",
+      },
     },
     fnDemand: "* Data demands are quoted separately and do not count against the plan's row quota.",
     fnLegal: "* Legal-domain data is enquiry-gated by default and not directly readable in the public catalog.",
@@ -100,8 +107,9 @@ const en: Translation = {
         "When monthly rows reach 80% and 95% of the quota, alerts go to the account owner; service is not interrupted.",
       hardStopTitle: "Hard-stop semantics",
       hardStopDesc:
-        "Once the quota is exhausted, data reads fail closed (including scheduled artifact refresh); they resume after a top-up or plan change.",
-      pricingNote: "See the pricing page for plans and overage rates →",
+        "Once the quota is exhausted, data reads fail closed (including scheduled artifact refresh) — no action needed: the full quota is restored automatically at the start of next month; upgrade if you need more headroom sooner.",
+      pricingNote:
+        "Four tiers (Free / Basic / Standard / Custom) with monthly included quota, stop at quota, restored next month — see the pricing page →",
     },
     demands: {
       title: "Demand workflow",
@@ -120,7 +128,6 @@ const en: Translation = {
       cellLabel: "Cell provisioning (private-scope delivery)",
     },
     statusTitle: "Rollout status",
-    statusConsoleLabel: "Console analytics building",
     statusDemandLabel: "Demand submission",
   },
   badge: {
@@ -192,7 +199,7 @@ const en: Translation = {
   demandNew: {
     title: "File a data demand",
     placeholder:
-      "Demand submission is under construction — the console will file the demand with this indicator prefilled, with a fully visible timeline; delivery lands in your private scope.",
+      "Demand submission is under construction — this page will file the demand with the indicator prefilled, with a fully visible timeline; delivery lands in your private scope.",
     prefilled: "Prefilled indicator",
     back: "Back to catalog",
   },
@@ -208,12 +215,36 @@ const en: Translation = {
       usage: "Usage",
     },
     topbar: {
-      org: "Enterprise (placeholder)",
-      customerLabel: "X-Customer-Id",
-      customerHint:
-        "Development placeholder, dev use only — replaced by real sign-in once auth lands",
-      save: "Save",
-      login: "Sign in (placeholder)",
+      org: "Customer",
+      plan: "Plan",
+      logout: "Sign out",
+    },
+    auth: {
+      loading: "Starting the console…",
+      anonymousTitle: "Sign in required",
+      anonymousBody:
+        "Sign in to enter the console: AI builder, My data, artifacts and usage.",
+      signIn: "Go to sign-in",
+      loginPageLink: "Open the sign-in page →",
+      blockedTitle: "Sign-in not available yet",
+      blockedBody:
+        "The server has not published its sign-in configuration (configured=false) — console sign-in is unavailable for now. Please contact the platform administrator.",
+      configErrorTitle: "Failed to load the sign-in configuration",
+      sessionErrorTitle: "Failed to establish the session",
+      upgradeHint:
+        "Onboarding may be temporarily unavailable — retry later or contact us.",
+      retry: "Retry",
+    },
+    callback: {
+      processing: "Processing the sign-in callback…",
+      success: "Signed in — entering the console…",
+      errorTitle: "Sign-in failed",
+      backToLogin: "Back to sign-in",
+    },
+    keyOnce: {
+      title: "Your platform key (shown once only)",
+      hint: "Copy and store it now — for security, the plaintext key is never queryable again.",
+      copy: "Copy",
     },
     chat: {
       conversations: "Conversations",
@@ -284,6 +315,11 @@ const en: Translation = {
       title: "My data",
       subtitle:
         "Customer datasets uploaded or synced via a connector — visible to this enterprise only, reads never count against plan quota.",
+      upgrade: {
+        title: "“My data” is a paid-tier capability",
+        body: "You are on the free tier: it includes public indicator reads only, without My data (uploads / connectors). Upgrade to Basic to enable it.",
+        cta: "Contact us to upgrade",
+      },
       loading: "Loading datasets…",
       errorTitle: "Failed to load datasets",
       retry: "Retry",
@@ -510,9 +546,26 @@ const en: Translation = {
       title: "Demands",
       body: "Demand management is under construction — filing demands for indicators outside the catalog, with the eight-state timeline, will land here (today a placeholder filing can be started from a catalog detail page).",
     },
-    usagePlaceholder: {
+    usage: {
       title: "Usage",
-      body: "Usage views are under construction — row-level metering, quota alerts and dual-track usage will land here.",
+      subtitle:
+        "This month's read usage and plan quota (rows_returned; the same source as the quota gate and billing).",
+      periodLabel: "Period",
+      planLabel: "Current plan",
+      includedLabel: "Included rows",
+      usedLabel: "Rows used",
+      remainingLabel: "Remaining quota",
+      stopNote:
+        "Stop at quota, restored next month — reads beyond the included quota are rejected; no overage is ever billed.",
+      lowWarning:
+        "Less than 20% of this month's quota remains — pace your usage, or upgrade for more headroom.",
+      exhaustedTitle: "This month's quota is used up",
+      exhaustedBody:
+        "The included quota is exhausted and data reads are paused — the full quota is restored automatically next month, no action needed; you can also upgrade for more quota now.",
+      upgradeCta: "Contact us to upgrade",
+      loading: "Loading usage…",
+      errorTitle: "Failed to load usage",
+      retry: "Retry",
     },
   },
   admin: {
@@ -523,12 +576,17 @@ const en: Translation = {
       demands: "Demands",
       catalog: "Catalog governance",
       usage: "Usage",
+      localData: "Local data",
     },
     topbar: {
-      tokenLabel: "X-Admin-Token",
-      save: "Save",
-      tokenHint: "Token is a dev-only placeholder (localStorage); production replaces it with real auth.",
+      identity: "Signed in as",
+      gateNote:
+        "Dual-gate channel: login role + server-side token (injected by the gateway, never visible to the browser).",
       exit: "Back to site",
+    },
+    roleGate: {
+      title: "Internal admin access required",
+      body: "This account does not carry the wire-admin role — ask an administrator to assign it in Logto if you need access.",
     },
     common: {
       loading: "Loading…",
@@ -538,7 +596,8 @@ const en: Translation = {
     error: {
       title: "Failed to load",
       authTitle: "Authentication failed",
-      authHint: "Check the X-Admin-Token in the top bar (the server rejects everything when its token is unset).",
+      authHint:
+        "The session is invalid or lacks the wire-admin role; the server-side second token gate is verified on the gateway.",
       retry: "Retry",
     },
     customers: {
@@ -675,8 +734,18 @@ const en: Translation = {
   },
   login: {
     title: "Sign in",
-    placeholder: "Customer sign-in under construction — enter the console with an enterprise account (owner / member).",
-    cta: "Contact us to get started",
+    loading: "Loading sign-in configuration…",
+    subtitle:
+      "Sign in to the Wire console — AI builder, My data, artifacts and usage in one place.",
+    cta: "Sign in with Logto",
+    blockedBody:
+      "The server has not published its sign-in configuration (configured=false); sign-in is unavailable.",
+    blockedHint: "This is not on you — please contact the platform administrator.",
+    signedInAs: "Signed in as {{identity}}",
+    goConsole: "Enter the console",
+    signOut: "Sign out",
+    errorTitle: "Failed to load the sign-in configuration",
+    errorHint: "Retry in a moment; contact the platform administrator if it persists.",
   },
   footer: "© FindData · Wire · FindData Tech wire line",
 };

@@ -1,38 +1,46 @@
-"""内部后台路由（wire-platform-v1 任务 7.1）：``/internal/admin/*``。
+"""内部后台路由（wire-platform-v1 任务 7.1；wire-self-serve-launch 2.1/2.2）。
 
-一面五台：
+一面六台：
 1. **客户管理**：GET/POST ``/customers``、PATCH ``/customers/{id}``——
-   只新增对 billing_customers/billing_plans 的只读查询与开户记录
-   （直接落 Customer 行；sub2api 代建账户留给后续任务，先本地档位关联），
-   不改 billing 模块内部逻辑。
-2. **额度与账本**：GET ``/customers/{id}/usage``（metering_records 只读联查：
+   开户经 ``billing.ensure_customer`` 自动代建 sub2api 支付账户并回写
+   ``sub2api_user_id``（2.1；sub2api 不可达 fail-closed 502 中止，不留半
+   开户）；显式传 ``sub2api_user_id`` 保留为兼容路径（跳过代建）。禁用档
+   （is_active=false，如旧三档）不可指派 → 409（2.2）。
+2. **档位管理**：GET ``/plans``（全部档位含禁用标记）、POST ``/plans``
+   （自定义档建档，恒 is_public=false，2.2）。
+3. **额度与账本**：GET ``/customers/{id}/usage``（metering_records 只读联查：
    credential_track=customer × caller=billing_customers.sub2api_user_id——v1
    身份映射由该列承载）、GET ``/ledger``（billing_ledger_entries 只读）。
-3. **需求单派发台**：GET ``/demands``（全客户）、POST ``/demands/{id}/transition``
+4. **需求单派发台**：GET ``/demands``（全客户）、POST ``/demands/{id}/transition``
    ——转发既有内部 transition 端点语义（直接调 service 层，无 HTTP 自调）。
-4. **目录治理**：GET ``/catalog/pending``（读镜像表）、POST
+5. **目录治理**：GET ``/catalog/pending``（读镜像表）、POST
    ``/catalog/{indicator_id}/verify-note``——不改镜像数据（仅同步管道可写），
    审核意见只记 admin 自己的 catalog_review_notes（append-only）。
-5. **用量视图（分轨）**：GET ``/usage/overview``——按 credential_track 与
+6. **用量视图（分轨）**：GET ``/usage/overview``——按 credential_track 与
    source 聚合 metering_records（复用计量聚合口径）。
 
-鉴权：全部端点经 ``X-Admin-Token``（env ``FD_WIRE_ADMIN_TOKEN``，
-fail-closed，见 auth.py）。
+鉴权（5.1 双闸）：全部端点经 ``require_admin_access``——X-Admin-Token
+（env ``FD_WIRE_ADMIN_TOKEN``，fail-closed）+ Bearer ID token 角色闸
+（env ``FD_WIRE_ADMIN_ROLE``，默认 wire-admin；FD_WIRE_ADMIN_BEARER_GATE
+控制，默认 on，"off" 仅测试/开发用）。
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from datetime import timezone as dt_timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..billing.customers import ensure_customer
 from ..billing.models import Customer, CustomerStatus, LedgerEntry
 from ..billing.models import Plan as BillingPlan
 from ..billing.models import validate_period
 from ..billing.plans import get_plan
+from ..billing.sub2api import Sub2ApiError, Sub2ApiClient, sub2api_client_dep
 from ..catalog.db import readonly_session
 from ..catalog.models import IndicatorSnapshot
 from ..demands import evaluation, service as demands_service
@@ -43,7 +51,7 @@ from ..demands.statemachine import DemandStatus, TransitionError
 from ..metering.db import to_utc
 from ..metering.models import MeteringRecord
 from ..metering.settings import ALLOWED_TRACKS
-from .auth import require_admin_token
+from .auth import require_admin_access
 from .db import get_db
 from .models import CatalogReviewNote
 from .schemas import (
@@ -54,6 +62,7 @@ from .schemas import (
     CustomerUsageOut,
     IndicatorPendingItem,
     LedgerEntryOut,
+    PlanCreateIn,
     PlanOut,
     ReviewNoteIn,
     ReviewNoteOut,
@@ -65,7 +74,7 @@ from .schemas import (
 router = APIRouter(
     prefix="/internal/admin",
     tags=["admin"],
-    dependencies=[Depends(require_admin_token)],
+    dependencies=[Depends(require_admin_access)],
 )
 
 #: 镜像状态的合法取值（与 indicator_snapshots 的 CHECK 约束一致）
@@ -90,6 +99,7 @@ def _customer_out(db: Session, customer: Customer) -> CustomerOut:
         id=customer.id,
         name=customer.name,
         sub2api_user_id=customer.sub2api_user_id,
+        logto_sub=customer.logto_sub,
         plan_id=customer.plan_id,
         plan_code=plan.code if plan else "",
         plan_name=plan.name if plan else "",
@@ -98,11 +108,65 @@ def _customer_out(db: Session, customer: Customer) -> CustomerOut:
     )
 
 
+def _assignable_plan_or_error(db: Session, plan_code: str) -> BillingPlan:
+    """指派校验（2.2）：未知档 → 422；禁用档（is_active=false，含旧三档）
+    → 409（旧档禁用退场，不可再指派给新客户）。"""
+    try:
+        plan = get_plan(db, plan_code)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not plan.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"档位 {plan_code!r} 已禁用（不可指派）",
+        )
+    return plan
+
+
 @router.get("/plans", response_model=list[PlanOut])
 def list_plans(db: Session = Depends(get_db)) -> list[PlanOut]:
-    """套餐档位下拉数据源（billing_plans 只读）。"""
+    """套餐档位下拉数据源（billing_plans 只读；含禁用档与 is_public 标记）。"""
     plans = db.execute(select(BillingPlan).order_by(BillingPlan.id)).scalars().all()
     return [PlanOut.from_plan(p) for p in plans]
+
+
+@router.post(
+    "/plans",
+    response_model=PlanOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_custom_plan(payload: PlanCreateIn, db: Session = Depends(get_db)) -> PlanOut:
+    """自定义档建档（2.2）：询价定案的月费/含额，恒 ``is_public=false``
+    （不进公开档位列表）；建后可指派给指定客户，指派后行数门与结算按
+    新档口径生效。code 冲突 → 409。"""
+    existing = db.execute(
+        select(BillingPlan).where(BillingPlan.code == payload.code)
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"档位 code 已存在: {payload.code!r}",
+        )
+    plan = BillingPlan(
+        code=payload.code,
+        name=payload.name,
+        monthly_price_micro=payload.monthly_price_micro,
+        included_lines=payload.included_lines,
+        overage_unit_price_micro=payload.overage_unit_price_micro,
+        is_active=True,
+        is_public=False,
+        created_at=datetime.now(dt_timezone.utc),
+    )
+    db.add(plan)
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"档位创建冲突: {payload.code!r}",
+        ) from exc
+    return PlanOut.from_plan(plan)
 
 
 @router.get("/customers", response_model=list[CustomerOut])
@@ -118,17 +182,20 @@ def list_customers(db: Session = Depends(get_db)) -> list[CustomerOut]:
     status_code=status.HTTP_201_CREATED,
 )
 def create_customer(
-    payload: CustomerCreateIn, db: Session = Depends(get_db)
+    payload: CustomerCreateIn,
+    db: Session = Depends(get_db),
+    sub2api: Sub2ApiClient = Depends(sub2api_client_dep),
 ) -> CustomerOut:
-    """开户：名称 + 套餐档位（本地档位关联；sub2api 代建留给后续任务）。
+    """开户（2.1）：名称 + 套餐档位 → 自动代建 sub2api 支付账户并回写
+    ``sub2api_user_id``（``billing.ensure_customer`` 幂等；Idempotency-Key
+    兜底重试不重复建户）。
 
-    ``sub2api_user_id`` 在 v1 兼作计量身份映射（metering caller 名），
-    开户时录入即建立客户 ↔ 调用身份的联查键。
+    - sub2api 不可达/5xx → 502 fail-closed 中止（不留半开户：本地行与
+      代建账户要么都有、要么都没有）；
+    - 显式传 ``sub2api_user_id`` 保留为兼容路径（跳过代建，直接落本地行）；
+    - 同名同档重复开户 → 409；禁用档 → 409；未知档位 → 422。
     """
-    try:
-        plan = get_plan(db, payload.plan_code)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    plan = _assignable_plan_or_error(db, payload.plan_code)
 
     duplicate = db.execute(
         select(Customer).where(Customer.name == payload.name, Customer.plan_id == plan.id)
@@ -139,21 +206,42 @@ def create_customer(
             detail=f"同名同档客户已存在（id={duplicate.id}）",
         )
 
-    customer = Customer(
-        name=payload.name,
-        sub2api_user_id=payload.sub2api_user_id or None,
-        plan_id=plan.id,
-        status=CustomerStatus.ACTIVE.value,
-    )
-    db.add(customer)
+    if payload.sub2api_user_id:
+        # 兼容路径：显式身份映射键（v1 手工口径；不触发 sub2api 代建）
+        customer = Customer(
+            name=payload.name,
+            sub2api_user_id=payload.sub2api_user_id,
+            plan_id=plan.id,
+            status=CustomerStatus.ACTIVE.value,
+        )
+        db.add(customer)
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="客户创建冲突（sub2api_user_id 已被其他客户占用？）",
+            ) from exc
+        return _customer_out(db, customer)
+
+    # 自动代建路径（2.1）：sub2api 建户 → 落本地行；不可达即 502 中止
     try:
-        db.flush()
-    except IntegrityError as exc:
+        customer, created = ensure_customer(
+            db, sub2api, name=payload.name, plan_code=plan.code
+        )
+    except Sub2ApiError as exc:
         db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="客户创建冲突（sub2api_user_id 已被其他客户占用？）",
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"sub2api 代建账户失败（fail-closed，未落本地行）: {exc}",
         ) from exc
+    if not created:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"同名同档客户已存在（id={customer.id}）",
+        )
+    db.flush()
     return _customer_out(db, customer)
 
 
@@ -161,15 +249,12 @@ def create_customer(
 def patch_customer(
     customer_id: int, payload: CustomerPatchIn, db: Session = Depends(get_db)
 ) -> CustomerOut:
-    """改套餐档位 / 客户状态（active | suspended | closed）。"""
+    """改套餐档位 / 客户状态（active | suspended | closed）；禁用档不可指派（409）。"""
     if payload.plan_code is None and payload.status is None:
         raise HTTPException(status_code=422, detail="至少提供 plan_code 或 status 之一")
     customer = _customer_or_404(db, customer_id)
     if payload.plan_code is not None:
-        try:
-            plan = get_plan(db, payload.plan_code)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        plan = _assignable_plan_or_error(db, payload.plan_code)
         customer.plan_id = plan.id
     if payload.status is not None:
         customer.status = payload.status.value

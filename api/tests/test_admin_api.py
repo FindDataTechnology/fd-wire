@@ -28,8 +28,14 @@ from sqlalchemy.pool import StaticPool
 from fd_wire_api.admin import reset_admin_runtime
 from fd_wire_api.admin.db import AdminBase, get_session
 from fd_wire_api.app import app
-from fd_wire_api.billing import METERING_RECORDS_DDL, Base as BillingBase, LedgerKind, seed_plans
+from fd_wire_api.billing import (
+    METERING_RECORDS_DDL,
+    Base as BillingBase,
+    LedgerKind,
+    seed_plans,
+)
 from fd_wire_api.billing.ledger import Ledger
+from fd_wire_api.billing.sub2api import sub2api_client_dep
 from fd_wire_api.catalog import catalog_settings, init_db as init_catalog_db
 from fd_wire_api.catalog import reset_engines as reset_catalog_engines
 from fd_wire_api.catalog.db import sync_session
@@ -38,6 +44,15 @@ from fd_wire_api.demands.db import Base as DemandsBase
 from fd_wire_api.demands.db import get_db as get_demands_db
 from fd_wire_api.metering.db import to_utc
 from fd_wire_api.metering.models import MeteringRecord
+
+from console_fixture import (
+    CLIENT_ID,
+    ISSUER_BASE,
+    bearer,
+    install_fake_jwks,
+    mint_id_token,
+)
+from test_billing_common import FakeSub2Api
 
 ADMIN_TOKEN = "test-admin-token"
 AUTH = {"X-Admin-Token": ADMIN_TOKEN}
@@ -49,10 +64,21 @@ def _ts(value: str) -> datetime:
 
 @pytest.fixture()
 def admin_env(tmp_path, monkeypatch):
-    """单库联查环境：admin/billing/metering/demands/catalog 同一临时文件库。"""
+    """单库联查环境：admin/billing/metering/demands/catalog 同一临时文件库。
+
+    Bearer 角色闸默认关（FD_WIRE_ADMIN_BEARER_GATE=off，旧行为回归）；
+    双闸矩阵的专测见本文件 5.1 节。sub2api 通道走 httpx.MockTransport 假件
+    （开户代建 2.1 的集成断言用）。
+    """
     db_url = f"sqlite:///{tmp_path/'admin.db'}"
     monkeypatch.setenv("FD_WIRE_ADMIN_DATABASE_URL", db_url)
     monkeypatch.setenv("FD_WIRE_ADMIN_TOKEN", ADMIN_TOKEN)
+    monkeypatch.setenv("FD_WIRE_ADMIN_BEARER_GATE", "off")
+    # 控制台身份（4.5）：demands 客户面走 Bearer ID token → logto_sub →
+    # Customer（平台库=本测试共享库），JWKS 用测试密钥假件闭环验签。
+    monkeypatch.setenv("FD_WIRE_LOGTO_ISSUER", ISSUER_BASE)
+    monkeypatch.setenv("FD_WIRE_LOGTO_CLIENT_ID", CLIENT_ID)
+    install_fake_jwks(monkeypatch)
     # 需求单默认引擎不落本机文件（本测试不经它，仅防 import 副作用）
     monkeypatch.setenv("FD_WIRE_DATABASE_URL", "sqlite://")
     # 目录镜像指同一文件库
@@ -98,10 +124,25 @@ def admin_env(tmp_path, monkeypatch):
         finally:
             db.close()
 
+    # sub2api 假件（开户代建 2.1）：dependency override 注入
+    fake_sub2api = FakeSub2Api()
+    sub2api_client = fake_sub2api.client()
+
+    def override_sub2api():
+        yield sub2api_client
+
     app.dependency_overrides[get_demands_db] = override_demands_db
+    app.dependency_overrides[sub2api_client_dep] = override_sub2api
     client = TestClient(app)  # 不走 lifespan：避免默认引擎副作用
-    yield SimpleNamespace(client=client, engine=engine, db_url=db_url)
+    yield SimpleNamespace(
+        client=client,
+        engine=engine,
+        db_url=db_url,
+        sub2api=fake_sub2api,
+    )
     app.dependency_overrides.pop(get_demands_db, None)
+    app.dependency_overrides.pop(sub2api_client_dep, None)
+    sub2api_client.close()
     reset_admin_runtime()
     reset_catalog_engines()
     engine.dispose()
@@ -167,7 +208,7 @@ def add_ledger_entry(*, customer_id: int, kind: LedgerKind, period: str,
         sess.commit()
 
 
-def create_customer(client: TestClient, name: str, plan_code: str = "starter",
+def create_customer(client: TestClient, name: str, plan_code: str = "free",
                     sub2api_user_id: str | None = None) -> dict:
     resp = client.post(
         "/internal/admin/customers",
@@ -178,11 +219,34 @@ def create_customer(client: TestClient, name: str, plan_code: str = "starter",
     return resp.json()
 
 
+def seed_console_customers(*names: str) -> None:
+    """4.5 控制台身份种子：``logto_sub=sub-<name>`` → Customer（free 档，
+    显式 sub2api_user_id 不触发 sub2api 代建）。供 submit_demand 用。"""
+    from sqlalchemy import select
+
+    from fd_wire_api.billing.models import Customer, Plan
+
+    with get_session() as sess:
+        free_plan = sess.execute(select(Plan).where(Plan.code == "free")).scalar_one()
+        for name in names:
+            sess.add(
+                Customer(
+                    name=name,
+                    sub2api_user_id=f"caller-{name}",
+                    logto_sub=f"sub-{name}",
+                    plan_id=free_plan.id,
+                )
+            )
+        sess.commit()
+
+
 def submit_demand(client: TestClient, customer_id: str, title: str) -> dict:
+    """客户面造数（4.5 身份切换）：Bearer ID token → logto_sub → Customer
+    （customer_id=Customer.name 命名空间键；对应 fixture 种子 sub-<name>）。"""
     resp = client.post(
         "/api/v1/demands",
         json={"title": title, "intent": f"需要 {title} 相关数据"},
-        headers={"X-Customer-Id": customer_id},
+        headers=bearer(mint_id_token(f"sub-{customer_id}")),
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
@@ -229,20 +293,72 @@ def test_auth_rejects_missing_or_wrong_token(admin_env):
 
 def test_customer_create_and_list_with_plan(admin_env):
     client = admin_env.client
-    created = create_customer(client, "上海壹座", "professional", "acme-caller")
-    assert created["plan_code"] == "professional"
-    assert created["plan_name"] == "专业版"
+    created = create_customer(client, "上海壹座", "standard", "acme-caller")
+    assert created["plan_code"] == "standard"
+    assert created["plan_name"] == "标准版"
     assert created["status"] == "active"
     assert created["sub2api_user_id"] == "acme-caller"
 
     listing = client.get("/internal/admin/customers", headers=AUTH).json()
     assert [c["name"] for c in listing] == ["上海壹座"]
-    assert listing[0]["plan_code"] == "professional"
+    assert listing[0]["plan_code"] == "standard"
 
-    # 档位下拉数据源（billing_plans 只读）
+    # 档位下拉数据源（billing_plans 只读；公开三档 active + 旧三档禁用标记）
     plans = client.get("/internal/admin/plans", headers=AUTH).json()
-    assert [p["code"] for p in plans] == ["starter", "professional", "enterprise"]
+    assert [p["code"] for p in plans] == [
+        "free", "basic", "standard", "starter", "professional", "enterprise",
+    ]
     assert any(p["monthly_price_yuan"].startswith("¥") for p in plans)
+    assert {p["code"]: p["is_active"] for p in plans}["starter"] is False
+    assert {p["code"]: p["is_public"] for p in plans}["free"] is True
+
+
+def test_customer_create_auto_provisions_sub2api_account(admin_env):
+    """2.1：无手工 sub2api_user_id 开户 → 自动代建 sub2api 账户并回写。"""
+    client = admin_env.client
+    created = create_customer(client, "自助客户甲", "basic")
+    assert created["sub2api_user_id"], "必须自动回写 sub2api_user_id"
+    # sub2api 侧确实建了户（create 调用恰一次）
+    assert len(admin_env.sub2api.users) == 1
+    assert created["sub2api_user_id"] in admin_env.sub2api.users
+    # 回读一致
+    listing = client.get("/internal/admin/customers", headers=AUTH).json()
+    assert listing[0]["sub2api_user_id"] == created["sub2api_user_id"]
+
+
+def test_customer_create_sub2api_unavailable_fail_closed(admin_env, monkeypatch):
+    """2.1：sub2api 不可达 → 502 fail-closed 中止，不留本地半开户行。"""
+    import httpx
+
+    client = admin_env.client
+    from fd_wire_api.billing.sub2api import Sub2ApiClient
+
+    broken = Sub2ApiClient(
+        base_url="http://sub2api.test",
+        admin_key="k",
+        http_client=httpx.Client(transport=httpx.MockTransport(
+            lambda request: (_ for _ in ()).throw(httpx.ConnectError("down"))
+        )),
+    )
+
+    def override_broken():
+        yield broken
+
+    from fd_wire_api.billing.sub2api import sub2api_client_dep
+    app.dependency_overrides[sub2api_client_dep] = override_broken
+    try:
+        resp = client.post(
+            "/internal/admin/customers",
+            json={"name": "断网客户", "plan_code": "free"},
+            headers=AUTH,
+        )
+    finally:
+        def restore():
+            yield admin_env.sub2api.client()
+        app.dependency_overrides[sub2api_client_dep] = restore
+    assert resp.status_code == 502
+    listing = client.get("/internal/admin/customers", headers=AUTH).json()
+    assert listing == []  # 不留半开户态
 
 
 def test_customer_create_validations(admin_env):
@@ -254,24 +370,33 @@ def test_customer_create_validations(admin_env):
         headers=AUTH,
     )
     assert resp.status_code == 422
-    # 同名同档重复开户 → 409
-    create_customer(client, "重复客户", "starter")
+    # 禁用档（旧三档）不可指派 → 409（wire-self-serve-launch 2.2/旧档退场）
     resp = client.post(
         "/internal/admin/customers",
-        json={"name": "重复客户", "plan_code": "starter"},
+        json={"name": "旧档客户", "plan_code": "starter"},
         headers=AUTH,
     )
     assert resp.status_code == 409
+    # 同名同档重复开户（自动代建路径）→ 409，且不重复建 sub2api 账户
+    first = create_customer(client, "重复客户", "free")
+    calls_before = len(admin_env.sub2api.users)
+    resp = client.post(
+        "/internal/admin/customers",
+        json={"name": "重复客户", "plan_code": "free"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 409
+    assert len(admin_env.sub2api.users) == calls_before
     # caller 身份映射键占用冲突 → 409
     resp = client.post(
         "/internal/admin/customers",
-        json={"name": "另一家", "plan_code": "enterprise", "sub2api_user_id": "dup-caller"},
+        json={"name": "另一家", "plan_code": "standard", "sub2api_user_id": "dup-caller"},
         headers=AUTH,
     )
     assert resp.status_code == 201
     resp = client.post(
         "/internal/admin/customers",
-        json={"name": "第三家", "plan_code": "starter", "sub2api_user_id": "dup-caller"},
+        json={"name": "第三家", "plan_code": "free", "sub2api_user_id": "dup-caller"},
         headers=AUTH,
     )
     assert resp.status_code == 409
@@ -279,16 +404,24 @@ def test_customer_create_validations(admin_env):
 
 def test_customer_patch_plan_and_status(admin_env):
     client = admin_env.client
-    customer = create_customer(client, "萬星", "starter")
+    customer = create_customer(client, "萬星", "free", "wanxing-caller")
     cid = customer["id"]
 
+    resp = client.patch(
+        f"/internal/admin/customers/{cid}",
+        json={"plan_code": "standard"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["plan_code"] == "standard"
+
+    # 禁用档不可指派（改档同样受限）
     resp = client.patch(
         f"/internal/admin/customers/{cid}",
         json={"plan_code": "enterprise"},
         headers=AUTH,
     )
-    assert resp.status_code == 200
-    assert resp.json()["plan_code"] == "enterprise"
+    assert resp.status_code == 409
 
     resp = client.patch(
         f"/internal/admin/customers/{cid}", json={"status": "suspended"}, headers=AUTH
@@ -326,9 +459,20 @@ def test_customer_patch_plan_and_status(admin_env):
 
 def test_customer_usage_readonly_join_by_caller_identity(admin_env):
     client = admin_env.client
-    customer = create_customer(client, "壹座数据", "starter", "acme-caller")
-    other = create_customer(client, "别家", "starter", "other-caller")
-    no_mapping = create_customer(client, "未映射", "starter")
+    customer = create_customer(client, "壹座数据", "free", "acme-caller")
+    other = create_customer(client, "别家", "free", "other-caller")
+    # 2.1 起 API 开户恒有身份映射（自动代建或显式传）——「未映射」只能是
+    # 存量直插行（sub2api_user_id=NULL），如实返回空聚合
+    from sqlalchemy import select
+
+    from fd_wire_api.billing.models import Customer as _C, Plan as _P
+
+    with get_session() as sess:
+        free_plan = sess.execute(select(_P).where(_P.code == "free")).scalar_one()
+        unmapped = _C(name="未映射", plan_id=free_plan.id)
+        sess.add(unmapped)
+        sess.commit()
+        unmapped_id = unmapped.id
 
     add_metering_row(request_id="m-1", caller="acme-caller", track="customer",
                      rows=120, ts="2026-09-20T10:00:00+00:00", source="yizuo")
@@ -349,8 +493,8 @@ def test_customer_usage_readonly_join_by_caller_identity(admin_env):
         {"period": "2026-10", "calls": 1, "rows": 80},
     ]
 
-    # 身份映射未建立：空聚合如实返回
-    body = client.get(f"/internal/admin/customers/{no_mapping['id']}/usage", headers=AUTH).json()
+    # 身份映射未建立（存量直插行）：空聚合如实返回
+    body = client.get(f"/internal/admin/customers/{unmapped_id}/usage", headers=AUTH).json()
     assert body["caller"] is None
     assert body["totals"]["rows"] == 0
     assert body["periods"] == []
@@ -371,8 +515,8 @@ def test_customer_usage_readonly_join_by_caller_identity(admin_env):
 
 def test_ledger_readonly_with_filters(admin_env):
     client = admin_env.client
-    c1 = create_customer(client, "客户甲", "starter")
-    c2 = create_customer(client, "客户乙", "starter")
+    c1 = create_customer(client, "客户甲", "free")
+    c2 = create_customer(client, "客户乙", "free")
     add_ledger_entry(customer_id=c1["id"], kind=LedgerKind.GRANT, period="2026-09",
                      amount_micro=1_999_000_000, quantity=500_000, key="grant:1:2026-09")
     add_ledger_entry(customer_id=c1["id"], kind=LedgerKind.OVERAGE, period="2026-10",
@@ -411,6 +555,7 @@ def test_ledger_readonly_with_filters(admin_env):
 
 def test_demands_list_all_customers_with_status_filter(admin_env):
     client = admin_env.client
+    seed_console_customers("cust-001", "cust-002")
     d1 = submit_demand(client, "cust-001", "煤价日度数据")
     d2 = submit_demand(client, "cust-002", "航运运价")
     # cust-002 的一单推进到 evaluating（走既有内部端点语义）
@@ -439,6 +584,7 @@ def test_demands_list_all_customers_with_status_filter(admin_env):
 
 def test_demands_transition_forwards_service_semantics(admin_env):
     client = admin_env.client
+    seed_console_customers("cust-001")
     demand = submit_demand(client, "cust-001", "光伏装机")
 
     # 非法迁移（submitted → delivered 不在白名单）→ 409，状态不变
@@ -611,3 +757,71 @@ def test_usage_overview_empty_db(admin_env):
     assert body["tracks"] == []
     assert body["by_source"] == []
     assert body["totals"] == {"key": "all", "calls": 0, "rows": 0}
+
+
+# ---------------------------------------------------------------------------
+# 5.1 admin 双闸矩阵（gate=on：X-Admin-Token + Bearer 角色缺一不可）
+# ---------------------------------------------------------------------------
+
+
+def _admin_bearer(*, roles: list[str] | None = None, expired: bool = False) -> dict:
+    return bearer(mint_id_token("sub-admin", roles=roles, expired=expired))
+
+
+@pytest.fixture()
+def gate_on(admin_env, monkeypatch):
+    """打开 Bearer 角色闸（admin_env 默认 off；env 每请求实时读取）。"""
+    monkeypatch.setenv("FD_WIRE_ADMIN_BEARER_GATE", "on")
+    monkeypatch.setenv("FD_WIRE_ADMIN_ROLE", "wire-admin")
+    return admin_env
+
+
+def test_dual_gate_full_credentials_pass(gate_on):
+    """双全（X-Admin-Token + 含 wire-admin 角色的有效 ID token）→ 放行。"""
+    headers = AUTH | _admin_bearer(roles=["wire-admin"])
+    resp = gate_on.client.get("/internal/admin/customers", headers=headers)
+    assert resp.status_code == 200, resp.text
+
+
+def test_dual_gate_token_without_role_403(gate_on):
+    """有令牌无角色（普通客户登录态）→ 403（角色闸否决）。"""
+    headers = AUTH | _admin_bearer(roles=["ordinary-customer"])
+    assert gate_on.client.get("/internal/admin/customers", headers=headers).status_code == 403
+    # roles claim 缺失同样 403
+    headers = AUTH | _admin_bearer()
+    assert gate_on.client.get("/internal/admin/customers", headers=headers).status_code == 403
+
+
+def test_dual_gate_missing_bearer_401(gate_on):
+    """有令牌无 Bearer → 401（缺第二道凭据）。"""
+    assert gate_on.client.get("/internal/admin/customers", headers=AUTH).status_code == 401
+
+
+def test_dual_gate_invalid_bearer_401(gate_on):
+    """有令牌但 Bearer 无效（过期/错签名）→ 401。"""
+    expired = AUTH | _admin_bearer(roles=["wire-admin"], expired=True)
+    assert gate_on.client.get("/internal/admin/customers", headers=expired).status_code == 401
+    forged = AUTH | bearer("not-a-jwt")
+    assert gate_on.client.get("/internal/admin/customers", headers=forged).status_code == 401
+
+
+def test_dual_gate_wrong_admin_token_401_even_with_role(gate_on):
+    """Bearer 角色全但 X-Admin-Token 错/缺 → 401（第一道闸照常校验）。"""
+    headers = {"X-Admin-Token": "wrong"} | _admin_bearer(roles=["wire-admin"])
+    assert gate_on.client.get("/internal/admin/customers", headers=headers).status_code == 401
+    headers = _admin_bearer(roles=["wire-admin"])
+    assert gate_on.client.get("/internal/admin/customers", headers=headers).status_code == 401
+
+
+def test_dual_gate_gate_off_token_only_regression(gate_on, monkeypatch):
+    """gate=off 退回旧行为：仅 X-Admin-Token 放行（服务间调用口径）。"""
+    monkeypatch.setenv("FD_WIRE_ADMIN_BEARER_GATE", "off")
+    assert gate_on.client.get("/internal/admin/customers", headers=AUTH).status_code == 200
+
+
+def test_dual_gate_admin_token_unconfigured_fail_closed(gate_on, monkeypatch):
+    """FD_WIRE_ADMIN_TOKEN 未配置 → 403（fail-closed 优先于一切，gate on）。"""
+    monkeypatch.delenv("FD_WIRE_ADMIN_TOKEN", raising=False)
+    plain = TestClient(app)
+    headers = _admin_bearer(roles=["wire-admin"])
+    assert plain.get("/internal/admin/customers", headers=headers).status_code == 403

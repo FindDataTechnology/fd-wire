@@ -6,7 +6,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import "../i18n";
 import i18n from "../i18n";
 import { DemandsPage } from "./DemandsPage";
-import { installAdminBackend } from "./testing";
+import { installAdminBackend, seedAdminSession } from "./testing";
 import type { AdminDemand } from "./api";
 
 const TOKEN = "test-admin-token";
@@ -39,12 +39,17 @@ const DEMANDS: AdminDemand[] = [
 beforeEach(() => {
   i18n.changeLanguage("zh");
   localStorage.clear();
+  sessionStorage.clear();
+  // admin 双闸（web 半边）：登录会话持 wire-admin 角色，idToken 与假后端
+  // 的期望 Bearer 一致（X-Admin-Token 由 nginx 服务端注入，前端不持）。
+  seedAdminSession();
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   localStorage.clear();
+  sessionStorage.clear();
 });
 
 function openPanel(itemId: number) {
@@ -61,9 +66,9 @@ function openPanel(itemId: number) {
 
 describe("DemandsPage（需求单派发台）", () => {
   it("全客户列表渲染 + 状态筛选的查询形状（?status=）", async () => {
-    const backend = installAdminBackend({ demands: DEMANDS, adminToken: TOKEN });
+    const backend = installAdminBackend({ demands: DEMANDS, bearerToken: TOKEN });
     vi.stubGlobal("fetch", backend.fetchImpl);
-    render(<DemandsPage token={TOKEN} />);
+    render(<DemandsPage />);
 
     const items = await screen.findAllByTestId("admin-demand-item");
     expect(items.length).toBe(3);
@@ -86,9 +91,9 @@ describe("DemandsPage（需求单派发台）", () => {
   });
 
   it("派发操作：非法迁移项禁用，合法迁移的调用形状（target/by/note）与刷新", async () => {
-    const backend = installAdminBackend({ demands: [DEMANDS[0]!], adminToken: TOKEN });
+    const backend = installAdminBackend({ demands: [DEMANDS[0]!], bearerToken: TOKEN });
     vi.stubGlobal("fetch", backend.fetchImpl);
-    render(<DemandsPage token={TOKEN} />);
+    render(<DemandsPage />);
     await screen.findAllByTestId("admin-demand-item");
 
     openPanel(1);
@@ -113,7 +118,7 @@ describe("DemandsPage（需求单派发台）", () => {
 
     const call = backend.calls.find((c) => c.method === "POST")!;
     expect(call.url.pathname).toBe("/internal/admin/demands/1/transition");
-    expect(call.headers["x-admin-token"]).toBe(TOKEN);
+    expect(call.headers["authorization"]).toBe(`Bearer ${TOKEN}`);
     expect(call.body).toEqual({
       target_status: "evaluating",
       by: "admin-console",
@@ -128,10 +133,10 @@ describe("DemandsPage（需求单派发台）", () => {
   it("rejected 必填理由：缺理由禁用提交，携带 reason 的调用形状", async () => {
     const backend = installAdminBackend({
       demands: [demand({ id: 2, status: "evaluating" })],
-      adminToken: TOKEN,
+      bearerToken: TOKEN,
     });
     vi.stubGlobal("fetch", backend.fetchImpl);
-    render(<DemandsPage token={TOKEN} />);
+    render(<DemandsPage />);
     await screen.findAllByTestId("admin-demand-item");
 
     openPanel(2);
@@ -163,9 +168,9 @@ describe("DemandsPage（需求单派发台）", () => {
   it("终态（delivered）不可派发：按钮禁用且无面板", async () => {
     vi.stubGlobal(
       "fetch",
-      installAdminBackend({ demands: [DEMANDS[2]!], adminToken: TOKEN }).fetchImpl,
+      installAdminBackend({ demands: [DEMANDS[2]!], bearerToken: TOKEN }).fetchImpl,
     );
-    render(<DemandsPage token={TOKEN} />);
+    render(<DemandsPage />);
     await screen.findAllByTestId("admin-demand-item");
     const toggle = screen.getByTestId("admin-demand-dispatch-toggle") as HTMLButtonElement;
     expect(toggle.disabled).toBe(true);
@@ -178,11 +183,11 @@ describe("DemandsPage（需求单派发台）", () => {
       "fetch",
       installAdminBackend({
         demands: [DEMANDS[0]!],
-        adminToken: TOKEN,
+        bearerToken: TOKEN,
         failTransitionStatus: 409,
       }).fetchImpl,
     );
-    render(<DemandsPage token={TOKEN} />);
+    render(<DemandsPage />);
     await screen.findAllByTestId("admin-demand-item");
 
     openPanel(1);

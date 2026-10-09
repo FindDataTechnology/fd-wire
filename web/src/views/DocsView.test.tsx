@@ -31,7 +31,17 @@ describe("DocsView（文档三节 · 如实呈现）", () => {
     expect(screen.getByText("按行计量")).toBeTruthy();
     expect(screen.getByText("AI 探索不计费")).toBeTruthy();
     expect(screen.getByText(/80% 与 95%/)).toBeTruthy();
-    expect(screen.getByText(/fail-closed 硬停/)).toBeTruthy();
+    // 硬停语义与四档口径联动（wire-self-serve-launch 7.4）：耗尽即停、次月自动恢复
+    const hardStop = screen.getByText(/fail-closed 硬停/);
+    expect(hardStop.textContent).toContain("次月自动恢复");
+  });
+
+  it("计费说明与定价页联动：四档口径 + pricingNote 链接 #/pricing", () => {
+    render(<DocsView />);
+
+    const pricingNote = screen.getByText(/四档套餐（免费\/基础\/标准\/自定义）/);
+    expect(pricingNote.textContent).toContain("用完即停、次月恢复");
+    expect(pricingNote.closest("a")?.getAttribute("href")).toBe("#/pricing");
   });
 
   it("需求单八态：七个主步骤 + 拒绝分支说明", () => {
@@ -53,15 +63,17 @@ describe("DocsView（文档三节 · 如实呈现）", () => {
     expect(screen.getAllByTestId(/^demand-step-/)).toHaveLength(7);
   });
 
-  it("「上线中」徽标存在：控制台分析构建 / cell 开通 / 需求单提交", () => {
+  it("「上线中」徽标收缩为两项：cell 开通 / 需求单提交（控制台已上线不再挂徽标）", () => {
     render(<DocsView />);
 
+    // 控制台（AI 对话构建/我的数据/产物）已上线（wire-self-serve-launch 7.3/7.4）
+    expect(screen.queryByText("控制台分析构建")).toBeNull();
+    // 剩余未上线项如实挂徽标
     const badges = screen.getAllByTestId("coming-soon-badge");
-    expect(badges.length).toBeGreaterThanOrEqual(3);
+    expect(badges.length).toBe(2);
     for (const b of badges) {
       expect(b.textContent).toContain("上线中");
     }
-    expect(screen.getByText("控制台分析构建")).toBeTruthy();
     expect(screen.getByText(/cell 开通/)).toBeTruthy();
     expect(screen.getByText("需求单提交")).toBeTruthy();
   });

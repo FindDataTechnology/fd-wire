@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import "../i18n";
 import i18n from "../i18n";
 import { CustomersPage } from "./CustomersPage";
-import { installAdminBackend } from "./testing";
+import { installAdminBackend, seedAdminSession } from "./testing";
 import type { AdminCustomer } from "./api";
 
 const TOKEN = "test-admin-token";
@@ -36,19 +36,24 @@ const CUSTOMERS: AdminCustomer[] = [
 beforeEach(() => {
   i18n.changeLanguage("zh");
   localStorage.clear();
+  sessionStorage.clear();
+  // admin 双闸（web 半边）：登录会话持 wire-admin 角色，idToken 与假后端
+  // 的期望 Bearer 一致（X-Admin-Token 由 nginx 服务端注入，前端不持）。
+  seedAdminSession();
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   localStorage.clear();
+  sessionStorage.clear();
 });
 
 describe("CustomersPage（客户管理）", () => {
   it("列表渲染：名称/计量身份/档位/状态，sub2api 后续任务如实标注", async () => {
-    const backend = installAdminBackend({ customers: CUSTOMERS, adminToken: TOKEN });
+    const backend = installAdminBackend({ customers: CUSTOMERS, bearerToken: TOKEN });
     vi.stubGlobal("fetch", backend.fetchImpl);
-    render(<CustomersPage token={TOKEN} />);
+    render(<CustomersPage />);
 
     const rows = await screen.findAllByTestId("admin-customer-row");
     expect(rows.length).toBe(2);
@@ -68,13 +73,13 @@ describe("CustomersPage（客户管理）", () => {
     );
     // 请求带鉴权头
     expect(backend.calls.length).toBeGreaterThanOrEqual(2);
-    expect(backend.calls[0]!.headers["x-admin-token"]).toBe(TOKEN);
+    expect(backend.calls[0]!.headers["authorization"]).toBe(`Bearer ${TOKEN}`);
   });
 
   it("开户：调用形状（POST /internal/admin/customers，名称+档位+计量身份）并刷新列表", async () => {
-    const backend = installAdminBackend({ customers: [], adminToken: TOKEN });
+    const backend = installAdminBackend({ customers: [], bearerToken: TOKEN });
     vi.stubGlobal("fetch", backend.fetchImpl);
-    render(<CustomersPage token={TOKEN} />);
+    render(<CustomersPage />);
     await screen.findByTestId("admin-customers-empty");
 
     fireEvent.change(screen.getByTestId("new-customer-name"), {
@@ -94,7 +99,7 @@ describe("CustomersPage（客户管理）", () => {
 
     const createCall = backend.calls.find((c) => c.method === "POST")!;
     expect(createCall.url.pathname).toBe("/internal/admin/customers");
-    expect(createCall.headers["x-admin-token"]).toBe(TOKEN);
+    expect(createCall.headers["authorization"]).toBe(`Bearer ${TOKEN}`);
     expect(createCall.body).toEqual({
       name: "新客户",
       plan_code: "professional",
@@ -105,7 +110,7 @@ describe("CustomersPage（客户管理）", () => {
   it("鉴权失败态：403（服务端未配置 fail-closed）与 401 都如实呈现并支持重试", async () => {
     const forbidden = installAdminBackend({ forceStatus: 403 });
     vi.stubGlobal("fetch", forbidden.fetchImpl);
-    render(<CustomersPage token={TOKEN} />);
+    render(<CustomersPage />);
     const box = await screen.findByTestId("admin-auth-error");
     expect(box.textContent).toContain("鉴权失败");
     expect(box.textContent).toContain("forced 403");
@@ -114,14 +119,14 @@ describe("CustomersPage（客户管理）", () => {
     cleanup();
     const unauthorized = installAdminBackend({ forceStatus: 401 });
     vi.stubGlobal("fetch", unauthorized.fetchImpl);
-    render(<CustomersPage token={TOKEN} />);
+    render(<CustomersPage />);
     expect(await screen.findByTestId("admin-auth-error")).toBeTruthy();
   });
 
   it("网络错误走通用错误态（非鉴权）", async () => {
     const broken = installAdminBackend({ forceStatus: 500 });
     vi.stubGlobal("fetch", broken.fetchImpl);
-    render(<CustomersPage token={TOKEN} />);
+    render(<CustomersPage />);
     expect(await screen.findByTestId("admin-error")).toBeTruthy();
   });
 });

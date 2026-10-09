@@ -39,7 +39,16 @@ from .models import (
 )
 from .money import MICRO_PER_YUAN, micro_to_yuan, micro_to_yuan_str, yuan_to_micro
 from .notices import USAGE_WARNING_TIERS, evaluate_usage_warnings
-from .plans import PLAN_CODES, SEEDS, PlanSeed, get_plan, seed_plans
+from .plans import (
+    LEGACY_CODES,
+    PLAN_CODES,
+    PUBLIC_SEEDS,
+    SEEDS,
+    PlanSeed,
+    get_plan,
+    list_public_plans,
+    seed_plans,
+)
 from .reconcile import ReconcileReport, ReconcileRow, reconcile
 from .settle import SettlementReport, SettlementService, default_resolver
 from .sub2api import (
@@ -54,7 +63,9 @@ __all__ = [
     "METERING_RECORDS_DDL",
     "MICRO_PER_YUAN",
     "NOTICE_CHANNELS",
+    "LEGACY_CODES",
     "PLAN_CODES",
+    "PUBLIC_SEEDS",
     "SEEDS",
     "SUB2API_APPLIED_KINDS",
     "USAGE_WARNING_TIERS",
@@ -87,6 +98,7 @@ __all__ = [
     "evaluate_usage_warnings",
     "get_plan",
     "init_billing",
+    "list_public_plans",
     "micro_to_yuan",
     "micro_to_yuan_str",
     "reconcile",

@@ -1,13 +1,16 @@
-// 内部后台容器（#/admin/*）：布局壳 + 按左侧栏切换五页（客户/账本/需求单/
-// 目录治理/用量）。X-Admin-Token 开发占位值在此持有，变更即重挂载子页
-// （新令牌重新请求）。
-import { useState } from "react";
+// 内部后台容器（#/admin/*）：角色门禁 + 布局壳 + 按左侧栏切换六页（客户/
+// 账本/需求单/目录治理/用量/本地数据）。
+// admin 双闸（wire-self-serve-launch 任务 5.2）：无 wire-admin 角色的登录
+// 用户在此被角色门禁拦下（导航入口已在 App 按角色显隐，路由直达也进不来）；
+// 子页请求自动附 Authorization: Bearer（见 admin/api.ts），不再持有任何
+// 手填令牌——token prop 与 key 重挂载随令牌而变的旧制退场。
+import { useTranslation } from "react-i18next";
 import {
   AdminLayout,
   parseAdminSection,
   type AdminSection,
 } from "./AdminLayout";
-import { loadAdminToken, saveAdminToken } from "./api";
+import { hasAdminRole, loadSession, logoutLocal } from "../console/auth";
 import { CustomersPage } from "./CustomersPage";
 import { LedgerPage } from "./LedgerPage";
 import { DemandsPage } from "./DemandsPage";
@@ -20,27 +23,42 @@ export function AdminView({
 }: {
   section?: AdminSection;
 }) {
-  const [token, setToken] = useState(loadAdminToken);
+  const { t } = useTranslation();
+  const session = loadSession();
   const active: AdminSection = parseAdminSection(section);
+
+  // 角色门禁：无 wire-admin 一律拦下（不留任何数据请求面）。
+  if (!hasAdminRole(session)) {
+    return (
+      <div
+        data-testid="admin-role-gate"
+        className="max-w-xl rounded-lg border border-amber-200 bg-amber-50/50 p-8"
+      >
+        <h1 className="text-xl font-semibold">{t("admin.roleGate.title")}</h1>
+        <p className="mt-3 text-sm text-slate-600">
+          {t("admin.roleGate.body")}
+        </p>
+      </div>
+    );
+  }
+
+  const logout = () => {
+    logoutLocal();
+    window.location.hash = "#/";
+  };
 
   return (
     <AdminLayout
       section={active}
-      token={token}
-      onTokenSave={(raw) => setToken(saveAdminToken(raw))}
+      identity={session!.identity}
+      onLogout={logout}
     >
-      {active === "customers" && <CustomersPage key={`customers:${token}`} token={token} />}
-      {active === "ledger" && <LedgerPage key={`ledger:${token}`} token={token} />}
-      {active === "demands" && <DemandsPage key={`demands:${token}`} token={token} />}
-      {active === "catalog" && (
-        <CatalogGovernancePage key={`catalog:${token}`} token={token} />
-      )}
-      {active === "usage" && (
-        <UsageOverviewPage key={`usage:${token}`} token={token} />
-      )}
-      {active === "localdata" && (
-        <LocalDataPage key={`localdata:${token}`} token={token} />
-      )}
+      {active === "customers" && <CustomersPage />}
+      {active === "ledger" && <LedgerPage />}
+      {active === "demands" && <DemandsPage />}
+      {active === "catalog" && <CatalogGovernancePage />}
+      {active === "usage" && <UsageOverviewPage />}
+      {active === "localdata" && <LocalDataPage />}
     </AdminLayout>
   );
 }
