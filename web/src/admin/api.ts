@@ -95,13 +95,10 @@ export interface LedgerEntry {
   created_at: string;
 }
 
+/** 需求单状态（三态机 + rejected；八态工作流的五个旧态已废除，前端不出现）。 */
 export type DemandStatus =
   | "submitted"
-  | "evaluating"
-  | "quoted"
-  | "awaiting_confirm"
-  | "building"
-  | "delivery_acceptance"
+  | "in_progress"
   | "delivered"
   | "rejected";
 
@@ -133,7 +130,6 @@ export interface DemandTransitionInput {
   note?: string;
   by?: string;
   reason?: string;
-  confirmed_by_operator?: boolean;
 }
 
 export interface IndicatorPendingItem {

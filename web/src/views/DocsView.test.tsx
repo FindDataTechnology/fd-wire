@@ -44,36 +44,31 @@ describe("DocsView（文档三节 · 如实呈现）", () => {
     expect(pricingNote.closest("a")?.getAttribute("href")).toBe("#/pricing");
   });
 
-  it("需求单八态：七个主步骤 + 拒绝分支说明", () => {
+  it("需求单三态：三个主步骤 + 拒绝分支说明（八态旧名退场）", () => {
     render(<DocsView />);
 
-    for (const label of [
-      "已提交",
-      "评估中",
-      "已报价",
-      "待确认",
-      "构建中",
-      "交付验收",
-      "已交付",
-    ]) {
+    for (const label of ["已收到", "处理中", "已交付"]) {
       expect(screen.getByText(label)).toBeTruthy();
     }
-    // 第八态：已拒绝（分支留档说明）
+    // rejected：分支留档说明（1 个工作日响应承诺）
     expect(screen.getByText(/「已拒绝」/)).toBeTruthy();
-    expect(screen.getAllByTestId(/^demand-step-/)).toHaveLength(7);
+    expect(screen.getAllByTestId(/^demand-step-/)).toHaveLength(3);
+    // 旧八态名不出现在客户面文案（wire-ux-consolidation 任务 3.5）
+    const pageText = document.body.textContent ?? "";
+    for (const legacy of ["评估中", "已报价", "待确认", "构建中", "交付验收"]) {
+      expect(pageText).not.toContain(legacy);
+    }
   });
 
-  it("「上线中」徽标收缩为两项：cell 开通 / 需求单提交（控制台已上线不再挂徽标）", () => {
+  it("「上线中」徽标收缩为一项：cell 开通（需求单提交已上线不再挂徽标）", () => {
     render(<DocsView />);
 
-    // 控制台（AI 对话构建/我的数据/产物）已上线（wire-self-serve-launch 7.3/7.4）
+    // 控制台（AI 对话构建/我的数据/产物）已上线（wire-self-serve-launch 7.3/7.4）；
+    // 需求单提交已上线（wire-ux-consolidation 4.1）——仅 cell 开通如实挂徽标
     expect(screen.queryByText("控制台分析构建")).toBeNull();
-    // 剩余未上线项如实挂徽标
     const badges = screen.getAllByTestId("coming-soon-badge");
-    expect(badges.length).toBe(2);
-    for (const b of badges) {
-      expect(b.textContent).toContain("上线中");
-    }
+    expect(badges.length).toBe(1);
+    expect(badges[0]!.textContent).toContain("上线中");
     expect(screen.getByText(/cell 开通/)).toBeTruthy();
     expect(screen.getByText("需求单提交")).toBeTruthy();
   });

@@ -762,3 +762,59 @@ export function fetchConsoleUsage(): Promise<ConsoleUsage> {
     method: "GET",
   }) as Promise<ConsoleUsage>;
 }
+
+// ── 需求单客户面（wire-ux-consolidation 任务 3.2/4.1/4.3）──────────────
+// 契约：POST/GET /api/v1/demands（Bearer 登录身份，服务端按映射客户隔离，
+// 他企数据不可见）。提交四入参：description（必填）/ contact_email（必填）/
+// company（选填）/ indicator_code（选填目录锚点）；状态三态 + rejected。
+
+/** 需求单提交入参（后端 DemandCreate：旧表单字段一律不再收）。 */
+export interface DemandCreateInput {
+  description: string;
+  contact_email: string;
+  company?: string;
+  indicator_code?: string;
+}
+
+/** 需求单时间线条目（客户可见投影）。 */
+export interface DemandHistoryEvent {
+  status: string;
+  at: string;
+  by: string;
+  note: string | null;
+}
+
+/** 需求单客户视图（后端 DemandOut 截面：不含任何内部字段）。 */
+export interface CustomerDemand {
+  id: number;
+  code: string;
+  customer_id: string;
+  /** 列表摘要（后端由描述截断生成）。 */
+  title: string;
+  /** 描述全文。 */
+  intent: string;
+  contact_email: string | null;
+  company: string | null;
+  status: string;
+  status_history: DemandHistoryEvent[];
+  rejection_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 提交需求单（四入参；成功返回 submitted 态新单）。 */
+export function submitDemand(
+  payload: DemandCreateInput,
+): Promise<CustomerDemand> {
+  return requestJson(`${API_BASE}/v1/demands`, {
+    method: "POST",
+    body: payload,
+  }) as Promise<CustomerDemand>;
+}
+
+/** 本企业需求单列表（按创建时间倒序；跨客户隔离由服务端保证）。 */
+export function fetchMyDemands(): Promise<CustomerDemand[]> {
+  return requestJson(`${API_BASE}/v1/demands`, {
+    method: "GET",
+  }) as Promise<CustomerDemand[]>;
+}

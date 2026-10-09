@@ -17,7 +17,14 @@ def _utcnow_naive() -> datetime:
 
 
 class Demand(Base):
-    """数据需求单：客户提交 → AI 预评估 → 人工报价 → 构建 → 交付。"""
+    """数据需求单：客户提交（submitted）→ 处理（in_progress）→ 交付（delivered）。
+
+    wire-ux-consolidation 任务 3.2 起表单收窄为四入参：需求描述
+    （description → intent 全文，title 存截断摘要）、联系邮箱
+    （contact_email，必填）、公司名（company，选填）、目录锚点
+    （indicator code → linked_indicators，选填、服务端原样存储）。
+    entities_hint / frequency_expect 保留为旧列（新表单不再写入）。
+    """
 
     __tablename__ = "demands"
 
@@ -26,14 +33,19 @@ class Demand(Base):
     code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     #: 归属企业（客户侧按此隔离列表与详情）
     customer_id: Mapped[str] = mapped_column(String(64), index=True)
+    #: 摘要（列表展示用；新表单由需求描述截断生成，旧单为手填标题）
     title: Mapped[str] = mapped_column(String(200))
-    #: 自然语言意图描述
+    #: 需求描述全文（自由文本，按将来对话第一条消息的形态设计）
     intent: Mapped[str] = mapped_column(Text)
-    #: 实体线索（自由 JSON：地域/行业/关键词等）
+    #: 联系邮箱（新表单必填；旧单无值，可空）
+    contact_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    #: 公司名（选填）
+    company: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: 实体线索（自由 JSON：地域/行业/关键词等；旧表单遗留，新表单不再写入）
     entities_hint: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    #: 期望更新频率（如 daily/weekly）
+    #: 期望更新频率（如 daily/weekly；旧表单遗留，新表单不再写入）
     frequency_expect: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    #: 目录预填的 indicator code 列表（提交时可带）
+    #: 目录预填的 indicator code 列表（提交时携带的锚点，服务端原样存储）
     linked_indicators: Mapped[list] = mapped_column(JSON, default=list)
     #: 当前状态（DemandStatus 值）
     status: Mapped[str] = mapped_column(
@@ -47,7 +59,8 @@ class Demand(Base):
     evaluation_detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     #: 拒绝理由（必留档，客户可见）
     rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    #: 报价金额（元，展示用；进入 quoted 后写入）
+    # ---- 报价字段（旧八态工作流遗留，随旧单保留可查；三态机不再写入）----
+    #: 报价金额（元，展示用；旧 quoted 态写入）
     quote_amount: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 2), nullable=True
     )
@@ -55,7 +68,7 @@ class Demand(Base):
     quote_amount_micro: Mapped[int | None] = mapped_column(Integer, nullable=True)
     #: 报价说明
     quote_note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    #: 报价有效期（客户视图随金额一并展示）
+    #: 报价有效期（旧单展示用）
     quote_valid_until: Mapped[datetime | None] = mapped_column(
         DateTime, nullable=True
     )

@@ -31,7 +31,7 @@ export type FetchCall = {
   body?: unknown;
 };
 
-/** 需求单八态状态机白名单（共享 demandsMachine.ts 的镜像）。 */
+/** 需求单三态状态机白名单（共享 demandsMachine.ts 的镜像）。 */
 export const ALLOWED_TRANSITIONS = MACHINE_TRANSITIONS;
 
 export const DEFAULT_PLANS: AdminPlan[] = [

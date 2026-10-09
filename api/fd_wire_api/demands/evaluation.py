@@ -1,10 +1,10 @@
 """AI 预评估服务（wire-platform-v1 任务 6.4：需求单的 AI 预评估与人工报价流）。
 
-触发机制（两条路，均已实现）：
-1. **自动**：``POST /internal/demands/{id}/transition`` 迁移到 ``evaluating``
-   成功后，路由层调 :func:`maybe_auto_evaluate` 即时跑一次预评估；
-2. **独立**：``POST /internal/demands/{id}/evaluate``（admin_routes）——
-   submitted（自动接单进 evaluating）或 evaluating 下可（重）跑。
+wire-ux-consolidation 任务 3.1 起三态化：评估挂接的 evaluating 态已废除，
+端点流程（transition 自动评估 / 独立触发 / 评估写入）对现行状态一律 409。
+本模块保留纯函数（LLM 结构解析 / verdict 中文映射 / 合规初筛 / 提示词
+组装）与旧单 evaluation 字段的读路径——解析与初筛逻辑将来可复用于
+in_progress 观测挂点（design D1：为萬星闭环预留种子）。
 
 评估产物（结构化 JSON，由 LLM 依需求意图产出）：
     {verdict: feasible|doubtful|infeasible, confidence, reasons[],
@@ -353,10 +353,10 @@ def evaluate_demand(
 
 
 def maybe_auto_evaluate(db: Session, demand: Demand) -> Demand:
-    """迁移到 evaluating 后的自动预评估钩子——绝不抛出打断迁移响应。
+    """迁移到 evaluating 后的自动预评估钩子（旧八态工作流遗留，已无调用方）。
 
-    评估自身的失败已被 :func:`evaluate_demand` 内部兜底成 doubtful；
-    此处再兜一层意外异常：迁移已成功，评估可经独立触发端点重跑。
+    wire-ux-consolidation 3.1 起 evaluating 不可达，本钩子恒为直通返回；
+    保留是为旧调用方渐进退场与将来 in_progress 观测挂点复用。
     """
     try:
         if DemandStatus(demand.status) is not DemandStatus.evaluating:

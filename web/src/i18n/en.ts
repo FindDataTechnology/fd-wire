@@ -52,6 +52,10 @@ const en: Translation = {
     includedLines: "{{count}} rows/mo included",
     stopAtQuotaLine: "Stop at quota, restored next month — no overage rate.",
     customQuote: "Enquiry",
+    // Custom card main CTA (wire-ux-consolidation task 4.4): in-app route to the
+    // demand form; the mailto contact stays as a secondary small link.
+    ctaCustom: "File a demand for a quote",
+    ctaCustomMailto: "or email us",
     featCatalog: "Full access to the {{total}}+ indicator catalog",
     featCatalogNoCount: "Full access to the indicator catalog",
     featMcp: "Data reads over MCP",
@@ -139,18 +143,16 @@ const en: Translation = {
   },
   demands: {
       title: "Demand workflow",
+      // Three-state machine (wire-ux-consolidation task 3.5): submitted →
+      // in_progress → delivered, plus rejected; old eight-state names are gone.
       intro:
-        "Missing an indicator? File a data demand — an eight-state machine keeps the timeline visible end to end, with delivery into your private scope (cell).",
-      stepsTitle: "The eight states",
-      step1: "Submitted",
-      step2: "Evaluating",
-      step3: "Quoted",
-      step4: "Awaiting confirm",
-      step5: "Building",
-      step6: "Delivery acceptance",
-      step7: "Delivered",
+        "Missing an indicator? File a data demand — three states keep the timeline visible end to end (Received / In progress / Delivered), with delivery into your private scope (cell).",
+      stepsTitle: "The three states",
+      step1: "Received",
+      step2: "In progress",
+      step3: "Delivered",
       rejectedNote:
-        "Any evaluation-stage state may move to “Rejected” (reason archived and visible to the customer); a failed build stays in “Building” with issues shown as they are.",
+        "Any pre-delivery state may move to “Rejected” (reason archived and visible to you); we respond within 1 business day of submission.",
       cellLabel: "Cell provisioning (private-scope delivery)",
     },
     statusTitle: "Rollout status",
@@ -224,17 +226,38 @@ const en: Translation = {
   },
   demandNew: {
     title: "File a data demand",
-    placeholder:
-      "Demand submission is under construction — this page will file the demand with the indicator prefilled, with a fully visible timeline; delivery lands in your private scope.",
-    prefilled: "Prefilled indicator",
+    intro:
+      "Describe your data need in a sentence — the status stays visible end to end, and delivery lands in your private scope.",
+    prefilled: "Catalog anchor",
+    descriptionPrefill: "Indicator {{code}}: ",
+    descriptionLabel: "Describe your need (required)",
+    descriptionPlaceholder:
+      "One or two sentences on the data you want: indicator caliber, coverage, update frequency…",
+    descriptionRequired: "Please describe your need.",
+    emailLabel: "Contact email (required)",
+    emailPlaceholder: "name@company.com",
+    emailRequired: "Please enter a contact email.",
+    emailInvalid: "That email address doesn't look valid (name@domain.tld).",
+    companyLabel: "Company (optional)",
+    companyPlaceholder: "e.g. Acme Data",
+    submit: "Submit demand",
+    submitting: "Submitting…",
+    errorTitle: "Submission failed — please retry in a moment.",
+    signInRequired:
+      "Filing a demand requires signing in to the console first — demands then belong to your enterprise, with progress under “My demands”.",
+    signInCta: "Go to sign-in",
+    successTitle: "Your demand has been received",
+    successBody: "We will respond within 1 business day.",
+    successCode: "Demand code: {{code}}",
     back: "Back to catalog",
+    viewMine: "View my demands",
   },
   console: {
     title: "Console",
     chartTitle: "Dashboard placeholder",
     chartEmpty: "No data yet",
     nav: {
-      chat: "AI builder",
+      chat: "AI Build",
       artifacts: "Artifacts",
       datasets: "My data",
       demands: "Demands",
@@ -273,36 +296,14 @@ const en: Translation = {
       hint: "Copy and store it now — for security, the plaintext key is never queryable again.",
       copy: "Copy",
     },
-    chat: {
-      conversations: "Conversations",
-      newConversation: "New conversation",
-      conversationsLoading: "Loading conversations…",
-      conversationsEmpty:
-        "No conversations yet — send the first message to start one.",
-      listErrorTitle: "Failed to load conversations",
-      messagesLoading: "Loading messages…",
-      messagesEmpty: "No messages in this conversation yet.",
-      messagesErrorTitle: "Failed to load messages",
-      retry: "Retry",
-      startTitle: "Start a new conversation",
-      startHint:
-        "Your first message creates the conversation and runs one build loop (subject to the daily creation limit).",
-      inputLabel: "Message input",
-      inputPlaceholder: "Describe what to build next…",
-      inputPlaceholderNew:
-        "Describe the analysis you want — sending starts a new conversation…",
-      send: "Send",
-      sending: "Sending…",
-      errorTitle: "Send failed",
-      error429: "Daily conversation creation limit reached",
-      error429Hint:
-        "Try again tomorrow, or contact the platform to adjust the limit.",
-      errorNetwork: "Network error — the console service is unreachable.",
-      toolTrace: "Tool call",
-      toolTraceArgs: "Arguments",
-      toolTraceResult: "Result",
-      resultOk: "OK",
-      resultFail: "Failed",
+    // AI build guide card (wire-ux-consolidation task 2.1): the old chat page
+    // is retired; the chat tab shows a Base trial guide — no timing promises.
+    chatGuide: {
+      title: "AI Build",
+      body:
+        "Wire's conversational build capability will be provided through this entrance; data trials run on Base — the demo page carries the published test account and a guided tour.",
+      tryCta: "Try it on Base",
+      haveAccount: "Already have a Base account? Enter directly",
     },
     artifacts: {
       title: "Artifact drafts",
@@ -583,9 +584,27 @@ const en: Translation = {
         },
       },
     },
-    demandsPlaceholder: {
-      title: "Demands",
-      body: "Demand management is under construction — filing demands for indicators outside the catalog, with the eight-state timeline, will land here (today a placeholder filing can be started from a catalog detail page).",
+    // My demands (wire-ux-consolidation task 4.3): read-only list, no
+    // transition controls.
+    demands: {
+      title: "My demands",
+      subtitle:
+        "The data demands you filed — status visible end to end (Received / In progress / Delivered; declined demands show the reason); progress is advanced on the platform side.",
+      newCta: "File a new demand",
+      loading: "Loading demands…",
+      errorTitle: "Failed to load demands",
+      retry: "Retry",
+      empty: "No demands yet",
+      emptyHint:
+        "File your first one from a catalog entry's “Request access” or the pricing page's “Custom” card.",
+      submittedAt: "Submitted {{time}}",
+      rejectedReason: "Declined: {{reason}}",
+      statuses: {
+        submitted: "Received",
+        in_progress: "In progress",
+        delivered: "Delivered",
+        rejected: "Declined",
+      },
     },
     usage: {
       title: "Usage",
@@ -722,16 +741,12 @@ const en: Translation = {
     },
     demands: {
       title: "Demand dispatch console",
-      subtitle: "All-customer demand list with status filter and dispatch — transitions follow the eight-state whitelist; illegal options disabled.",
+      subtitle: "All-customer demand list with status filter and dispatch — transitions follow the three-state whitelist (submitted → in_progress → delivered, plus rejected with a reason); illegal options disabled.",
       statusFilter: "Status",
       statusAll: "All statuses",
       statuses: {
-        submitted: "Submitted",
-        evaluating: "Evaluating",
-        quoted: "Quoted",
-        awaiting_confirm: "Awaiting confirm",
-        building: "Building",
-        delivery_acceptance: "Delivery acceptance",
+        submitted: "Received",
+        in_progress: "In progress",
         delivered: "Delivered",
         rejected: "Rejected",
       },
@@ -747,8 +762,6 @@ const en: Translation = {
       submit: "Apply transition",
       illegalSuffix: "illegal",
       machineNote: "The client only disables illegal options; the server state machine is the single arbiter (409 shown as-is).",
-      quotedPrereq:
-        "Entering quoted requires operator confirmation: this action sends confirmed_by_operator=true; quote amounts are entered via the quote console.",
     },
     catalog: {
       title: "Catalog governance",
@@ -820,7 +833,21 @@ const en: Translation = {
     errorTitle: "Failed to load the sign-in configuration",
     errorHint: "Retry in a moment; contact the platform administrator if it persists.",
   },
-  footer: "© FindData · Wire · FindData Tech wire line",
+  // Footer (wire-ux-consolidation task 1.1): org/tagline wording mirrors the
+  // fd-official-web footer.org / footer.line; filing numbers live in
+  // components/footerConstants.ts.
+  footer: {
+    org: "FindData Technology",
+    tagline: "Infrastructure and tools for text and data in the AI era.",
+    github: "GitHub",
+    servicesLabel: "FindData products",
+    services: {
+      official: "Website",
+      base: "Base",
+      lex: "Lex",
+      more: "More products",
+    },
+  },
 };
 
 export default en;

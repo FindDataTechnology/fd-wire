@@ -1,6 +1,7 @@
 // 需求单派发台（#/admin/demands）：全客户列表 + 状态筛选 + 派发操作。
 // 迁移下拉按状态机白名单禁用非法项（客户端只是提示面，服务端 409 仍是
-// 唯一裁决）；quoted 迁移自动携带 confirmed_by_operator + operator。
+// 唯一裁决）；三态机（wire-ux-consolidation 任务 3.5）：submitted →
+// in_progress → delivered，rejected 必带理由；报价确认流程已随八态废除。
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AdminErrorBox, AdminStates } from "./AdminLayout";
@@ -10,20 +11,11 @@ import {
   type AdminDemand,
   type DemandStatus,
 } from "./api";
-import {
-  ALL_DEMAND_STATUSES,
-  allowedTargets,
-  needsOperatorConfirmation,
-  needsReason,
-} from "./demandsMachine";
+import { ALL_DEMAND_STATUSES, allowedTargets, needsReason } from "./demandsMachine";
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
   submitted: "bg-slate-100 text-slate-700 ring-slate-200",
-  evaluating: "bg-sky-50 text-sky-700 ring-sky-200",
-  quoted: "bg-indigo-50 text-indigo-700 ring-indigo-200",
-  awaiting_confirm: "bg-violet-50 text-violet-700 ring-violet-200",
-  building: "bg-amber-50 text-amber-700 ring-amber-200",
-  delivery_acceptance: "bg-teal-50 text-teal-700 ring-teal-200",
+  in_progress: "bg-amber-50 text-amber-700 ring-amber-200",
   delivered: "bg-emerald-50 text-emerald-700 ring-emerald-200",
   rejected: "bg-rose-50 text-rose-700 ring-rose-200",
 };
@@ -205,9 +197,6 @@ function DispatchPanel({
         by: "admin-console",
         ...(note.trim() ? { note: note.trim() } : {}),
         ...(needsReason(target) && reason.trim() ? { reason: reason.trim() } : {}),
-        ...(needsOperatorConfirmation(target)
-          ? { confirmed_by_operator: true }
-          : {}),
       });
       setNote("");
       setReason("");
@@ -294,9 +283,7 @@ function DispatchPanel({
         </button>
       </div>
       <p className="mt-2 text-[11px] text-slate-400">
-        {needsOperatorConfirmation(target)
-          ? t("admin.demands.quotedPrereq")
-          : t("admin.demands.machineNote")}
+        {t("admin.demands.machineNote")}
       </p>
     </div>
   );

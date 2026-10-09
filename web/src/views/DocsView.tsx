@@ -1,6 +1,8 @@
 // 文档页（#/docs）——三节：快速开始 / 计量与计费 / 需求单流程。
-// 如实呈现纪律：未上线能力（控制台分析构建、cell 开通、需求单提交）
-// 一律挂「上线中 · 即将开放」徽标，不以已上线口吻陈述。
+// 如实呈现纪律：未上线能力（cell 开通）挂「上线中 · 即将开放」徽标，不以
+// 已上线口吻陈述；需求单提交已上线（wire-ux-consolidation 任务 4.1）。
+// 需求单流程为三态机（submitted → in_progress → delivered，另 rejected），
+// 八态工作流旧态名不再出现在客户面文案（任务 3.5 同步）。
 import { useTranslation } from "react-i18next";
 
 /** MCP 端点占位（wire-platform URL 契约：单域 /mcp 反代 registry wire 入口）。 */
@@ -10,10 +12,6 @@ const DEMAND_STEPS = [
   "docs.demands.step1",
   "docs.demands.step2",
   "docs.demands.step3",
-  "docs.demands.step4",
-  "docs.demands.step5",
-  "docs.demands.step6",
-  "docs.demands.step7",
 ] as const;
 
 function ComingSoonBadge() {
@@ -202,7 +200,7 @@ export function DocsView() {
         </p>
       </section>
 
-      {/* 三、需求单流程（八态状态机步骤条） */}
+      {/* 三、需求单流程（三态状态机步骤条） */}
       <section className="space-y-4">
         <h2 className="text-xl font-semibold">{t("docs.demands.title")}</h2>
         <p className="text-sm text-slate-500">{t("docs.demands.intro")}</p>
@@ -234,14 +232,19 @@ export function DocsView() {
       </section>
 
       {/* 能力上线状态——如实呈现，未上线不发卡。控制台（AI 对话构建/我的数据/
-          产物预览）已上线，不再挂「上线中」徽标（wire-self-serve-launch 7.3/7.4）。 */}
+          产物预览）已上线，不再挂「上线中」徽标（wire-self-serve-launch 7.3/7.4）；
+          需求单提交已上线（wire-ux-consolidation 4.1），仅 cell 开通保留徽标。 */}
       <section className="space-y-3">
         <h2 className="text-sm font-medium text-slate-400">
           {t("docs.statusTitle")}
         </h2>
         <ul className="space-y-2">
           <StatusRow label={t("docs.demands.cellLabel")} />
-          <StatusRow label={t("docs.statusDemandLabel")} />
+          <li className="flex flex-wrap items-center gap-2">
+            <span className="text-sm text-slate-600">
+              {t("docs.statusDemandLabel")}
+            </span>
+          </li>
         </ul>
       </section>
     </div>

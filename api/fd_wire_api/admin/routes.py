@@ -43,7 +43,7 @@ from ..billing.plans import get_plan
 from ..billing.sub2api import Sub2ApiError, Sub2ApiClient, sub2api_client_dep
 from ..catalog.db import readonly_session
 from ..catalog.models import IndicatorSnapshot
-from ..demands import evaluation, service as demands_service
+from ..demands import service as demands_service
 from ..demands.db import get_db as get_demands_db
 from ..demands.models import Demand
 from ..demands.schemas import DemandInternalOut, TransitionIn
@@ -395,9 +395,9 @@ def transition_demand(
 ) -> DemandInternalOut:
     """派发操作：转发既有内部 transition 端点语义（直调 service 层）。
 
-    - 非法迁移/前置不满足 → 409（状态机白名单裁决，与内部端点一致）；
-    - 迁移到 evaluating 成功后同样自动跑一次 AI 预评估（maybe_auto_evaluate，
-      LLM 不可用时如实落 doubtful，绝不打断迁移）。
+    - 非法迁移/前置不满足 → 409（三态白名单裁决，与内部端点一致）；
+    - 合法目标仅 in_progress / delivered / rejected（带理由）——废除态
+      迁入一律 409 如实回显（wire-ux-consolidation 3.1）。
     """
     try:
         demand = demands_service.get_demand(db, demand_id)
@@ -411,11 +411,9 @@ def transition_demand(
             by=payload.by or "admin-console",
             note=payload.note,
             reason=payload.reason,
-            confirmed_by_operator=payload.confirmed_by_operator,
         )
     except TransitionError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    demand = evaluation.maybe_auto_evaluate(db, demand)
     return DemandInternalOut.model_validate(demand)
 
 

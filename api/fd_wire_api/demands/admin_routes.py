@@ -1,9 +1,9 @@
-"""需求单内部管理端点（wire-platform-v1 任务 6.4：人工报价确认台）。
+"""需求单内部视图端点（原 wire-platform-v1 任务 6.4 确认台，三态化收窄）。
 
-- ``POST /internal/demands/{id}/evaluate``  AI 预评估独立触发端点：
-  submitted（自动接单进 evaluating）或 evaluating 下（重）跑一次
-  :mod:`fd_wire_api.demands.evaluation`；其余状态 409。
-- ``GET  /internal/demands/{id}``           确认台内部完整视图：
+- ``POST /internal/demands/{id}/evaluate``  旧八态评估流遗留端点：
+  wire-ux-consolidation 3.1 起 evaluating 态废除，对现行状态一律 409
+  （评估全文字段随旧单保留可查）。
+- ``GET  /internal/demands/{id}``           内部完整视图：
   评估全文（verdict/confidence/reasons/hints/compliance_flags）+
   报价留档（operator/微元金额/历史）——这些字段绝不出现在客户侧响应。
 
@@ -47,10 +47,10 @@ def run_evaluation(
     demand_id: int,
     db: Session = Depends(get_db),
 ) -> DemandInternalOut:
-    """AI 预评估独立触发（submitted 自动接单 / evaluating 重跑；其余 409）。
+    """旧八态评估流遗留端点（wire-ux-consolidation 3.1）：一律 409。
 
-    LLM 不可用或输出无法解析时，如实落 doubtful +「AI 评估不可用，转人工
-    评估」——绝不编造结论。
+    原语义（submitted 自动接单 / evaluating 重跑）随 evaluating 态废除；
+    诚实纪律不变：LLM 不可用或输出无法解析时如实落 doubtful——绝不编造结论。
     """
     demand = _demand_or_404(db, demand_id)
     try:

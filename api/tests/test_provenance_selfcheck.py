@@ -341,6 +341,12 @@ def test_selfcheck_routes(client_env) -> None:
     client = client_env.client
     # app lifespan 接线后 start_selfcheck_loop() 启动即跑一次并填充 last_report；
     # 本测试验证"未运行 404"契约本身，先复位模块态隔离。
+    # 竞态消除：启动首跑在 to_thread 里可能仍在途——等它落定（last_report
+    # 非 None）再复位，否则复位后线程补写会把 404 变 200（偶发假失败；
+    # 纯测试确定性修复，生产语义不变）。
+    _deadline = time.monotonic() + 5.0
+    while selfcheck.get_last_report() is None and time.monotonic() < _deadline:
+        time.sleep(0.01)
     reset_selfcheck_runtime()
 
     no_header = client.get("/api/v1/provenance/selfcheck")

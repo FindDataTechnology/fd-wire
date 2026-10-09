@@ -163,7 +163,14 @@ export function displayDescription(item: {
   return item.description_zh?.trim() || item.description_en?.trim() || null;
 }
 
-/** registered 导流目标：需求单提交占位路由（预填指标 code）。 */
-export function demandNewHref(indicatorCode: string): string {
-  return `#/console/demands/new?indicator=${encodeURIComponent(indicatorCode)}`;
+/**
+ * 需求单表单路由（wire-ux-consolidation 任务 4.1/4.2）：registered 导流与
+ * 定价页自定义卡共用。携带指标 code 时表单预填目录锚点；无锚点（如定价页
+ * 入口）返回不带 query 的裸路由。
+ */
+export function demandNewHref(indicatorCode?: string | null): string {
+  const code = indicatorCode?.trim();
+  return code
+    ? `#/console/demands/new?indicator=${encodeURIComponent(code)}`
+    : "#/console/demands/new";
 }

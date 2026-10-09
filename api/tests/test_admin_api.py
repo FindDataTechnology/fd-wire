@@ -242,10 +242,14 @@ def seed_console_customers(*names: str) -> None:
 
 def submit_demand(client: TestClient, customer_id: str, title: str) -> dict:
     """客户面造数（4.5 身份切换）：Bearer ID token → logto_sub → Customer
-    （customer_id=Customer.name 命名空间键；对应 fixture 种子 sub-<name>）。"""
+    （customer_id=Customer.name 命名空间键；对应 fixture 种子 sub-<name>）。
+    wire-ux-consolidation 3.2 起为意向单四入参形态。"""
     resp = client.post(
         "/api/v1/demands",
-        json={"title": title, "intent": f"需要 {title} 相关数据"},
+        json={
+            "description": f"需要 {title} 相关数据，用于内部研究",
+            "contact_email": f"contact-{customer_id}@example.com",
+        },
         headers=bearer(mint_id_token(f"sub-{customer_id}")),
     )
     assert resp.status_code == 201, resp.text
@@ -558,10 +562,10 @@ def test_demands_list_all_customers_with_status_filter(admin_env):
     seed_console_customers("cust-001", "cust-002")
     d1 = submit_demand(client, "cust-001", "煤价日度数据")
     d2 = submit_demand(client, "cust-002", "航运运价")
-    # cust-002 的一单推进到 evaluating（走既有内部端点语义）
+    # cust-002 的一单推进到 in_progress（走既有内部端点语义，三态机）
     resp = client.post(
         f"/internal/demands/{d2['id']}/transition",
-        json={"target_status": "evaluating", "by": "tester"},
+        json={"target_status": "in_progress", "by": "tester"},
         headers={"X-Internal-Token": "wire-internal-dev"},
     )
     assert resp.status_code == 200, resp.text
@@ -576,10 +580,10 @@ def test_demands_list_all_customers_with_status_filter(admin_env):
         "/internal/admin/demands", params={"status": "submitted"}, headers=AUTH
     ).json()
     assert [d["id"] for d in submitted] == [d1["id"]]
-    evaluating = client.get(
-        "/internal/admin/demands", params={"status": "evaluating"}, headers=AUTH
+    in_progress = client.get(
+        "/internal/admin/demands", params={"status": "in_progress"}, headers=AUTH
     ).json()
-    assert [d["id"] for d in evaluating] == [d2["id"]]
+    assert [d["id"] for d in in_progress] == [d2["id"]]
 
 
 def test_demands_transition_forwards_service_semantics(admin_env):
@@ -595,25 +599,32 @@ def test_demands_transition_forwards_service_semantics(admin_env):
     )
     assert resp.status_code == 409
 
-    # 合法迁移：submitted → evaluating（service 层直调 + 自动预评估）
+    # 合法迁移：submitted → in_progress（service 层直调）
     resp = client.post(
         f"/internal/admin/demands/{demand['id']}/transition",
-        json={"target_status": "evaluating", "note": "派发台接单", "by": "admin-console"},
+        json={"target_status": "in_progress", "note": "派发台接单", "by": "admin-console"},
         headers=AUTH,
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["status"] == "evaluating"
+    assert body["status"] == "in_progress"
     # 时间线追加派发记录（append-only，by=admin-console）
     assert body["status_history"][-1]["by"] == "admin-console"
-    # 迁移到 evaluating 后自动跑 AI 预评估（无 LLM 时如实 doubtful）
-    assert body["evaluation_summary"] is not None
+
+    # 废除态迁入同样 409（旧八态工作流通道如实回绝）
+    resp = client.post(
+        f"/internal/admin/demands/{demand['id']}/transition",
+        json={"target_status": "evaluating"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 409
+    assert "废除" in resp.json()["detail"]
 
     # 未知需求单 → 404
     assert (
         client.post(
             "/internal/admin/demands/99999/transition",
-            json={"target_status": "evaluating"},
+            json={"target_status": "in_progress"},
             headers=AUTH,
         ).status_code
         == 404

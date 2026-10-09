@@ -46,6 +46,10 @@ const zh = {
     includedLines: "含 {{count}} 行/月",
     stopAtQuotaLine: "用完即停、次月恢复——无超额单价。",
     customQuote: "询价",
+    // 自定义卡主 CTA（wire-ux-consolidation 任务 4.4）：站内跳需求单表单；
+    // mailto 联系降为次级小链接保留。
+    ctaCustom: "提交需求单询价",
+    ctaCustomMailto: "或邮件联系开通",
     featCatalog: "{{total}}+ 指标目录全量浏览",
     featCatalogNoCount: "指标目录全量浏览",
     featMcp: "MCP 直连数据读取",
@@ -132,18 +136,16 @@ const zh = {
   },
   demands: {
       title: "需求单流程",
+      // 三态机（wire-ux-consolidation 任务 3.5）：submitted → in_progress →
+      // delivered，另 rejected；八态工作流旧态名不再出现。
       intro:
-        "目录里没有的指标，提交数据需求单——八态状态机全程可见，交付进入私有范围（cell）。",
-      stepsTitle: "八态状态机",
-      step1: "已提交",
-      step2: "评估中",
-      step3: "已报价",
-      step4: "待确认",
-      step5: "构建中",
-      step6: "交付验收",
-      step7: "已交付",
+        "目录里没有的指标，提交数据需求单——三态全程可见（已收到/处理中/已交付），交付进入私有范围（cell）。",
+      stepsTitle: "三态状态机",
+      step1: "已收到",
+      step2: "处理中",
+      step3: "已交付",
       rejectedNote:
-        "评估各阶段均可转入「已拒绝」（理由留档、客户可见）；构建不达标将停留在「构建中」并如实展示问题。",
+        "交付前任一状态均可转入「已拒绝」（理由留档、客户可见）；提交后 1 个工作日内响应。",
       cellLabel: "cell 开通（私有范围交付）",
     },
     statusTitle: "能力上线状态",
@@ -215,17 +217,37 @@ const zh = {
   },
   demandNew: {
     title: "提交数据需求单",
-    placeholder:
-      "需求单提交建设中——此处将以预填指标提交需求单，状态全程可见，交付进入私有 scope。",
-    prefilled: "预填指标",
+    intro:
+      "用一句话描述你的数据需求——提交后状态全程可见，交付进入你的私有范围。",
+    prefilled: "目录锚点",
+    descriptionPrefill: "指标 {{code}}：",
+    descriptionLabel: "需求描述（必填）",
+    descriptionPlaceholder:
+      "用一两句话描述想要的数据：指标口径、覆盖范围、更新频率…",
+    descriptionRequired: "请填写需求描述。",
+    emailLabel: "联系邮箱（必填）",
+    emailPlaceholder: "name@company.com",
+    emailRequired: "请填写联系邮箱。",
+    emailInvalid: "邮箱格式不合法（应为 name@domain.tld 形态）。",
+    companyLabel: "公司名（选填）",
+    companyPlaceholder: "如：上海壹座",
+    submit: "提交需求单",
+    submitting: "提交中…",
+    errorTitle: "提交失败，请稍后重试。",
+    signInRequired: "提交需求单需要先登录控制台——登录后需求单归属你的企业，进度在「我的需求」可查。",
+    signInCta: "前往登录",
+    successTitle: "已收到你的需求单",
+    successBody: "我们会在 1 个工作日内响应。",
+    successCode: "需求单编号：{{code}}",
     back: "返回目录",
+    viewMine: "查看我的需求",
   },
   console: {
     title: "控制台",
     chartTitle: "仪表盘占位",
     chartEmpty: "暂无数据",
     nav: {
-      chat: "AI 对话构建",
+      chat: "AI 构建",
       artifacts: "产物",
       datasets: "我的数据",
       demands: "需求单",
@@ -262,33 +284,13 @@ const zh = {
       hint: "请立即复制并妥善保存——出于安全考虑，明文密钥关闭后不再提供查询。",
       copy: "复制",
     },
-    chat: {
-      conversations: "会话列表",
-      newConversation: "新建对话",
-      conversationsLoading: "会话加载中…",
-      conversationsEmpty: "还没有对话——发送第一条消息即新建会话。",
-      listErrorTitle: "会话列表加载失败",
-      messagesLoading: "消息加载中…",
-      messagesEmpty: "该会话还没有消息。",
-      messagesErrorTitle: "消息加载失败",
-      retry: "重试",
-      startTitle: "开始新对话",
-      startHint:
-        "发送首条消息即创建会话并运行一轮构建循环（受每日新建限额约束）。",
-      inputLabel: "消息输入",
-      inputPlaceholder: "继续描述你的分析意图…",
-      inputPlaceholderNew: "描述你想构建的分析，发送即新建会话…",
-      send: "发送",
-      sending: "发送中…",
-      errorTitle: "发送失败",
-      error429: "已达每日新建对话上限",
-      error429Hint: "请明日再试，或联系平台调整限额。",
-      errorNetwork: "网络错误——无法连接控制台服务。",
-      toolTrace: "工具调用",
-      toolTraceArgs: "入参",
-      toolTraceResult: "结果",
-      resultOk: "成功",
-      resultFail: "失败",
+    // AI 构建引导卡（wire-ux-consolidation 任务 2.1）：旧对话页退役，
+    // chat tab 落壹座试用引导；不写死任何时间承诺。
+    chatGuide: {
+      title: "AI 构建",
+      body: "柏讯的对话构建能力将经此入口提供；数据试用在壹座进行——演示页含公示测试账号与使用导览。",
+      tryCta: "去壹座试用",
+      haveAccount: "已有壹座账号？直接进入",
     },
     artifacts: {
       title: "产物草稿",
@@ -563,9 +565,25 @@ const zh = {
         },
       },
     },
-    demandsPlaceholder: {
-      title: "需求单",
-      body: "需求单管理建设中——目录外指标的需求提交与八态时间线将在此上线（当前可从指标目录详情发起占位提交）。",
+    // 我的需求（wire-ux-consolidation 任务 4.3）：只读列表，无迁移操作控件。
+    demands: {
+      title: "我的需求",
+      subtitle:
+        "你提交的数据需求单——状态全程可见（已收到/处理中/已交付；未承接显示理由），进度由平台侧推进。",
+      newCta: "提交新需求",
+      loading: "需求单加载中…",
+      errorTitle: "需求单加载失败",
+      retry: "重试",
+      empty: "还没有需求单",
+      emptyHint: "从指标目录的「按需开通」或定价页「自定义」入口提交第一个。",
+      submittedAt: "提交于 {{time}}",
+      rejectedReason: "未承接理由：{{reason}}",
+      statuses: {
+        submitted: "已收到",
+        in_progress: "处理中",
+        delivered: "已交付",
+        rejected: "未承接",
+      },
     },
     usage: {
       title: "用量",
@@ -697,16 +715,12 @@ const zh = {
     },
     demands: {
       title: "需求单派发台",
-      subtitle: "全客户需求单的状态筛选与派发——迁移走八态状态机白名单，非法项禁用。",
+      subtitle: "全客户需求单的状态筛选与派发——迁移走三态白名单（submitted → in_progress → delivered，另 rejected 带理由），非法项禁用。",
       statusFilter: "状态",
       statusAll: "全部状态",
       statuses: {
-        submitted: "已提交",
-        evaluating: "评估中",
-        quoted: "已报价",
-        awaiting_confirm: "待确认",
-        building: "构建中",
-        delivery_acceptance: "交付验收",
+        submitted: "已收到",
+        in_progress: "处理中",
         delivered: "已交付",
         rejected: "已拒绝",
       },
@@ -722,8 +736,6 @@ const zh = {
       submit: "执行迁移",
       illegalSuffix: "非法",
       machineNote: "客户端只禁用非法项；服务端状态机是唯一裁决面（409 如实回显）。",
-      quotedPrereq:
-        "进入已报价需后台人工确认：本操作自动携带 confirmed_by_operator=true；报价金额经报价确认台录入。",
     },
     catalog: {
       title: "目录治理",
@@ -793,7 +805,21 @@ const zh = {
     errorTitle: "登录配置获取失败",
     errorHint: "请稍后重试；若持续失败请联系平台管理员。",
   },
-  footer: "© FindData · 柏讯 Wire · 寻数科技 wire 线",
+  // 页脚（wire-ux-consolidation 任务 1.1）：署名与标语措辞对齐官网
+  // fd-official-web 的 footer.org / footer.line；备案号常量在
+  // components/footerConstants.ts。
+  footer: {
+    org: "寻数科技 FindData Technology",
+    tagline: "服务 AI 时代的文本与数据基础设施与工具。",
+    github: "GitHub",
+    servicesLabel: "寻数产品线",
+    services: {
+      official: "官网",
+      base: "壹座",
+      lex: "识律",
+      more: "更多产品线",
+    },
+  },
 };
 
 export default zh;

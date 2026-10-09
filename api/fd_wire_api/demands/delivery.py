@@ -1,8 +1,8 @@
 """私有 scope 交付与授权转公开（wire-platform-v1 任务 6.6）。
 
 交付纪律：
-- ``delivery_acceptance→delivered`` 迁移成功后，交付默认进**客户私有
-  scope**（命名 ``demand-<demand_code>``，summary 含需求标题），指标逐个
+- ``in_progress→delivered`` 迁移成功后，交付默认进**客户私有
+  scope**（命名 ``demand-<demand_code>``，summary 含需求摘要），指标逐个
   grant 进 ``semantic_codes`` allow-list；
 - 建 scope 失败（scope API 未配置/不可达/拒绝）→ 如实落
   ``delivery_events``（scope_create_failed），需求单状态照常 ``delivered``，
@@ -126,19 +126,21 @@ def deliver_demand(
     indicators: Sequence[str] | None = None,
     source_dbs: Sequence[str] | None = None,
 ) -> Demand:
-    """交付动作：``delivery_acceptance→delivered`` 迁移 + 自动建私有 scope。
+    """交付动作：``in_progress→delivered`` 迁移 + 自动建私有 scope。
 
-    重试语义：``delivered`` 且 ``scope_status=pending`` 时再次调用只重试
-    建 scope（不再迁移）；其余状态 409。
+    wire-ux-consolidation 3.1 起，交付前置态自 delivery_acceptance（废除）
+    改为 in_progress——与三态白名单一致。重试语义不变：``delivered`` 且
+    ``scope_status=pending`` 时再次调用只重试建 scope（不再迁移）；
+    其余状态 409。
     """
     current = DemandStatus(demand.status)
-    if current is DemandStatus.delivery_acceptance:
+    if current is DemandStatus.in_progress:
         demand = service.apply_transition(
             db,
             demand,
             target=DemandStatus.delivered,
             by=by,
-            note=note or "客户验收确认，完成交付",
+            note=note or "完成交付",
         )
     elif not (
         current is DemandStatus.delivered
@@ -147,7 +149,7 @@ def deliver_demand(
         raise TransitionError(
             current,
             DemandStatus.delivered,
-            "交付动作仅允许从 delivery_acceptance 发起"
+            "交付动作仅允许从 in_progress 发起"
             "（delivered 且 scope 交付 pending 时可重试）",
         )
     return _create_customer_scope(

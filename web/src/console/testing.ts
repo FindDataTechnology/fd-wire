@@ -11,6 +11,7 @@ import type {
   Correction,
   CorrectionInput,
   CorrectionOp,
+  CustomerDemand,
   Dataset,
   DatasetColumn,
   DraftArtifact,
@@ -100,6 +101,11 @@ export interface ConsoleBackendOptions {
   failUploadDetail?: string;
   /** 配对令牌有效期秒数（默认 900 = 15 分钟）。 */
   pairingTokenTtlSeconds?: number;
+  /** 种子需求单（带 customer_id 的仅对同客户可见；wire-ux-consolidation 4.3）。 */
+  demands?: CustomerDemand[];
+  /** 强制 POST /api/v1/demands 返回该状态（如 422 校验回显）。 */
+  failDemandCreateStatus?: number;
+  failDemandCreateDetail?: string;
 }
 
 /** 安装假后端为 global fetch；返回调用记录与状态注入接口。 */
@@ -171,6 +177,13 @@ export function installConsoleBackend(
     }
   >();
   const syncs = new Map<string, SyncRecord[]>();
+  // ── 需求单假后端状态（我的需求 / 提交表单）──
+  const demandsStore = new Map<number, CustomerDemand>();
+  let nextDemandId = 1;
+  for (const demand of options.demands ?? []) {
+    demandsStore.set(demand.id, { ...demand });
+    nextDemandId = Math.max(nextDemandId, demand.id + 1);
+  }
   let nextUploadSeq = 1;
   let nextCorrectionId = 1;
   let nextTokenSeq = 1;
@@ -330,6 +343,71 @@ export function installConsoleBackend(
           },
         ),
       );
+    }
+
+    // ── 需求单客户面（wire-ux-consolidation 3.2/4.1/4.3：POST/GET
+    //    /api/v1/demands，Bearer 身份隔离——种子带 customer_id 的仅同客户可见）──
+    if (path === "/api/v1/demands" && method === "GET") {
+      const mine = [...demandsStore.values()]
+        .filter((d) => d.customer_id === customerId)
+        .sort((a, b) => b.id - a.id);
+      return Promise.resolve(jsonResponse(mine));
+    }
+    if (path === "/api/v1/demands" && method === "POST") {
+      if (options.failDemandCreateStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failDemandCreateDetail ??
+                `demand create ${options.failDemandCreateStatus}`,
+            },
+            options.failDemandCreateStatus,
+          ),
+        );
+      }
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        description?: string;
+        contact_email?: string;
+        company?: string;
+        indicator_code?: string;
+      };
+      if (!payload.description || !payload.description.trim()) {
+        return Promise.resolve(
+          jsonResponse({ detail: "需求描述不能为空（或全为空白字符）" }, 422),
+        );
+      }
+      if (!payload.contact_email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(payload.contact_email)) {
+        return Promise.resolve(
+          jsonResponse({ detail: "联系邮箱格式不合法（应为 name@domain.tld 形态）" }, 422),
+        );
+      }
+      const id = nextDemandId++;
+      const nowIso = "2026-10-10T08:00:00";
+      const oneLine = payload.description.replace(/\s+/g, " ").trim();
+      const created: CustomerDemand = {
+        id,
+        code: `DE-20261010-${String(id).padStart(2, "0")}`,
+        customer_id: customerId,
+        title: oneLine.slice(0, 200),
+        intent: payload.description,
+        contact_email: payload.contact_email,
+        company: payload.company ?? null,
+        status: "submitted",
+        status_history: [
+          {
+            status: "submitted",
+            at: "2026-10-10T08:00:00+00:00",
+            by: `customer:${customerId}`,
+            note: "需求单提交" + (payload.indicator_code ? `（目录锚点：${payload.indicator_code}）` : ""),
+          },
+        ],
+        rejection_reason: null,
+        created_at: nowIso,
+        updated_at: nowIso,
+      };
+      demandsStore.set(id, created);
+      return Promise.resolve(jsonResponse(created, 201));
     }
 
     /** 本客户可见性：带 customer_id 的种子仅同客户可见（跨企业 404）。 */

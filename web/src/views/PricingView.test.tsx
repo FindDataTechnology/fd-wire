@@ -93,19 +93,27 @@ describe("PricingView（定价四卡 · portal-pricing spec）", () => {
     }
   });
 
-  it("第四张静态「自定义」询价卡：无价格数字，CTA=联系开通（mailto）", async () => {
+  it("第四张「自定义」卡：主 CTA 站内跳需求单表单，mailto 降次级（任务 4.4）", async () => {
     render(<PricingView />);
 
     const custom = await screen.findByTestId("tier-custom");
     expect(within(custom).getByText("自定义")).toBeTruthy();
     expect(within(custom).getByText("询价")).toBeTruthy();
-    // 全部四卡 CTA 均为 mailto 占位
+    // 主 CTA：站内路由（不唤起邮件客户端）
+    const cta = screen.getByTestId("tier-custom-cta");
+    expect(cta.getAttribute("href")).toBe("#/console/demands/new");
+    expect(cta.textContent).not.toMatch(/mailto/);
+    expect(cta.className).not.toContain("text-xs");
+    // mailto 降为次级小链接保留
+    const mailto = screen.getByTestId("tier-custom-mailto");
+    expect(mailto.getAttribute("href")).toMatch(/^mailto:/);
+    // 三张公开卡 CTA 仍为 mailto 联系开通（共 3 处，自定义卡不再计入）
     const ctas = screen.getAllByText("联系开通");
-    expect(ctas.length).toBe(4);
+    expect(ctas.length).toBe(3);
     for (const cta of ctas) {
       expect(cta.closest("a")?.getAttribute("href")).toMatch(/^mailto:/);
     }
-    // 副标题 1 处 + 三张公开卡的功能行各 1 处（自定义询价卡无该行）
+    // 副标题 1 处 + 三张公开卡的功能行各 1 处（自定义卡无该行）
     const stopAtQuota = screen.getAllByText(/用完即停、次月恢复/);
     expect(stopAtQuota.length).toBe(4);
     expect(screen.queryByText(/阶梯单价/)).toBeNull();

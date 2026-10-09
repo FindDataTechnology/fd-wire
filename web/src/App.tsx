@@ -1,7 +1,9 @@
 // App shell: top nav (site / pricing / docs / catalog / console, zh–en toggle)
 // over the views. Hash routing, deliberately no router dependency — parametrized
 // routes are parsed by parseHash below (catalog list, catalog detail, console
-// tabs with ?c=<conversationId>, demand placeholder).
+// tabs, demand placeholder).
+// 页脚分发（wire-ux-consolidation 任务 1.2）：门户视图挂全量页脚，
+// #/console/* 挂紧凑页脚，#/admin 不渲染页脚。
 // 登录件（wire-self-serve-launch 4.4/5.2）：
 // - Logto 回调走真实路径 /console/callback（App 挂载时检测 pathname 进入
 //   CallbackView，完成后回 hash 路由）；
@@ -21,6 +23,8 @@ import { parseAdminSection, type AdminSection } from "./admin/AdminLayout";
 import { CallbackView } from "./console/CallbackView";
 import { hasAdminRole, loadSession } from "./console/auth";
 import type { ConsoleTab } from "./console/ConsoleLayout";
+import { ConsoleFooter } from "./components/ConsoleFooter";
+import { SiteFooter } from "./components/SiteFooter";
 import { switchLanguage, type Language } from "./i18n";
 
 export type Route =
@@ -29,12 +33,12 @@ export type Route =
   | { name: "docs" }
   | { name: "catalog" }
   | { name: "catalogDetail"; id: string }
-  | { name: "console"; tab: ConsoleTab; conversationId: number | null }
+  | { name: "console"; tab: ConsoleTab }
   | { name: "demandNew"; indicator: string | null }
   | { name: "admin"; section: AdminSection }
   | { name: "login" };
 
-/** 控制台二级段 → tab（未知段回落默认 chat）。 */
+/** 控制台二级段 → tab（未知段回落默认 datasets）。 */
 function parseConsoleTab(segment: string | undefined): ConsoleTab {
   if (
     segment === "chat" ||
@@ -46,7 +50,7 @@ function parseConsoleTab(segment: string | undefined): ConsoleTab {
   ) {
     return segment;
   }
-  return "chat";
+  return "datasets";
 }
 
 /** "#/catalog/abc?indicator=x" → 结构化路由（未知路径回落首页）。 */
@@ -63,14 +67,9 @@ export function parseHash(rawHash: string): Route {
     if (second === "demands" && third === "new") {
       return { name: "demandNew", indicator: query.get("indicator") };
     }
-    const tab = parseConsoleTab(second);
-    // ?c=<id> 选中会话（非法值回落未选中新会话态）。
-    const rawConversation = Number(query.get("c"));
-    const conversationId =
-      Number.isInteger(rawConversation) && rawConversation > 0
-        ? rawConversation
-        : null;
-    return { name: "console", tab, conversationId };
+    // 旧深链 ?c=<id> 仅服务于已退役的对话页：查询参数被忽略，仍落对应 tab
+    //（chat 落壹座引导卡），路由兼容。
+    return { name: "console", tab: parseConsoleTab(second) };
   }
   if (head === "admin") {
     // #/admin/customers|ledger|demands|catalog|usage（未知段回落客户页）
@@ -109,9 +108,7 @@ function renderRoute(route: Route) {
     case "catalogDetail":
       return <CatalogDetailView id={route.id} />;
     case "console":
-      return (
-        <ConsoleView tab={route.tab} conversationId={route.conversationId} />
-      );
+      return <ConsoleView tab={route.tab} />;
     case "demandNew":
       return <DemandNewView indicator={route.indicator} />;
     case "admin":
@@ -136,6 +133,15 @@ export function App() {
   const route = parseHash(hash);
   // 控制台/内部后台是工作台布局（自带侧栏与宽内容区），主容器放宽。
   const wideMain = route.name === "console" || route.name === "admin";
+  // 页脚分发：门户视图（含登录页）全量；#/console/*（含需求单占位子页）
+  // 紧凑；#/admin 不渲染。
+  const footer =
+    route.name === "admin" ? null : route.name === "console" ||
+      route.name === "demandNew" ? (
+      <ConsoleFooter />
+    ) : (
+      <SiteFooter />
+    );
   // Logto 回调：真实路径 /console/callback 优先于 hash 路由（完成后回 hash）。
   const callbackActive = isConsoleCallbackPath(window.location.pathname);
   // admin 导航门禁：登录会话含 wire-admin 角色才渲染「内部后台」入口
@@ -215,12 +221,7 @@ export function App() {
       >
         {renderRoute(route)}
       </main>
-      <footer className="max-w-5xl mx-auto px-4 py-8 text-xs text-slate-400">
-        {t("footer")} ·{" "}
-        <a className="underline" href="https://wire.finddatatech.cloud">
-          wire.finddatatech.cloud
-        </a>
-      </footer>
+      {footer}
     </div>
   );
 }

@@ -671,7 +671,6 @@ describe("导航与路由接入（任务 3.1）", () => {
     expect(parseHash("#/console/datasets")).toEqual({
       name: "console",
       tab: "datasets",
-      conversationId: null,
     });
     // 模块文案全键化（中英键集合一致性由 i18nKeys.test.ts 全量守护）
     expect(i18n.t("console.nav.datasets")).toBe("我的数据");

@@ -1,5 +1,9 @@
-// 控制台布局：左侧栏（对话构建 / 产物 / 我的数据 / 需求单占位 / 用量）+ 顶栏
-// （登录客户标识 + 当前档位 + 登出）+ 内容区。
+// 控制台布局：左侧栏（AI 构建 / 产物 / 我的数据 / 我的需求 / 用量）+ 顶栏
+//（登录客户标识 + 当前档位 + 登出）+ 内容区。
+// chat tab 显示名「AI 构建」，id 保持 chat 不变（路由兼容，任务 2.2）；
+// 页面为壹座试用引导卡（ChatPage）。
+// demands tab 已转正（wire-ux-consolidation 任务 4.3）：「我的需求」只读列表
+//（MyDemandsPage），不再是「上线中」占位。
 // 身份来自登录会话（auth.ts，Authorization: Bearer）；X-Customer-Id 可编辑的
 // 开发占位顶栏已退场（wire-self-serve-launch 任务 4.4）。
 import { type ReactNode } from "react";
@@ -30,7 +34,6 @@ export const CONSOLE_TABS: ReadonlyArray<{
     id: "demands",
     href: "#/console/demands",
     labelKey: "console.nav.demands",
-    placeholder: true,
   },
   // 用量页已正式化（usage-transparency 6.2）：不再是「上线中」占位。
   { id: "usage", href: "#/console/usage", labelKey: "console.nav.usage" },
@@ -49,7 +52,7 @@ export function ConsolePlaceholder({
   return (
     <div
       data-testid="console-placeholder"
-      className="max-w-xl rounded-lg border border-amber-200 bg-amber-50/50 p-8"
+      className="mx-auto max-w-xl rounded-lg border border-amber-200 bg-amber-50/50 p-8"
     >
       <div className="flex items-center gap-3">
         <h1 className="text-xl font-semibold">{t(titleKey)}</h1>

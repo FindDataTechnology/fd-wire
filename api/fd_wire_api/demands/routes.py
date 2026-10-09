@@ -2,22 +2,22 @@
 
 客户侧（Bearer ID token → logto_sub → Customer，wire-self-serve-launch 4.5
 身份切换；X-Customer-Id 占位头退位不再接受，缺失/未映射 401）：
-- ``POST /api/v1/demands``            提交（可带目录预填 linked_indicators）
+- ``POST /api/v1/demands``            提交意向单（四入参：需求描述/联系邮箱/
+                                      公司名/目录锚点，wire-ux-consolidation 3.2；
+                                      新单 submitted 时异步邮件通知运营邮箱）
 - ``GET  /api/v1/demands``            本企业列表（含当前状态+时间线）
-- ``GET  /api/v1/demands/{id}``       详情（非本企业一律 404；只含客户可见字段，
-                                      评估只给概要 evaluation_summary，报价只给
-                                      金额/说明/有效期，绝不携带 operator 等内部信息）
+- ``GET  /api/v1/demands/{id}``       详情（非本企业一律 404；只含客户可见字段）
 
 内部侧（``X-Internal-Token`` 与 ``FD_WIRE_INTERNAL_TOKEN`` 比对）：
-- ``POST /internal/demands/{id}/transition``  目标状态+note（校验白名单与前置；
-                                      迁移到 evaluating 成功后自动跑 AI 预评估）
-- ``POST /internal/demands/{id}/evaluation``  写 AI 预评估结论概要（可带内部 detail）
-- ``POST /internal/demands/{id}/quote``       报价确认台：confirmed_by_operator
-                                      与 operator 缺一 409；落库微元金额+有效期，
-                                      quote_history append-only，迁移 quoted
+- ``POST /internal/demands/{id}/transition``  目标状态+note（三态白名单裁决，
+                                      非法 409；delivered 后自动建私有 scope）
+- ``POST /internal/demands/{id}/evaluation``  旧八态工作流遗留：对现行状态
+                                      一律 409（评估字段随旧单保留可查）
+- ``POST /internal/demands/{id}/quote``       旧八态工作流遗留：报价不进三态
+                                      状态机，一律 409（quote 字段保留可查）
 
-另见 admin_routes.py：``POST /internal/demands/{id}/evaluate``（AI 预评估独立
-触发端点）与 ``GET /internal/demands/{id}``（确认台内部完整视图）。
+另见 admin_routes.py：``GET /internal/demands/{id}``（确认台内部完整视图）；
+pipeline_routes.py：流水线事实 / gate 结果 / 交付 / 授权转公开端点。
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from . import delivery as delivery_service
-from . import evaluation, service
+from . import notifications, service
 from .db import get_db
 from ..console.auth import require_console_customer_id
 from ..delivery.scope_client import ScopeClient, scope_client_dep
@@ -84,8 +84,9 @@ def submit_demand(
     customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> DemandOut:
-    """提交需求单：初始 submitted，可携带目录导流的 indicator code 列表。"""
+    """提交意向单：初始 submitted；新单异步邮件通知运营（失败仅留痕）。"""
     demand = service.create_demand(db, customer_id=customer_id, payload=payload)
+    notifications.notify_new_demand(demand)  # 解耦：通知失败不影响提交结果
     return DemandOut.model_validate(demand)
 
 
@@ -132,10 +133,8 @@ def transition_demand(
     db: Session = Depends(get_db),
     scope_client: ScopeClient | None = Depends(scope_client_dep),
 ) -> DemandInternalOut:
-    """状态迁移：校验合法迁移表与前置条件（非法 409），历史只追加。
+    """状态迁移：三态白名单裁决（非法 409 如实回显），历史只追加。
 
-    迁移到 ``evaluating`` 成功后自动跑一次 AI 预评估（evaluation.py）：
-    LLM 不可用/解析失败时如实落 doubtful 兜底，绝不因评估失败打断迁移。
     迁移到 ``delivered`` 成功后自动发起客户私有 scope 交付（任务 6.6）：
     scope 面失败只落 ``scope_pending`` 留档，绝不打断迁移响应。
     """
@@ -148,11 +147,9 @@ def transition_demand(
             by=payload.by,
             note=payload.note,
             reason=payload.reason,
-            confirmed_by_operator=payload.confirmed_by_operator,
         )
     except TransitionError as exc:
         raise _conflict(exc) from exc
-    demand = evaluation.maybe_auto_evaluate(db, demand)
     if payload.target_status is DemandStatus.delivered:
         demand = delivery_service.maybe_auto_deliver(db, demand, scope_client=scope_client)
     return DemandInternalOut.model_validate(demand)
@@ -168,7 +165,7 @@ def write_evaluation(
     payload: EvaluationIn,
     db: Session = Depends(get_db),
 ) -> DemandInternalOut:
-    """写 AI 预评估结论概要（submitted 下自动接单进入 evaluating）。"""
+    """写 AI 预评估结论概要（旧八态工作流遗留端点：现行状态一律 409）。"""
     demand = _demand_or_404(db, demand_id)
     try:
         demand = service.write_evaluation(
@@ -193,7 +190,12 @@ def submit_quote(
     payload: QuoteIn,
     db: Session = Depends(get_db),
 ) -> DemandInternalOut:
-    """报价确认台：confirmed_by_operator 与 operator 缺一 409，绝不进 quoted。"""
+    """报价端点（旧八态工作流遗留）：报价不进三态状态机，一律 409。
+
+    硬前置（confirmed_by_operator 与 operator 缺一 409）维持原语义；
+    「须先处于 evaluating」的前置在现行单上永不满足——存量 quote 字段
+    随旧单保留可查（设计 D4）。
+    """
     demand = _demand_or_404(db, demand_id)
     try:
         demand = service.submit_quote(

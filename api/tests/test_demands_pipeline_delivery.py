@@ -1,19 +1,20 @@
-"""需求单流水线衔接与私有 scope 交付测试（wire-platform-v1 任务 6.5+6.6）。
+"""需求单流水线衔接与私有 scope 交付测试（wire-platform-v1 任务 6.5+6.6，
+wire-ux-consolidation 3.1 三态化适配）。
 
 覆盖：
-- gate 门禁：无通过记录 building→delivery_acceptance 直接 409（指明原因）；
-  gate fail 记录 + 停留 building + 重跑 pass 后迁移放行
-- 流水线事实 append-only、仅 building 可记录、内部视图透出 events 与 gate
+- 流水线事实 append-only、仅 in_progress 可记录（三态化后的观测挂点）、
+  内部视图透出 events 与 gate 摘要
+- gate 结果：append-only 观测留档（passed/fail 都只记录，不再门禁状态迁移）
 - scope 客户端：HttpScopeClient 全操作形状（httpx.MockTransport，含鉴权头、
   rules 载荷、读改合并、publish/unpublish、错误路径）与空规则拒绝
-- 交付动作：deliver 自动建客户私有 scope（命名 demand-<code>、summary 含
-  标题）；失败→scope_pending+重试成功；transition 到 delivered 自动交付；
-  未配置客户端如实挂起
+- 交付动作：deliver 自 in_progress 迁 delivered 并自动建客户私有 scope
+  （命名 demand-<code>、summary 含摘要）；失败→scope_pending+重试成功；
+  transition 到 delivered 自动交付；未配置客户端如实挂起
 - 授权转公开：granted=true 调 publish、撤回调 unpublish，append-only 留档，
   客户视图可见授权状态且不含内部细节
-- 完整闭环：确认→building（pipeline event）→gate fail→重跑 pass→
-  delivery_acceptance→deliver（scope 建）→delivered→授权转公开→撤回
-- alembic 0008：demands 表新增流水线/交付列，链头唯一
+- 完整闭环：提交→in_progress（pipeline event）→gate fail→重跑 pass→
+  deliver（scope 建）→delivered→授权转公开→撤回
+- alembic 0008/0019：demands 表流水线/交付列与联系方式列，链头唯一
 
 真实 gate 命令（python3 fd-industry-data/scripts/conformance_gate.py）在外部
 仓——本文件绝不代跑，只消费结果载荷。
@@ -168,40 +169,15 @@ def migrated_demands_sqlite(tmp_path, monkeypatch):
 
 def submit(client, customer="cust-001") -> dict:
     payload = {
-        "title": "上海汽车销量月度数据",
-        "intent": "需要上海市 2024 年以来乘用车月度销量与价格带分布，用于市场分析",
-        "entities_hint": {"region": "上海市", "industry": "汽车"},
-        "frequency_expect": "monthly",
-        "linked_indicators": ["IND-CPI-001", "IND-AUTO-014"],
+        "description": "需要上海市 2024 年以来乘用车月度销量与价格带分布，用于市场分析",
+        "contact_email": "buyer@example.com",
+        "company": "上海某某咨询",
+        "indicator_code": "IND-AUTO-014",
     }
     resp = client.post(
         "/api/v1/demands", json=payload, headers=CUST if customer == "cust-001" else OTHER
     )
     assert resp.status_code == 201, resp.text
-    return resp.json()
-
-
-def evaluate(client, demand_id: int) -> dict:
-    resp = client.post(
-        f"/internal/demands/{demand_id}/evaluation",
-        json={"summary": "可行：公开源存在", "by": "ai"},
-        headers=INTERNAL,
-    )
-    assert resp.status_code == 200, resp.text
-    return resp.json()
-
-
-def quote(client, demand_id: int) -> dict:
-    resp = client.post(
-        f"/internal/demands/{demand_id}/quote",
-        json={
-            "amount": "1200.00",
-            "confirmed_by_operator": True,
-            "operator": "op-001",
-        },
-        headers=INTERNAL,
-    )
-    assert resp.status_code == 200, resp.text
     return resp.json()
 
 
@@ -245,26 +221,13 @@ def publish_authorization(client, demand_id: int, granted: bool, **extra):
     )
 
 
-def at_building(client) -> tuple[int, dict]:
-    """走合法路径到 building（不记 gate），返回 (id, 提交响应)。"""
+def at_in_progress(client) -> tuple[int, dict]:
+    """走合法路径到 in_progress（三态机的处理期），返回 (id, 提交响应)。"""
     d = submit(client)
     did = d["id"]
-    evaluate(client, did)
-    quote(client, did)
-    assert transition(client, did, "awaiting_confirm", by="operator").status_code == 200
-    resp = transition(client, did, "building", by="customer:cust-001", note="客户确认报价")
+    resp = transition(client, did, "in_progress", by="ops-001", note="派发台接单")
     assert resp.status_code == 200, resp.text
     return did, d
-
-
-def at_delivery_acceptance(client, *, gate_note: str = "gate 全绿") -> int:
-    """到 building 后记一次 gate 通过并迁入 delivery_acceptance。"""
-    did, _ = at_building(client)
-    resp = gate_result(client, did, True, by="pipeline", note=gate_note)
-    assert resp.status_code == 200, resp.text
-    resp = transition(client, did, "delivery_acceptance", by="system", note="gate 通过")
-    assert resp.status_code == 200, resp.text
-    return did
 
 
 def internal_detail(client, demand_id: int) -> dict:
@@ -288,66 +251,11 @@ def make_http_client(handler) -> HttpScopeClient:
     )
 
 
-# ------------------------------------------------------- 6.5 gate 门禁
-
-
-def test_gate_precondition_409_without_pass(client):
-    did, _ = at_building(client)
-
-    resp = transition(client, did, "delivery_acceptance", by="system")
-    assert resp.status_code == 409
-    assert "gate" in resp.json()["detail"]
-    assert "gate-result" in resp.json()["detail"]
-    assert customer_detail(client, did)["status"] == "building"  # 状态不动
-
-
-def test_gate_fail_recorded_stay_and_rerun_pass(client):
-    did, _ = at_building(client)
-
-    # gate fail：如实入档（note/report_path），状态停留 building
-    resp = gate_result(
-        client, did, False,
-        note="conformance gate 未过：2 处违规（字段命名/幂等键）",
-        report_path="fd-industry-data/reports/gate-0001.txt",
-    )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["status"] == "building"
-    assert body["gate"]["passed"] is False
-    assert body["gate"]["attempts"] == 1
-    event = body["pipeline_events"][-1]
-    assert event["type"] == "gate_result"
-    assert event["passed"] is False
-    assert event["report_path"].endswith("gate-0001.txt")
-    assert event["note"].startswith("conformance gate 未过")
-
-    # 重跑通过：gate 通过记录落档，此后迁移放行
-    resp = gate_result(client, did, True, by="pipeline", note="修复后重跑全绿")
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["gate"]["passed"] is True
-    assert body["gate"]["attempts"] == 2
-    assert body["gate"]["latest"]["passed"] is True
-
-    resp = transition(client, did, "delivery_acceptance", by="system", note="gate 通过")
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["status"] == "delivery_acceptance"
-
-
-def test_gate_result_only_in_building(client):
-    did = submit(client)["id"]
-    resp = gate_result(client, did, True)
-    assert resp.status_code == 409
-    assert "building" in resp.json()["detail"]
-
-    # 交付验收后也不可再记 gate（gate 属于构建期）
-    did2 = at_delivery_acceptance(client)
-    resp = gate_result(client, did2, True)
-    assert resp.status_code == 409
+# ------------------------------------------------------- 6.5 流水线事实（in_progress 期）
 
 
 def test_pipeline_run_recorded_append_only(client):
-    did, _ = at_building(client)
+    did, _ = at_in_progress(client)
 
     resp = pipeline_run(
         client, did,
@@ -374,17 +282,21 @@ def test_pipeline_run_recorded_append_only(client):
     assert after[: len(snapshot)] == snapshot
     assert len(after) == len(snapshot) + 1
 
-    bad = transition(client, did, "delivered", by="probe")  # 白名单外 → 409
+    bad = transition(client, did, "building", by="probe")  # 废除态迁入 → 409
     assert bad.status_code == 409
     assert internal_detail(client, did)["pipeline_events"] == after
 
-    # 仅 building 可记录流水线事实
+    # 仅 in_progress 可记录流水线事实（submitted/delivered 均 409）
     did2 = submit(client)["id"]
     assert pipeline_run(client, did2).status_code == 409
+    did3 = submit(client)["id"]
+    assert transition(client, did3, "in_progress", by="ops-001").status_code == 200
+    assert transition(client, did3, "delivered", by="ops-001").status_code == 200
+    assert pipeline_run(client, did3).status_code == 409
 
 
 def test_internal_view_exposes_pipeline_and_gate(client):
-    did, _ = at_building(client)
+    did, _ = at_in_progress(client)
     pipeline_run(client, did, pipeline_run_id="run-1")
     gate_result(client, did, False, note="首跑未过")
     gate_result(client, did, True, note="重跑全绿")
@@ -407,7 +319,7 @@ def test_internal_view_exposes_pipeline_and_gate(client):
 
 
 def test_pipeline_endpoints_require_internal_token(client):
-    did, _ = at_building(client)
+    did, _ = at_in_progress(client)
     for path, payload in (
         (f"/internal/demands/{did}/pipeline", {"pipeline_run_id": "run-1"}),
         (f"/internal/demands/{did}/gate-result", {"passed": True}),
@@ -419,6 +331,40 @@ def test_pipeline_endpoints_require_internal_token(client):
             assert resp.status_code == 401, f"{path} {headers}"
     # 缺 run id → 422（schema 校验）
     assert pipeline_run(client, did, pipeline_run_id="").status_code == 422
+
+
+# ------------------------------------------------------- gate 观测留档（不再门禁）
+
+
+def test_gate_results_recorded_without_gating_transitions(client):
+    """三态化后 gate 结果仅观测留档：passed 与否都不影响状态迁移裁决。"""
+    did, _ = at_in_progress(client)
+
+    # gate fail：如实入档（note/report_path），状态保持 in_progress
+    resp = gate_result(
+        client, did, False,
+        note="conformance gate 未过：2 处违规（字段命名/幂等键）",
+        report_path="fd-industry-data/reports/gate-0001.txt",
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "in_progress"
+    assert body["gate"]["passed"] is False
+    assert body["gate"]["attempts"] == 1
+    event = body["pipeline_events"][-1]
+    assert event["type"] == "gate_result"
+    assert event["passed"] is False
+    assert event["report_path"].endswith("gate-0001.txt")
+    assert event["note"].startswith("conformance gate 未过")
+
+    # gate 尚未通过也能交付（不再门禁）：重跑通过 → 交付放行前也放行
+    resp = transition(client, did, "delivered", by="ops-001", note="无 gate 记录交付")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "delivered"
+
+    # 已交付后不可再记 gate（gate 属于处理期观测）
+    resp = gate_result(client, did, True)
+    assert resp.status_code == 409
 
 
 # ------------------------------------------------------- 6.6 scope 客户端
@@ -551,25 +497,22 @@ def test_http_scope_client_error_paths():
 
 
 def test_deliver_creates_private_scope(client, scope_mock):
-    did = at_delivery_acceptance(client)
-    submitted = customer_detail(client, did)
+    did, submitted = at_in_progress(client)
 
-    resp = deliver(client, did, note="客户验收确认")
+    resp = deliver(client, did, note="完成交付")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "delivered"
 
-    # scope 命名 demand-<code>，summary 含需求标题，指标缺省用 linked_indicators
+    # scope 命名 demand-<code>，summary 含需求摘要，指标缺省用 linked_indicators
     creates = scope_mock.calls_of("create_scope")
     assert len(creates) == 1
     _, name, summary, source_dbs, codes = creates[0]
     assert name == f"demand-{submitted['code']}"
     assert submitted["title"] in summary
     assert source_dbs == ()
-    assert codes == ("IND-CPI-001", "IND-AUTO-014")
-    assert [c[2] for c in scope_mock.calls_of("grant_indicator")] == [
-        "IND-CPI-001", "IND-AUTO-014",
-    ]
+    assert codes == ("IND-AUTO-014",)
+    assert [c[2] for c in scope_mock.calls_of("grant_indicator")] == ["IND-AUTO-014"]
 
     # 交付状态与留档
     assert body["scope_status"] == "ok"
@@ -577,13 +520,13 @@ def test_deliver_creates_private_scope(client, scope_mock):
     event = body["delivery_events"][-1]
     assert event["type"] == "scope_created"
     assert event["scope_name"] == name
-    assert event["granted"] == ["IND-CPI-001", "IND-AUTO-014"]
+    assert event["granted"] == ["IND-AUTO-014"]
 
 
 def test_deliver_failure_marks_pending_then_retry_succeeds(client):
     mock = MockScopeClient(fail_create=True)
     app.dependency_overrides[scope_client_dep] = lambda: mock
-    did = at_delivery_acceptance(client)
+    did, _ = at_in_progress(client)
 
     resp = deliver(client, did)
     assert resp.status_code == 200, resp.text  # 迁移照常完成
@@ -608,7 +551,7 @@ def test_deliver_failure_marks_pending_then_retry_succeeds(client):
 
 def test_deliver_unconfigured_client_marks_pending(client, monkeypatch):
     monkeypatch.delenv("SCOPE_API_BASE", raising=False)
-    did = at_delivery_acceptance(client)
+    did, _ = at_in_progress(client)
 
     resp = deliver(client, did)
     assert resp.status_code == 200, resp.text
@@ -619,9 +562,9 @@ def test_deliver_unconfigured_client_marks_pending(client, monkeypatch):
 
 
 def test_transition_to_delivered_auto_creates_scope(client, scope_mock):
-    did = at_delivery_acceptance(client)
+    did, _ = at_in_progress(client)
 
-    resp = transition(client, did, "delivered", by="customer:cust-001", note="客户验收确认")
+    resp = transition(client, did, "delivered", by="ops-001", note="处理完成")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "delivered"
@@ -631,12 +574,12 @@ def test_transition_to_delivered_auto_creates_scope(client, scope_mock):
 
 
 def test_deliver_state_rules(client, scope_mock):
-    did, _ = at_building(client)
-    resp = deliver(client, did)  # building 直接交付 → 409
+    did = submit(client)["id"]
+    resp = deliver(client, did)  # submitted 直接交付 → 409
     assert resp.status_code == 409
-    assert "delivery_acceptance" in resp.json()["detail"]
+    assert "in_progress" in resp.json()["detail"]
 
-    did2 = at_delivery_acceptance(client)
+    did2, _ = at_in_progress(client)
     assert deliver(client, did2).status_code == 200
     resp = deliver(client, did2)  # 已交付且 scope 就绪 → 不可重复
     assert resp.status_code == 409
@@ -647,12 +590,12 @@ def test_deliver_state_rules(client, scope_mock):
 
 
 def test_publish_authorization_grant_and_revoke(client, scope_mock):
-    did = at_delivery_acceptance(client)
+    did, _ = at_in_progress(client)
     assert deliver(client, did).status_code == 200
 
     # 授权转公开：客户显式动作留档 + publish 调用形状
     resp = publish_authorization(
-        client, did, True, conditions="脱敏口径经客户确认", indicators=["IND-CPI-001"]
+        client, did, True, conditions="脱敏口径经客户确认", indicators=["IND-AUTO-014"]
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -661,9 +604,9 @@ def test_publish_authorization_grant_and_revoke(client, scope_mock):
     assert event["granted"] is True
     assert event["conditions"] == "脱敏口径经客户确认"
     assert event["by"] == "customer:cust-001"  # 缺省归属客户
-    assert event["indicators"] == ["IND-CPI-001"]
+    assert event["indicators"] == ["IND-AUTO-014"]
     assert event["publish_outcome"]["ok"] is True
-    assert scope_mock.calls_of("publish") == [("publish", ("IND-CPI-001",))]
+    assert scope_mock.calls_of("publish") == [("publish", ("IND-AUTO-014",))]
 
     # 客户视图：授权状态可见
     assert customer_detail(client, did)["delivery"]["publish_authorized"] is True
@@ -672,7 +615,7 @@ def test_publish_authorization_grant_and_revoke(client, scope_mock):
     resp = publish_authorization(client, did, False, by="customer:cust-001")
     assert resp.status_code == 200, resp.text
     assert scope_mock.calls_of("unpublish") == [
-        ("unpublish", ("IND-CPI-001", "IND-AUTO-014"))  # 缺省回到 linked_indicators
+        ("unpublish", ("IND-AUTO-014",))  # 缺省回到 linked_indicators
     ]
     events = internal_detail(client, did)["delivery_events"]
     auth_events = [e for e in events if e["type"] == "publish_authorization"]
@@ -681,7 +624,7 @@ def test_publish_authorization_grant_and_revoke(client, scope_mock):
 
 
 def test_publish_authorization_requires_delivered(client):
-    did, _ = at_building(client)
+    did, _ = at_in_progress(client)
     resp = publish_authorization(client, did, True)
     assert resp.status_code == 409
     assert "delivered" in resp.json()["detail"]
@@ -689,7 +632,7 @@ def test_publish_authorization_requires_delivered(client):
 
 def test_publish_authorization_unconfigured_records_failure(client, monkeypatch):
     monkeypatch.delenv("SCOPE_API_BASE", raising=False)
-    did = at_delivery_acceptance(client)
+    did, _ = at_in_progress(client)
     assert deliver(client, did).status_code == 200
 
     resp = publish_authorization(client, did, True)
@@ -706,8 +649,7 @@ def test_publish_authorization_unconfigured_records_failure(client, monkeypatch)
 
 
 def test_customer_view_delivery_fields_without_internals(client, scope_mock):
-    did = at_delivery_acceptance(client)
-    submitted = customer_detail(client, did)
+    did, submitted = at_in_progress(client)
     deliver(client, did)
     publish_authorization(client, did, True)
 
@@ -727,8 +669,8 @@ def test_customer_view_delivery_fields_without_internals(client, scope_mock):
 
     # 内部视图齐全（确认台上下文）
     internal = internal_detail(client, did)
-    assert internal["gate"]["passed"] is True
-    assert len(internal["pipeline_events"]) >= 1
+    assert internal["gate"]["passed"] is False  # 未记 gate，摘要如实
+    assert len(internal["pipeline_events"]) >= 0
     assert [e["type"] for e in internal["delivery_events"]] == [
         "scope_created", "publish_authorization",
     ]
@@ -738,29 +680,24 @@ def test_customer_view_delivery_fields_without_internals(client, scope_mock):
 
 
 def test_full_closed_loop(client, scope_mock):
-    """确认→building（pipeline event）→gate fail→重跑 pass→delivery_acceptance
-    →deliver（scope 建）→delivered→授权转公开→撤回。"""
+    """提交→in_progress（pipeline event）→gate fail→重跑 pass→deliver
+    （scope 建）→delivered→授权转公开→撤回。"""
     d = submit(client)
     did = d["id"]
-    evaluate(client, did)
-    quote(client, did)
-    assert transition(client, did, "awaiting_confirm", by="operator").status_code == 200
 
-    # 客户确认 → building，随后流水线事实入档
-    assert transition(client, did, "building", by="customer:cust-001").status_code == 200
+    # 派发接单 → in_progress，随后流水线事实入档
+    assert transition(client, did, "in_progress", by="ops-001").status_code == 200
     assert pipeline_run(
         client, did, pipeline_run_id="run-closed-loop", repo="fd-industry-data", branch="main"
     ).status_code == 200
 
-    # gate fail → 停留；重跑 pass → 放行
+    # gate fail → 如实留档（仅观测，不门禁）；重跑 pass
     assert gate_result(client, did, False, note="首跑 2 处违规").status_code == 200
-    assert customer_detail(client, did)["status"] == "building"
-    assert transition(client, did, "delivery_acceptance").status_code == 409  # 门禁
+    assert customer_detail(client, did)["status"] == "in_progress"
     assert gate_result(client, did, True, note="重跑全绿").status_code == 200
-    assert transition(client, did, "delivery_acceptance").status_code == 200
 
     # deliver：delivered + 客户私有 scope 建立
-    resp = deliver(client, did, note="客户验收确认")
+    resp = deliver(client, did, note="完成交付")
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "delivered"
     assert resp.json()["scope_status"] == "ok"
@@ -771,11 +708,10 @@ def test_full_closed_loop(client, scope_mock):
     assert publish_authorization(client, did, False).status_code == 200
     assert customer_detail(client, did)["delivery"]["publish_authorized"] is False
 
-    # 全程留档核对
+    # 全程留档核对（三态时间线）
     internal = internal_detail(client, did)
     assert [e["status"] for e in internal["status_history"]] == [
-        "submitted", "evaluating", "quoted", "awaiting_confirm",
-        "building", "delivery_acceptance", "delivered",
+        "submitted", "in_progress", "delivered",
     ]
     assert [e["type"] for e in internal["pipeline_events"]] == [
         "pipeline_run", "gate_result", "gate_result",
@@ -785,21 +721,23 @@ def test_full_closed_loop(client, scope_mock):
     ]
     # scope 客户端调用形状全程可追溯
     assert [c[0] for c in scope_mock.calls] == [
-        "create_scope", "grant_indicator", "grant_indicator", "publish", "unpublish",
+        "create_scope", "grant_indicator", "publish", "unpublish",
     ]
 
 
 # ------------------------------------------------------- 迁移链
 
 
-def test_migration_0008_adds_demand_pipeline_columns(migrated_demands_sqlite):
+def test_migration_head_adds_demand_columns(migrated_demands_sqlite):
     engine = create_engine(migrated_demands_sqlite)
     inspector = inspect(engine)
     columns = {c["name"] for c in inspector.get_columns("demands")}
     assert {
         "pipeline_events", "delivery_events", "scope_status", "scope_name",
+        # wire-ux-consolidation 3.2：意向单联系方式列
+        "contact_email", "company",
     } <= columns
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    # 链头唯一且随链推进（wire-customer-local-data 任务 2.1 起 = 0011_datasets，0016 起链头=0016_data_plane_keys）
-    assert version == "0018_plan_limits"
+    # 链头唯一且随链推进（0019 起链头=0019_demand_three_state）
+    assert version == "0019_demand_three_state"

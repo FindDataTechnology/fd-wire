@@ -1,5 +1,5 @@
 // 控制台容器（#/console/*）：登录引导/阻塞态 + 会话建立 + 布局壳 + 按 tab
-// 切换子页（AI 对话构建默认、产物、我的数据、需求单占位、用量）。
+// 切换子页（我的数据默认、AI 构建引导卡、产物、需求单占位、用量）。
 // 身份流（wire-self-serve-launch 任务 4.4）：
 //   拉登录配置 →（未配置=阻塞态，绝不假登录）→ 无会话=登录引导 →
 //   会话过期先静默续期 → POST /api/console/session 建立映射/触发首登开户 →
@@ -7,11 +7,7 @@
 // X-Customer-Id 开发占位已退场；子页请求一律自动附 Authorization: Bearer。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  ConsoleLayout,
-  ConsolePlaceholder,
-  type ConsoleTab,
-} from "../console/ConsoleLayout";
+import { ConsoleLayout, type ConsoleTab } from "../console/ConsoleLayout";
 import {
   beginLogin,
   clearSession,
@@ -28,6 +24,7 @@ import {
 import { ChatPage } from "../console/ChatPage";
 import { ArtifactsPage } from "../console/ArtifactsPage";
 import { DatasetsPage } from "../console/DatasetsPage";
+import { MyDemandsPage } from "../console/MyDemandsPage";
 import { UsagePage } from "../console/UsagePage";
 import { KeysPage } from "../console/KeysPage";
 import { CONTACT_MAILTO } from "../views/HomeView";
@@ -43,13 +40,7 @@ type BootstrapPhase =
 /** 静默续期提前量：距过期不足 5 分钟即尝试 refresh（有 refreshToken 才可能）。 */
 const RENEW_AHEAD_MS = 5 * 60_000;
 
-export function ConsoleView({
-  tab = "chat",
-  conversationId = null,
-}: {
-  tab?: ConsoleTab;
-  conversationId?: number | null;
-}) {
+export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
   const { t } = useTranslation();
   const [phase, setPhase] = useState<BootstrapPhase>({ kind: "loading" });
   // 会话建立只跑一轮；retry 由显式事件触发（bootstrapToken 重新计数）。
@@ -143,7 +134,7 @@ export function ConsoleView({
     return (
       <div
         data-testid="console-blocked"
-        className="max-w-xl rounded-lg border border-amber-200 bg-amber-50/50 p-8"
+        className="mx-auto max-w-xl rounded-lg border border-amber-200 bg-amber-50/50 p-8"
       >
         <h1 className="text-xl font-semibold">{t("console.auth.blockedTitle")}</h1>
         <p className="mt-3 text-sm text-slate-600">
@@ -157,7 +148,7 @@ export function ConsoleView({
     return (
       <div
         data-testid="console-config-error"
-        className="max-w-xl rounded-lg border border-red-200 bg-red-50 p-8"
+        className="mx-auto max-w-xl rounded-lg border border-red-200 bg-red-50 p-8"
       >
         <h1 className="text-xl font-semibold">
           {t("console.auth.configErrorTitle")}
@@ -178,7 +169,7 @@ export function ConsoleView({
     return (
       <div
         data-testid="console-signin"
-        className="max-w-xl rounded-lg border border-slate-200 p-8"
+        className="mx-auto max-w-xl rounded-lg border border-slate-200 p-8"
       >
         <h1 className="text-xl font-semibold">{t("console.auth.anonymousTitle")}</h1>
         <p className="mt-3 text-sm text-slate-600">
@@ -216,7 +207,7 @@ export function ConsoleView({
     return (
       <div
         data-testid="console-session-error"
-        className="max-w-xl rounded-lg border border-red-200 bg-red-50 p-8"
+        className="mx-auto max-w-xl rounded-lg border border-red-200 bg-red-50 p-8"
       >
         <h1 className="text-xl font-semibold">
           {t("console.auth.sessionErrorTitle")}
@@ -295,19 +286,12 @@ export function ConsoleView({
           </p>
         </div>
       )}
-      {tab === "chat" && (
-        <ChatPage key={`chat:${conversationId ?? "new"}`} conversationId={conversationId} />
-      )}
+      {tab === "chat" && <ChatPage />}
       {tab === "artifacts" && <ArtifactsPage />}
       {tab === "datasets" && (
         <DatasetsPage planCode={customer?.plan_code ?? ""} />
       )}
-      {tab === "demands" && (
-        <ConsolePlaceholder
-          titleKey="console.demandsPlaceholder.title"
-          bodyKey="console.demandsPlaceholder.body"
-        />
-      )}
+      {tab === "demands" && <MyDemandsPage />}
       {tab === "usage" && <UsagePage />}
       {tab === "keys" && <KeysPage />}
     </ConsoleLayout>

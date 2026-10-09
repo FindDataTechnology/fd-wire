@@ -2,12 +2,12 @@
 
 内部侧（``X-Internal-Token``，与既有内部端点一致）：
 - ``POST /internal/demands/{id}/pipeline``             记录流水线事实
-  {pipeline_run_id, repo?, branch?, note}（append-only，仅 building）
+  {pipeline_run_id, repo?, branch?, note}（append-only，仅 in_progress）
 - ``POST /internal/demands/{id}/gate-result``          记录 conformance gate
-  结果 {passed, report_path?, note}——passed=true 才放行后续
-  building→delivery_acceptance 迁移（无通过记录 409）
+  结果 {passed, report_path?, note}（append-only 观测留档；wire-ux-
+  consolidation 3.1 起不再门禁状态迁移）
 - ``POST /internal/demands/{id}/deliver``              交付动作：
-  delivery_acceptance→delivered + 自动建客户私有 scope（失败如实留档、
+  in_progress→delivered + 自动建客户私有 scope（失败如实留档、
   scope_status=pending；delivered+pending 时重试建 scope）
 - ``POST /internal/demands/{id}/publish-authorization`` 客户授权转公开/撤回
   {granted, conditions?, indicators?}——append-only 留档
@@ -78,8 +78,7 @@ def record_gate_result(
     payload: GateResultIn,
     db: Session = Depends(get_db),
 ) -> DemandInternalOut:
-    """记录 conformance gate 结果：passed=false 停留 building 可重跑；
-    passed=true 写通过记录（此后 building→delivery_acceptance 放行）。"""
+    """记录 conformance gate 结果：append-only 观测留档（不再门禁迁移）。"""
     demand = _demand_or_404(db, demand_id)
     try:
         demand = pipeline_service.record_gate_result(

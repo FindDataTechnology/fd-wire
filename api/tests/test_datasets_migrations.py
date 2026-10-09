@@ -141,7 +141,7 @@ def test_chain_head_is_provenance_foundation(migrated_sqlite) -> None:
         version = conn.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
         ).scalar()
-    assert version == "0018_plan_limits"
+    assert version == "0019_demand_three_state"
     engine.dispose()
 
 

@@ -47,10 +47,10 @@ describe("ConsoleView（登录引导 / 阻塞态 / 会话建立）", () => {
     vi.stubGlobal("fetch", backend.fetchImpl);
     render(<ConsoleView />);
 
-    expect(await screen.findByTestId("console-blocked")).toBeTruthy();
-    expect(screen.getByTestId("console-blocked").textContent).toContain(
-      "configured=false",
-    );
+    const blocked = await screen.findByTestId("console-blocked");
+    expect(blocked.textContent).toContain("configured=false");
+    // 居中修复（任务 1.3）：卡片水平居中。
+    expect(blocked.className).toContain("mx-auto");
     // 绝不假登录：无登录跳转按钮、无 /api/v1 会话数据请求。
     expect(screen.queryByTestId("console-signin-button")).toBeNull();
     expect(
@@ -64,7 +64,8 @@ describe("ConsoleView（登录引导 / 阻塞态 / 会话建立）", () => {
       installConsoleBackend(CONVERSATIONS, { failAuthConfigStatus: 500 }).fetchImpl,
     );
     render(<ConsoleView />);
-    expect(await screen.findByTestId("console-config-error")).toBeTruthy();
+    const configError = await screen.findByTestId("console-config-error");
+    expect(configError.className).toContain("mx-auto");
   });
 
   it("无会话 → 登录引导（不携带任何 Bearer 请求 /api/v1）", async () => {
@@ -72,14 +73,15 @@ describe("ConsoleView（登录引导 / 阻塞态 / 会话建立）", () => {
     vi.stubGlobal("fetch", backend.fetchImpl);
     render(<ConsoleView />);
 
-    expect(await screen.findByTestId("console-signin")).toBeTruthy();
+    const signin = await screen.findByTestId("console-signin");
+    expect(signin.className).toContain("mx-auto");
     const protectedCalls = backend.calls.filter((c) =>
       c.url.pathname.startsWith("/api/v1/"),
     );
     expect(protectedCalls).toEqual([]);
   });
 
-  it("已登录：会话建立（POST /api/console/session 带 id_token）→ 进入默认 chat 页", async () => {
+  it("已登录：会话建立（POST /api/console/session 带 id_token）→ 默认落「我的数据」", async () => {
     const backend = installConsoleBackend(CONVERSATIONS, {
       customerName: "上海壹座",
       planCode: "basic",
@@ -98,13 +100,13 @@ describe("ConsoleView（登录引导 / 阻塞态 / 会话建立）", () => {
       expect(call!.body).toEqual({ id_token: makeIdToken({ sub: "demo-customer" }) });
     });
 
-    // 进入控制台：顶栏客户/档位 + 会话列表拉取（Bearer 头）
+    // 进入控制台：顶栏客户/档位 + 默认 tab=datasets（我的数据，Bearer 头）
     expect(await screen.findByTestId("console-topbar")).toBeTruthy();
     expect(screen.getByTestId("console-org").textContent).toBe("上海壹座");
     expect(screen.getByTestId("console-plan").textContent).toBe("basic");
-    expect(await screen.findAllByTestId("conversation-item")).toHaveLength(1);
+    expect(await screen.findByTestId("upload-section")).toBeTruthy();
     const listCall = backend.calls.find(
-      (c) => c.url.pathname === "/api/v1/ai/conversations",
+      (c) => c.url.pathname === "/api/v1/datasets",
     );
     expect(listCall?.headers["authorization"]).toMatch(/^Bearer /);
     expect(listCall?.headers["x-customer-id"]).toBeUndefined();
@@ -131,12 +133,13 @@ describe("ConsoleView（登录引导 / 阻塞态 / 会话建立）", () => {
     seedConsoleSession({ sub: "demo-customer" });
     render(<ConsoleView />);
 
-    expect(await screen.findByTestId("console-session-error")).toBeTruthy();
+    const sessionError = await screen.findByTestId("console-session-error");
+    expect(sessionError.className).toContain("mx-auto");
     expect(
       screen.getByTestId("console-session-error-detail").textContent,
     ).toContain("cell-manager unreachable");
-    // 失败态不渲染任何子页数据
-    expect(screen.queryByTestId("chat-start")).toBeNull();
+    // 失败态不渲染任何子页
+    expect(screen.queryByTestId("console-nav")).toBeNull();
   });
 
   it("顶栏登出：清会话并回首页", async () => {
@@ -152,12 +155,38 @@ describe("ConsoleView（登录引导 / 阻塞态 / 会话建立）", () => {
 });
 
 describe("ConsoleView（tab 切换）", () => {
-  it("demands 占位 tab 如实标注建设中；datasets/usage/正式页随 tab 渲染", async () => {
-    vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
+  it("demands tab 已转正：「我的需求」只读列表渲染（不再占位、无上线中徽标）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installConsoleBackend([], {
+        demands: [
+          {
+            id: 1,
+            code: "DE-20261010-01",
+            customer_id: "demo-customer",
+            title: "煤价日度",
+            intent: "煤价日度",
+            contact_email: "buyer@acme.com",
+            company: null,
+            status: "submitted",
+            status_history: [],
+            rejection_reason: null,
+            created_at: "2026-10-10T08:00:00",
+            updated_at: "2026-10-10T08:00:00",
+          },
+        ],
+      }).fetchImpl,
+    );
     seedConsoleSession({ sub: "demo-customer", planCode: "basic" });
     const { rerender } = render(<ConsoleView tab="demands" />);
-    const placeholder = await screen.findByTestId("console-placeholder");
-    expect(placeholder.textContent).toContain("需求单管理建设");
+
+    // 只读列表渲染（任务 4.3）：占位卡与「上线中」徽标均退场
+    const page = await screen.findByTestId("my-demands-page");
+    expect(page.textContent).toContain("我的需求");
+    expect(screen.getAllByTestId("my-demand-item").length).toBe(1);
+    expect(screen.queryByTestId("console-placeholder")).toBeNull();
+    const navDemands = screen.getByTestId("console-nav-demands");
+    expect(navDemands.textContent).not.toContain("上线中");
     // usage：正式用量页（占位退位）——端点数据渲染
     rerender(<ConsoleView tab="usage" />);
     expect(await screen.findByTestId("usage-page")).toBeTruthy();
@@ -167,5 +196,24 @@ describe("ConsoleView（tab 切换）", () => {
     // artifacts tab 渲染产物页（空态可见）
     rerender(<ConsoleView tab="artifacts" />);
     expect(screen.getByTestId("artifacts-draft-note")).toBeTruthy();
+  });
+
+  it("chat tab 显示名「AI 构建」（id 保持 chat）；旧 #/console/chat 深链仍落壹座引导卡", async () => {
+    vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
+    seedConsoleSession({ sub: "demo-customer", planCode: "basic" });
+    render(<ConsoleView tab="chat" />);
+
+    expect(await screen.findByTestId("chat-guide")).toBeTruthy();
+    expect(screen.getByTestId("chat-guide-demo-cta").getAttribute("href")).toBe(
+      "https://finddatatech.cloud/demo",
+    );
+    // 引导卡无测试账号明文
+    expect(screen.getByTestId("chat-guide").textContent).not.toContain(
+      "platform-test",
+    );
+    // tab id 保持 chat（路由兼容），显示名改为「AI 构建」
+    const chatNav = screen.getByTestId("console-nav-chat");
+    expect(chatNav.getAttribute("href")).toBe("#/console/chat");
+    expect(chatNav.textContent).toContain("AI 构建");
   });
 });

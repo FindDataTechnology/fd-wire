@@ -1,6 +1,7 @@
 // 定价页（#/pricing，wire-self-serve-launch 任务 7.1）——四卡活取。
 // - 三张公开卡从 GET /api/v1/plans 渲染（免费/基础/标准；价格与含额行数为
-//   后端数据，源码零档位面量）+ 一张静态「自定义」询价卡（CTA=联系开通）。
+//   后端数据，源码零档位面量）+ 一张静态「自定义」卡：主 CTA 站内跳需求单
+//   表单（wire-ux-consolidation 任务 4.4），mailto 联系降为次级小链接。
 // - 副标题为「用完即停、次月恢复」口径；全部档位无超额单价。
 // - 请求失败回退 = 无数字卡片（沿用目录页 fallback 范式：名字/能力仍在，
 //   数字退场），绝不回退到写死的价格字面量。
@@ -9,6 +10,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CONTACT_MAILTO } from "./HomeView";
+import { demandNewHref } from "../catalog/api";
 import {
   fetchPublicPlans,
   formatIncludedLines,
@@ -147,7 +149,8 @@ export function PricingView() {
           );
         })}
 
-        {/* 静态「自定义」询价卡：不进公开档位列表，CTA=联系开通。 */}
+        {/* 静态「自定义」询价卡：不进公开档位列表。主 CTA 站内跳需求单表单
+           （wire-ux-consolidation 任务 4.4），mailto 降为次级小链接保留。 */}
         <div data-testid="tier-custom" className={cardShell(false, true)}>
           <h2 className="font-medium">{tierName(t, "custom")}</h2>
           <p className="mt-1 text-xs text-slate-500">{tierDesc(t, "custom")}</p>
@@ -166,10 +169,18 @@ export function PricingView() {
             ))}
           </ul>
           <a
-            href={CONTACT_MAILTO}
+            href={demandNewHref()}
+            data-testid="tier-custom-cta"
             className="mt-6 block rounded-md bg-slate-900 px-4 py-2 text-center text-sm text-white hover:bg-slate-700 transition-colors"
           >
-            {t("pricing.cta")}
+            {t("pricing.ctaCustom")}
+          </a>
+          <a
+            href={CONTACT_MAILTO}
+            data-testid="tier-custom-mailto"
+            className="mt-2 block text-center text-xs text-slate-500 underline hover:text-slate-900"
+          >
+            {t("pricing.ctaCustomMailto")}
           </a>
         </div>
       </section>

@@ -5,7 +5,7 @@ import "./i18n";
 import i18n from "./i18n";
 import { installFakeBackend } from "./catalog/testing";
 import { resetCatalogStatsCacheForTests } from "./catalog/useCatalogStats";
-import { seedConsoleSession } from "./console/testing";
+import { installConsoleBackend, seedConsoleSession } from "./console/testing";
 
 describe("parseHash（hash 路由解析）", () => {
   it("空 / 首页 / 未知路径 → home", () => {
@@ -23,47 +23,40 @@ describe("parseHash（hash 路由解析）", () => {
     expect(parseHash("#/catalog/a%2Fb")).toEqual({ name: "catalogDetail", id: "a/b" });
   });
 
-  it("控制台：默认 chat、四 tab、?c= 选中会话（非法值回落未选中）", () => {
+  it("控制台：默认 datasets、六 tab、未知段回落 datasets（wire-ux-consolidation 2.2）", () => {
     expect(parseHash("#/console")).toEqual({
       name: "console",
-      tab: "chat",
-      conversationId: null,
+      tab: "datasets",
     });
     expect(parseHash("#/console/chat")).toEqual({
       name: "console",
       tab: "chat",
-      conversationId: null,
     });
+    // 旧深链 ?c=<id> 被忽略（对话页退役），仍落 chat tab（壹座引导卡）。
     expect(parseHash("#/console/chat?c=12")).toEqual({
       name: "console",
       tab: "chat",
-      conversationId: 12,
-    });
-    expect(parseHash("#/console/chat?c=abc")).toEqual({
-      name: "console",
-      tab: "chat",
-      conversationId: null,
     });
     expect(parseHash("#/console/artifacts")).toEqual({
       name: "console",
       tab: "artifacts",
-      conversationId: null,
+    });
+    expect(parseHash("#/console/datasets")).toEqual({
+      name: "console",
+      tab: "datasets",
     });
     expect(parseHash("#/console/demands")).toEqual({
       name: "console",
       tab: "demands",
-      conversationId: null,
     });
     expect(parseHash("#/console/usage")).toEqual({
       name: "console",
       tab: "usage",
-      conversationId: null,
     });
-    // 未知二级段回落默认 chat
+    // 未知二级段回落默认 datasets
     expect(parseHash("#/console/whatever")).toEqual({
       name: "console",
-      tab: "chat",
-      conversationId: null,
+      tab: "datasets",
     });
   });
 
@@ -122,5 +115,60 @@ describe("App shell（admin 导航按角色显隐 · Logto 回调真实路径）
     seedConsoleSession({ sub: "admin", roles: ["wire-admin"] });
     render(<App />);
     expect(screen.getByTestId("nav-admin").getAttribute("href")).toBe("#/admin");
+  });
+});
+
+describe("App 页脚分发（wire-ux-consolidation 任务 1.2）", () => {
+  beforeEach(() => {
+    i18n.changeLanguage("zh");
+    resetCatalogStatsCacheForTests();
+    localStorage.clear();
+    sessionStorage.clear();
+    window.location.hash = "";
+    // 门户页含目录/定价活取——打上不可用假后端（零网络，回退态不碍页脚断言）。
+    vi.stubGlobal("fetch", installFakeBackend([], {}, null).fetchImpl);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+    sessionStorage.clear();
+    window.location.hash = "";
+  });
+
+  it("四门户视图（首页/定价/文档/指标目录）挂全量页脚", () => {
+    for (const hash of ["#/", "#/pricing", "#/docs", "#/catalog"]) {
+      window.location.hash = hash;
+      const { unmount } = render(<App />);
+      expect(screen.getByTestId("site-footer")).toBeTruthy();
+      expect(screen.getByTestId("footer-service-official")).toBeTruthy();
+      expect(screen.queryByTestId("console-footer")).toBeNull();
+      unmount();
+      cleanup();
+      resetCatalogStatsCacheForTests();
+    }
+  });
+
+  it("#/console 挂紧凑页脚（单行版权+备案，无跨服务行/GitHub）", () => {
+    vi.unstubAllGlobals();
+    vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
+    window.location.hash = "#/console";
+    render(<App />);
+    expect(screen.getByTestId("console-footer")).toBeTruthy();
+    expect(screen.getByTestId("footer-icp").textContent).toBe(
+      "粤ICP备2026118740号-1",
+    );
+    expect(screen.queryByTestId("site-footer")).toBeNull();
+    expect(screen.queryAllByTestId(/^footer-service-/)).toEqual([]);
+    expect(screen.queryByTestId("footer-github")).toBeNull();
+  });
+
+  it("#/admin 不渲染页脚", () => {
+    window.location.hash = "#/admin";
+    render(<App />);
+    expect(screen.getByTestId("admin-role-gate")).toBeTruthy();
+    expect(screen.queryByTestId("site-footer")).toBeNull();
+    expect(screen.queryByTestId("console-footer")).toBeNull();
   });
 });

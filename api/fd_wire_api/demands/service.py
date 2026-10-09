@@ -1,7 +1,10 @@
-"""需求单业务逻辑：建档、编码、状态迁移、评估与报价写入。
+"""需求单业务逻辑：建档、编码、状态迁移。
 
 所有状态变更都收敛到 :func:`apply_transition`——先经状态机白名单校验
 （非法即 ``TransitionError`` → 路由层 409），再 append-only 追加时间线。
+wire-ux-consolidation 任务 3.1 起为三态机（submitted → in_progress →
+delivered，另 rejected 终态）；评估/报价写入（write_evaluation/
+submit_quote）挂接的旧态已废除，对现行状态一律 409。
 """
 
 from __future__ import annotations
@@ -15,7 +18,6 @@ from sqlalchemy.orm import Session
 
 from .models import Demand
 from .schemas import DemandCreate
-from . import pipeline
 from ..billing.money import micro_to_yuan, yuan_to_micro
 from .statemachine import (
     DemandStatus,
@@ -48,16 +50,30 @@ def _next_code(db: Session) -> str:
     return f"{prefix}{max_seq + 1:02d}"
 
 
+def _summary_title(description: str) -> str:
+    """由需求描述生成列表摘要（title 列）：截 200 字符，多行压成一行。"""
+
+    one_line = " ".join(description.split())
+    return one_line[:200]
+
+
 def create_demand(db: Session, *, customer_id: str, payload: DemandCreate) -> Demand:
-    """客户提交：初始状态 submitted，时间线首条即提交事件。"""
+    """客户提交意向单：初始状态 submitted，时间线首条即提交事件。
+
+    四入参落库：description → intent 全文（title 存截断摘要）、
+    contact_email / company 直落同名列、indicator_code 原样进
+    linked_indicators（目录锚点，预填语义）。
+    """
     demand = Demand(
         code=_next_code(db),
         customer_id=customer_id,
-        title=payload.title,
-        intent=payload.intent,
-        entities_hint=payload.entities_hint,
-        frequency_expect=payload.frequency_expect,
-        linked_indicators=list(payload.linked_indicators),
+        title=_summary_title(payload.description),
+        intent=payload.description,
+        contact_email=payload.contact_email,
+        company=payload.company,
+        linked_indicators=[payload.indicator_code]
+        if payload.indicator_code
+        else [],
         status=DemandStatus.submitted.value,
         status_history=[],
     )
@@ -65,8 +81,8 @@ def create_demand(db: Session, *, customer_id: str, payload: DemandCreate) -> De
         status=DemandStatus.submitted,
         by=f"customer:{customer_id}",
         note="需求单提交" + (
-            f"（目录预填指标：{'、'.join(payload.linked_indicators)}）"
-            if payload.linked_indicators
+            f"（目录锚点：{payload.indicator_code}）"
+            if payload.indicator_code
             else ""
         ),
     )
@@ -117,32 +133,22 @@ def apply_transition(
     by: str,
     note: str | None = None,
     reason: str | None = None,
-    confirmed_by_operator: bool = False,
 ) -> Demand:
     """执行一次合法迁移并追加时间线（历史只增不改）。
 
-    building→building 是合法"停留"：状态不变，但 gate 问题 note 如实入档。
-    building→delivery_acceptance 有硬前置（任务 6.5）：``pipeline_events``
-    里必须已有一条 conformance gate 通过记录（无记录 → 409，错误信息
-    指明原因）。
+    三态机（wire-ux-consolidation 3.1）：submitted → in_progress →
+    delivered，另 rejected 终态（必带 reason）。废除态迁入与废除态迁出
+    一律 409（存量归并迁移 alembic 0019 前的读窗口行同样如实回绝）。
     """
     current = DemandStatus(demand.status)
-    ensure_transition(
-        current,
-        target,
-        confirmed_by_operator=confirmed_by_operator,
-        reason=reason,
-        note=note,
-        gate_passed=pipeline.has_gate_pass(demand),
-    )
+    ensure_transition(current, target, reason=reason)
     entry_note = note
     if target is DemandStatus.rejected:
         entry_note = note or f"拒绝理由：{reason}"
     demand.append_history(status=target, by=by, note=entry_note)
     if target is DemandStatus.rejected:
         demand.rejection_reason = reason
-    if target is not DemandStatus.building or current is not DemandStatus.building:
-        demand.status = target.value
+    demand.status = target.value
     demand.updated_at = _utcnow_naive()
     db.commit()
     db.refresh(demand)
@@ -159,9 +165,9 @@ def write_evaluation(
 ) -> Demand:
     """写 AI 预评估结论：summary 客户可见，detail 为内部全文（客户不可见）。
 
-    submitted 状态下写入即触发 submitted→evaluating（后台/AI 接单）；
-    仅 evaluating 允许更新；其余状态 409。detail 为 None 时保留既有
-    内部全文（旧调用只更新概要，不清空评估留档）。
+    wire-ux-consolidation 3.1 起：submitted→evaluating 自动接单迁移已被
+    三态白名单回绝，本函数对现行状态一律 ``TransitionError``（→409）；
+    既有 evaluation 字段随旧单保留可查。detail 为 None 时保留既有内部全文。
     """
     current = DemandStatus(demand.status)
     if current is DemandStatus.submitted:
@@ -195,7 +201,11 @@ def submit_quote(
     confirmed_by_operator: bool,
     by: str | None = None,
 ) -> Demand:
-    """人工确认报价（报价确认台）：写 quote 字段并迁移 evaluating→quoted。
+    """人工确认报价（旧八态工作流遗留）：写 quote 字段并迁移 evaluating→quoted。
+
+    wire-ux-consolidation 3.1 起报价不进三态状态机（走定价页自助或线下
+    沟通）：仅 evaluating 可报价的前置在现行单上永不满足，一律 409；
+    既有 quote 字段随旧单保留可查（设计 D4：不做字段级映射）。
 
     硬前置（缺一 409，绝不进入 quoted、绝不向客户发出报价）：
     - ``confirmed_by_operator=True``（后台人工确认标志）；
