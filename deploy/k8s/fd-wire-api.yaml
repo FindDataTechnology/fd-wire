@@ -35,7 +35,7 @@ spec:
       containers:
         - name: api
           # 不可变标签纪律（mcp-service-deploy spec：禁 latest/浮动标签）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-5d3c2fa
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-7fae9e5
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -157,6 +157,11 @@ spec:
               value: wire-admin
             - name: FD_WIRE_ADMIN_BEARER_GATE
               value: "on"
+            # 首登自动开户（4.3）：平台凭据=cell-manager 同源（铸 key/caller-map/
+            # registry 授权束；未配 fail-closed 502）
+            - name: CELL_REGISTRY_TOKEN
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: cell_registry_token }
           readinessProbe:
             httpGet: { path: /health, port: http }
             initialDelaySeconds: 3
