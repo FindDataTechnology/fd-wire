@@ -5,6 +5,7 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev && npm cache clean --force
 COPY server.js ./
+COPY public ./public
 RUN addgroup -S bff && adduser -S bff -G bff && chown -R bff:bff /app
 USER bff
 ENV PORT=8787

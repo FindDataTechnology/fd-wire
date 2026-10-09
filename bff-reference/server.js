@@ -60,6 +60,8 @@ const DEMO_USERS = new Map([['demo', 'demo']]);
 
 const app = express();
 app.use(express.json({ limit: '4mb' }));
+// 演示前端（参考形态的活样例：页面无任何 wdk- 凭据，全程走 /bff/*）
+app.use(express.static(require('node:path').join(__dirname, 'public')));
 
 app.post('/bff/login', (req, res) => {
   const { username, password } = req.body || {};
