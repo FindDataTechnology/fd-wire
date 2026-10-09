@@ -621,3 +621,33 @@ def test_paid_plan_ceremony_can_trigger_cell_face(tmp_path, monkeypatch):
     finally:
         sub2api.close()
         console_env.engine.dispose()
+
+
+def test_admin_mint_channel_posts_json_with_groups_list(monkeypatch) -> None:
+    """HTTP 形状钉死：registry patch-keys 真契约=JSON 体 + groups 列表
+    （form/逗号串形态曾在生产 422——cell_manager AdminMintChannel 同径）。"""
+    from fd_wire_api.console.onboarding import AdminKeyMintChannel
+
+    captured: dict = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self) -> dict:
+            return {"key": "wgk-shape", "info": {"key_id": "kid-shape"}}
+
+    def fake_post(url, **kw):
+        captured["url"] = url
+        captured["kw"] = kw
+        return _Resp()
+
+    monkeypatch.setattr("fd_wire_api.console.onboarding.httpx.post", fake_post)
+    out = AdminKeyMintChannel("http://reg.test/", "tok").mint(
+        sub="s1", groups=["wire-customers", "wire-cust-c1"], name="n"
+    )
+    assert captured["url"] == "http://reg.test/api/patch-keys"
+    assert captured["kw"]["json"] == {
+        "name": "n", "username": "s1", "groups": ["wire-customers", "wire-cust-c1"]
+    }
+    assert captured["kw"]["headers"]["Authorization"] == "Bearer tok"
+    assert out == {"key_id": "kid-shape", "key": "wgk-shape"}

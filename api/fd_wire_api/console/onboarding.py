@@ -118,11 +118,12 @@ class AdminKeyMintChannel:
         self._timeout = timeout
 
     def mint(self, *, sub: str, groups: list[str], name: str) -> dict[str, Any]:
-        fields = {"name": name, "username": sub, "groups": ",".join(groups)}
+        # registry 真契约（cell_manager AdminMintChannel 同径）：JSON 体，
+        # groups 为列表（非 form、非逗号串——form 形状 registry 422）。
         try:
             resp = httpx.post(
                 f"{self._base}{PATCH_KEYS_PATH}",
-                data=fields,
+                json={"name": name, "username": sub, "groups": groups},
                 headers={"Authorization": f"Bearer {self._admin_token}"},
                 timeout=self._timeout,
             )
