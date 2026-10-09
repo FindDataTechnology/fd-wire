@@ -5,8 +5,8 @@
 - [x] 1.1 secrets map 扩展：`CELL_CUSTOMER_CREDENTIAL_MAP` 同级新增 `CELL_CUSTOMER_IDENTITY_MAP`（`customer_id → {username, sub2api_user_id}`）；验证：单测覆盖 map 解析 + 缺项报错（test_grant.py 7 形状用例）
 - [x] 1.2 注册调用补隔离字段：register 表单带 `visibility=group-restricted` + `allowed_groups=wire-cust-<cid>`（registry 既有 Form 字段）；验证：单测断言表单字段存在且值正确（test_registry_http.py）
 - [x] 1.3 授权文档铸造子步骤：调 `POST /api/servers/groups/import`（`create_in_idp:false`），幂等 upsert；验证：mock registry 断言 payload（含 create_in_idp:false）+ Fake 幂等重放
-- [ ] 1.4 铸 key 子步骤（第一步通道）：cheap-1 本机读 SECRET_KEY → 自签短命 JWT → `POST /api/patch-keys`，明文只走返回值（审计只落 key_id）；验证：单测已绿（claims 形状/明文纪律/簿记），**生产真实验证绑在 2.1 drillcust001 重铸内做**
-- [ ] 1.5 预检映射写入子步骤：调 registry caller-map admin API（`CELL_PREFLIGHT_MAP_PATH`）；验证：写入后 `db.sub2api_caller_map` 可查到该行。**实施偏差（2026-10-08）**：不做「直写 Mongo 过渡实现」——破坏 cell-manager 零第三方依赖纪律且引入一次性凭据面；改为 API 路径未配置时显式 skipped+审计留痕，切片一验收走 registry 侧 env 覆盖层（行为不变），3.1 落地后配置路径即激活
+- [x] 1.4 铸 key 子步骤（第一步通道）：cheap-1 本机读 SECRET_KEY → 自签短命 JWT → `POST /api/patch-keys`，明文只走返回值（审计只落 key_id）。**生产实证（2026-10-08/09）**：drillcust001/acme001/e2e001/final001 四客户 mint-key 全链通过；4.3 已切 admin 代铸通道（`AdminMintChannel`），自签 JWT 降为兼容回退
+- [x] 1.5 预检映射写入子步骤：调 registry caller-map admin API（`CELL_PREFLIGHT_MAP_PATH`，默认 `/api/sub2api-caller-map`）；验证：写入后 `db.sub2api_caller_map` 可查到该行。**终态（2026-10-09 隐患闭环）**：早期「skipped+留痕」方案已废除——预检策略为 deny 时 skipped = 新客户第一次调用即 402 不可用，故改为 **fail-closed**：`HttpRegistryClient.put_caller_map`（PUT JSON）缺失或失败即中止开户；退租侧成对提供 `delete_caller_map`（防 username 永久占位）。生产实证：acme001/e2e001/final001 grant 自动写入且退租全摘
 - [x] 1.6 退租子命令：吊销 key → 删授权文档 → 注销条目 → deprovision（D6 序）；幂等可重跑、无宽限；验证：连续执行两遍无报错、无授权面残留（test_grant.py 三个退租用例 + CLI fake 冒烟）
 
 ## 2. 切片一 · 存量补正与演练验收
@@ -19,7 +19,7 @@
 - [x] 3.1 caller-map admin API（PUT/GET/DELETE /api/sub2api-caller-map，生产实锤 admin 200/非 admin 403）：registry app 新端点（`nginx_proxied_auth` + `_require_admin` + audit，对齐 `/iam/groups` 模式）读写 `sub2api_caller_map` 集合（username → sub2api_user_id）；验证：admin wgk- 可写可读、非 admin 403，单测随迁
 - [x] 3.2 preflight 读集合（两层+TTL+2s 有界读+fail-open；生产实锤 drill 仅 Mongo 映射 200）：`_caller_map` 改为集合读取 + 30-60s TTL 缓存，env `SUB2API_CALLER_MAP` 降为覆盖层（env 优先）；验证：单测覆盖「集合写入→TTL 过期→生效」「env 覆盖集合」「集合不可达时行为」
 - [x] 3.3 `PREFLIGHT_UNMAPPED` 开关（生产 deny：未映射非 admin 402 CALLER_NOT_MAPPED 具名留痕、admin 豁免直通）（pass|warn|deny，默认 pass）：deny 下未映射非 admin 调用者拒绝、admin scope 保持 skip-pass；验证：单测三分支 + 生产切 deny 后漏配身份即时 402/deny
-- [ ] 3.4 **部分完成（2026-10-08）**：代码在 github 线 wire-onboarding@1ffa7cb（基座=部署镜像 63126fe），镜像经 scs001 仓 GHA→hkccr→ccr 中继线构建 sha-1ffa7cb，cheap-1 prebuilt 已滚、五项冒烟绿；**gitee 线同步遗留**（两线谱系无关，cherry-pick 需理 4 文件冲突——运行时以 github 线为准，/opt 树仅簿记）：cherry-pick 纪律（同 lex-legal da4c6cf7 先例）、CN 镜像配方重建、cheap-1 ff + `up -d --no-deps --no-build`、合并 gitee main；验证：容器内冒烟（venv python 配方）+ 生产探针复跑 2.2
+- [x] 3.4 **完成（2026-10-09）**：github 线 wire-onboarding 镜像（sha-1ffa7cb 起，现生产 sha-65139f8）已滚 cheap-1 prebuilt；**gitee 线同步已闭合**——/opt 树 HEAD 8349b4e（caller-map API + preflight 双层/unmapped 开关 + 代铸/admin 吊销，与 1ffa7cb 对齐）、gitee main 5fd9dfe（R6 代码 + 宿主 nginx 模板）；验证：容器内冒烟 + 生产探针复跑全绿。**运维坑（另一 session 记档）**：cheap-1 nginx 模板真源是宿主 bind-mount（/opt 两文件挂进 /app/docker/），镜像内模板无关；手动重渲染传空 servers 会抹掉全部 per-server location（恢复法=toggle off→on 触发正规重渲染）
 
 ## 4. 切片二 · registry 代铸与代吊（同分支同船）
 
