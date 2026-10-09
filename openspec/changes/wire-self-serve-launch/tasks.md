@@ -26,7 +26,7 @@
 - [x] 4.4 web 登录件平移：SPA+PKCE（抄 `fd-lex/web/src/console/auth.ts`）、sessionStorage、静默续期、登出；`LoginView` 激活、`console/customer.ts` 与 X-Customer-Id 占位退场；前端测试（配置未下发的阻塞态）
 - [x] 4.5 客户侧端点身份切换：datasets/demands/provenance/ai 四路由从 X-Customer-Id 骨架切到登录映射身份，跨客户 404；路由测试更新
 - [x] 4.6 免费档边界与升档：免费用户「我的数据」升级引导（无 cell 创建）、admin 升档至 basic 后 cell 配给+额度生效；端到端测试
-- [ ] 4.7 自助注册端到端实弹：邮箱验证→注册→首登→得 key（明文仅一次）→200 调用→suspend 即断；证据存 `reports/`
+- [x] 4.7 自助注册端到端实弹：邮箱验证→注册→首登→得 key（明文仅一次）→200 调用→suspend 即断；证据存 `reports/`
 
 ## 5. admin 双闸与占位退位（api + web）
 
