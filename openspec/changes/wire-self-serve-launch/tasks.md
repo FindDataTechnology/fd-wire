@@ -50,4 +50,4 @@
 
 - [x] 8.1 构建与全量测试：api pytest 全绿 + web vitest 全绿 + 镜像构建（Jenkins/GHA 按 fd-wire 既有通道）
 - [x] 8.2 部署滚动：api/web 滚动 + registry 探针独立 PR 灰度（先 wire 端点后探针）；生产冒烟（定价页四卡、登录流、旧三档 404）
-- [ ] 8.3 验收汇总：`reports/final-acceptance.md`（四档全链、行数门实弹、首登开户实弹、双闸、占位退位清单、令牌轮换记录）；`openspec validate wire-self-serve-launch --strict` 通过
+- [x] 8.3 验收汇总：`reports/final-acceptance.md`（四档全链、行数门实弹、首登开户实弹、双闸、占位退位清单、令牌轮换记录）；`openspec validate wire-self-serve-launch --strict` 通过
