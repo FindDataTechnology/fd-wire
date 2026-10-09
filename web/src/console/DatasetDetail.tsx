@@ -14,6 +14,8 @@ import {
   fetchCorrections,
   fetchDataset,
   fetchDatasetRows,
+  queryDataset,
+  type QueryFilterOp,
   fetchEvidencePackage,
   fetchProvenanceEvents,
   fetchProvenanceOverview,
@@ -223,7 +225,11 @@ export function DatasetDetail({
           className={`rounded-full px-2 py-0.5 text-xs ring-1 ${
             dataset.source_kind === "connector"
               ? "bg-indigo-50 text-indigo-700 ring-indigo-200"
-              : "bg-teal-50 text-teal-700 ring-teal-200"
+              : dataset.source_kind === "derived"
+                ? "bg-amber-50 text-amber-700 ring-amber-200"
+                : dataset.source_kind === "declared"
+                  ? "bg-sky-50 text-sky-700 ring-sky-200"
+                  : "bg-teal-50 text-teal-700 ring-teal-200"
           }`}
         >
           {t(`console.datasets.source.${dataset.source_kind}`)}
@@ -336,6 +342,14 @@ function PreviewGrid({
   const [data, setData] = useState<DatasetRows | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [page, setPage] = useState(1);
+  // 结构化查询（wire-customer-data-engine 6.3）：列/操作符/值 + 排序；
+  // 空过滤 = 原 preview 分页路径，两态共用同一网格。
+  const [filterColumn, setFilterColumn] = useState("");
+  const [filterOp, setFilterOp] = useState<QueryFilterOp>("eq");
+  const [filterValue, setFilterValue] = useState("");
+  const [sortColumn, setSortColumn] = useState("");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [queryActive, setQueryActive] = useState(false);
   const [editing, setEditing] = useState<{
     rowId: string;
     column: string;
@@ -346,15 +360,39 @@ function PreviewGrid({
   const [busy, setBusy] = useState(false);
   const [opError, setOpError] = useState<string | null>(null);
 
+  const columns = data?.columns.map((c) => c.name) ?? [];
+
   const load = useCallback(async () => {
     setLoadError(false);
     try {
-      setData(await fetchDatasetRows(datasetId, page, PAGE_SIZE));
+      if (queryActive) {
+        const filters =
+          filterColumn && filterOp !== "isnull" && filterOp !== "notnull" && filterValue !== ""
+            ? [{ column: filterColumn, op: filterOp, value: filterValue }]
+            : filterColumn && (filterOp === "isnull" || filterOp === "notnull")
+              ? [{ column: filterColumn, op: filterOp }]
+              : [];
+        const sort =
+          sortColumn !== "" ? [{ column: sortColumn, dir: sortDir }] : [];
+        const result = await queryDataset(datasetId, {
+          filters,
+          sort,
+          limit: PAGE_SIZE,
+          offset: (page - 1) * PAGE_SIZE,
+        });
+        setData({
+          columns: result.columns,
+          rows: result.rows,
+          total: result.total,
+        });
+      } else {
+        setData(await fetchDatasetRows(datasetId, page, PAGE_SIZE));
+      }
     } catch {
       setData(null);
       setLoadError(true);
     }
-  }, [datasetId, page]);
+  }, [datasetId, page, queryActive, filterColumn, filterOp, filterValue, sortColumn, sortDir]);
 
   useEffect(() => {
     setData(null);
@@ -452,6 +490,99 @@ function PreviewGrid({
 
       {data != null && (
         <>
+          {/* 结构化查询条（6.3）：列+操作符+值过滤、列排序；「应用」切服务端查询，「重置」回预览分页 */}
+          <div
+            data-testid="query-bar"
+            className="mt-2 flex flex-wrap items-center gap-1.5 rounded-lg border border-slate-200 bg-white p-2 text-xs"
+          >
+            <select
+              data-testid="query-filter-column"
+              value={filterColumn}
+              onChange={(e) => setFilterColumn(e.target.value)}
+              className="rounded border border-slate-300 px-1.5 py-1"
+            >
+              <option value="">{t("console.datasets.query.column")}</option>
+              {columns.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+            <select
+              data-testid="query-filter-op"
+              value={filterOp}
+              onChange={(e) => setFilterOp(e.target.value as QueryFilterOp)}
+              disabled={!filterColumn}
+              className="rounded border border-slate-300 px-1.5 py-1 disabled:opacity-40"
+            >
+              {(["eq","ne","gt","gte","lt","lte","in","notin","like","isnull","notnull"] as QueryFilterOp[]).map((op) => (
+                <option key={op} value={op}>{op}</option>
+              ))}
+            </select>
+            {filterOp !== "isnull" && filterOp !== "notnull" && (
+              <input
+                data-testid="query-filter-value"
+                value={filterValue}
+                onChange={(e) => setFilterValue(e.target.value)}
+                placeholder={t("console.datasets.query.value")}
+                disabled={!filterColumn}
+                className="w-32 rounded border border-slate-300 px-1.5 py-1 disabled:opacity-40"
+              />
+            )}
+            <span className="mx-1 text-slate-200">|</span>
+            <select
+              data-testid="query-sort-column"
+              value={sortColumn}
+              onChange={(e) => setSortColumn(e.target.value)}
+              className="rounded border border-slate-300 px-1.5 py-1"
+            >
+              <option value="">{t("console.datasets.query.sort")}</option>
+              {columns.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+            {sortColumn !== "" && (
+              <button
+                type="button"
+                data-testid="query-sort-dir"
+                onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
+                className="rounded border border-slate-300 px-1.5 py-1 font-mono"
+              >
+                {sortDir === "asc" ? "↑" : "↓"}
+              </button>
+            )}
+            <button
+              type="button"
+              data-testid="query-apply"
+              onClick={() => {
+                setPage(1);
+                setQueryActive(true);
+              }}
+              className="rounded bg-slate-900 px-2.5 py-1 text-white hover:bg-slate-700"
+            >
+              {t("console.datasets.query.apply")}
+            </button>
+            {queryActive && (
+              <button
+                type="button"
+                data-testid="query-reset"
+                onClick={() => {
+                  setQueryActive(false);
+                  setFilterColumn("");
+                  setFilterValue("");
+                  setSortColumn("");
+                  setPage(1);
+                }}
+                className="rounded border border-slate-300 px-2.5 py-1 text-slate-600 hover:bg-slate-100"
+              >
+                {t("console.datasets.query.reset")}
+              </button>
+            )}
+            {queryActive && (
+              <span data-testid="query-active" className="text-slate-400">
+                {t("console.datasets.query.activeNote")}
+              </span>
+            )}
+          </div>
+
           <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200 bg-white">
             <table data-testid="preview-grid" className="w-full text-xs">
               <thead>
@@ -736,6 +867,19 @@ function CorrectionsPanel({
               <span className="font-mono text-[11px] text-slate-700">
                 {describeCorrection(correction)}
               </span>
+              {correction.channel != null && correction.channel !== "console" && (
+                <span
+                  data-testid="correction-channel"
+                  data-channel={correction.channel}
+                  className={`rounded px-1.5 py-0.5 text-[10px] ${
+                    correction.channel === "data-key"
+                      ? "bg-sky-50 text-sky-700"
+                      : "bg-violet-50 text-violet-700"
+                  }`}
+                >
+                  {t(`console.datasets.detail.channel.${correction.channel}`)}
+                </span>
+              )}
               {correction.dangling_at != null && (
                 <span
                   data-testid="correction-dangling-badge"
@@ -1070,6 +1214,19 @@ function DanglingPanel({
               <span className="font-mono text-[11px] text-slate-700">
                 {describeCorrection(correction)}
               </span>
+              {correction.channel != null && correction.channel !== "console" && (
+                <span
+                  data-testid="correction-channel"
+                  data-channel={correction.channel}
+                  className={`rounded px-1.5 py-0.5 text-[10px] ${
+                    correction.channel === "data-key"
+                      ? "bg-sky-50 text-sky-700"
+                      : "bg-violet-50 text-violet-700"
+                  }`}
+                >
+                  {t(`console.datasets.detail.channel.${correction.channel}`)}
+                </span>
+              )}
               {correction.dangling_reason && (
                 <span className="text-[11px] text-slate-500">
                   {correction.dangling_reason}

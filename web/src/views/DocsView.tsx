@@ -37,6 +37,21 @@ function StatusRow({ label }: { label: string }) {
   );
 }
 
+const DATA_PLANE_ENDPOINTS: ReadonlyArray<{
+  method: string;
+  path: string;
+  purposeKey: string;
+}> = [
+  { method: "POST", path: "/api/v1/datasets", purposeKey: "docs.dataPlane.purposeCreate" },
+  { method: "POST", path: "/api/v1/datasets/{id}/query", purposeKey: "docs.dataPlane.purposeQuery" },
+  { method: "POST", path: "/api/v1/datasets/{id}/aggregate", purposeKey: "docs.dataPlane.purposeAggregate" },
+  { method: "POST", path: "/api/v1/datasets/{id}/rows:batchWrite", purposeKey: "docs.dataPlane.purposeWrite" },
+  { method: "POST", path: "/api/v1/datasets/{id}/columns", purposeKey: "docs.dataPlane.purposeColumn" },
+  { method: "POST", path: "/api/v1/datasets/{id}/derive", purposeKey: "docs.dataPlane.purposeDerive" },
+  { method: "POST", path: "/api/v1/datasets/{id}/join", purposeKey: "docs.dataPlane.purposeJoin" },
+  { method: "GET", path: "/api/v1/datasets/{id}/lineage", purposeKey: "docs.dataPlane.purposeLineage" },
+];
+
 export function DocsView() {
   const { t } = useTranslation();
 
@@ -124,6 +139,67 @@ export function DocsView() {
         >
           {t("docs.metering.pricingNote")}
         </a>
+      </section>
+
+      {/* 四、数据面 REST API（wire-customer-data-engine 7.3）：端点族 + 持钥纪律 */}
+      <section className="space-y-4" data-testid="docs-data-plane">
+        <h2 className="text-xl font-semibold">{t("docs.dataPlane.title")}</h2>
+        <p className="max-w-3xl text-sm text-slate-500">
+          {t("docs.dataPlane.intro")}
+        </p>
+        <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <table className="w-full min-w-[36rem] border-collapse text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50/60 text-left text-xs text-slate-400">
+                <th className="px-4 py-2 font-medium">
+                  {t("docs.dataPlane.colMethod")}
+                </th>
+                <th className="px-4 py-2 font-medium">
+                  {t("docs.dataPlane.colEndpoint")}
+                </th>
+                <th className="px-4 py-2 font-medium">
+                  {t("docs.dataPlane.colPurpose")}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {DATA_PLANE_ENDPOINTS.map((e) => (
+                <tr key={e.path} className="border-b border-slate-100 last:border-0">
+                  <td className="px-4 py-2 font-mono text-xs text-slate-500">
+                    {e.method}
+                  </td>
+                  <td className="px-4 py-2 font-mono text-xs text-slate-800">
+                    {e.path}
+                  </td>
+                  <td className="px-4 py-2 text-xs text-slate-500">
+                    {t(e.purposeKey)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="rounded-lg border border-slate-200 p-5">
+          <h3 className="font-medium">{t("docs.dataPlane.keyTitle")}</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            {t("docs.dataPlane.keyDesc")}
+          </p>
+          <ul className="mt-3 space-y-1.5 text-sm text-slate-500">
+            <li>{t("docs.dataPlane.rule1")}</li>
+            <li>{t("docs.dataPlane.rule2")}</li>
+            <li>{t("docs.dataPlane.rule3")}</li>
+            <li>{t("docs.dataPlane.rule4")}</li>
+          </ul>
+          <a
+            href="#/console/keys"
+            className="mt-3 inline-block text-sm text-slate-600 underline hover:text-slate-900"
+          >
+            {t("docs.dataPlane.consoleLink")}
+          </a>
+        </div>
+        <p className="max-w-3xl text-xs text-slate-400">
+          {t("docs.dataPlane.mcpNote")}
+        </p>
       </section>
 
       {/* 三、需求单流程（八态状态机步骤条） */}

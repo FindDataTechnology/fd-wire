@@ -223,7 +223,7 @@ export async function fetchAllArtifacts(
 // ── 我的数据：客户数据集与连接器（wire-customer-local-data 任务组 3）────────
 // 路径/载荷严格对齐冻结契约 reports/interfaces.md §3.3 客户面（Bearer 登录身份）。
 
-export type DatasetSourceKind = "upload" | "connector";
+export type DatasetSourceKind = "upload" | "connector" | "declared" | "derived";
 
 export const SYNC_STATUSES = [
   "idle",
@@ -281,6 +281,10 @@ export interface Correction {
   value: unknown;
   values: Record<string, unknown> | null;
   actor: string;
+  /** 写入通道归属（wire-customer-data-engine）：console 成员 / data-key 应用 / agent。 */
+  channel?: "console" | "data-key" | "agent";
+  actor_id?: string | null;
+  actor_label?: string | null;
   created_at: string;
   reverted_at: string | null;
   dangling_at: string | null;
@@ -455,6 +459,95 @@ export function resumeDataset(
     method: "POST",
     body: { accept_columns: acceptColumns },
   }) as Promise<Dataset>;
+}
+
+// ── 数据面 key（wire-customer-data-engine 5.2）────────────────────
+
+export interface DataPlaneKey {
+  id: string;
+  label: string;
+  fingerprint: string;
+  dataset_ids: string[];
+  status: "active" | "revoked";
+  created_at: string;
+  revoked_at: string | null;
+  last_used_at: string | null;
+}
+
+export interface DataPlaneKeyCreated extends DataPlaneKey {
+  /** 明文仅铸造响应一次；落库只有 sha256。 */
+  key: string;
+}
+
+export function fetchDataPlaneKeys(): Promise<DataPlaneKey[]> {
+  return requestJson(`${API_BASE}/v1/data-plane-keys`, {
+    method: "GET",
+  }) as Promise<DataPlaneKey[]>;
+}
+
+/** 铸造：dataset_ids 空 = 本企业全部数据集。 */
+export function createDataPlaneKey(payload: {
+  label: string;
+  dataset_ids?: string[];
+}): Promise<DataPlaneKeyCreated> {
+  return requestJson(`${API_BASE}/v1/data-plane-keys`, {
+    method: "POST",
+    body: payload,
+  }) as Promise<DataPlaneKeyCreated>;
+}
+
+/** 吊销即时生效（验证路径无缓存层）。 */
+export function revokeDataPlaneKey(keyId: string): Promise<DataPlaneKey> {
+  return requestJson(`${API_BASE}/v1/data-plane-keys/${keyId}`, {
+    method: "DELETE",
+  }) as Promise<DataPlaneKey>;
+}
+
+// ── 结构化查询（wire-customer-data-engine 5.3；与 MCP 工具零漂移）──
+
+export type QueryFilterOp =
+  | "eq" | "ne" | "gt" | "gte" | "lt" | "lte"
+  | "in" | "notin" | "like" | "isnull" | "notnull";
+
+export interface QueryFilter {
+  column: string;
+  op: QueryFilterOp;
+  value?: unknown;
+  values?: unknown[];
+}
+
+export interface QuerySort {
+  column: string;
+  dir: "asc" | "desc";
+}
+
+export interface DatasetQueryInput {
+  filters?: QueryFilter[];
+  sort?: QuerySort[];
+  limit?: number;
+  offset?: number;
+  count_only?: boolean;
+  raw?: boolean;
+}
+
+export interface DatasetQueryResult {
+  columns: DatasetColumn[];
+  rows: Array<Record<string, unknown>>;
+  total: number;
+  limit: number;
+  offset: number;
+  truncated: boolean;
+}
+
+/** 结构化查询（服务端执行：过滤/排序/精确 total；行含 __row_id 锚）。 */
+export function queryDataset(
+  datasetId: string,
+  input: DatasetQueryInput,
+): Promise<DatasetQueryResult> {
+  return requestJson(`${API_BASE}/v1/datasets/${datasetId}/query`, {
+    method: "POST",
+    body: input,
+  }) as Promise<DatasetQueryResult>;
 }
 
 /** 生成一次性配对令牌（15 分钟、单次；明文仅此一次）。 */

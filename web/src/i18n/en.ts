@@ -111,7 +111,33 @@ const en: Translation = {
       pricingNote:
         "Four tiers (Free / Basic / Standard / Custom) with monthly included quota, stop at quota, restored next month — see the pricing page →",
     },
-    demands: {
+    dataPlane: {
+    title: "Data-Plane REST API",
+    intro:
+      "The REST service face for customer data (derived datasets included): the same engine as the MCP tools, zero semantic drift. Auth via data-plane keys (minted in the console); reads are unmetered, guarded by rate limits and storage quotas.",
+    colMethod: "Method",
+    colEndpoint: "Endpoint",
+    colPurpose: "Purpose",
+    purposeCreate: "Create dataset: file upload / connector / declared (columns + PK)",
+    purposeQuery: "Structured query: filters (11 operators) / sort / paging / count / distinct",
+    purposeAggregate: "Aggregate: multi-column group by × count/sum/avg/min/max",
+    purposeWrite: "Batch write: single transaction ≤1,000 ops, all-or-nothing",
+    purposeColumn: "Schema evolution: add a nullable column",
+    purposeDerive: "Query derivation: materialize results into a new dataset (lineage kept)",
+    purposeJoin: "Indicator-join derivation: customer data × platform indicators (misses join as null)",
+    purposeLineage: "Lineage: own derivation source and derived children",
+    keyTitle: "Data-plane keys & key discipline",
+    keyDesc:
+      "Data-plane keys (wdk- prefix) never expire, revoke instantly, and can be scoped to a dataset allowlist. They are server-side secrets:",
+    rule1: "Server-side only — never in browser pages or client code;",
+    rule2: "Browser frontends always go through a BFF (session + server-side forwarding; a reference BFF is open-sourced at fd-wire/bff-reference);",
+    rule3: "The REST data plane ships with CORS disabled — browser direct calls are rejected by design;",
+    rule4: "Platform indicator data never rides REST — use the MCP calling face (long-lived key) or materialize via indicator-join derivation.",
+    consoleLink: "Manage data-plane keys in the console →",
+    mcpNote:
+      "Agents and automation should prefer the MCP calling face (wire entrance): same engine, metering built in. The REST data plane is for self-built frontends and business systems.",
+  },
+  demands: {
       title: "Demand workflow",
       intro:
         "Missing an indicator? File a data demand — an eight-state machine keeps the timeline visible end to end, with delivery into your private scope (cell).",
@@ -213,6 +239,7 @@ const en: Translation = {
       datasets: "My data",
       demands: "Demands",
       usage: "Usage",
+    keys: "Data-Plane Keys",
     },
     topbar: {
       org: "Customer",
@@ -329,6 +356,8 @@ const en: Translation = {
       source: {
         upload: "Upload",
         connector: "Connector",
+        declared: "Declared",
+        derived: "Derived",
       },
       rowCount: "{{count}} rows",
       sizeLabel: "Size",
@@ -425,6 +454,14 @@ const en: Translation = {
           created: "Added to the allowlist and the dataset is created.",
         },
       },
+      query: {
+        column: "Column…",
+        value: "Value",
+        sort: "Sort…",
+        apply: "Query",
+        reset: "Reset",
+        activeNote: "server-side filter active",
+      },
       detail: {
         back: "Back to list",
         loading: "Loading detail…",
@@ -456,6 +493,10 @@ const en: Translation = {
         },
         reverted: "Reverted",
         dangling: "Dangling",
+        channel: {
+          "data-key": "App write",
+          agent: "Agent write",
+        },
         revert: "Revert",
         reverting: "Reverting…",
         revertError: "Failed to revert",
@@ -566,6 +607,38 @@ const en: Translation = {
       loading: "Loading usage…",
       errorTitle: "Failed to load usage",
       retry: "Retry",
+    },
+    keys: {
+      title: "Data-Plane Keys",
+      subtitle:
+        "Credentials for the REST data plane (customer-data REST API): non-expiring, revocation is immediate. Server-side only — never in a browser.",
+      mintTitle: "Mint a new key",
+      labelPlaceholder: "Label (e.g. order-sync)",
+      mintCta: "Mint",
+      minting: "Minting…",
+      allowlistLabel: "Dataset allowlist (none selected = all datasets)",
+      allowlistScoped: "Scoped to {{count}} datasets",
+      noDatasets: "No datasets yet",
+      onceTitle: "Plaintext shown only once",
+      copy: "Copy",
+      copied: "Copied",
+      onceDismiss: "Saved it",
+      onceHint:
+        "Only a hash is stored — the plaintext cannot be shown again. Store it in your server-side secret manager (BFF deploy env) now.",
+      colLabel: "Label",
+      colFingerprint: "Fingerprint",
+      colScope: "Scope",
+      colStatus: "Status",
+      colLastUsed: "Last used",
+      scopeAll: "All datasets",
+      statusActive: "Active",
+      statusRevoked: "Revoked",
+      revokeCta: "Revoke",
+      empty: "No data-plane keys yet.",
+      loading: "Loading…",
+      errorTitle: "Data-plane key operation failed",
+      disciplineNote:
+        "Key discipline: the key is a server-side secret. Browser frontends always reach the data plane through a BFF (session + server-side forwarding) — never embed the key in pages or client code.",
     },
   },
   admin: {

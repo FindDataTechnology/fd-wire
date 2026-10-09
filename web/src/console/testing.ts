@@ -156,6 +156,20 @@ export function installConsoleBackend(
     connectors.set(connector.id, { ...connector });
   }
   const corrections = new Map<string, Correction[]>();
+  const keysStore = new Map<
+    string,
+    {
+      id: string;
+      customer_id?: string;
+      label: string;
+      fingerprint: string;
+      dataset_ids: string[];
+      status: string;
+      created_at: string;
+      revoked_at: string | null;
+      last_used_at: string | null;
+    }
+  >();
   const syncs = new Map<string, SyncRecord[]>();
   let nextUploadSeq = 1;
   let nextCorrectionId = 1;
@@ -507,6 +521,100 @@ export function installConsoleBackend(
           total: data.rows.length,
         }),
       );
+    }
+
+    // ── 数据面（wire-customer-data-engine）：结构化查询 + key 三端点 ──
+    match = path.match(/^\/api\/v1\/datasets\/([^/]+)\/query$/);
+    if (match && method === "POST") {
+      const dataset = ownDataset(match[1]);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      const body = (calls[calls.length - 1]!.body ?? {}) as {
+        filters?: Array<{ column: string; op: string; value?: unknown }>;
+        sort?: Array<{ column: string; dir: string }>;
+        limit?: number;
+        offset?: number;
+      };
+      const data = rowsStore.get(dataset.id) ?? { columns: dataset.columns, rows: [] };
+      let out = [...data.rows];
+      for (const f of body.filters ?? []) {
+        out = out.filter((row) => {
+          const cell = row[f.column];
+          const value = f.value;
+          switch (f.op) {
+            case "eq": return cell === value;
+            case "ne": return cell !== value;
+            case "gt": return Number(cell) > Number(value);
+            case "lt": return Number(cell) < Number(value);
+            case "like": return String(cell ?? "").includes(String(value ?? ""));
+            case "isnull": return cell == null;
+            case "notnull": return cell != null;
+            default: return true;
+          }
+        });
+      }
+      for (const s of [...(body.sort ?? [])].reverse()) {
+        out.sort((a, b) => {
+          const av = a[s.column];
+          const bv = b[s.column];
+          const cmp = av === bv ? 0 : av == null ? -1 : bv == null ? 1 : String(av) < String(bv) ? -1 : 1;
+          return s.dir === "desc" ? -cmp : cmp;
+        });
+      }
+      const limit = body.limit ?? 50;
+      const offset = body.offset ?? 0;
+      return Promise.resolve(
+        jsonResponse({
+          columns: data.columns,
+          rows: out.slice(offset, offset + limit),
+          total: out.length,
+          limit,
+          offset,
+          truncated: out.length > offset + Math.min(out.length - offset, limit),
+        }),
+      );
+    }
+
+    if (path === "/api/v1/data-plane-keys" && method === "GET") {
+      return Promise.resolve(
+        jsonResponse(
+          [...keysStore.values()].filter((k) => !k.customer_id || k.customer_id === customerId),
+        ),
+      );
+    }
+    if (path === "/api/v1/data-plane-keys" && method === "POST") {
+      const body = (calls[calls.length - 1]!.body ?? {}) as {
+        label?: string;
+        dataset_ids?: string[];
+      };
+      const id = `k${keysStore.size + 1}`;
+      const fingerprint = `fp${id.padStart(12, "0")}`;
+      const created = {
+        id,
+        customer_id: customerId,
+        label: body.label ?? "unlabeled",
+        fingerprint,
+        dataset_ids: body.dataset_ids ?? [],
+        status: "active",
+        created_at: "2026-10-10T00:00:00Z",
+        revoked_at: null,
+        last_used_at: null,
+      };
+      keysStore.set(id, created);
+      return Promise.resolve(
+        jsonResponse({ ...created, key: `wdk-test-${id}` }, 201),
+      );
+    }
+    match = path.match(/^\/api\/v1\/data-plane-keys\/([^/]+)$/);
+    if (match && method === "DELETE") {
+      const row = keysStore.get(match[1]);
+      if (!row) {
+        return Promise.resolve(jsonResponse({ detail: "key not found" }, 404));
+      }
+      row.status = "revoked";
+      row.revoked_at = "2026-10-10T01:00:00Z";
+      return Promise.resolve(jsonResponse(row));
     }
 
     match = path.match(/^\/api\/v1\/datasets\/([^/]+)\/corrections$/);

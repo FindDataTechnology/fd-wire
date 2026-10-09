@@ -29,6 +29,7 @@ import { ChatPage } from "../console/ChatPage";
 import { ArtifactsPage } from "../console/ArtifactsPage";
 import { DatasetsPage } from "../console/DatasetsPage";
 import { UsagePage } from "../console/UsagePage";
+import { KeysPage } from "../console/KeysPage";
 import { CONTACT_MAILTO } from "../views/HomeView";
 
 type BootstrapPhase =
@@ -308,6 +309,7 @@ export function ConsoleView({
         />
       )}
       {tab === "usage" && <UsagePage />}
+      {tab === "keys" && <KeysPage />}
     </ConsoleLayout>
   );
 }

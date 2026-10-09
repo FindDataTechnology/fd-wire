@@ -104,7 +104,33 @@ const zh = {
       pricingNote:
         "四档套餐（免费/基础/标准/自定义）月费含额、用完即停、次月恢复——详见定价页 →",
     },
-    demands: {
+    dataPlane: {
+    title: "数据面 REST API",
+    intro:
+      "客户数据（含派生数据集）的 REST 服务面：与 MCP 工具同一执行引擎、零语义漂移。数据面 Key 鉴权（控制台铸造），读取不占额度、以限流与存储配额为闸。",
+    colMethod: "方法",
+    colEndpoint: "端点",
+    colPurpose: "用途",
+    purposeCreate: "建集：文件上传 / 连接器 / 声明式（列与主键）",
+    purposeQuery: "结构化查询：过滤（11 种操作符）/排序/分页/计数/去重",
+    purposeAggregate: "聚合：group by 多列 × count/sum/avg/min/max",
+    purposeWrite: "批量写：单事务 ≤1000 op、失败整批回滚",
+    purposeColumn: "schema 演化：新增可空列",
+    purposeDerive: "查询派生：结果物化成新数据集（血缘留档）",
+    purposeJoin: "指标连接派生：客户数据 × 平台指标（未命中填 null）",
+    purposeLineage: "血缘：自身派生来源与派生子集",
+    keyTitle: "数据面 Key 与持钥纪律",
+    keyDesc:
+      "数据面 Key（wdk- 前缀）不过期、吊销即时生效、可限定数据集允许清单。它是服务端秘密：",
+    rule1: "仅服务端持有——绝不放进浏览器页面或前端代码；",
+    rule2: "浏览器前端一律经 BFF 访问（会话 + 服务端转发，参考 BFF 已开源在 fd-wire/bff-reference）；",
+    rule3: "REST 数据面不开 CORS，浏览器直连会被拒——这是设计而非限制；",
+    rule4: "平台指标数据不经 REST——走 MCP 调用面（长命 Key）或指标连接派生物化。",
+    consoleLink: "去控制台管理数据面 Key →",
+    mcpNote:
+      "agent 与自动化编排请优先走 MCP 调用面（wire 入口）：同源引擎、天然计量；REST 数据面面向自建前端与业务系统。",
+  },
+  demands: {
       title: "需求单流程",
       intro:
         "目录里没有的指标，提交数据需求单——八态状态机全程可见，交付进入私有范围（cell）。",
@@ -204,6 +230,7 @@ const zh = {
       datasets: "我的数据",
       demands: "需求单",
       usage: "用量",
+    keys: "数据面 Key",
     },
     topbar: {
       org: "客户",
@@ -313,6 +340,8 @@ const zh = {
       source: {
         upload: "上传",
         connector: "连接器",
+        declared: "声明建集",
+        derived: "派生",
       },
       rowCount: "{{count}} 行",
       sizeLabel: "大小",
@@ -407,6 +436,14 @@ const zh = {
           created: "已加入白名单并建成数据集。",
         },
       },
+      query: {
+        column: "选列…",
+        value: "值",
+        sort: "排序…",
+        apply: "查询",
+        reset: "重置",
+        activeNote: "查询态（服务端过滤生效）",
+      },
       detail: {
         back: "返回列表",
         loading: "详情加载中…",
@@ -415,7 +452,7 @@ const zh = {
         previewHint:
           "双击单元格修改；行尾可删行；底部可加行——修正写入修正层，不回写客户源。",
         previewLoading: "预览加载中…",
-        previewEmpty: "暂无可预览的数据行。",
+          previewEmpty: "暂无可预览的数据行。",
         pagination: "共 {{total}} 行 · 第 {{page}} / {{pages}} 页",
         prev: "上一页",
         next: "下一页",
@@ -438,6 +475,10 @@ const zh = {
         },
         reverted: "已回滚",
         dangling: "悬空",
+        channel: {
+          "data-key": "应用写",
+          agent: "Agent 写",
+        },
         revert: "回滚",
         reverting: "回滚中…",
         revertError: "回滚失败",
@@ -543,6 +584,38 @@ const zh = {
       loading: "用量加载中…",
       errorTitle: "用量加载失败",
       retry: "重试",
+    },
+    keys: {
+      title: "数据面 Key",
+      subtitle:
+        "REST 数据面（客户数据 REST API）的调用凭据：不过期、吊销即时生效；仅限服务端持有，不得进入浏览器。",
+      mintTitle: "铸造新 Key",
+      labelPlaceholder: "标签（如：订单系统）",
+      mintCta: "铸造",
+      minting: "铸造中…",
+      allowlistLabel: "数据集允许清单（不选 = 本企业全部数据集）",
+      allowlistScoped: "作用域：仅 {{count}} 个数据集",
+      noDatasets: "尚无数据集",
+      onceTitle: "Key 明文仅此一次展示",
+      copy: "复制",
+      copied: "已复制",
+      onceDismiss: "我已抄存",
+      onceHint:
+        "落库只有哈希——关闭后无法再查看明文；请立即存入服务端密管（BFF 部署 env）。",
+      colLabel: "标签",
+      colFingerprint: "指纹",
+      colScope: "作用域",
+      colStatus: "状态",
+      colLastUsed: "最近使用",
+      scopeAll: "全部数据集",
+      statusActive: "在役",
+      statusRevoked: "已吊销",
+      revokeCta: "吊销",
+      empty: "尚无数据面 Key。",
+      loading: "加载中…",
+      errorTitle: "数据面 Key 操作失败",
+      disciplineNote:
+        "持钥纪律：Key 是服务端秘密，浏览器前端一律经 BFF（会话 + 服务端转发）访问数据面，绝不把 Key 放进页面或前端代码。",
     },
   },
   admin: {

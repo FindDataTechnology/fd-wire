@@ -5,7 +5,13 @@
 import { type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-export type ConsoleTab = "chat" | "artifacts" | "datasets" | "demands" | "usage";
+export type ConsoleTab =
+  | "chat"
+  | "artifacts"
+  | "datasets"
+  | "demands"
+  | "usage"
+  | "keys";
 
 export const CONSOLE_TABS: ReadonlyArray<{
   id: ConsoleTab;
@@ -28,6 +34,8 @@ export const CONSOLE_TABS: ReadonlyArray<{
   },
   // 用量页已正式化（usage-transparency 6.2）：不再是「上线中」占位。
   { id: "usage", href: "#/console/usage", labelKey: "console.nav.usage" },
+  // 数据面 key（wire-customer-data-engine 6.2）：REST 数据面凭据管理。
+  { id: "keys", href: "#/console/keys", labelKey: "console.nav.keys" },
 ];
 
 export function ConsolePlaceholder({
