@@ -153,7 +153,7 @@ sub2api 余额预检约束；映射关系随开户自动建立，不靠手工改
 
 ---
 
-## R3【P1】客户凭据自助铸造与吊销（免人工 ceremony）
+## R3【P1】客户凭据自助铸造与吊销（免人工 ceremony）—— 已交付（代铸+admin 代吊，sha-1ffa7cb 起，生产实弹 201→200→401；wire 侧 cell-manager mint-key/revoke-key 已接）
 
 ### 现状
 
@@ -285,6 +285,14 @@ registry 生成的 per-server location 之外，加一条通配/默认 MCP 前�
 - [ ] 客户 key 请求别家 cell 路径 → 403（且 body 带授权语义说明）
 - [ ] 本企业 cell 与共享业务面仍 200；未注册路径的控制台其他路由不受影响
 
+### 交付状态（2026-10-09 复验：通过）
+
+另一 session 已修：`location ^~ /fd-wire-cell-` → 403 JSON（授权语义），
+已注册 cell 靠最长前缀胜出不受影响。本线实弹：未注册 cell → **403 +
+`{"error":"FORBIDDEN","message":"该 cell 不在你的授权范围或不存在"}`**，
+own cell / 共享面仍 200。对接方文档第 7 节的临时提示（405 按 403 处理）
+可在下次文档整理时移除。
+
 ---
 
 ## R5【P0】退租链路的 scope 删除被边缘拦（405）→ 授权面残留
@@ -319,6 +327,27 @@ registry 条目还在线、caller-map 映射还在库**，退租卡死在半途�
       回执无 `scope_error`
 - [ ] 不影响 GET/POST/PATCH 等其它方法的现有行为
 
+### 交付状态（2026-10-09 复验：通过 + 本线补两处未覆盖路径）
+
+另一 session 已修（三层根因：公网 DELETE /api/iam/groups 被 GET-only 路由
+遮蔽 405 → /api/management 面因 IdP 同步删除 502 → /api/internal/* 被 nginx
+`^~` 劫去 8091）。修法 = cell-manager `InternalScopeDeleter` 走
+`POST /api/internal/delete-group` + `delete_from_keycloak=false`（只删 Mongo
+不碰 Logto）+ nginx 精确 location 放行。
+
+本线复验时实弹抓到**两个未覆盖路径**（e2e001 全生命周期）并修复：
+
+1. `manager.purge`（retention 到期批量清除）仍调旧通道 → purge-expired
+   整步失败、到期清除卡死。修：purge 走 `_delete_scope_resilient`
+   （优先 InternalScopeDeleter，与 teardown 同通道）
+2. **退租不摘预检映射**：teardown/purge 都不删 caller-map → username
+   永久占位（e2e001 实证残留）。修：`HttpRegistryClient.delete_caller_map`
+   + teardown 摘除（失败以 `caller_map_error` 留痕不中止）
+
+终验（final001 全生命周期）：grant→provision→deprovision→purge 零残留
+（caller-map/scope/条目/容器/卷全清）；回归 drillcust001 与平台凭据
+cell/biz 均 200。cell-manager 125 passed。
+
 ## R6【P1】预检把「计费面查不到用户」误分类为额度不足
 
 ### 现状
@@ -343,3 +372,11 @@ fail-closed 方向是对的（拒了），但**语义误导**：对接方文档�
       INSUFFICIENT_BALANCE），审计 reason 一致
 - [ ] 真余额耗尽仍返回 INSUFFICIENT_BALANCE（不回归）
 - [ ] 对接方文档同步补该错误码语义
+
+### 交付状态（2026-10-09 复验：通过）
+
+另一 session 已修：readUser 404 → 独立 verdict → `402 BILLING_ACCOUNT_MISSING`
+（中文消息指向开户缺口）+ audit `rejected_billing_account_missing`；真余额
+耗尽仍 `INSUFFICIENT_BALANCE`（单测护栏）；对接方文档已补。本线实弹
+（e2e001，映射在而账户不存在）：返回 BILLING_ACCOUNT_MISSING、审计
+`readUser 404: billing account not found`。
