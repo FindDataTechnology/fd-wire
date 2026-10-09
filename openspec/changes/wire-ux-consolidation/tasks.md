@@ -29,5 +29,5 @@
 ## 5. 集成与发布
 
 - [x] 5.1 全量回归：web vitest + api pytest 全绿，openspec validate wire-ux-consolidation --strict 通过。
-- [ ] 5.2 双镜像构建滚动（web+api 经既有发布通道），生产验证六路由页脚形态、控制台居中、AI 构建引导卡、需求单提交→通知→列表全链、存量迁移后 admin 派发台只见三态。
-- [ ] 5.3 运营知会：派发台八态→三态操作语义变化同步内部（备注进 change reports 或 INFRA-NOTES）。
+- [x] 5.2 双镜像构建滚动（web+api 经既有发布通道），生产验证六路由页脚形态、控制台居中、AI 构建引导卡、需求单提交→通知→列表全链、存量迁移后 admin 派发台只见三态。
+- [x] 5.3 运营知会：派发台八态→三态操作语义变化同步内部（备注进 change reports 或 INFRA-NOTES）。
