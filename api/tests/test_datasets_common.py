@@ -28,15 +28,25 @@ from fd_wire_api.datasets.db import reset_datasets_runtime
 from fd_wire_api.datasets.ingest import (
     EngineCallError,
     EngineUnavailable,
+    TOOL_ADD_COLUMN,
+    TOOL_AGGREGATE,
     TOOL_CORRECTION_ADD,
     TOOL_CORRECTION_LIST,
     TOOL_CORRECTION_REVERT,
+    TOOL_CREATE_DECLARED,
     TOOL_DELETE,
+    TOOL_DERIVE,
+    TOOL_DERIVE_REFRESH,
     TOOL_INGEST_ABORT,
     TOOL_INGEST_BEGIN,
     TOOL_INGEST_CHUNK,
     TOOL_INGEST_COMMIT,
+    TOOL_JOIN_INDICATORS,
+    TOOL_LINEAGE,
+    TOOL_OVERVIEW,
     TOOL_PREVIEW,
+    TOOL_QUERY,
+    TOOL_WRITE_BATCH,
     get_engine_client_factory,
 )
 
@@ -61,6 +71,28 @@ class FakeEngine:
         self.chunk_rows: int = 0
         self.commit_size_bytes: int = 4096
         self.fail_on: dict[str, Exception] = {}
+        #: 工具级引擎侧拒绝（返回 success=False 信封而非抛异常）
+        self.error_on: dict[str, str] = {}
+        self.overview_result: dict = {
+            "key": "any",
+            "columns": [
+                {"name": "id", "type": "INTEGER"},
+                {"name": "amount", "type": "REAL"},
+            ],
+            "rows": 2,
+            "size_bytes": 2048,
+            "capabilities": {"query": True},
+        }
+        self.query_result: dict = {
+            "columns": [{"name": "id", "type": "INTEGER"}],
+            "rows": [{"id": 1, "__row_id": "pk:[1]"}],
+            "total": 1,
+            "limit": 100,
+            "offset": 0,
+            "truncated": False,
+        }
+        self.aggregate_result: dict = {"group_by": ["region"], "groups": [{"region": "华东", "count": 2}], "group_count": 1, "truncated": False}
+        self.lineage_result: dict = {"derivation": [], "children": []}
         self.preview_result: dict = {
             "columns": [
                 {"name": "id", "type": "INTEGER"},
@@ -96,6 +128,9 @@ class FakeEngine:
         failure = self.fail_on.get(tool)
         if failure is not None:
             raise failure
+        error = self.error_on.get(tool)
+        if error is not None:
+            return {"success": False, "error": error}
         # 与真实客户端一致：返回前剥掉引擎的 success 信封
         result = self._result(tool, arguments)
         result.pop("success", None)
@@ -132,6 +167,45 @@ class FakeEngine:
             return {"success": True, "reverted": True}
         if tool == TOOL_DELETE:
             return {"success": True, "deleted": True}
+        # ── 数据处理引擎（wire-customer-data-engine §1–§4）──
+        if tool == TOOL_CREATE_DECLARED:
+            return {
+                "success": True,
+                "dataset_key": arguments["dataset_key"],
+                "rows": 0,
+                "columns": arguments["columns"],
+                "pk_columns": arguments.get("pk_columns") or [],
+            }
+        if tool == TOOL_QUERY:
+            return dict(self.query_result)
+        if tool == TOOL_AGGREGATE:
+            return dict(self.aggregate_result)
+        if tool == TOOL_WRITE_BATCH:
+            return {
+                "success": True,
+                "applied": len(arguments["ops"]),
+                "correction_ids": list(range(1, len(arguments["ops"]) + 1)),
+            }
+        if tool == TOOL_ADD_COLUMN:
+            return {
+                "success": True,
+                "column": arguments["column"],
+                "columns": [{"name": "id", "type": "INTEGER"}, arguments["column"]],
+            }
+        if tool in (TOOL_DERIVE, TOOL_JOIN_INDICATORS):
+            return {
+                "success": True,
+                "dataset_key": arguments["child_key"],
+                "rows": 3,
+                "kind": "join" if tool == TOOL_JOIN_INDICATORS else "query",
+                "unresolved_regions": [],
+            }
+        if tool == TOOL_DERIVE_REFRESH:
+            return {"success": True, "dataset_key": arguments["dataset_key"], "rows": 4, "refreshed": True}
+        if tool == TOOL_LINEAGE:
+            return dict(self.lineage_result)
+        if tool == TOOL_OVERVIEW:
+            return {**self.overview_result, "key": arguments["dataset_key"]}
         raise AssertionError(f"FakeEngine 未实现的工具: {tool}")
 
 
@@ -142,6 +216,10 @@ def datasets_env(tmp_path, monkeypatch):
     monkeypatch.setenv("FD_WIRE_DATASETS_UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("FD_WIRE_DATASETS_AUTO_CREATE_TABLES", "1")
     monkeypatch.setenv("FD_WIRE_INTERNAL_TOKEN", INTERNAL_TOKEN)
+    # materialization 侧（wire-customer-data-engine 6.1）：独立引擎必须同样
+    # 钉进临时库，否则落到 cwd 残留文件（schema 漂移）或跨测试串库
+    monkeypatch.setenv("MATERIALIZATION_DATABASE_URL", f"sqlite:///{tmp_path}/platform.db")
+    monkeypatch.setenv("MATERIALIZATION_AUTO_CREATE_TABLES", "1")
     install_fake_jwks(monkeypatch)
     make_console_env(
         tmp_path,
@@ -151,6 +229,9 @@ def datasets_env(tmp_path, monkeypatch):
     )
     reset_datasets_runtime()
     connector_routes._SYNC_SESSIONS.clear()
+    from fd_wire_api.materialization.db import reset_materialization_runtime
+
+    reset_materialization_runtime()
 
     fake = FakeEngine()
     seen_customers: list[str] = []

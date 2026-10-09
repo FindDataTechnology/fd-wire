@@ -17,7 +17,7 @@ import enum
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
@@ -80,6 +80,10 @@ class Plan(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
+
+    #: 数据面分层限额（wire-customer-data-engine 6.4）：None=缺省档；
+    #: {"storage_bytes": int, "max_dataset_rows": int}，后台可改价同渠道可改
+    limits_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     customers: Mapped[list["Customer"]] = relationship(back_populates="plan")
 

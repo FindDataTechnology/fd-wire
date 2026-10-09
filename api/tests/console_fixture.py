@@ -190,6 +190,9 @@ def make_console_env(
 
     db_url = f"sqlite:///{tmp_path/db_filename}"
     monkeypatch.setenv("FD_WIRE_ADMIN_DATABASE_URL", db_url)
+    # billing 模块的 init_billing（app lifespan）有独立引擎：不钉住就会落到
+    # cwd 的 ./billing.db 滞留文件（跨运行残留 schema），与 admin 库同源隔离
+    monkeypatch.setenv("BILLING_DATABASE_URL", db_url)
     monkeypatch.setenv("FD_WIRE_ADMIN_TOKEN", "test-admin-token")
     if gate is not None:
         monkeypatch.setenv("FD_WIRE_ADMIN_BEARER_GATE", gate)

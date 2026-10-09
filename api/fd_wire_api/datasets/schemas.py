@@ -18,9 +18,9 @@ class ColumnIn(BaseModel):
 
 
 class DatasetSourceIn(BaseModel):
-    """数据集来源（上传 / 连接器白名单），随 kind 互斥取用。"""
+    """数据集来源（上传 / 连接器白名单 / 声明式建集），随 kind 互斥取用。"""
 
-    kind: Literal["upload", "connector"]
+    kind: Literal["upload", "connector", "declared"]
     upload_id: str | None = None
     connector_id: str | None = None
     #: 连接器本地源名（连接器本地配置 sources[].name 的映射键）；上传类忽略
@@ -28,6 +28,10 @@ class DatasetSourceIn(BaseModel):
     #: 源内的表名/文件名（连接器拉数对象）；上传类忽略
     source_ref: str | None = Field(default=None, max_length=512)
     schedule_cron: str | None = Field(default=None, max_length=64)
+    #: declared 专用：列声明 [{name, type(INTEGER|REAL|TEXT)}]（wire-customer-data-engine 2.3）
+    columns: list[ColumnIn] | None = None
+    #: declared 专用：主键列（成为行锚；缺省行哈希兜底）
+    pk_columns: list[str] | None = None
 
 
 class DatasetCreateIn(BaseModel):

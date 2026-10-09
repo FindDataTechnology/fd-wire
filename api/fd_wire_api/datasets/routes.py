@@ -42,6 +42,7 @@ from .ingest import (
     TOOL_CORRECTION_ADD,
     TOOL_CORRECTION_LIST,
     TOOL_CORRECTION_REVERT,
+    TOOL_CREATE_DECLARED,
     TOOL_DELETE,
     TOOL_INGEST_ABORT,
     TOOL_INGEST_BEGIN,
@@ -258,9 +259,67 @@ def create_dataset(
         return _create_from_connector(
             db, customer_id=customer_id, name=payload.name, source=source
         )
+    if source.kind == "declared":
+        return _create_from_declared(
+            db, customer_id=customer_id, name=payload.name, source=source,
+            engine_factory=engine_factory,
+        )
     raise HTTPException(  # pragma: no cover - pydantic Literal 已拦
-        status_code=400, detail="source.kind 必须是 upload 或 connector"
+        status_code=400, detail="source.kind 必须是 upload、connector 或 declared"
     )
+
+
+def _create_from_declared(
+    db: Session,
+    *,
+    customer_id: str,
+    name: str,
+    source,
+    engine_factory: EngineClientFactory,
+) -> DatasetOut:
+    """声明式建集（wire-customer-data-engine 2.3）：业务系统不经过文件/连接器，
+    直接声明列/类型/主键建空集，随后经数据面批量写填充。引擎 create_declared
+    内部走 ingest 原语，产物与上传/连接器数据集无差别。"""
+    if not source.columns:
+        raise HTTPException(status_code=400, detail="declared 来源必须带 columns（列声明）")
+    columns = [c.model_dump() for c in source.columns]
+    pk_columns = list(source.pk_columns or [])
+    key = service.allocate_key(db, customer_id=customer_id, name=name)
+    client = engine_factory(customer_id)
+    try:
+        result = client.call(
+            TOOL_CREATE_DECLARED,
+            {
+                "dataset_key": key,
+                "columns": columns,
+                "pk_columns": pk_columns,
+                "name": name,
+                "actor": _actor(customer_id),
+                "channel": "console",
+            },
+        )
+    except (EngineUnavailable, EngineCallError) as exc:
+        raise _ensure_engine_ok(exc) from exc
+    if not isinstance(result, dict) or "error" in result:
+        raise _ensure_engine_ok(
+            EngineCallError(str(result.get("error") if isinstance(result, dict) else result))
+        )
+    dataset = Dataset(
+        customer_id=customer_id,
+        key=key,
+        name=name,
+        source_kind="declared",
+        connector_id=None,
+        source_ref=None,
+        columns_json=columns,
+        row_count=0,
+        size_bytes=0,
+        sync_status="ok",
+    )
+    db.add(dataset)
+    db.commit()
+    db.refresh(dataset)
+    return DatasetOut.from_dataset(dataset)
 
 
 def _create_from_connector(

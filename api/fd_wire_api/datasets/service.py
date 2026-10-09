@@ -129,6 +129,31 @@ def dataset_storage_total(
     return int(total or 0)
 
 
+def storage_limit_for(*, customer_id: str) -> int:
+    """套餐分层的存储上限（wire-customer-data-engine 6.4）：
+    billing_plans.limits_json.storage_bytes（经 Customer.name 命名空间键解析）
+    → 无档位配置时回落全局缺省（datasets settings）。查询失败同样回落缺省
+    （fail-closed 方向仍是「有上限」，只是不放大）。"""
+    limit = None
+    try:
+        from ..admin.db import get_session as _platform_session
+        from ..billing.models import Customer as BillingCustomer
+
+        sess = _platform_session()
+        try:
+            row = sess.execute(
+                select(BillingCustomer).where(BillingCustomer.name == customer_id)
+            ).scalar_one_or_none()
+            if row is not None and row.plan is not None:
+                limits = row.plan.limits_json or {}
+                limit = limits.get("storage_bytes")
+        finally:
+            sess.close()
+    except Exception:  # noqa: BLE001 - 平台库不可达：回落缺省上限
+        limit = None
+    return int(limit) if limit else get_settings().dataset_storage_limit_bytes
+
+
 def ensure_storage_quota(
     db: Session,
     *,
@@ -136,8 +161,9 @@ def ensure_storage_quota(
     incoming_bytes: int,
     exclude_dataset_id: str | None = None,
 ) -> None:
-    """存储配额 fail-closed：``其他数据集已用 + 本次预期 > 上限`` 即 429。"""
-    limit = get_settings().dataset_storage_limit_bytes
+    """存储配额 fail-closed：``其他数据集已用 + 本次预期 > 上限`` 即 429。
+    上限套餐分层（storage_limit_for），无分层配置用全局缺省。"""
+    limit = storage_limit_for(customer_id=customer_id)
     used = dataset_storage_total(
         db, customer_id=customer_id, exclude_dataset_id=exclude_dataset_id
     )
@@ -150,7 +176,7 @@ def ensure_storage_quota(
 
 def ensure_new_dataset_room(db: Session, *, customer_id: str) -> None:
     """新数据集 fail-closed 前置：已用存储已达上限即 429（无空余可分配）。"""
-    limit = get_settings().dataset_storage_limit_bytes
+    limit = storage_limit_for(customer_id=customer_id)
     used = dataset_storage_total(db, customer_id=customer_id)
     if used >= limit:
         raise QuotaExceeded(

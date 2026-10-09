@@ -53,6 +53,16 @@ TOOL_CORRECTION_LIST = "customer_dataset_correction_list"
 TOOL_CORRECTION_DANGLING = "customer_dataset_correction_dangling"
 TOOL_CORRECTION_REVERT = "customer_dataset_correction_revert"
 TOOL_DELETE = "customer_dataset_delete"
+#: 数据处理引擎（wire-customer-data-engine §1–§4）
+TOOL_QUERY = "customer_dataset_query"
+TOOL_AGGREGATE = "customer_dataset_aggregate"
+TOOL_WRITE_BATCH = "customer_dataset_write_batch"
+TOOL_CREATE_DECLARED = "customer_dataset_create_declared"
+TOOL_ADD_COLUMN = "customer_dataset_add_column"
+TOOL_DERIVE = "customer_dataset_derive"
+TOOL_JOIN_INDICATORS = "customer_dataset_join_indicators"
+TOOL_DERIVE_REFRESH = "customer_dataset_derive_refresh"
+TOOL_LINEAGE = "customer_dataset_lineage"
 
 
 class EngineToolClient:

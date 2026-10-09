@@ -142,3 +142,30 @@ class Upload(DatasetsBase):
     content_sha256: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class DataPlaneKey(DatasetsBase):
+    """REST 数据面 key（wire-customer-data-engine §5，Q6/ADR 词汇表「数据面 key」）。
+
+    明文永不落库（sha256 唯一索引）；吊销 = status 翻转，验证路径即时拒。
+    allowlist 为空 = 本 cell 全部数据集；非空 = 仅列出的 dataset_id。
+    沿用长命 key 生命周期语义：不过期、可吊销且吊销即时生效。
+    """
+
+    __tablename__ = "data_plane_keys"
+    __table_args__ = (UniqueConstraint("key_hash", name="uq_data_plane_key_hash"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    customer_id: Mapped[str] = mapped_column(String(64), index=True)
+    label: Mapped[str] = mapped_column(String(200))
+    #: sha256(明文) hex —— 明文仅铸造响应返回一次
+    key_hash: Mapped[str] = mapped_column(String(64), index=True)
+    #: 展示指纹（key_hash 前 12 位），审计与控制台显示用
+    fingerprint: Mapped[str] = mapped_column(String(16))
+    #: [dataset_id…]；空数组 = 全部
+    allowlist_json: Mapped[list] = mapped_column(JSON, default=list)
+    #: active | revoked
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

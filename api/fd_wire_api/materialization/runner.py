@@ -40,6 +40,11 @@ from .credentials import CustomerCredentialMissingError, resolve_customer_creden
 from .db import utc_now_naive
 from .models import MaterializedArtifact
 from .quota import QuotaGuard, SqlQuotaGuard
+
+#: 引擎客户端工厂（模块级可注入：调度链不走 FastAPI DI；测试换假件）
+from ..datasets.ingest import (  # noqa: E402
+    get_engine_client_factory as _default_engine_factory,
+)
 from .settings import get_settings
 from .specs import ReadItem, SpecReadListError, extract_read_list
 
@@ -237,6 +242,85 @@ class MaterializationRunner:
         return ItemOutcome(code=item.code, ok=True, rows=rows)
 
     # -- 入口 ------------------------------------------------------------
+
+    def run_artifact_row(
+        self, artifact: MaterializedArtifact, *, now: datetime | None = None
+    ) -> RunResult:
+        """按产物行分派（调度器入口，wire-customer-data-engine 6.1）：
+        derived_dataset → 引擎重派生；其余 → 既有草稿物化路径。"""
+        if artifact.kind == "derived_dataset":
+            return self._run_derived_refresh(artifact, now=now)
+        return self.run(artifact.customer_id, artifact.artifact_id, now=now)
+
+    def _run_derived_refresh(
+        self, artifact: MaterializedArtifact, *, now: datetime | None = None
+    ) -> RunResult:
+        """derived_dataset 定时重派生：额度门 → 引擎 derive_refresh → 结果落库。
+
+        join 类重派生读平台指标的计量与额度硬停在 registry 行数门/入口侧
+        生效（引擎走 wire 入口 + cell 凭据，与产物物化同轨）——此处仅做
+        平台侧额度前置门，不重复计数。"""
+        if not artifact.enabled:
+            return self._record(
+                artifact, status=STATUS_DISABLED, rows=0,
+                error="产物已停用（enabled=false）", now=now,
+            )
+        verdict = self._quota_guard.check(artifact.customer_id, now=now)
+        if not verdict.allowed:
+            if verdict.exhausted:
+                self._record_hardstop(artifact.customer_id, now=now)
+            return self._record(
+                artifact, status=verdict.status or STATUS_FAILED, rows=0,
+                error=verdict.reason, now=now,
+            )
+        dataset_id = artifact.ref_key or ""
+        from sqlalchemy import select as _select
+
+        from ..datasets.models import Dataset
+        from ..datasets.routes import _ensure_engine_ok
+        from ..datasets.ingest import (
+            EngineCallError,
+            EngineUnavailable,
+            TOOL_DERIVE_REFRESH,
+            get_engine_client_factory,
+        )
+
+        from ..datasets.db import get_session as get_datasets_session
+
+        engine_factory = globals().get("_engine_factory_override") or _default_engine_factory
+
+        session = get_datasets_session()
+        try:
+            dataset = session.execute(
+                _select(Dataset).where(
+                    Dataset.id == dataset_id,
+                    Dataset.customer_id == artifact.customer_id,
+                )
+            ).scalar_one_or_none()
+        finally:
+            session.close()
+        if dataset is None:
+            return self._record(
+                artifact, status=STATUS_FAILED, rows=0,
+                error=f"派生数据集不存在或不属于本企业: {dataset_id}", now=now,
+            )
+        client = engine_factory(artifact.customer_id)
+        try:
+            result = client.call(TOOL_DERIVE_REFRESH, {"dataset_key": dataset.key})
+        except (EngineUnavailable, EngineCallError) as exc:
+            reason = str(_ensure_engine_ok(exc))
+            return self._record(
+                artifact, status=STATUS_FAILED, rows=0, error=reason, now=now
+            )
+        if isinstance(result, dict) and result.get("error"):
+            return self._record(
+                artifact, status=STATUS_FAILED, rows=0,
+                error=f"引擎拒绝: {result['error']}", now=now,
+            )
+        rows = int((result or {}).get("rows") or 0)
+        return self._record(
+            artifact, status=STATUS_SUCCESS, rows=rows, now=now
+        )
 
     def run(
         self,

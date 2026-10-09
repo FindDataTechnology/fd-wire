@@ -28,6 +28,10 @@ class PlanSeed:
     overage_unit_price_yuan: str
     is_public: bool = False
     is_active: bool = True
+    #: 数据面分层限额（wire-customer-data-engine 6.4，Q10）：
+    #: 缺省档 None → datasets 侧缺省（50 万行/数据集 + 全局存储设置）；
+    #: standard 起 = 业务档（500 万行/数据集 + 5GB 存储）。
+    limits: dict | None = None
 
     @property
     def monthly_price_micro(self) -> int:
@@ -44,7 +48,10 @@ class PlanSeed:
 PUBLIC_SEEDS: tuple[PlanSeed, ...] = (
     PlanSeed("free", "免费版", "0", 1_000, "0", is_public=True),
     PlanSeed("basic", "基础版", "10", 100_000, "0", is_public=True),
-    PlanSeed("standard", "标准版", "50", 1_000_000, "0", is_public=True),
+    PlanSeed(
+        "standard", "标准版", "50", 1_000_000, "0", is_public=True,
+        limits={"max_dataset_rows": 5_000_000, "storage_bytes": 5 * 1024**3},
+    ),
 )
 
 #: 旧三档（高客单演示定价）：seed 禁用退场（is_active=False），行保留可审计。
@@ -101,6 +108,7 @@ def seed_plans(session: Session) -> dict[str, Plan]:
                 overage_unit_price_micro=seed.overage_unit_price_micro,
                 is_active=seed.is_active,
                 is_public=seed.is_public,
+                limits_json=seed.limits,
             )
             session.add(existing)
             plans[seed.code] = existing

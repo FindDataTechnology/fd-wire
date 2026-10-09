@@ -128,6 +128,14 @@ app.include_router(materialization_router)
 # 客户数据集（wire-customer-local-data 任务组 2）：客户面（Bearer ID token，
 # wire-self-serve-launch 4.5 身份切换）
 app.include_router(datasets_router)
+
+# REST 数据面（wire-customer-data-engine）：读写端点 + key 管理面 + 后台只读
+from .data_plane import routes as data_plane_keys_routes  # noqa: E402
+from .data_plane.data_routes import router as data_plane_router  # noqa: E402
+
+app.include_router(data_plane_router)
+app.include_router(data_plane_keys_routes.router)
+app.include_router(data_plane_keys_routes.admin_router)
 # 连接器面（Bearer fwc_...）与内部只读概览；客户数据读写全经引擎 MCP 通道
 app.include_router(datasets_connector_router)
 # 溯源账本（wire-provenance-ledger 任务组 2）：客户面概览/时间线/状态/调档

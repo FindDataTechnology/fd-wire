@@ -923,8 +923,9 @@ def test_migration_0009_creates_materialized_artifacts(migrated_sqlite) -> None:
     inspector = inspect(engine)
     assert "materialized_artifacts" in inspector.get_table_names()
     columns = {c["name"] for c in inspector.get_columns("materialized_artifacts")}
+    # ref_key：wire-customer-data-engine 6.1 派生调度行的关联键
     assert columns == {
-        "id", "artifact_id", "customer_id", "kind", "spec", "schedule",
+        "id", "artifact_id", "customer_id", "kind", "ref_key", "spec", "schedule",
         "last_run_at", "last_status", "last_rows", "last_run_detail",
         "last_error", "enabled", "created_at",
     }

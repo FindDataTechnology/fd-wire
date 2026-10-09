@@ -118,7 +118,7 @@ def tick_once(
     try:
         for artifact in hits:
             try:
-                result = runner.run(artifact.customer_id, artifact.artifact_id, now=moment)
+                result = runner.run_artifact_row(artifact, now=moment)
             except Exception:  # noqa: BLE001 - 单产物失败不殃及同轮其它产物
                 logger.exception(
                     "materialization run crashed for artifact %s", artifact.artifact_id

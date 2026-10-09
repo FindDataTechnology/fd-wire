@@ -34,12 +34,17 @@ class MaterializedArtifact(MatBase):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    #: 来源草稿（ai_draft_artifacts.id）——同草稿只转正一次
-    artifact_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    #: 来源草稿（ai_draft_artifacts.id）——同草稿只转正一次；派生调度行
+    #: （wire-customer-data-engine 6.1）无草稿来源，置 NULL（唯一约束对
+    #: NULL 放行，关联键走 ref_key）
+    artifact_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     #: 归属企业（与 ai 切片同款字符串客户 id，如 "cust-001"）
     customer_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    #: 产物类型短名（dashboard / composite_indicator / research_report）
+    #: 产物类型短名（dashboard / composite_indicator / research_report /
+    #: derived_dataset——wire-customer-data-engine 6.1 定时重派生，经 ref_key 关联）
     kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    #: 非草稿产物的关联键（derived_dataset → datasets.id）；草稿产物为 NULL
+    ref_key: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     #: 转正时的 spec 快照（草稿 spec 列原样拷贝：{"title":..., "spec":{...}}）
     spec: Mapped[dict] = mapped_column(JSON, nullable=False)
     #: 五字段 cron（naive UTC）；NULL = 不调度
