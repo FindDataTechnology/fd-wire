@@ -92,7 +92,9 @@ jobs:
           # so passing it unconditionally is harmless there. NOTE: the action
           # input is `build-contexts` — `additional_contexts` is silently
           # ignored as an unexpected input (run 37520142803/37520691589).
-          build-contexts: daas=${{ github.workspace }}/daas-src
+          # main 是嵌套布局（引擎在 fd-daas-mcp/ 子目录；旧 internal-main
+          # 14065ac 为扁平根布局——2026-10-10 internal-main 已对齐 main）
+          build-contexts: daas=${{ github.workspace }}/daas-src/fd-daas-mcp
           tags: |
             ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.image }}:${{ steps.tag.outputs.tag }}
             ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.image }}:main
