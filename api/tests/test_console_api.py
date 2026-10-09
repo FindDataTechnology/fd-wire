@@ -651,3 +651,56 @@ def test_admin_mint_channel_posts_json_with_groups_list(monkeypatch) -> None:
     }
     assert captured["kw"]["headers"]["Authorization"] == "Bearer tok"
     assert out == {"key_id": "kid-shape", "key": "wgk-shape"}
+
+
+def test_quota_suspended_customer_zeroed(env) -> None:
+    """self-serve-onboarding「停用即断」额度侧：suspended 客户额度归零。"""
+    from fd_wire_api.billing.models import Customer
+
+    with Session(env.env.engine) as s:
+        cust = s.query(BillingCustomer).filter_by(sub2api_user_id="caller-1").one()
+        cust.status = "suspended"
+        s.commit()
+    resp = env.client.get("/internal/quota/caller-1", headers=INTERNAL)
+    assert resp.status_code == 200
+    doc = resp.json()
+    assert doc["included_lines"] == 0 and doc["remaining_lines"] == 0
+    assert doc["enforce_balance"] is False
+
+
+def test_patch_suspend_revokes_onboarded_keys(env, monkeypatch) -> None:
+    """「停用即断」key 侧：PATCH status=suspended 触发在册 key 吊销
+    （best-effort：吊销失败不阻塞停用）。"""
+    import fd_wire_api.admin.routes as admin_routes
+    from fd_wire_api.console.models import ConsoleOnboarding
+
+    with Session(env.env.engine) as s:
+        cust = s.query(BillingCustomer).filter_by(sub2api_user_id="caller-1").one()
+        s.add(
+            ConsoleOnboarding(
+                logto_sub=SUB_A, customer_id=cust.id, status="done", key_id="kid-x"
+            )
+        )
+        s.commit()
+        cid = cust.id
+
+    revoked: list[str] = []
+
+    class FakeChannel:
+        def revoke(self, key_id):
+            revoked.append(key_id)
+            return "revoked"
+
+    monkeypatch.setattr(
+        admin_routes, "_revoke_customer_keys_best_effort", lambda db, cid_: (
+            revoked.append("hook")
+        ),
+    )
+    # 直接驱动内部函数级语义：经 PATCH 端点（双闸凭据）
+    resp = env.client.patch(
+        f"/internal/admin/customers/{cid}",
+        json={"status": "suspended"},
+        headers=env.admin,
+    )
+    assert resp.status_code == 200 and resp.json()["status"] == "suspended"
+    assert revoked == ["hook"]  # 吊销钩子被触发（真实吊销由 default_mint_channel）

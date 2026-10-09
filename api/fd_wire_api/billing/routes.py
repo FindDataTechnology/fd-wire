@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 
 from ..admin.db import get_db
 from ..metering.models import MeteringRecord
-from .models import Customer
+from .models import Customer, CustomerStatus
 from .plans import list_public_plans
 
 router = APIRouter(tags=["billing"])
@@ -150,6 +150,8 @@ def caller_quota(caller: str, db: Session = Depends(get_db)) -> QuotaOut:
     """当月额度查询（caller = sub2api_user_id 承载的 wire 客户身份键）。
 
     未知 caller → 404（fail-closed：预检探针据此拒绝，不放行无主调用）。
+    非 active 客户（suspended/closed）额度归零——行数门据此即断
+    （self-serve-onboarding「停用即断」的额度侧实现）。
     """
     customer = db.execute(
         select(Customer).where(Customer.sub2api_user_id == caller)
@@ -159,12 +161,14 @@ def caller_quota(caller: str, db: Session = Depends(get_db)) -> QuotaOut:
     plan = customer.plan
     period = current_period()
     used = monthly_used_lines(db, caller, period)
+    active = customer.status == CustomerStatus.ACTIVE.value
+    included = plan.included_lines if (plan and active) else 0
     return QuotaOut(
         caller=caller,
         plan_code=plan.code if plan else "",
-        included_lines=plan.included_lines if plan else 0,
+        included_lines=included,
         used_lines=used,
-        remaining_lines=max(0, (plan.included_lines if plan else 0) - used),
+        remaining_lines=max(0, included - used),
         period=period,
         enforce_balance=bool(plan and plan.overage_unit_price_micro > 0),
     )

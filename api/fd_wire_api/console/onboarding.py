@@ -146,6 +146,29 @@ class AdminKeyMintChannel:
             )
         return {"key_id": str(key_id), "key": plaintext}
 
+    def revoke(self, key_id: str) -> str:
+        """admin 旁路吊销（DELETE /api/patch-keys/{key_id}，cell_manager 同径）。
+
+        返回 revoked | already_revoked | not_found；不可达抛 OnboardingError。
+        """
+        try:
+            resp = httpx.delete(
+                f"{self._base}{PATCH_KEYS_PATH}/{key_id}",
+                headers={"Authorization": f"Bearer {self._admin_token}"},
+                timeout=self._timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise OnboardingError(f"registry 吊销 key 不可达: {exc}") from exc
+        if resp.status_code == 404:
+            return "not_found"
+        if resp.status_code == 409:
+            return "already_revoked"
+        if resp.status_code != 200:
+            raise OnboardingError(
+                f"registry 吊销 key 失败: HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+        return "revoked"
+
 
 class HttpRegistryFace:
     """registry 授权束 HTTP 面（caller-map PUT + cell 面 upsert，幂等）。"""

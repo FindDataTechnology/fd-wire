@@ -249,7 +249,13 @@ def create_customer(
 def patch_customer(
     customer_id: int, payload: CustomerPatchIn, db: Session = Depends(get_db)
 ) -> CustomerOut:
-    """改套餐档位 / 客户状态（active | suspended | closed）；禁用档不可指派（409）。"""
+    """改套餐档位 / 客户状态（active | suspended | closed）；禁用档不可指派（409）。
+
+    状态转 suspended/closed 时 best-effort 吊销该客户经首登开户铸出的
+    registry key（console_onboardings.key_id 在册者；self-serve-onboarding
+    「停用即断」）。吊销失败不阻塞停用（治理动作不能因 registry 故障被
+    卡死），行数门侧另有非 active 额度归零兜底。
+    """
     if payload.plan_code is None and payload.status is None:
         raise HTTPException(status_code=422, detail="至少提供 plan_code 或 status 之一")
     customer = _customer_or_404(db, customer_id)
@@ -259,7 +265,34 @@ def patch_customer(
     if payload.status is not None:
         customer.status = payload.status.value
     db.flush()
+    if payload.status is not None and payload.status.value in (
+        CustomerStatus.SUSPENDED.value,
+        CustomerStatus.CLOSED.value,
+    ):
+        _revoke_customer_keys_best_effort(db, customer.id)
     return _customer_out(db, customer)
+
+
+def _revoke_customer_keys_best_effort(db: Session, customer_id: int) -> None:
+    """吊销该客户名下在册 key（幂等：revoked/already/not_found 均算达成）。"""
+    from ..console.models import ConsoleOnboarding
+    from ..console.onboarding import default_mint_channel
+
+    try:
+        channel = default_mint_channel()
+    except Exception:  # CELL_REGISTRY_TOKEN 未配置：无 key 可吊的部署面，跳过
+        return
+    rows = db.execute(
+        select(ConsoleOnboarding.key_id).where(
+            ConsoleOnboarding.customer_id == customer_id,
+            ConsoleOnboarding.key_id.is_not(None),
+        )
+    ).all()
+    for (key_id,) in rows:
+        try:
+            channel.revoke(key_id)
+        except Exception:
+            continue  # best-effort：单把失败不挡其余与停用本身
 
 
 # ---------------------------------------------------------------------------
