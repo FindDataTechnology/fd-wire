@@ -32,7 +32,7 @@
 
 - [x] 5.1 api admin 角色闸：`/internal/admin/*` 叠加 Logto Bearer + `wire-admin` 角色（无角色 403），X-Admin-Token 保留第二道；双闸单测（有角色无令牌拒、有令牌无角色拒、双全过）
 - [x] 5.2 web admin 占位退位：token 输入框退场、导航按角色显隐、请求自动附双凭据；`AdminPages` 测试更新
-- [ ] 5.3 令牌轮换（运维）：fd_wire_admin_token/internal/metering 三令牌轮换 + k8s Secret 滚动 + pod 重启验证；记录入 `reports/token-rotation.md`
+- [x] 5.3 令牌轮换（运维）：fd_wire_admin_token/internal/metering 三令牌轮换 + k8s Secret 滚动 + pod 重启验证；记录入 `reports/token-rotation.md`
 
 ## 6. 用量透明（api + web）
 
@@ -48,6 +48,6 @@
 
 ## 8. 发布与验收
 
-- [ ] 8.1 构建与全量测试：api pytest 全绿 + web vitest 全绿 + 镜像构建（Jenkins/GHA 按 fd-wire 既有通道）
+- [x] 8.1 构建与全量测试：api pytest 全绿 + web vitest 全绿 + 镜像构建（Jenkins/GHA 按 fd-wire 既有通道）
 - [ ] 8.2 部署滚动：api/web 滚动 + registry 探针独立 PR 灰度（先 wire 端点后探针）；生产冒烟（定价页四卡、登录流、旧三档 404）
 - [ ] 8.3 验收汇总：`reports/final-acceptance.md`（四档全链、行数门实弹、首登开户实弹、双闸、占位退位清单、令牌轮换记录）；`openspec validate wire-self-serve-launch --strict` 通过
