@@ -20,7 +20,7 @@
 
 ## 4. 正式登录与自助开户（api + web）
 
-- [ ] 4.1 Logto UI 手工（一次性，记录到 deploy 文档）：wire SPA 应用（回调 `https://wire.finddatatech.cloud/console/callback`、CORS wire 域）+ `wire-admin` 角色 + 挂现有管理员；截图/记录入 `reports/logto-setup.md`
+- [x] 4.1 Logto UI 手工（一次性，记录到 deploy 文档）：wire SPA 应用（回调 `https://wire.finddatatech.cloud/console/callback`、CORS wire 域）+ `wire-admin` 角色 + 挂现有管理员；截图/记录入 `reports/logto-setup.md`
 - [x] 4.2 api console auth 模块：`GET /api/console/auth/config` 运行时下发（未配置 configured=false）+ ID token 本地校验（JWKS/iss/aud/exp）+ sub→Customer 解析；伪造/过期令牌 401 单测
 - [x] 4.3 首登自动开户触发：无映射 sub 首登→调 cell-manager ceremony（free 档跳过 cell 配给）→成功后映射生效；断点幂等重试与半开户态测试（key 铸成但映射失败→重试不重复铸）
 - [x] 4.4 web 登录件平移：SPA+PKCE（抄 `fd-lex/web/src/console/auth.ts`）、sessionStorage、静默续期、登出；`LoginView` 激活、`console/customer.ts` 与 X-Customer-Id 占位退场；前端测试（配置未下发的阻塞态）
