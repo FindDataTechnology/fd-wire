@@ -220,13 +220,17 @@ describe("App 公开分享壳（wire-dashboard-share）", () => {
     window.location.hash = "";
   });
 
-  it("#/share/dashboard/* 渲染独立极简壳：Wire 顶栏在，站点导航/页脚不渲染", async () => {
+  it("#/share/dashboard/* 渲染独立极简壳：品牌锁定顶栏在，站点导航/页脚不渲染", async () => {
     window.location.hash = "#/share/dashboard/9?t=tok&v=2";
     // 无登录会话（分享页免登录红线）
     render(<App />);
 
     expect(await screen.findByTestId("share-invalid")).toBeTruthy();
-    expect(screen.getByTestId("share-topbar").textContent).toBe("Wire");
+    // 品牌锁定（wire-share-branding）：寻数·柏讯 + Wire 双语并呈
+    expect(screen.getByTestId("share-topbar").textContent).toContain(
+      "寻数·柏讯",
+    );
+    expect(screen.getByTestId("share-topbar").textContent).toContain("Wire");
     // 独立成壳：不进站点 header/footer，也无控制台布局
     expect(screen.queryByTestId("site-footer")).toBeNull();
     expect(screen.queryByTestId("console-footer")).toBeNull();

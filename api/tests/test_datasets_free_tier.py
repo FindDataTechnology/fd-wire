@@ -9,8 +9,9 @@
 - 数据面本地执行：query（eq/in/gt/gte/lt/lte/contains/startswith、排序、
   分页、count、distinct）与 aggregate（group by ≤3 × count/sum/avg/min/max）；
   免费窄面不支持的算子/非数值聚合明确 400；
-- 档位闸：连接器/声明式建集、derive/join/batchWrite/加列/修正 → 403
-  ``PLAN_TIER_REQUIRED``；lineage/修正清单最小空呈现；
+- 档位闸：连接器/声明式建集、derive/join/batchWrite/加列 → 403
+  ``PLAN_TIER_REQUIRED``；lineage/修正清单最小空呈现（修正三件套对 api
+  层已放行本地实现——wire-dataset-form-editing，见 test_local_corrections）；
 - 计量口径（D5/D7）：查询/聚合不产生 metering_records；
 - 双方言冒烟（5.3）：PG 方言编译断言（``->>`` 取值、数值 CAST、JSONB DDL）；
   SQLite 真跑即既有用例本体。
@@ -555,13 +556,8 @@ def test_free_tier_gates_return_plan_tier_required(free_env) -> None:
         f"/api/v1/datasets/{dataset_id}/columns", headers=headers,
         json={"column": {"name": "extra", "type": "TEXT"}},
     ))
-    assert_gate(free_env.client.post(
-        f"/api/v1/datasets/{dataset_id}/corrections", headers=headers,
-        json={"op": "insert", "values": {"qty": 9}},
-    ))
-    assert_gate(free_env.client.post(
-        f"/api/v1/datasets/{dataset_id}/corrections/7/revert", headers=headers
-    ))
+    # 修正三件套不再 403：api 层已放行本地修正层
+    # （wire-dataset-form-editing，正路径见 test_local_corrections.py）
     assert_gate(free_env.client.post(
         "/api/v1/datasets", headers=headers,
         json={
@@ -577,7 +573,7 @@ def test_free_tier_gates_return_plan_tier_required(free_env) -> None:
         },
     ))
 
-    # 读面最小呈现：修正清单与 lineage 本地空视图（零引擎调用）
+    # 读面最小呈现：修正清单（本地修正层，空历史）与 lineage 本地空视图
     corrections = free_env.client.get(
         f"/api/v1/datasets/{dataset_id}/corrections", headers=headers
     )

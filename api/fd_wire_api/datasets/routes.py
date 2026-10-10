@@ -8,7 +8,8 @@
 - 建档（tier 判定在建集时刻按客户档位：免费档→api 层本地物化、付费档→
   cell 引擎 ingest；wire-free-tier-data-gate D1/D4）
 - 行预览（cell 层透传引擎 ``preview``；api 层本地执行）、修正三件套
-  （透传引擎修正层；api 层数据集档位闸拒）、同步历史、漂移恢复 ``resume``
+  （cell 层透传引擎覆盖层；api 层走本地修正层——wire-dataset-form-editing，
+  基行永不改写）、同步历史、漂移恢复 ``resume``
 - 连接器管理：配对令牌签发、列表（心跳推导状态）、改名、吊销
 - 配额：``GET /api/v1/datasets/quota``（免费档真实数字；付费档 max=null）
 
@@ -708,12 +709,15 @@ def add_correction(
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> CorrectionOut:
-    """修正三件套透传：改值/删行/加行，落引擎覆盖层（云端不写回客户源）。
+    """修正三件套：改值/删行/加行，落覆盖层（云端不写回客户源）。
 
-    api 层数据集无引擎覆盖层 → 403 档位闸（修正层是 cell 耦合的付费面）。
+    cell 层透传引擎覆盖层；api 层数据集走本地修正层
+    （wire-dataset-form-editing，镜像引擎语义——基行永不改写、悬空如实、
+    insert 受免费档行数闸），全链路零引擎调用。
     """
     dataset = _dataset_or_404(db, dataset_id, customer_id)
-    require_cell_tier(dataset, "数据修正")
+    if getattr(dataset, "storage_tier", service.TIER_CELL) == service.TIER_API:
+        return _add_local_correction(db, dataset=dataset, payload=payload, customer_id=customer_id)
     if payload.op == "insert":
         if not payload.values:
             raise HTTPException(status_code=400, detail="insert 必须带 values（整行值）")
@@ -759,6 +763,43 @@ def add_correction(
     return CorrectionOut(correction_id=int(correction_id))
 
 
+def _add_local_correction(
+    db: Session, *, dataset: Dataset, payload: CorrectionIn, customer_id: str
+) -> CorrectionOut:
+    """api 层本地修正写入（载荷校验与 cell 分支同款 400；悬空允许落层）。"""
+    if payload.op == "insert":
+        if not payload.values:
+            raise HTTPException(status_code=400, detail="insert 必须带 values（整行值）")
+        value: object = payload.values
+    elif payload.op == "update":
+        if not payload.row_id or not payload.column:
+            raise HTTPException(
+                status_code=400, detail="update 必须带 row_id 与 column"
+            )
+        if "value" not in payload.model_fields_set:
+            raise HTTPException(status_code=400, detail="update 必须带 value（可为 null）")
+        value = payload.value
+    else:  # delete
+        if not payload.row_id:
+            raise HTTPException(status_code=400, detail="delete 必须带 row_id")
+        value = None
+    try:
+        correction_id = api_store.apply_local_correction(
+            db,
+            dataset=dataset,
+            op=payload.op,
+            row_anchor=payload.row_id,
+            column_name=payload.column,
+            value=value,
+            actor=_actor(customer_id),
+        )
+    except api_store.LocalQueryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except service.QuotaExceeded as exc:
+        _raise_quota(exc)
+    return CorrectionOut(correction_id=correction_id)
+
+
 @router.get("/api/v1/datasets/{dataset_id}/corrections")
 def list_corrections(
     dataset_id: str,
@@ -770,11 +811,19 @@ def list_corrections(
 ) -> dict:
     """修正历史（含悬空与已回滚；审计留痕，不静默丢弃）。
 
-    api 层数据集不可加修正 → 本地恒空清单（零引擎调用，如实呈现）。
+    cell 层透传引擎；api 层数据集走本地修正层清单（零引擎调用，
+    字段形态镜像 web 客户端 Correction 类型）。
     """
     dataset = _dataset_or_404(db, dataset_id, customer_id)
     if getattr(dataset, "storage_tier", service.TIER_CELL) == service.TIER_API:
-        return {"corrections": []}
+        return {
+            "corrections": api_store.list_local_corrections(
+                db,
+                dataset.id,
+                include_reverted=include_reverted,
+                include_dangling=include_dangling,
+            )
+        }
     client = engine_factory(customer_id)
     try:
         result = client.call(
@@ -798,12 +847,22 @@ def revert_correction(
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> dict:
-    """单条回滚：引擎标记 reverted 并重建有效表；修正留档。
+    """单条回滚：标记 reverted 并停止生效；修正留档。
 
-    api 层数据集无覆盖层可回滚 → 403 档位闸。
+    cell 层透传引擎（重建有效表）；api 层数据集走本地修正层回滚
+    （仅置 reverted_at——基行永不改写；二次回滚 409、不存在 404）。
     """
     dataset = _dataset_or_404(db, dataset_id, customer_id)
-    require_cell_tier(dataset, "修正回滚")
+    if getattr(dataset, "storage_tier", service.TIER_CELL) == service.TIER_API:
+        try:
+            api_store.revert_local_correction(
+                db, dataset=dataset, correction_id=correction_id
+            )
+        except api_store.CorrectionNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except api_store.CorrectionAlreadyReverted as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"reverted": True}
     client = engine_factory(customer_id)
     try:
         result = client.call(

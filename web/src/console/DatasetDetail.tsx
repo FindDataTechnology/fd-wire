@@ -1,5 +1,7 @@
 // 数据集详情（wire-customer-local-data 任务组 3，四块）：
-// 预览网格（分页/双击改值/删行/加行 → 修正层）、修正历史（悬空徽标+单条回滚）、
+// 预览网格（分页 + 行内编辑器：默认只读，「编辑」模式下双击改值/删行/加行
+// 进脏队列，保存按入队顺序逐条写修正层——wire-dataset-form-editing 2.1）、
+// 修正历史（悬空徽标+单条回滚）、
 // 同步历史（失败原因；漂移暂停行确认列并恢复）、悬空清单（逐条回滚）。
 // 溯源区块（wire-provenance-ledger 任务组 8）：档位/链完整性/锚定进度状态条、
 // 倒序事件时间线（before_seq 加载更早）、证据包下载。
@@ -39,6 +41,13 @@ import {
   type SyncStatus,
 } from "./api";
 import { formatServerDate, truncate } from "./util";
+import {
+  describeEditItem,
+  enqueueEdit,
+  saveEditQueue,
+  type EditQueueItem,
+  type SaveOutcome,
+} from "./editQueue";
 import {
   DATASET_SCHEDULE_INTERVALS,
   RefreshScheduleSection,
@@ -365,6 +374,12 @@ function PreviewGrid({
   const [sortColumn, setSortColumn] = useState("");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [queryActive, setQueryActive] = useState(false);
+  // 行内编辑器（wire-dataset-form-editing 2.1）：默认只读（零编辑控件渲染）；
+  // 「编辑」是叠加态——双击改值/删行/加行先进脏队列，「保存」按入队顺序
+  // 逐条 addCorrection（失败逐条如实呈现，不自动重试），「放弃」清队；
+  // 队列非空时离开编辑模式先确认。
+  const [editMode, setEditMode] = useState(false);
+  const [queue, setQueue] = useState<EditQueueItem[]>([]);
   const [editing, setEditing] = useState<{
     rowId: string;
     column: string;
@@ -372,8 +387,9 @@ function PreviewGrid({
   } | null>(null);
   const [adding, setAdding] = useState(false);
   const [newValues, setNewValues] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState(false);
-  const [opError, setOpError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveResults, setSaveResults] = useState<SaveOutcome[] | null>(null);
+  const [confirmLeave, setConfirmLeave] = useState(false);
 
   const columns = data?.columns.map((c) => c.name) ?? [];
 
@@ -415,56 +431,95 @@ function PreviewGrid({
     void load();
   }, [load, version]);
 
-  const submit = async (payload: CorrectionInput): Promise<boolean> => {
-    setBusy(true);
-    setOpError(null);
-    try {
-      await addCorrection(datasetId, payload);
-      return true;
-    } catch (err) {
-      setOpError(
-        apiErrorText(err, t("console.datasets.detail.correctionError")),
-      );
-      return false;
-    } finally {
-      setBusy(false);
-    }
+  /** 入队（update/delete/insert 同入口）；新修改进队即作废旧保存结果。 */
+  const enqueue = (payload: CorrectionInput) => {
+    setQueue((items) => enqueueEdit(items, payload));
+    setSaveResults(null);
   };
 
-  const saveEdit = async () => {
+  /** 单元格编辑确认（Enter）：update 项入队；Esc 取消不开口子。 */
+  const confirmCellEdit = () => {
     if (!editing) return;
-    const ok = await submit({
+    enqueue({
       op: "update",
       row_id: editing.rowId,
       column: editing.column,
       value: editing.value,
     });
-    if (ok) {
-      setEditing(null);
-      onChanged();
-    }
+    setEditing(null);
   };
 
-  const deleteRow = async (rowId: string) => {
-    const ok = await submit({ op: "delete", row_id: rowId });
-    if (ok) onChanged();
-  };
-
-  const addRow = async () => {
+  /** 加行确认：非空字段组 insert 项入队。 */
+  const enqueueInsert = () => {
     const values: Record<string, string> = {};
     for (const [key, value] of Object.entries(newValues)) {
       if (value.trim() !== "") values[key] = value;
     }
-    const ok = await submit({ op: "insert", values });
-    if (ok) {
-      setAdding(false);
-      setNewValues({});
-      onChanged();
+    enqueue({ op: "insert", values });
+    setAdding(false);
+    setNewValues({});
+  };
+
+  const resetEditing = () => {
+    setEditing(null);
+    setAdding(false);
+    setNewValues({});
+  };
+
+  /**
+   * 保存：按入队顺序逐条 addCorrection（失败隔离——单条失败不断链、不重试），
+   * 逐条结果呈现；全部提交完后清队并刷新行预览与修正历史（onChanged）。
+   */
+  const saveQueue = async () => {
+    if (saving || queue.length === 0) return;
+    setSaving(true);
+    const outcomes = await saveEditQueue(queue, async (payload) => {
+      await addCorrection(datasetId, payload);
+    });
+    setSaveResults(outcomes);
+    setQueue([]);
+    resetEditing();
+    setSaving(false);
+    onChanged();
+  };
+
+  /** 放弃：清空脏队列与未完成的内联编辑（显式操作，无需再确认）。 */
+  const discardQueue = () => {
+    setQueue([]);
+    resetEditing();
+  };
+
+  /** 切换编辑模式：队列非空时离开先确认（确认后丢弃）。 */
+  const toggleEditMode = () => {
+    if (editMode && queue.length > 0) {
+      setConfirmLeave(true);
+      return;
     }
+    setEditMode((mode) => !mode);
+    setSaveResults(null);
+    discardQueue();
+  };
+
+  const leaveEditMode = () => {
+    setConfirmLeave(false);
+    setEditMode(false);
+    setSaveResults(null);
+    discardQueue();
   };
 
   const total = data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  // 队列叠加可视化（只编辑态）：待保存 update 单元格淡黄标注、delete 行划线弱化。
+  const pendingCellKeys = new Set<string>();
+  const pendingDeleteRows = new Set<string>();
+  for (const { payload } of queue) {
+    if (payload.op === "update") {
+      pendingCellKeys.add(`${payload.row_id}\u0000${payload.column}`);
+    } else if (payload.op === "delete") {
+      pendingDeleteRows.add(payload.row_id);
+    }
+  }
 
   return (
     <section data-testid="preview-section" className="mt-6">
@@ -474,12 +529,6 @@ function PreviewGrid({
       <p className="mt-1 max-w-2xl text-xs text-slate-500">
         {t("console.datasets.detail.previewHint")}
       </p>
-
-      {opError && (
-        <p data-testid="preview-op-error" className="mt-2 text-xs text-red-600">
-          {opError}
-        </p>
-      )}
 
       {loadError && (
         <div data-testid="preview-error" className="mt-2">
@@ -598,6 +647,96 @@ function PreviewGrid({
             )}
           </div>
 
+          {/* 编辑模式条（wire-dataset-form-editing 2.1）：默认只读零编辑控件；
+              编辑态叠加 脏队列计数徽标 + 保存/放弃。 */}
+          <div
+            data-testid="preview-edit-bar"
+            className="mt-2 flex flex-wrap items-center gap-2 text-xs"
+          >
+            <button
+              type="button"
+              data-testid="preview-edit-toggle"
+              data-mode={editMode ? "edit" : "read"}
+              disabled={saving}
+              onClick={toggleEditMode}
+              className={
+                editMode
+                  ? "rounded border border-slate-300 bg-slate-100 px-2.5 py-1 text-slate-700 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+                  : "rounded bg-slate-900 px-2.5 py-1 text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+              }
+            >
+              {editMode
+                ? t("console.datasets.detail.editDone")
+                : t("console.datasets.detail.editStart")}
+            </button>
+            {editMode && queue.length > 0 && (
+              <>
+                <span
+                  data-testid="preview-dirty-badge"
+                  className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 ring-1 ring-amber-200"
+                >
+                  {t("console.datasets.detail.dirtyCount", { count: queue.length })}
+                </span>
+                <button
+                  type="button"
+                  data-testid="preview-queue-save"
+                  disabled={saving}
+                  onClick={() => void saveQueue()}
+                  className="rounded bg-slate-900 px-2.5 py-1 text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {saving
+                    ? t("console.datasets.detail.saving")
+                    : t("console.datasets.detail.save")}
+                </button>
+                <button
+                  type="button"
+                  data-testid="preview-queue-discard"
+                  disabled={saving}
+                  onClick={discardQueue}
+                  className="rounded border border-slate-300 px-2.5 py-1 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {t("console.datasets.detail.queueDiscard")}
+                </button>
+              </>
+            )}
+          </div>
+
+          {confirmLeave && (
+            <div
+              data-testid="preview-leave-dialog"
+              role="dialog"
+              className="mt-2 rounded-lg border border-amber-300 bg-amber-50/60 p-4"
+            >
+              <h3 className="text-sm font-semibold text-amber-800">
+                {t("console.datasets.detail.leaveTitle")}
+              </h3>
+              <p
+                data-testid="preview-leave-warning"
+                className="mt-1 text-xs text-slate-600"
+              >
+                {t("console.datasets.detail.leaveHint", { count: queue.length })}
+              </p>
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  data-testid="preview-leave-confirm"
+                  onClick={leaveEditMode}
+                  className="rounded bg-amber-600 px-3 py-1 text-xs text-white hover:bg-amber-700"
+                >
+                  {t("console.datasets.detail.leaveConfirm")}
+                </button>
+                <button
+                  type="button"
+                  data-testid="preview-leave-cancel"
+                  onClick={() => setConfirmLeave(false)}
+                  className="rounded border border-slate-300 bg-white px-3 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                >
+                  {t("console.datasets.detail.leaveCancel")}
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200 bg-white">
             <table data-testid="preview-grid" className="w-full text-xs">
               <thead>
@@ -615,32 +754,42 @@ function PreviewGrid({
                       </span>
                     </th>
                   ))}
-                  <th className="border-b border-slate-200 px-2 py-1.5" />
+                  {editMode && <th className="border-b border-slate-200 px-2 py-1.5" />}
                 </tr>
               </thead>
               <tbody>
                 {data.rows.map((row, index) => {
                   const rowId = String(row.__row_id ?? "");
+                  const rowPendingDelete =
+                    editMode && pendingDeleteRows.has(rowId);
                   return (
                     <tr
                       key={rowId || index}
                       data-testid="preview-row"
                       data-row-id={rowId}
-                      className="hover:bg-slate-50/60"
+                      data-pending-delete={rowPendingDelete ? "true" : "false"}
+                      className={`hover:bg-slate-50/60 ${
+                        rowPendingDelete ? "text-slate-400 line-through opacity-60" : ""
+                      }`}
                     >
                       {data.columns.map((column) => {
                         const isEditing =
                           editing != null &&
                           editing.rowId === rowId &&
                           editing.column === column.name;
+                        const cellPending =
+                          editMode &&
+                          !isEditing &&
+                          pendingCellKeys.has(`${rowId}\u0000${column.name}`);
                         return (
                           <td
                             key={column.name}
                             data-testid="preview-cell"
                             data-column={column.name}
                             data-row-id={rowId}
+                            data-pending-edit={cellPending ? "true" : "false"}
                             onDoubleClick={() => {
-                              if (rowId && !busy) {
+                              if (editMode && rowId && !saving) {
                                 setEditing({
                                   rowId,
                                   column: column.name,
@@ -651,42 +800,29 @@ function PreviewGrid({
                                 });
                               }
                             }}
-                            className="whitespace-nowrap border-b border-slate-100 px-3 py-1 text-slate-700"
+                            className={`whitespace-nowrap border-b border-slate-100 px-3 py-1 text-slate-700 ${
+                              cellPending ? "bg-amber-50" : ""
+                            }`}
                           >
                             {isEditing ? (
-                              <span className="flex items-center gap-1">
-                                <input
-                                  data-testid="preview-edit-input"
-                                  value={editing.value}
-                                  autoFocus
-                                  onChange={(e) =>
-                                    setEditing({
-                                      ...editing,
-                                      value: e.target.value,
-                                    })
-                                  }
-                                  className="w-28 rounded border border-slate-300 px-1 py-0.5 text-xs"
-                                />
-                                <button
-                                  type="button"
-                                  data-testid="preview-edit-save"
-                                  disabled={busy}
-                                  onClick={() => void saveEdit()}
-                                  className="rounded bg-slate-900 px-1.5 py-0.5 text-[10px] text-white disabled:bg-slate-300"
-                                >
-                                  {busy
-                                    ? t("console.datasets.detail.saving")
-                                    : t("console.datasets.detail.save")}
-                                </button>
-                                <button
-                                  type="button"
-                                  data-testid="preview-edit-cancel"
-                                  onClick={() => setEditing(null)}
-                                  className="rounded border border-slate-300 px-1.5 py-0.5 text-[10px] text-slate-500"
-                                >
-                                  {t("console.datasets.detail.cancel")}
-                                </button>
-                              </span>
+                              <input
+                                data-testid="preview-edit-input"
+                                data-column={column.name}
+                                data-row-id={rowId}
+                                value={editing.value}
+                                autoFocus
+                                onChange={(e) =>
+                                  setEditing({
+                                    ...editing,
+                                    value: e.target.value,
+                                  })
+                                }
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") confirmCellEdit();
+                                  else if (e.key === "Escape") setEditing(null);
+                                }}
+                                className="w-28 rounded border border-slate-300 px-1 py-0.5 text-xs"
+                              />
                             ) : row[column.name] == null ? (
                               ""
                             ) : (
@@ -695,18 +831,22 @@ function PreviewGrid({
                           </td>
                         );
                       })}
-                      <td className="border-b border-slate-100 px-2 py-1 text-right">
-                        <button
-                          type="button"
-                          data-testid="preview-delete-row"
-                          title={t("console.datasets.detail.deleteRow")}
-                          disabled={!rowId || busy}
-                          onClick={() => void deleteRow(rowId)}
-                          className="rounded border border-rose-200 px-1.5 py-0.5 text-[10px] text-rose-600 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          ✕
-                        </button>
-                      </td>
+                      {editMode && (
+                        <td className="border-b border-slate-100 px-2 py-1 text-right">
+                          <button
+                            type="button"
+                            data-testid="preview-delete-row"
+                            title={t("console.datasets.detail.deleteRow")}
+                            disabled={!rowId || saving}
+                            onClick={() => {
+                              if (rowId) enqueue({ op: "delete", row_id: rowId });
+                            }}
+                            className="rounded border border-rose-200 px-1.5 py-0.5 text-[10px] text-rose-600 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            ✕
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -747,7 +887,7 @@ function PreviewGrid({
               {t("console.datasets.detail.next")}
             </button>
 
-            {!adding && (
+            {editMode && !adding && (
               <button
                 type="button"
                 data-testid="preview-add-row"
@@ -792,13 +932,10 @@ function PreviewGrid({
                 <button
                   type="button"
                   data-testid="preview-add-row-submit"
-                  disabled={busy}
-                  onClick={() => void addRow()}
-                  className="rounded bg-slate-900 px-2 py-1 text-xs text-white disabled:bg-slate-300"
+                  onClick={enqueueInsert}
+                  className="rounded bg-slate-900 px-2 py-1 text-xs text-white hover:bg-slate-700"
                 >
-                  {busy
-                    ? t("console.datasets.detail.saving")
-                    : t("console.datasets.detail.addRowSubmit")}
+                  {t("console.datasets.detail.addRowEnqueue")}
                 </button>
                 <button
                   type="button"
@@ -812,6 +949,61 @@ function PreviewGrid({
                   {t("console.datasets.detail.addRowCancel")}
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* 保存结果（wire-dataset-form-editing 2.1）：逐条呈现——成功已生效；
+              失败带行上下文与服务端原因（apiErrorText 取 detail），不自动重试。 */}
+          {editMode && saveResults != null && saveResults.length > 0 && (
+            <div
+              data-testid="preview-save-results"
+              className="mt-2 rounded-lg border border-slate-200 bg-slate-50/60 p-3"
+            >
+              <p className="text-xs font-medium text-slate-600">
+                {t("console.datasets.detail.saveResultTitle")}
+              </p>
+              <ul className="mt-1.5 space-y-1">
+                {saveResults.map((outcome) => (
+                  <li
+                    key={outcome.item.seq}
+                    data-testid="preview-save-result"
+                    data-op={outcome.item.payload.op}
+                    data-ok={outcome.ok ? "true" : "false"}
+                    className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs"
+                  >
+                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">
+                      {t(
+                        `console.datasets.detail.correctionOps.${outcome.item.payload.op}`,
+                      )}
+                    </span>
+                    <span
+                      data-testid="preview-save-result-context"
+                      className="font-mono text-[11px] text-slate-700"
+                    >
+                      {describeEditItem(outcome.item.payload)}
+                    </span>
+                    {outcome.ok ? (
+                      <span
+                        data-testid="preview-save-result-status"
+                        className="text-emerald-600"
+                      >
+                        {t("console.datasets.detail.saveResultOk")}
+                      </span>
+                    ) : (
+                      <span
+                        data-testid="preview-save-result-status"
+                        className="text-red-600"
+                      >
+                        {t("console.datasets.detail.saveResultFailed")}：
+                        {apiErrorText(
+                          outcome.error,
+                          t("console.datasets.detail.correctionError"),
+                        )}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
         </>

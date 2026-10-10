@@ -10,12 +10,15 @@
 - ``uploads``：上传原件登记（stored_path 指向 api 侧暂存 CSV）。
 - ``dataset_columns`` / ``dataset_rows``：api 层轻量行存储（免费档，
   wire-free-tier-data-gate D2——列元数据 + JSON 行，SQLite/PG 双方言）。
+- ``dataset_corrections``：api 层本地修正覆盖层（wire-dataset-form-editing，
+  镜像引擎覆盖层语义——只追加、回滚留痕）。
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import JSON, BigInteger, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
@@ -193,6 +196,39 @@ class DatasetRow(DatasetsBase):
     dataset_id: Mapped[str] = mapped_column(String(36), index=True)
     row_index: Mapped[int] = mapped_column(Integer)
     data: Mapped[dict] = mapped_column(JSON_DUAL_DIALECT)
+
+
+class DatasetCorrection(DatasetsBase):
+    """api 层本地修正覆盖层（wire-dataset-form-editing，镜像引擎覆盖层语义）。
+
+    约束（云端不破坏基行 / 永不丢原始数据）：
+    - ``dataset_rows`` 基行**绝不**因修正被改写或删除——本表只追加覆盖
+      记录，有效视图 = 基行 + 未回滚修正的实时合并（见 api_store）；
+    - 回滚仅置 ``reverted_at``（留痕不删行，审计可回放）；
+    - ``op`` ∈ insert|update|delete：insert 的 ``row_anchor`` 为空、
+      ``value_json``=整行 dict；update 的 ``row_anchor``=基行 row_index
+      字符串、``column_name``+``value_json``=单值；delete 仅 ``row_anchor``；
+    - 悬空修正（锚行不在基表）允许落层，列表时如实标注 dangling——
+      与引擎悬空语义一致，不静默丢弃。
+    """
+
+    __tablename__ = "dataset_corrections"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    dataset_id: Mapped[str] = mapped_column(String(36), index=True)
+    #: insert | update | delete
+    op: Mapped[str] = mapped_column(String(16))
+    #: 行锚：基行 row_index 字符串（如 "7"）或插入行合成锚 "c{correction_id}"；
+    #: insert 修正无锚（为空）
+    row_anchor: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: update 修正的目标列（必须在 dataset_columns 列图中）；insert/delete 为空
+    column_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #: update=单值 / insert=整行 dict（写入前已按列 dtype 归一）；delete 为空
+    value_json: Mapped[Any] = mapped_column(JSON_DUAL_DIALECT, nullable=True)
+    actor: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
+    #: 回滚时间（仅置位，永不删行）
+    reverted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class DataPlaneKey(DatasetsBase):

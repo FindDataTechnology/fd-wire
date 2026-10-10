@@ -1,7 +1,11 @@
 // 公开分享页（/#/share/dashboard/{id}?t=&v=，wire-dashboard-share 任务 2.1）。
 // - 免登录只读：调公开端点 GET /api/v1/share/dashboard/{id}?t=&v=（无
 //   Bearer），成功 → parseDashboardSpec 宽容解析标题 + DashboardRenderer
-//   复用渲染（只读，无任何编辑入口）；页脚「由柏讯分享 · 版本 v{n}」。
+//   复用渲染（只读，无任何编辑入口）。
+// - 品牌面（wire-share-branding）：四态同一顶栏双语品牌锁定（寻数·柏讯 /
+//   Wire，双语锁定即两语言下文案相同）链产品首页；页脚就绪态
+//   「{看板名} · 由 寻数·柏讯 提供 · 版本 v{n}」、非就绪态产品署名；
+//   就绪态注入 og:title/og:description/og:site_name 链接预览元信息。
 // - noindex 红线：挂载即注入 <meta name="robots" content="noindex">（卸载
 //   移除）——分享页不得入公开目录或搜索引擎；document.title 前缀「分享 · 」。
 // - 失败口径与 api 对齐且不泄露原因差异：404/网络错 →「链接无效或已过期」
@@ -49,6 +53,36 @@ export function ShareView({
       document.head.removeChild(meta);
     };
   }, []);
+
+  // og 链接预览元信息（wire-share-branding）：仅就绪态注入，与 noindex 同
+  // 手法——插/移除成对，data-share-og 标记便于清理与定位。诚实边界：这是
+  // 运行时注入，只对执行 JS 的链接预览器（聊天工具内嵌浏览器等）生效；
+  // 不执行 JS 的爬虫读不到（SPA 静态壳无 SSR，如需爬虫全覆盖另走入口
+  // nginx 注入，见 proposal Non-Goals）。og 与 noindex 不冲突：og 服务聊天
+  // 卡片预览，noindex 管不入搜索目录。
+  const ogTitle = state.kind === "ready" ? state.title : null;
+  useEffect(() => {
+    if (ogTitle == null) return;
+    const metas = (
+      [
+        ["og:title", ogTitle],
+        ["og:description", t("console.dashboard.share.ogDescription")],
+        ["og:site_name", t("console.dashboard.share.ogSiteName")],
+      ] as const
+    ).map(([property, content]) => {
+      const meta = document.createElement("meta");
+      meta.setAttribute("property", property);
+      meta.setAttribute("content", content);
+      meta.setAttribute("data-share-og", property);
+      document.head.appendChild(meta);
+      return meta;
+    });
+    return () => {
+      metas.forEach((meta) => {
+        document.head.removeChild(meta);
+      });
+    };
+  }, [ogTitle, t]);
 
   useEffect(() => {
     let alive = true;
@@ -102,14 +136,24 @@ export function ShareView({
 
   return (
     <div className="flex min-h-screen flex-col">
-      {/* 极简顶栏：只有 Wire 品牌字（无导航/登录/语言切换——公开只读页）。 */}
+      {/* 极简顶栏：双语品牌锁定 寻数·柏讯 / Wire（无导航/登录/语言切换——
+          公开只读页）。主副排版贴 App.tsx 站点顶栏品牌惯例（主名 semibold +
+          副名 slate-500 小字）；双语锁定即文案不随界面语言切换；四态同一
+          顶栏——invalid/disabled 页同样是产品触点。链接保持产品首页 #/。 */}
       <header
         data-testid="share-topbar"
         className="border-b border-slate-200 bg-white"
       >
         <div className="mx-auto flex max-w-5xl items-center px-4 py-3">
-          <a href="#/" className="text-lg font-semibold tracking-wide">
-            Wire
+          <a
+            href="#/"
+            data-testid="share-brand"
+            className="text-lg font-semibold tracking-wide"
+          >
+            {t("console.dashboard.share.brandNameZh")}
+            <span className="ml-2 text-sm font-normal tracking-normal text-slate-500">
+              {t("console.dashboard.share.brandNameEn")}
+            </span>
           </a>
         </div>
       </header>
@@ -164,12 +208,15 @@ export function ShareView({
         )}
       </main>
 
+      {/* 页脚署名（wire-share-branding）：就绪态三段「看板名 · 由 寻数·柏讯
+          提供 · 版本 v{n}」；非就绪态（loading/invalid/disabled）产品署名。 */}
       <footer
         data-testid="share-footer"
         className="border-t border-slate-200 bg-white py-4 text-center text-xs text-slate-400"
       >
         {state.kind === "ready"
           ? t("console.dashboard.share.footerVersion", {
+              title: state.title,
               version: state.data.version,
             })
           : t("console.dashboard.share.footer")}

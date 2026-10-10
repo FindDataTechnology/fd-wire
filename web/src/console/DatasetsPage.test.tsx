@@ -264,7 +264,7 @@ describe("DatasetsPage（我的数据列表与上传，任务 3.1/3.2）", () =>
 });
 
 describe("DatasetDetail（预览网格/修正/同步/悬空，任务 3.4）", () => {
-  it("预览网格：双击改值、删行、加行分别提交 update/delete/insert 修正载荷", async () => {
+  it("预览网格编辑模式：默认只读，双击改值/删行/加行入脏队列，保存按序提交 update/delete/insert", async () => {
     const backend = install({
       datasets: [makeDataset({ id: "ds-1", name: "门店销量" })],
       datasetRows: {
@@ -284,7 +284,24 @@ describe("DatasetDetail（预览网格/修正/同步/悬空，任务 3.4）", ()
     fireEvent.click(await screen.findByTestId("dataset-open"));
     await screen.findByTestId("preview-grid");
 
-    // 行锚来自引擎注入的 __row_id（假后端补 hash:seed-<n>）
+    // 只读默认（wire-dataset-form-editing 2.1）：无删行/加行控件，双击不开编辑框
+    expect(screen.queryByTestId("preview-delete-row")).toBeNull();
+    expect(screen.queryByTestId("preview-add-row")).toBeNull();
+    const readOnlyCell = screen
+      .getAllByTestId("preview-cell")
+      .find(
+        (el) =>
+          el.getAttribute("data-column") === "amount" &&
+          el.getAttribute("data-row-id") === "hash:seed-1",
+      );
+    expect(readOnlyCell).toBeTruthy();
+    fireEvent.doubleClick(readOnlyCell!);
+    expect(screen.queryByTestId("preview-edit-input")).toBeNull();
+
+    // 进入编辑模式
+    fireEvent.click(screen.getByTestId("preview-edit-toggle"));
+
+    // 双击改值 → Enter 入队（行锚来自引擎注入的 __row_id，假后端补 hash:seed-<n>）
     const cell = screen
       .getAllByTestId("preview-cell")
       .find(
@@ -292,50 +309,64 @@ describe("DatasetDetail（预览网格/修正/同步/悬空，任务 3.4）", ()
           el.getAttribute("data-column") === "amount" &&
           el.getAttribute("data-row-id") === "hash:seed-1",
       );
-    expect(cell).toBeTruthy();
     fireEvent.doubleClick(cell!);
     fireEvent.change(screen.getByTestId("preview-edit-input"), {
       target: { value: "99" },
     });
-    fireEvent.click(screen.getByTestId("preview-edit-save"));
-    await waitFor(() =>
-      expect(postCalls(backend, "/api/v1/datasets/ds-1/corrections").length).toBe(1),
-    );
-    expect(
-      postCalls(backend, "/api/v1/datasets/ds-1/corrections")[0]!.body,
-    ).toEqual({
-      op: "update",
-      row_id: "hash:seed-1",
-      column: "amount",
-      value: "99",
-    });
+    fireEvent.keyDown(screen.getByTestId("preview-edit-input"), { key: "Enter" });
+    expect(screen.getByTestId("preview-dirty-badge").textContent).toContain("1");
+    expect(postCalls(backend, "/api/v1/datasets/ds-1/corrections").length).toBe(0);
 
-    // 删行（第二行 → hash:seed-2）
-    await waitFor(() =>
-      expect(screen.getAllByTestId("preview-delete-row").length).toBe(2),
-    );
+    // 删行入队（第二行 → hash:seed-2）
+    expect(screen.getAllByTestId("preview-delete-row").length).toBe(2);
     fireEvent.click(screen.getAllByTestId("preview-delete-row")[1]!);
-    await waitFor(() =>
-      expect(postCalls(backend, "/api/v1/datasets/ds-1/corrections").length).toBe(2),
-    );
-    expect(
-      postCalls(backend, "/api/v1/datasets/ds-1/corrections")[1]!.body,
-    ).toEqual({ op: "delete", row_id: "hash:seed-2" });
+    expect(screen.getByTestId("preview-dirty-badge").textContent).toContain("2");
 
-    // 加行（只填 amount 列）
-    await waitFor(() => expect(screen.getByTestId("preview-add-row")).toBeTruthy());
+    // 加行入队（只填 amount 列）
     fireEvent.click(screen.getByTestId("preview-add-row"));
     const amountInput = screen
       .getAllByTestId("preview-add-row-input")
       .find((el) => el.getAttribute("data-column") === "amount");
     fireEvent.change(amountInput!, { target: { value: "5" } });
     fireEvent.click(screen.getByTestId("preview-add-row-submit"));
+    expect(screen.getByTestId("preview-dirty-badge").textContent).toContain("3");
+    expect(postCalls(backend, "/api/v1/datasets/ds-1/corrections").length).toBe(0);
+
+    // 保存：按入队顺序逐条提交三条修正
+    fireEvent.click(screen.getByTestId("preview-queue-save"));
     await waitFor(() =>
       expect(postCalls(backend, "/api/v1/datasets/ds-1/corrections").length).toBe(3),
     );
+    const posts = postCalls(backend, "/api/v1/datasets/ds-1/corrections");
+    expect(posts.map((call) => call.body)).toEqual([
+      { op: "update", row_id: "hash:seed-1", column: "amount", value: "99" },
+      { op: "delete", row_id: "hash:seed-2" },
+      { op: "insert", values: { amount: "5" } },
+    ]);
+    // 全部成功：队列清空、逐条结果已生效、预览刷新呈现修正后数据
+    await waitFor(() =>
+      expect(screen.queryByTestId("preview-dirty-badge")).toBeNull(),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getAllByTestId("preview-save-result").length,
+      ).toBe(3),
+    );
     expect(
-      postCalls(backend, "/api/v1/datasets/ds-1/corrections")[2]!.body,
-    ).toEqual({ op: "insert", values: { amount: "5" } });
+      screen
+        .getAllByTestId("preview-save-result")
+        .every((el) => el.getAttribute("data-ok") === "true"),
+    ).toBe(true);
+    await waitFor(() => {
+      const updated = screen
+        .getAllByTestId("preview-cell")
+        .find(
+          (el) =>
+            el.getAttribute("data-column") === "amount" &&
+            el.getAttribute("data-row-id") === "hash:seed-1",
+        );
+      expect(updated?.textContent).toBe("99");
+    });
   });
 
   it("漂移暂停：resume 确认弹窗展示被拒列，确认后提交 accept_columns 并恢复", async () => {

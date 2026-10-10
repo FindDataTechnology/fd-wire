@@ -505,7 +505,8 @@ const en: Translation = {
         contractFailure: "{{title}}: {{error}}",
       },
       // Signed share links (wire-dashboard-share): the artifact-page entry and
-      // the public share view (login-free read-only, noindex, "Shared by" footer).
+      // the public share view (login-free read-only, noindex, branding from
+      // wire-share-branding).
       share: {
         button: "Create share link",
         docTitle: "Shared · {{title}}",
@@ -515,8 +516,17 @@ const en: Translation = {
         invalidBody: "This share link does not exist, has expired, or the artifact is no longer published — ask the sender to generate a new one.",
         disabledTitle: "Sharing not enabled",
         disabledBody: "No share secret is configured on the server; share links are unavailable for now.",
-        footer: "Shared by Baixun",
-        footerVersion: "Shared by Baixun · version v{{version}}",
+        // Branding (wire-share-branding): bilingual lockup — the Chinese name
+        // 寻数·柏讯 and English name Wire shown together, identical in both
+        // locales (does not follow the UI language).
+        brandNameZh: "寻数·柏讯",
+        brandNameEn: "Wire",
+        ogDescription:
+          "Baixun data dashboards — enterprise data × macro indicators",
+        ogSiteName: "寻数·柏讯 Wire",
+        footer: "Provided by 寻数·柏讯",
+        footerVersion:
+          "{{title}} · Provided by 寻数·柏讯 · Version v{{version}}",
         dialogTitle: "Share link",
         generating: "Generating the share link…",
         generateFailed: "Failed to create the share link, please retry later.",
@@ -736,7 +746,7 @@ const en: Translation = {
         errorTitle: "Failed to load detail",
         previewTitle: "Data preview",
         previewHint:
-          "Double-click a cell to edit; delete a row from its tail button; add a row at the bottom — corrections go to the correction layer, never back to the customer source.",
+          "Read-only by default; click \"Edit\" to double-click cells, delete rows, or add rows — edits queue first, and saving writes them to the correction layer one by one, never back to the customer source.",
         previewLoading: "Loading preview…",
         previewEmpty: "No rows to preview yet.",
         pagination: "{{total}} rows · page {{page}} of {{pages}}",
@@ -745,10 +755,22 @@ const en: Translation = {
         save: "Save correction",
         cancel: "Cancel",
         saving: "Submitting…",
+        editStart: "Edit",
+        editDone: "Exit editing",
+        dirtyCount: "{{count}} unsaved change(s)",
+        queueDiscard: "Discard edits",
+        leaveTitle: "Unsaved changes",
+        leaveHint:
+          "Leaving edit mode discards {{count}} unsaved change(s); this cannot be undone.",
+        leaveConfirm: "Discard and exit",
+        leaveCancel: "Keep editing",
+        saveResultTitle: "Save results",
+        saveResultOk: "Applied",
+        saveResultFailed: "Failed",
         deleteRow: "Delete row",
         addRow: "＋ Add row",
         addRowTitle: "Add a row",
-        addRowSubmit: "Submit row",
+        addRowEnqueue: "Add to edit queue",
         addRowCancel: "Cancel",
         correctionError: "Failed to submit the correction",
         correctionsTitle: "Correction history",

@@ -483,7 +483,7 @@ const zh = {
         contractFailure: "{{title}}：{{error}}",
       },
       // 签名分享链接（wire-dashboard-share）：产物页入口 + 公开分享页文案
-      //（分享页免登录只读、noindex、页脚「由柏讯分享」）。
+      //（分享页免登录只读、noindex、品牌面 wire-share-branding）。
       share: {
         button: "生成分享链接",
         docTitle: "分享 · {{title}}",
@@ -493,8 +493,14 @@ const zh = {
         invalidBody: "该分享链接不存在、已过期或产物已下线——请联系分享者重新生成。",
         disabledTitle: "分享功能未开通",
         disabledBody: "服务端尚未配置分享密钥，分享链接暂不可用。",
-        footer: "由柏讯分享",
-        footerVersion: "由柏讯分享 · 版本 v{{version}}",
+        // 品牌面（wire-share-branding）：品牌名双语锁定——中文名寻数·柏讯、
+        // 英文名 Wire 同屏并呈，两语言下文案相同（不随界面语言切换）。
+        brandNameZh: "寻数·柏讯",
+        brandNameEn: "Wire",
+        ogDescription: "柏讯数据看板——企业数据 × 宏观指标",
+        ogSiteName: "寻数·柏讯 Wire",
+        footer: "由 寻数·柏讯 提供",
+        footerVersion: "{{title}} · 由 寻数·柏讯 提供 · 版本 v{{version}}",
         dialogTitle: "分享链接",
         generating: "正在生成分享链接…",
         generateFailed: "生成分享链接失败，请稍后重试。",
@@ -705,7 +711,7 @@ const zh = {
         errorTitle: "详情加载失败",
         previewTitle: "数据预览",
         previewHint:
-          "双击单元格修改；行尾可删行；底部可加行——修正写入修正层，不回写客户源。",
+          "默认只读；点「编辑」后可双击改值、行尾删行、底部加行——修改先进队列，保存后逐条写入修正层，不回写客户源。",
         previewLoading: "预览加载中…",
           previewEmpty: "暂无可预览的数据行。",
         pagination: "共 {{total}} 行 · 第 {{page}} / {{pages}} 页",
@@ -714,10 +720,21 @@ const zh = {
         save: "保存修正",
         cancel: "取消",
         saving: "提交中…",
+        editStart: "编辑",
+        editDone: "退出编辑",
+        dirtyCount: "未保存 {{count}} 处修改",
+        queueDiscard: "放弃修改",
+        leaveTitle: "有未保存的修改",
+        leaveHint: "退出编辑模式将丢弃 {{count}} 处未保存的修改，不可恢复。",
+        leaveConfirm: "丢弃并退出",
+        leaveCancel: "继续编辑",
+        saveResultTitle: "保存结果",
+        saveResultOk: "已生效",
+        saveResultFailed: "提交失败",
         deleteRow: "删行",
         addRow: "＋ 加行",
         addRowTitle: "新增一行",
-        addRowSubmit: "提交加行",
+        addRowEnqueue: "加入修改队列",
         addRowCancel: "取消",
         correctionError: "修正提交失败",
         correctionsTitle: "修正历史",
