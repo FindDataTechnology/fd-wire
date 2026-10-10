@@ -85,8 +85,10 @@ def env(tmp_path, monkeypatch):
     console_env = make_console_env(
         tmp_path, monkeypatch, customers=[(SUB_A, "客户A"), (SUB_B, "客户B")]
     )
-    # demands 默认引擎不落本机文件（X-Customer-Id 退位用例防 import 副作用）
-    monkeypatch.setenv("FD_WIRE_DATABASE_URL", "sqlite://")
+    # 收敛开关（wire-dedicated-postgres）= 同一平台临时库：不压过上面
+    # FD_WIRE_ADMIN_DATABASE_URL / BILLING_DATABASE_URL 的同源语义，
+    # demands 侧也不落本机文件（X-Customer-Id 退位用例防 import 副作用）。
+    monkeypatch.setenv("FD_WIRE_DATABASE_URL", console_env.db_url)
 
     fake_sub2api = FakeSub2Api()
     sub2api_client = fake_sub2api.client()

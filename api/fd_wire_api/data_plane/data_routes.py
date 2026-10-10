@@ -5,6 +5,11 @@
 - allowlist 越界 403、额度满 fail-closed 429、引擎不可达如实 502/503
   （绝不静默降级）；
 - 写入按凭据通道归属（data-key/console）落引擎编辑记录。
+
+api 层分支（wire-free-tier-data-gate）：``storage_tier=api`` 的数据集
+（免费档）query/aggregate/lineage 走本地执行（不触碰引擎、不计
+metering_records——D7 口径），derive/join/batchWrite/加列等 cell 耦合
+路径返回 403 档位闸（PLAN_TIER_REQUIRED）。
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..datasets import service
+from ..datasets import api_store, service
 from ..datasets.db import get_db
 from ..datasets.ingest import (
     EngineCallError,
@@ -35,7 +40,13 @@ from ..datasets.ingest import (
     get_engine_client_factory,
 )
 from ..datasets.models import Dataset
-from ..datasets.routes import _actor, _dataset_or_404, _ensure_engine_ok, _raise_quota
+from ..datasets.routes import (
+    _actor,
+    _dataset_or_404,
+    _ensure_engine_ok,
+    _raise_quota,
+    require_cell_tier,
+)
 from ..datasets.schemas import ColumnIn, DatasetOut
 from .auth import DataPlanePrincipal, ensure_dataset_allowed, require_data_plane_principal
 
@@ -143,6 +154,10 @@ def _estimate_batch_bytes(ops: list[BatchOpIn]) -> int:
 # ── 查询/聚合 ────────────────────────────────────────────────────────
 
 
+def _is_api_tier(dataset: Dataset) -> bool:
+    return getattr(dataset, "storage_tier", service.TIER_CELL) == service.TIER_API
+
+
 @router.post("/api/v1/datasets/{dataset_id}/query")
 def dataset_query(
     dataset_id: str,
@@ -153,6 +168,22 @@ def dataset_query(
 ) -> dict:
     dataset = _dataset_or_404(db, dataset_id, principal.customer_id)
     ensure_dataset_allowed(principal, dataset_id)
+    if _is_api_tier(dataset):
+        # 免费档本地执行：零引擎调用、零 metering_records（D5/D7）；
+        # 限流沿用本依赖链既有 rpm（wdk- 轨道在鉴权步已生效）。
+        try:
+            return api_store.execute_query(
+                db,
+                dataset_id=dataset.id,
+                filters=body.filters,
+                sort=body.sort,
+                limit=body.limit,
+                offset=body.offset,
+                count_only=body.count_only,
+                distinct_column=body.distinct_column,
+            )
+        except api_store.LocalQueryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _engine_call(
         engine_factory,
         principal,
@@ -171,6 +202,17 @@ def dataset_aggregate(
 ) -> dict:
     dataset = _dataset_or_404(db, dataset_id, principal.customer_id)
     ensure_dataset_allowed(principal, dataset_id)
+    if _is_api_tier(dataset):
+        try:
+            return api_store.execute_aggregate(
+                db,
+                dataset_id=dataset.id,
+                group_by=body.group_by,
+                measures=body.measures,
+                filters=body.filters,
+            )
+        except api_store.LocalQueryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _engine_call(
         engine_factory,
         principal,
@@ -191,9 +233,11 @@ def dataset_batch_write(
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> dict:
     """业务写通道（Q1/ADR-0006）：ops 单事务原子；通道归属由凭据决定
-    （wdk- → data-key + 指纹；console 会话 → console）。"""
+    （wdk- → data-key + 指纹；console 会话 → console）。api 层数据集
+    无引擎侧表 → 403 档位闸（批量写是 cell 耦合的付费面）。"""
     dataset = _dataset_or_404(db, dataset_id, principal.customer_id)
     ensure_dataset_allowed(principal, dataset_id)
+    require_cell_tier(dataset, "批量写")
     try:
         service.ensure_storage_quota(
             db,
@@ -232,6 +276,7 @@ def dataset_add_column(
 ) -> DatasetOut:
     dataset = _dataset_or_404(db, dataset_id, principal.customer_id)
     ensure_dataset_allowed(principal, dataset_id)
+    require_cell_tier(dataset, "加列（schema 演化）")
     result = _engine_call(
         engine_factory,
         principal,
@@ -286,9 +331,11 @@ def dataset_derive(
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> DatasetOut:
     """以 {dataset_id} 为源派生子集（Q13）：引擎血缘留档，子 key 由引擎侧
-    （本 api 经 create_declared 同款 allocate 语义）落定。"""
+    （本 api 经 create_declared 同款 allocate 语义）落定。api 层数据集
+    无引擎侧表 → 403 档位闸（派生是 cell 耦合的付费面）。"""
     source = _dataset_or_404(db, dataset_id, principal.customer_id)
     ensure_dataset_allowed(principal, dataset_id)
+    require_cell_tier(source, "派生（derive）")
     try:
         service.ensure_new_dataset_room(db, customer_id=principal.customer_id)
     except service.QuotaExceeded as exc:
@@ -339,9 +386,11 @@ def dataset_join(
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> DatasetOut:
     """指标连接派生（Q17）：指标序列经 cell 引擎走 wire 入口拉取并计量；
-    未命中值列填 null。未解析地区在响应明细（dataset.detail 查 lineage）。"""
+    未命中值列填 null。未解析地区在响应明细（dataset.detail 查 lineage）。
+    api 层数据集无引擎侧表 → 403 档位闸。"""
     source = _dataset_or_404(db, dataset_id, principal.customer_id)
     ensure_dataset_allowed(principal, dataset_id)
+    require_cell_tier(source, "指标连接（join）")
     try:
         service.ensure_new_dataset_room(db, customer_id=principal.customer_id)
     except service.QuotaExceeded as exc:
@@ -377,9 +426,11 @@ def dataset_refresh(
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> DatasetOut:
-    """重派生：按存档 spec 对源当前有效态重算（join 会重拉指标=再次计量）。"""
+    """重派生：按存档 spec 对源当前有效态重算（join 会重拉指标=再次计量）。
+    api 层数据集不可派生 → 403 档位闸（source_kind 校验之外的兜底）。"""
     dataset = _dataset_or_404(db, dataset_id, principal.customer_id)
     ensure_dataset_allowed(principal, dataset_id)
+    require_cell_tier(dataset, "重派生（refresh）")
     if dataset.source_kind != "derived":
         raise HTTPException(
             status_code=400,
@@ -400,9 +451,12 @@ def dataset_lineage(
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> dict:
-    """血缘（引擎 key → dataset_id 映射后返回，附未解析地区等派生明细）。"""
+    """血缘（引擎 key → dataset_id 映射后返回，附未解析地区等派生明细）。
+    api 层数据集无引擎血缘 → 本地空视图（最小呈现，零引擎调用）。"""
     dataset = _dataset_or_404(db, dataset_id, principal.customer_id)
     ensure_dataset_allowed(principal, dataset_id)
+    if _is_api_tier(dataset):
+        return {"derivation": [], "children": []}
     result = _engine_call(
         engine_factory, principal, TOOL_LINEAGE, {"dataset_key": dataset.key}
     )

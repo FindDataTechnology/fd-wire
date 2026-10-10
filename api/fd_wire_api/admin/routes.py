@@ -43,6 +43,7 @@ from ..billing.plans import get_plan
 from ..billing.sub2api import Sub2ApiError, Sub2ApiClient, sub2api_client_dep
 from ..catalog.db import readonly_session
 from ..catalog.models import IndicatorSnapshot
+from ..dbcompat import period_expression
 from ..demands import service as demands_service
 from ..demands.db import get_db as get_demands_db
 from ..demands.models import Demand
@@ -313,7 +314,7 @@ def customer_usage(customer_id: int, db: Session = Depends(get_db)) -> CustomerU
 
     periods: list[UsagePeriodRow] = []
     if caller:
-        period_expr = func.strftime("%Y-%m", MeteringRecord.event_timestamp)
+        period_expr = period_expression(db.get_bind(), MeteringRecord.event_timestamp)
         rows = db.execute(
             select(
                 period_expr.label("period"),

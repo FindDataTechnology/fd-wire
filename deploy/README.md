@@ -61,6 +61,14 @@
 
 ## 备注
 
+- **专用 PostgreSQL（wire-dedicated-postgres）**：柏讯配专用 PG 实例——
+  配方与运维手册（部署/升级/监控/备份恢复/SQLite→PG 迁移与回退）见
+  [`deploy/wire-postgres/`](wire-postgres/README.md)，部署目标 cheap-1（与
+  cells 同机）。api 双 URL 语义：`FD_WIRE_DATABASE_URL`（元数据库
+  wire_platform，全平台模块收敛开关——现值=与计量同库的 SQLite，迁 PG 只
+  改这一个值）与 `FD_WIRE_DATASETS_DATABASE_URL`（数据集库
+  wire_datasets）；PG URL 用 `postgresql+psycopg://` 形态（历史形态 api
+  自动改写）。`AI_DATABASE_URL` 指向同一元数据库。
 - Ingress（`deploy/k8s/ingress.yaml`）是占位：集群现无 ingress controller，真实入口是步骤 9-10 的 Caddy；清单为路由意图存档，controller 启用后即生效。
 - `/internal/`（内部后台端点族）**不经 Caddy 单列路由**：`web/nginx.conf` 的 `location /internal/` 直接反代 `fd-wire-api.fd-prod.svc.cluster.local:8000`（wire-internal-public-routing）。admin 双闸（wire-self-serve-launch 5.2）：第一道 = 请求自带 `Authorization: Bearer <ID token>`（照常透传，服务端校验 `wire-admin` 角色）；第二道 = `X-Admin-Token` 由 web 容器启动时经 envsubst 注入（env `FD_WIRE_ADMIN_TOKEN` ← secret `fd-wire-env` 键 `fd_wire_admin_token`，与 api 同源）——令牌只存在容器 env 与 nginx 渲染配置里，**前端 bundle 不含任何令牌值**（旧开发占位 `dev-admin-token` 已随 5.2 退场）；未配置该 env 时注入空值 → 后端 fail-closed 403。生产密钥保持强随机值（10-07 核验为 48 位非占位）。
 - `fd-wire-api` 只暴露 ClusterIP；`/api` 由边缘 Caddy 承接直指 api，web nginx 刻意不设 `/api` 反代（同域双路由是隐患，注释占位保留仅作文档）。
@@ -143,15 +151,62 @@
 
 上游能力：`specs/wire-local-connector/`；代码 `connector/`（Go module，随本仓 CI 独立构建；详细行为见该目录各包注释）。
 
-### 取件
+### 取件与晋升（wire-connector-distribution）
 
-GHA `build` 的 `connector` job 在 push main 时产出三平台产物（artifact 名即 `fd-wire-connector-<os>-<arch>`，内含同名可执行文件；`-trimpath`，版本注入 `sha-<7>` 并随心跳上报控制台）：
+**客户取件走下载端点**（公开、无鉴权；`FD_WIRE_DOWNLOADS_DIR` 指向下载根目录，
+连接器产物在其 `connector/` 子目录，与 URL 命名空间一一对应——api 侧模块
+`fd_wire_api/downloads/`，未配置时端点 404 并说明原因）：
 
-| 平台 | 产物 |
+| 端点 | 用途 |
+|---|---|
+| `GET /api/v1/downloads/connector/manifest.json` | 版本清单：`{version, released_at, platforms:[{platform, filename, sha256, size, available}]}` |
+| `GET /api/v1/downloads/connector/{platform}` | 二进制流式下载（`Content-Length` + `X-Checksum-Sha256` 头；platform 如 `linux-amd64`） |
+
+| 平台 | 文件 |
 |---|---|
 | Linux | `fd-wire-connector-linux-{amd64,arm64}` |
 | macOS | `fd-wire-connector-darwin-{amd64,arm64}` |
 | Windows | `fd-wire-connector-windows-amd64.exe` |
+
+manifest 声明的文件在目录中缺失 → 该平台 `available=false`（其余平台不受影响），
+端点只做读取 + 一致性校验，不生成 manifest——**manifest 的 sha256 是唯一事实源**。
+
+**自动晋升**（build.yml `connector-promote` job，connector job 全平台产物汇齐后跑）：
+配置 per-repo secrets `DOWNLOADS_SSH_HOST` / `DOWNLOADS_SSH_USER` / `DOWNLOADS_SSH_KEY`
+（KEY 为私钥全文；同 `TCR_USERNAME/PASSWORD` 的 repo 级 secrets 纪律），job 即
+rsync 产物至 `$DOWNLOADS_REMOTE_DIR/connector/`（缺省 `fd-wire/downloads`，须与 api
+的 `FD_WIRE_DOWNLOADS_DIR` 指向一致）并重建 manifest（`version=sha-<7>`、逐平台
+sha256/size）。secrets 缺席时 job 仍绿：跳过上传、把手动晋升命令写进 job 摘要。
+
+**手动晋升**（secrets 未配 / 紧急通道；在能 SSH 到下载目录主机的机器上）：
+
+```bash
+# 1. 下载本 run 的全部 fd-wire-connector-* artifact（GHA run 页面 → Artifacts）
+#    解包到 ./staging/（每包一个同名可执行文件；artifact 名与文件名一致）
+mkdir -p staging && # 逐包 unzip 到 staging/
+# 2. 重建 manifest.json（与 CI connector-promote 逐字节同逻辑）
+version="sha-$(git rev-parse --short=7 HEAD)"   # 或目标 commit 的短 sha
+released_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+jq -n --arg v "$version" --arg r "$released_at" '{version:$v, released_at:$r, platforms:[]}' > staging/manifest.json
+for f in staging/fd-wire-connector-*; do
+  p="$(basename "$f")"; p="${p#fd-wire-connector-}"; p="${p%.exe}"
+  jq --arg p "$p" --arg f "$(basename "$f")" --arg s "$(sha256sum "$f" | cut -d' ' -f1)" \
+     --argjson z "$(wc -c < "$f" | tr -d ' ')" \
+     '.platforms += [{platform:$p, filename:$f, sha256:$s, size:$z}]' \
+     staging/manifest.json > manifest.tmp && mv manifest.tmp staging/manifest.json
+done
+# 3. 归档（目录专属本批产物，--delete 保持目录与 manifest 一致）
+rsync -avz --delete staging/ <user>@<host>:<FD_WIRE_DOWNLOADS_DIR>/connector/
+# 4. 验收：manifest 各平台 available=true；下载后 sha256 与 manifest 一致
+curl -s https://wire.finddatatech.cloud/api/v1/downloads/connector/manifest.json | jq .
+curl -sO https://wire.finddatatech.cloud/api/v1/downloads/connector/linux-amd64
+sha256sum fd-wire-connector-linux-amd64   # 对照 manifest.json 的 platforms[].sha256
+```
+
+**GHA artifact 定位降位**：runner artifact（90 天保留、需仓库权限下载）不再是客户
+取件通道，仅作构建产物缓存与手动晋升的源料；客户一律经下载端点取件。控制台配对
+向导按 manifest 渲染各平台下载链接（版本 + sha256 展示），manifest 不可用时如实
+显示「暂不可下载」并保留命令行指引。
 
 本地自建：`cd connector && go build ./cmd/fd-wire-connector`（或 `go build -ldflags "-X main.version=sha-$(git rev-parse --short HEAD)"`）。
 

@@ -1,8 +1,10 @@
-// 文档页（#/docs）——三节：快速开始 / 计量与计费 / 需求单流程。
+// 文档页（#/docs）——四节：快速开始 / 计量与计费 / 数据面 REST / 需求单流程，
+// 另加「我的数据与连接器」客户教程（wire-connector-distribution 任务 4）。
 // 如实呈现纪律：未上线能力（cell 开通）挂「上线中 · 即将开放」徽标，不以
 // 已上线口吻陈述；需求单提交已上线（wire-ux-consolidation 任务 4.1）。
 // 需求单流程为三态机（submitted → in_progress → delivered，另 rejected），
 // 八态工作流旧态名不再出现在客户面文案（任务 3.5 同步）。
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
 /** MCP 端点占位（wire-platform URL 契约：单域 /mcp 反代 registry wire 入口）。 */
@@ -13,6 +15,49 @@ const DEMAND_STEPS = [
   "docs.demands.step2",
   "docs.demands.step3",
 ] as const;
+
+const UPLOAD_STEPS = [
+  "docs.localData.uploadStep1",
+  "docs.localData.uploadStep2",
+  "docs.localData.uploadStep3",
+] as const;
+
+const CONNECTOR_STEPS = [
+  "docs.localData.connectorStep1",
+  "docs.localData.connectorStep2",
+  "docs.localData.connectorStep3",
+] as const;
+
+/** 常驻配置样例（deploy/README.md「连接器」段的客户面提炼；字面配置不进 i18n）。 */
+const SYSTEMD_SAMPLE = `[Unit]
+Description=fd-wire connector (outbound only)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/fd-wire-connector run --config /etc/fd-wire-connector/config.json
+Restart=always
+User=fdwire
+
+[Install]
+WantedBy=multi-user.target`;
+
+const NSSM_SAMPLE = `nssm install fd-wire-connector "C:\\Tools\\fd-wire-connector.exe" run
+nssm set fd-wire-connector AppDirectory "C:\\Tools"
+nssm start fd-wire-connector`;
+
+const LAUNCHD_SAMPLE = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.finddata.fd-wire-connector</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/fd-wire-connector</string>
+    <string>run</string>
+  </array>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
+</dict></plist>`;
 
 function ComingSoonBadge() {
   const { t } = useTranslation();
@@ -52,6 +97,16 @@ const DATA_PLANE_ENDPOINTS: ReadonlyArray<{
 
 export function DocsView() {
   const { t } = useTranslation();
+
+  // 深链锚点（wire-connector-distribution 任务 4.2）：配对向导链到
+  // #/docs?section=local-data——hash 路由不吃 #anchor，进页后手动定位。
+  useEffect(() => {
+    if (window.location.hash.includes("section=local-data")) {
+      document
+        .getElementById("local-data")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, []);
 
   const meteringPoints = [
     { title: t("docs.metering.rowsTitle"), desc: t("docs.metering.rowsDesc") },
@@ -198,6 +253,109 @@ export function DocsView() {
         <p className="max-w-3xl text-xs text-slate-400">
           {t("docs.dataPlane.mcpNote")}
         </p>
+      </section>
+
+      {/* 五、我的数据与连接器（wire-connector-distribution 任务 4）：
+          上传三步 / 连接器安装三步 / 常驻方式（systemd/nssm/launchd）/
+          故障排查——面向客户的口径，运维细节留在 deploy/README.md。 */}
+      <section
+        id="local-data"
+        data-testid="docs-local-data"
+        className="space-y-4"
+      >
+        <h2 className="text-xl font-semibold">{t("docs.localData.title")}</h2>
+        <p className="max-w-3xl text-sm text-slate-500">
+          {t("docs.localData.intro")}
+        </p>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="rounded-lg border border-slate-200 p-5">
+            <h3 className="font-medium">{t("docs.localData.uploadTitle")}</h3>
+            <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-sm text-slate-500">
+              {UPLOAD_STEPS.map((key) => (
+                <li key={key}>{t(key)}</li>
+              ))}
+            </ol>
+          </div>
+          <div className="rounded-lg border border-slate-200 p-5">
+            <h3 className="font-medium">
+              {t("docs.localData.connectorTitle")}
+            </h3>
+            <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-sm text-slate-500">
+              {CONNECTOR_STEPS.map((key) => (
+                <li key={key}>{t(key)}</li>
+              ))}
+            </ol>
+          </div>
+        </div>
+
+        <div
+          data-testid="docs-local-data-residency"
+          className="rounded-lg border border-slate-200 p-5"
+        >
+          <h3 className="font-medium">{t("docs.localData.residencyTitle")}</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            {t("docs.localData.residencyIntro")}
+          </p>
+          <div className="mt-3 grid gap-4 lg:grid-cols-3">
+            <div>
+              <h4 className="text-xs font-medium text-slate-600">
+                {t("docs.localData.systemdTitle")}
+              </h4>
+              <p className="mt-1 text-xs text-slate-500">
+                {t("docs.localData.systemdNote")}
+              </p>
+              <pre className="mt-1.5 overflow-x-auto rounded bg-slate-50 p-2 font-mono text-[11px] leading-relaxed text-slate-700 ring-1 ring-slate-200">
+                {SYSTEMD_SAMPLE}
+              </pre>
+            </div>
+            <div>
+              <h4 className="text-xs font-medium text-slate-600">
+                {t("docs.localData.nssmTitle")}
+              </h4>
+              <p className="mt-1 text-xs text-slate-500">
+                {t("docs.localData.nssmNote")}
+              </p>
+              <pre className="mt-1.5 overflow-x-auto rounded bg-slate-50 p-2 font-mono text-[11px] leading-relaxed text-slate-700 ring-1 ring-slate-200">
+                {NSSM_SAMPLE}
+              </pre>
+            </div>
+            <div>
+              <h4 className="text-xs font-medium text-slate-600">
+                {t("docs.localData.launchdTitle")}
+              </h4>
+              <p className="mt-1 text-xs text-slate-500">
+                {t("docs.localData.launchdNote")}
+              </p>
+              <pre className="mt-1.5 overflow-x-auto rounded bg-slate-50 p-2 font-mono text-[11px] leading-relaxed text-slate-700 ring-1 ring-slate-200">
+                {LAUNCHD_SAMPLE}
+              </pre>
+            </div>
+          </div>
+        </div>
+
+        <div
+          data-testid="docs-local-data-troubleshooting"
+          className="rounded-lg border border-slate-200 p-5"
+        >
+          <h3 className="font-medium">
+            {t("docs.localData.troubleshootTitle")}
+          </h3>
+          <ul className="mt-3 space-y-1.5 text-sm text-slate-500">
+            <li>{t("docs.localData.troubleshootWarnings")}</li>
+            <li>{t("docs.localData.troubleshootDrift")}</li>
+            <li>{t("docs.localData.troubleshootRows")}</li>
+            <li>{t("docs.localData.troubleshootRevoked")}</li>
+          </ul>
+        </div>
+
+        <a
+          href="#/console/datasets"
+          data-testid="docs-local-data-console-link"
+          className="inline-block text-sm text-slate-600 underline hover:text-slate-900"
+        >
+          {t("docs.localData.consoleLink")}
+        </a>
       </section>
 
       {/* 三、需求单流程（三态状态机步骤条） */}

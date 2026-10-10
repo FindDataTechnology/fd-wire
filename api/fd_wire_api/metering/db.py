@@ -23,8 +23,9 @@ class MeteringBase(DeclarativeBase):
 
 @lru_cache(maxsize=1)
 def get_engine() -> Engine:
-    """按 ``DATABASE_URL`` 创建引擎（sqlite 默认开启外键与 NATIVE 日期）。"""
-    url = get_settings().database_url
+    """按 effective URL 建引擎（FD_WIRE_DATABASE_URL > DATABASE_URL；sqlite
+    默认开启外键与 NATIVE 日期）。"""
+    url = get_settings().effective_database_url
     kwargs: dict = {}
     if url.startswith("sqlite"):
         kwargs.setdefault("connect_args", {"check_same_thread": False})

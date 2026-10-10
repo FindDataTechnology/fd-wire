@@ -264,6 +264,97 @@ def drift_message(differences: list[dict]) -> str:
     return "drift: " + "；".join(parts)
 
 
+# ------------------------------------------------------------------ 存储分层（wire-free-tier-data-gate）
+
+
+#: 免费档档位码（billing_plans.code；free 档按 self-serve-onboarding 裁决无 cell）
+FREE_PLAN_CODE = "free"
+#: 存储分层取值：api 层轻量行存储 / cell 引擎物化（design D1/D2）
+TIER_API = "api"
+TIER_CELL = "cell"
+
+
+def plan_code_for(*, customer_id: str) -> str | None:
+    """客户当前档位码（平台库 ``billing_customers.name`` → ``plan.code``）。
+
+    解析纪律与 :func:`storage_limit_for` 同款：平台库不可达/客户未映射
+    返回 None（不放大权限——tier 判定按 None=非免费处理）。
+    """
+    try:
+        from ..admin.db import get_session as _platform_session
+        from ..billing.models import Customer as BillingCustomer
+
+        sess = _platform_session()
+        try:
+            row = sess.execute(
+                select(BillingCustomer).where(BillingCustomer.name == customer_id)
+            ).scalar_one_or_none()
+            if row is not None and row.plan is not None:
+                return str(row.plan.code)
+        finally:
+            sess.close()
+    except Exception:  # noqa: BLE001 - 平台库不可达：档位未知，交由 tier 缺省
+        return None
+    return None
+
+
+def storage_tier_for(*, customer_id: str) -> str:
+    """建集时刻的存储分层判定（design D1）：免费档 → api 层；其余 → cell 层。
+
+    档位未知（平台库不可达/未映射）按 cell 处理——与现状行为一致（付费
+    缺省零变化）；免费档判定必须显式命中 free 档。
+    """
+    return (
+        TIER_API
+        if plan_code_for(customer_id=customer_id) == FREE_PLAN_CODE
+        else TIER_CELL
+    )
+
+
+def is_free_tier(*, customer_id: str) -> bool:
+    """客户当前是否免费档（无 cell；quota 端点与档位闸共用）。"""
+    return plan_code_for(customer_id=customer_id) == FREE_PLAN_CODE
+
+
+def free_dataset_count(db: Session, *, customer_id: str) -> int:
+    """免费档口径的数据集个数（= api 层数据集数；升档后旧 api 集仍计入）。"""
+    return int(
+        db.execute(
+            select(func.count(Dataset.id)).where(
+                Dataset.customer_id == customer_id,
+                Dataset.storage_tier == TIER_API,
+            )
+        ).scalar_one()
+    )
+
+
+def ensure_free_dataset_quota(db: Session, *, customer_id: str) -> None:
+    """建集闸（design D3）：免费档数据集个数达上限即 429（错误含余量）。"""
+    limit = get_settings().free_tier_max_datasets
+    used = free_dataset_count(db, customer_id=customer_id)
+    if used >= limit:
+        raise QuotaExceeded(
+            f"免费档数据集个数已达上限（已用 {used}/{limit}）——"
+            "请删除不再需要的数据集，或升级到基础档及以上套餐"
+        )
+
+
+def ensure_free_row_quota(row_count: int | None) -> None:
+    """写入闸（design D3）：行数超免费档单集上限即 429（含上限与实际行数）。
+
+    在任何行写入之前判定（上传件行数建档时已知），拒收不留半写状态。
+    """
+    if row_count is None:
+        return
+    count = int(row_count)
+    limit = get_settings().free_tier_max_rows
+    if count > limit:
+        raise QuotaExceeded(
+            f"行数 {count} 超过免费档单数据集上限 {limit}——"
+            "请拆分数据，或升级到基础档及以上套餐"
+        )
+
+
 # ------------------------------------------------------------------ 连接器状态
 
 

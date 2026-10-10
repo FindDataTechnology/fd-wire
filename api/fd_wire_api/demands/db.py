@@ -4,7 +4,9 @@ Alembic 迁移链在 ``api/alembic/``（0001 计量表建链、0002 本切片的
 ``demands`` 表）；``create_all`` 作为开发兜底，生产经
 ``DEMANDS_AUTO_CREATE_TABLES=0`` 关闭后完全走迁移。
 
-连接串可经环境变量 ``FD_WIRE_DATABASE_URL`` 重指（默认本地 SQLite 文件）。
+连接串可经环境变量 ``FD_WIRE_DATABASE_URL`` 重指（元数据库收敛开关，
+wire-dedicated-postgres；默认本地 SQLite 文件——PG URL 历史形态在此
+规范化为 ``postgresql+psycopg://``）。
 """
 
 from __future__ import annotations
@@ -18,7 +20,12 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-DATABASE_URL = os.getenv("FD_WIRE_DATABASE_URL", "sqlite:///./fd_wire_demands.db")
+from ..config import normalize_database_url
+
+DATABASE_URL = normalize_database_url(
+    os.getenv("FD_WIRE_DATABASE_URL", "sqlite:///./fd_wire_demands.db")
+)
+
 
 
 def _build_engine(url: str) -> Engine:

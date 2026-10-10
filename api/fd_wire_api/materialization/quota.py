@@ -26,6 +26,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..billing.models import Customer, CustomerStatus
+from ..dbcompat import period_expression
 from ..metering.models import MeteringRecord
 from .db import utc_now_naive
 
@@ -95,7 +96,10 @@ class SqlQuotaGuard:
                 select(func.sum(MeteringRecord.rows_returned)).where(
                     MeteringRecord.credential_track == "customer",
                     MeteringRecord.caller == customer_id,
-                    func.strftime("%Y-%m", MeteringRecord.event_timestamp) == period,
+                    period_expression(
+                        self._session.get_bind(), MeteringRecord.event_timestamp
+                    )
+                    == period,
                 )
             ).scalar_one()
             or 0

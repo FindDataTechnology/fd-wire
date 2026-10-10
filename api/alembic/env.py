@@ -1,6 +1,8 @@
 """Alembic 环境：目标元数据来自 fd_wire_api.metering 的 ORM 声明。
 
-连接串优先级：``-x db_url=...`` > ``DATABASE_URL`` env > 默认 sqlite 开发库。
+连接串优先级：``-x db_url=...`` > ``FD_WIRE_DATABASE_URL``（元数据库收敛
+开关，wire-dedicated-postgres）> ``DATABASE_URL`` env > 默认 sqlite 开发库。
+PG 历史形态（``postgres://`` 等）统一改写为 ``postgresql+psycopg://``。
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from fd_wire_api.config import normalize_database_url
 from fd_wire_api.metering.db import MeteringBase
 from fd_wire_api.metering import models  # noqa: F401 —— 注册全部映射
 
@@ -21,8 +24,10 @@ if config.config_file_name is not None:
 
 # 让离线/在线模式共用同一 url 解析
 x_args = context.get_x_argument(as_dictionary=True)
-database_url = x_args.get("db_url") or os.environ.get(
-    "DATABASE_URL", "sqlite:///./fd_wire_dev.db"
+database_url = normalize_database_url(
+    x_args.get("db_url")
+    or os.environ.get("FD_WIRE_DATABASE_URL")
+    or os.environ.get("DATABASE_URL", "sqlite:///./fd_wire_dev.db")
 )
 config.set_main_option("sqlalchemy.url", database_url)
 

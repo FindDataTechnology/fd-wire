@@ -170,3 +170,89 @@ jobs:
           path: ${{ runner.temp }}/out/fd-wire-connector-${{ matrix.os }}-${{ matrix.arch }}*
           if-no-files-found: error
           retention-days: 90
+
+  # 连接器晋升（wire-connector-distribution 任务 2.1）：把 connector job 的
+  # 全平台产物归档到下载目录（api 侧 FD_WIRE_DOWNLOADS_DIR 的 connector/），
+  # 重建 manifest.json（version=sha-<7>，逐平台 sha256/size）——manifest 的
+  # sha256 是两条晋升路径（自动/手动）的唯一事实源。
+  # 前置（per-repo secrets，同 TCR_USERNAME/PASSWORD 的 repo 级纪律）：
+  #   DOWNLOADS_SSH_HOST / DOWNLOADS_SSH_USER / DOWNLOADS_SSH_KEY
+  # （KEY 为 SSH 私钥全文；DOWNLOADS_REMOTE_DIR 为目标主机上的下载根目录，
+  #  缺省 fd-wire/downloads，与 api 的 FD_WIRE_DOWNLOADS_DIR 指向一致。）
+  # secrets 缺席时本 job 仍绿：跳过上传，把手动晋升命令写进 job 摘要
+  # （完整步骤与 sha256 校验命令见 deploy/README.md「连接器取件与晋升」）。
+  connector-promote:
+    needs: connector
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HAS_DOWNLOADS_CREDS: ${{ secrets.DOWNLOADS_SSH_HOST != '' && secrets.DOWNLOADS_SSH_USER != '' && secrets.DOWNLOADS_SSH_KEY != '' }}
+      DOWNLOADS_REMOTE_DIR: fd-wire/downloads
+    steps:
+      - name: Gather all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fd-wire-connector-*
+          merge-multiple: true
+          path: staging
+
+      - name: Rebuild manifest.json (sha256 per platform)
+        working-directory: staging
+        run: |
+          set -eu
+          test -n "$(ls fd-wire-connector-* 2>/dev/null)" || { echo "no artifacts" >&2; exit 1; }
+          version="sha-${GITHUB_SHA::7}"
+          released_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          jq -n --arg v "$version" --arg r "$released_at" \
+            '{version:$v, released_at:$r, platforms:[]}' > manifest.json
+          for f in fd-wire-connector-*; do
+            p="${f#fd-wire-connector-}"; p="${p%.exe}"
+            sha="$(sha256sum "$f" | cut -d' ' -f1)"
+            size="$(wc -c < "$f" | tr -d ' ')"
+            jq --arg p "$p" --arg f "$f" --arg s "$sha" --argjson z "$size" \
+              '.platforms += [{platform:$p, filename:$f, sha256:$s, size:$z}]' \
+              manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
+          done
+          cat manifest.json
+
+      - name: Promote artifacts to downloads dir (rsync)
+        if: env.HAS_DOWNLOADS_CREDS == 'true'
+        env:
+          SSH_HOST: ${{ secrets.DOWNLOADS_SSH_HOST }}
+          SSH_USER: ${{ secrets.DOWNLOADS_SSH_USER }}
+          SSH_KEY: ${{ secrets.DOWNLOADS_SSH_KEY }}
+        run: |
+          set -eu
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/downloads_key
+          chmod 600 ~/.ssh/downloads_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          # 目标子目录与 api 端点命名空间一一对应（<root>/connector/）；
+          # --delete：该目录专属本批产物，保持目录与 manifest 一致
+          rsync -avz --delete -e "ssh -i ~/.ssh/downloads_key" \
+            staging/ "$SSH_USER@$SSH_HOST:$DOWNLOADS_REMOTE_DIR/connector/"
+          echo "### 连接器产物已晋升（$DOWNLOADS_REMOTE_DIR/connector/）" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Skip promote — print manual promotion commands
+        if: env.HAS_DOWNLOADS_CREDS != 'true'
+        run: |
+          {
+            echo "### 连接器晋升跳过：未配置 DOWNLOADS_SSH_* secrets，请手动晋升"
+            echo
+            echo '凭证缺席（DOWNLOADS_SSH_HOST/USER/KEY），本 job 仅保留 GHA artifact（90 天、需仓库权限）。手动晋升：'
+            echo '```bash'
+            echo '# 1. 本 run 页面下载全部 fd-wire-connector-* artifact 到 ./staging'
+            echo '# 2. 重建 manifest.json（与本 job 上一步逐字节同逻辑）：'
+            echo 'version="sha-<本次 GITHUB_SHA 前 7 位>"'
+            echo 'for f in staging/fd-wire-connector-*; do'
+            echo '  p="$(basename "$f")"; p="${p#fd-wire-connector-}"; p="${p%.exe}"'
+            echo '  sha256sum "$f"  # 逐平台写入 manifest.platforms[].sha256'
+            echo 'done'
+            echo '# 3. 归档到下载目录（与 api 的 FD_WIRE_DOWNLOADS_DIR 指向一致）：'
+            echo 'rsync -avz staging/ <user>@<host>:<downloads_dir>/connector/'
+            echo '# 4. 客户侧下载后按 manifest 的 sha256 校验：'
+            echo 'sha256sum fd-wire-connector-linux-amd64   # 对照 manifest.json'
+            echo '```'
+            echo
+            echo '完整步骤（含 sha256 校验命令与 GHA artifact 定位）见 deploy/README.md「连接器取件与晋升」。'
+          } >> "$GITHUB_STEP_SUMMARY"

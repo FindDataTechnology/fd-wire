@@ -5,6 +5,9 @@
 - ``MATERIALIZATION_DATABASE_URL`` / ``DATABASE_URL``：物化表所在库。
   显式给前者则用之，否则跟随平台库（与 admin 切片同约定——billing 与
   metering 生产上同库，物化的硬停检查需要只读联查它们）。
+- ``FD_WIRE_DATABASE_URL``：元数据库收敛开关（wire-dedicated-postgres）
+  ——设了即压过上面两条（effective_database_url 的最高优先级）；PG
+  历史形态（``postgres://`` 等）统一改写为 ``postgresql+psycopg://``。
 - ``WIRE_ENTRY_URL``：wire 入口（registry 侧）基地址——物化读取逐项
   经它发出。未配置即 fail-closed（绝不猜测端点、绝不直连 business-mcp）。
 - ``CUSTOMER_CREDENTIAL_MAP``：customer_id → 客户凭据（key）映射，
@@ -25,7 +28,10 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from ..config import normalize_database_url
 
 _DEFAULT_PLATFORM_DB = "sqlite:///./fd_wire_dev.db"
 #: MATERIALIZATION_INTERVAL 下限（0/负值会让循环退化成忙轮询）
@@ -61,6 +67,10 @@ class MaterializationSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # 元数据库收敛开关（wire-dedicated-postgres）：设了即压过下面两条
+    fd_wire_database_url: str | None = Field(
+        default=None, validation_alias="FD_WIRE_DATABASE_URL"
+    )
     materialization_database_url: str | None = None
     # 平台库（alembic 迁移链 0009 落物化表于此； billing/metering 联查同库）
     database_url: str | None = None
@@ -78,10 +88,13 @@ class MaterializationSettings(BaseSettings):
 
     @property
     def effective_database_url(self) -> str:
-        if self.materialization_database_url:
-            return self.materialization_database_url
-        if self.database_url:
-            return self.database_url
+        for candidate in (
+            self.fd_wire_database_url,
+            self.materialization_database_url,
+            self.database_url,
+        ):
+            if candidate:
+                return normalize_database_url(candidate)
         return _DEFAULT_PLATFORM_DB
 
     @property

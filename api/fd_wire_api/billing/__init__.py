@@ -23,6 +23,7 @@ from .metering_source import (
     MeteringUsage,
     SqlMeteringSource,
     StaticMeteringSource,
+    ensure_metering_records_table,
 )
 from .models import (
     NOTICE_CHANNELS,
@@ -95,6 +96,7 @@ __all__ = [
     "Sub2User",
     "default_resolver",
     "ensure_customer",
+    "ensure_metering_records_table",
     "evaluate_usage_warnings",
     "get_plan",
     "init_billing",
@@ -117,12 +119,15 @@ def init_billing(engine: Engine | None = None, *, session: Session | None = None
     if engine is None:
         import os
 
+        from ..config import canonical_metadata_database_url, normalize_database_url
+
         url = (
-            os.getenv("BILLING_DATABASE_URL")
+            canonical_metadata_database_url()
+            or os.getenv("BILLING_DATABASE_URL")
             or os.getenv("DATABASE_URL")
             or "sqlite:///./billing.db"
         )
-        engine = create_engine(url)
+        engine = create_engine(normalize_database_url(url))
     Base.metadata.create_all(engine)
     with Session(engine) as sess:
         seed_plans(sess)

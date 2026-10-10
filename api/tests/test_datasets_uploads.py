@@ -87,6 +87,8 @@ def test_settings_read_contract_env_names(monkeypatch) -> None:
     monkeypatch.setenv("FD_WIRE_DATASET_MAX_ROWS", "7")
     monkeypatch.setenv("FD_WIRE_DATASET_MIN_SYNC_MINUTES", "3")
     monkeypatch.setenv("FD_WIRE_DATASET_CONNECTOR_POLL_SECONDS", "11")
+    monkeypatch.setenv("FD_WIRE_FREE_MAX_DATASETS", "9")
+    monkeypatch.setenv("FD_WIRE_FREE_MAX_ROWS", "88")
     settings = DatasetsSettings()
     assert settings.datasets_database_url == "sqlite:///custom.db"
     assert settings.datasets_upload_dir == "/tmp/u"
@@ -95,6 +97,9 @@ def test_settings_read_contract_env_names(monkeypatch) -> None:
     assert settings.dataset_min_sync_minutes == 3
     assert settings.dataset_connector_poll_seconds == 11
     assert settings.heartbeat_offline_seconds == 33
+    # 免费档限额（wire-free-tier-data-gate 任务 1.2）：env 可覆盖默认 3×10000
+    assert settings.free_tier_max_datasets == 9
+    assert settings.free_tier_max_rows == 88
 
 
 # ------------------------------------------------------------------ 类型推断

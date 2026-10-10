@@ -2,11 +2,14 @@
 
 - ``connectors`` / ``connector_keys`` / ``connector_pairing_tokens``：
   出站连接器身份（配对令牌 15 分钟单次、key 存 sha256、吊销即时生效）。
-- ``datasets``：客户数据集登记（1:1 对应一张源表/一个文件），有效数据在
-  cell 引擎侧，本表只存元数据（绝不存客户源 DSN/账密）。
+- ``datasets``：客户数据集登记（1:1 对应一张源表/一个文件），有效数据按
+  ``storage_tier`` 分层——cell 层在引擎侧、api 层在本库轻量行存储；本表
+  只存元数据（绝不存客户源 DSN/账密）。
 - ``dataset_syncs``：同步历史（status 终态 ok|failed|drift|quota；
   在飞行为 ``syncing`` 标记，abort 时整行清理——见 sync_service 说明）。
 - ``uploads``：上传原件登记（stored_path 指向 api 侧暂存 CSV）。
+- ``dataset_columns`` / ``dataset_rows``：api 层轻量行存储（免费档，
+  wire-free-tier-data-gate D2——列元数据 + JSON 行，SQLite/PG 双方言）。
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import JSON, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import DatasetsBase
@@ -26,6 +30,11 @@ def _utcnow_naive() -> datetime:
 
 def new_uuid() -> str:
     return str(uuid.uuid4())
+
+
+#: JSON 行存储的双方言类型：SQLite 用 JSON、PG 用 JSONB（design D2；
+#: wire-dedicated-postgres 的双方言审计覆盖本列）。
+JSON_DUAL_DIALECT = JSON().with_variant(JSONB(), "postgresql")
 
 
 class Connector(DatasetsBase):
@@ -72,7 +81,7 @@ class ConnectorPairingToken(DatasetsBase):
 
 
 class Dataset(DatasetsBase):
-    """客户数据集登记（元数据；有效数据/修正层在 cell 引擎侧）。"""
+    """客户数据集登记（元数据；cell 层有效数据在引擎侧、api 层在本库）。"""
 
     __tablename__ = "datasets"
     __table_args__ = (UniqueConstraint("customer_id", "key", name="uq_datasets_customer_key"),)
@@ -84,6 +93,10 @@ class Dataset(DatasetsBase):
     name: Mapped[str] = mapped_column(String(200))
     #: "upload" | "connector"
     source_kind: Mapped[str] = mapped_column(String(16))
+    #: 存储分层（wire-free-tier-data-gate D1）："cell"=引擎物化（付费档默认，
+    #: 存量行同值）、"api"=本库轻量行存储（免费档建集时落值）。
+    #: 与 source_kind（从哪来）正交——source 是来源，tier 是存哪里。
+    storage_tier: Mapped[str] = mapped_column(String(16), default="cell")
     connector_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     #: 连接器本地源名（连接器本地配置 sources[].name 的映射键）；云端绝不含 DSN
     source_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -142,6 +155,44 @@ class Upload(DatasetsBase):
     content_sha256: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class DatasetColumn(DatasetsBase):
+    """api 层数据集列元数据（wire-free-tier-data-gate D2，免费档轻量存储）。
+
+    与 ``datasets.columns_json`` 同源（建档时一次写入两处：JSON 作卡片
+    快照，本表作查询面的列注册表——过滤/排序/聚合的列校验与 dtype 依据）。
+    """
+
+    __tablename__ = "dataset_columns"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "name", name="uq_dataset_columns_dataset_name"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    dataset_id: Mapped[str] = mapped_column(String(36), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    #: INTEGER | REAL | TEXT（与上传类型推断同集，值归一见 api_store）
+    dtype: Mapped[str] = mapped_column(String(16))
+    ordinal: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class DatasetRow(DatasetsBase):
+    """api 层数据集行存储（JSON 行；row_index 建集时定序、删除不回收）。
+
+    ``data`` 为「列名 → 已按 dtype 归一的值」；缺列即键不存在（与上传
+    短行语义一致）。SQLite/PG 双方言：PG 端 JSONB（见 JSON_DUAL_DIALECT）。
+    """
+
+    __tablename__ = "dataset_rows"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "row_index", name="uq_dataset_rows_dataset_index"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    dataset_id: Mapped[str] = mapped_column(String(36), index=True)
+    row_index: Mapped[int] = mapped_column(Integer)
+    data: Mapped[dict] = mapped_column(JSON_DUAL_DIALECT)
 
 
 class DataPlaneKey(DatasetsBase):

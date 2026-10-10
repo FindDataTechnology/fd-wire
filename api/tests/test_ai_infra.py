@@ -514,8 +514,8 @@ def test_migration_0005_creates_ai_tables(migrated_sqlite) -> None:
     }
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    # 迁移链只增不改：head 随链推进（wire-self-serve-launch 1.1/4.3 起 = 0015_console_onboarding）
-    assert version == "0019_demand_three_state"
+    # 迁移链只增不改：head 随链推进（wire-dedicated-postgres 并行批次起 = 0021_artifact_lifecycle）
+    assert version == "0021_artifact_lifecycle"
 
 
 def _cfg() -> Config:

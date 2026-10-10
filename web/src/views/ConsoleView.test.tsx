@@ -193,9 +193,10 @@ describe("ConsoleView（tab 切换）", () => {
     // datasets：付费档正常渲染数据面
     rerender(<ConsoleView tab="datasets" />);
     expect(await screen.findByTestId("upload-section")).toBeTruthy();
-    // artifacts tab 渲染产物页（空态可见）
+    // artifacts tab 渲染产物页（空态可见；wire-artifacts-persistence 后
+    // 草稿说明横幅退位，持久化产物列表空态取而代之）
     rerender(<ConsoleView tab="artifacts" />);
-    expect(screen.getByTestId("artifacts-draft-note")).toBeTruthy();
+    expect(await screen.findByTestId("artifacts-empty")).toBeTruthy();
   });
 
   it("chat tab 显示名「AI 构建」（id 保持 chat）；旧 #/console/chat 深链仍落壹座引导卡", async () => {

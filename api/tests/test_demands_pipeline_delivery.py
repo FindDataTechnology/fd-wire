@@ -24,7 +24,10 @@ from __future__ import annotations
 
 import os
 
-# 在导入 app 前把默认引擎指向内存库（与 test_demands_statemachine 同款纪律）。
+# 在导入 app 前把默认引擎指向内存库（与 test_demands_statemachine 同款纪律；
+# wire-dedicated-postgres 起该 env 升为元数据库收敛开关——只在导入期间生效，
+# 导入完即还原，避免泄漏进同会话其余模块的 URL 解析）。
+_OWNS_FD_WIRE_URL = "FD_WIRE_DATABASE_URL" not in os.environ
 os.environ.setdefault("FD_WIRE_DATABASE_URL", "sqlite://")
 
 from pathlib import Path
@@ -39,6 +42,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from fd_wire_api.app import app
+
+if _OWNS_FD_WIRE_URL:
+    del os.environ["FD_WIRE_DATABASE_URL"]
 from fd_wire_api.demands import DemandStatus, get_db
 from fd_wire_api.demands.db import Base
 from fd_wire_api.delivery.scope_client import (
@@ -739,5 +745,5 @@ def test_migration_head_adds_demand_columns(migrated_demands_sqlite):
     } <= columns
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    # 链头唯一且随链推进（0019 起链头=0019_demand_three_state）
-    assert version == "0019_demand_three_state"
+    # 链头唯一且随链推进（wire-dedicated-postgres 并行批次起链头=0021_artifact_lifecycle）
+    assert version == "0021_artifact_lifecycle"

@@ -15,6 +15,10 @@
   随连接器配置下发（本地调度不得更频）。
 - ``FD_WIRE_DATASET_CONNECTOR_POLL_SECONDS``：连接器心跳/轮询周期
   （默认 60s）；离线判定 = now - last_heartbeat_at > 3×该值（默认 180s）。
+- ``FD_WIRE_FREE_MAX_DATASETS``：免费档（api 层）数据集个数上限（默认 3，
+  wire-free-tier-data-gate D3）；建集超限 fail-closed（429 带余量）。
+- ``FD_WIRE_FREE_MAX_ROWS``：免费档单数据集行数上限（默认 10000）；
+  写入超限 fail-closed（429 带上限与实际行数，不留半写状态）。
 
 引擎通道凭据**复用 AI 轨道**（见 ``ingest.py``）：``AI_CELL_ENDPOINT_MAP``
 （customer_id → cell 的 registry wire 入口）与 ``AI_PLATFORM_CREDENTIAL``。
@@ -60,6 +64,12 @@ class DatasetsSettings(BaseSettings):
     )
     dataset_connector_poll_seconds: int = Field(
         default=60, validation_alias="FD_WIRE_DATASET_CONNECTOR_POLL_SECONDS"
+    )
+    free_tier_max_datasets: int = Field(
+        default=3, validation_alias="FD_WIRE_FREE_MAX_DATASETS"
+    )
+    free_tier_max_rows: int = Field(
+        default=10000, validation_alias="FD_WIRE_FREE_MAX_ROWS"
     )
 
     @property

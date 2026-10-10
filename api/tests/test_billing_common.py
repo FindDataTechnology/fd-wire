@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from fd_wire_api.billing import METERING_RECORDS_DDL, Base, Customer, seed_plans
+from fd_wire_api.billing import Base, Customer, ensure_metering_records_table, seed_plans
 from fd_wire_api.billing.sub2api import Sub2ApiClient
 
 BASE = "http://sub2api.test"
@@ -33,7 +33,7 @@ def make_engine():
         seed_plans(sess)
         sess.commit()
     with engine.begin() as conn:
-        conn.execute(text(METERING_RECORDS_DDL))
+        ensure_metering_records_table(conn)
     return engine
 
 

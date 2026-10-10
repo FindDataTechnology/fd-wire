@@ -1,6 +1,8 @@
 // 「我的数据」组件测试（wire-customer-local-data 任务组 3：3.1-3.5）：
 // 列表六态/空态、上传全流程载荷、预览网格改值/删行/加行载荷、漂移 resume 流、
 // 悬空徽标与回滚、连接器在线离线与配对令牌一次性显示、白名单建档、路由接入。
+// 免费档放行（wire-free-tier-data-gate 4.1-4.3）：完整渲染/配额条/存储徽标/
+// 内联限额提示/连接器区付费标注 + 付费档零变化回归。
 // fetch 一律走 testing.ts 的内存假后端（零网络）。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -22,7 +24,8 @@ const CUSTOMER = "demo-customer";
 const NOW = "2026-10-05T10:00:00";
 
 function makeDataset(
-  partial: Partial<Dataset> & Pick<Dataset, "id" | "name">,
+  partial: Partial<Dataset> &
+    Pick<Dataset, "id" | "name"> & { storage_tier?: string },
 ): Dataset {
   return {
     key: partial.id.replace(/-/g, "_"),
@@ -685,25 +688,182 @@ describe("导航与路由接入（任务 3.1）", () => {
   });
 });
 
-describe("DatasetsPage（免费档边界，wire-self-serve-launch 任务 4.6）", () => {
-  it("plan_code=free → 升级引导卡（mailto CTA），不发起任何数据集/连接器请求", async () => {
-    const backend = install();
+describe("DatasetsPage（免费档放行，wire-free-tier-data-gate 4.1-4.3）", () => {
+  it("免费档完整渲染：标题/配额条/列表（含存储层徽标）/上传面；连接器区可见但标注付费且不发起连接器请求", async () => {
+    const backend = install({
+      planCode: "free",
+      datasets: [
+        makeDataset({ id: "ds-1", name: "轻量数据集", storage_tier: "api" }),
+      ],
+    });
     render(<DatasetsPage planCode="free" />);
 
-    const gate = await screen.findByTestId("datasets-upgrade");
-    expect(gate.textContent).toContain("面向付费档开放");
-    expect(gate.textContent).toContain("免费档");
-    const cta = screen.getByTestId("datasets-upgrade-cta");
-    expect(cta.getAttribute("href")).toMatch(/^mailto:/);
-    // 绝不为免费用户发起 cell/数据集请求
-    const dataCalls = backend.calls.filter(
-      (c) =>
-        c.url.pathname.startsWith("/api/v1/datasets") ||
-        c.url.pathname.startsWith("/api/v1/connectors"),
+    // 配额条内联（数值来自配额端点，不写死）：已用 1/3、每集 ≤10,000 行
+    const quota = await screen.findByTestId("datasets-quota");
+    expect(quota.getAttribute("data-exhausted")).toBe("false");
+    expect(quota.textContent).toContain("1/3");
+    expect(quota.textContent).toContain("10,000");
+    // 列表卡片 + 存储层徽标（api 层数据集带 storage_tier；与 cell 层同列表）
+    expect(await screen.findByTestId("dataset-card")).toBeTruthy();
+    expect(
+      screen.getByTestId("dataset-tier-badge").getAttribute("data-tier"),
+    ).toBe("api");
+    expect(screen.getByTestId("dataset-tier-badge").textContent).toBe(
+      "轻量存储",
     );
-    expect(dataCalls).toEqual([]);
-    // 上传/连接器管理面不渲染
-    expect(screen.queryByTestId("upload-section")).toBeNull();
+    // 上传面照常渲染（免费通道 = CSV 上传）
+    expect(screen.getByTestId("upload-section")).toBeTruthy();
+    // 连接器区可见但标注付费：不渲染配对向导/白名单（不发起建集）
+    expect(screen.getByTestId("connectors-section")).toBeTruthy();
+    expect(screen.getByTestId("connectors-paid-badge").textContent).toBe(
+      "付费档",
+    );
+    expect(screen.queryByTestId("pairing-wizard")).toBeNull();
+    expect(screen.queryByTestId("whitelist-section")).toBeNull();
+    // 免费档不发起任何连接器请求（连接器建集经引擎物化，属付费面）
+    expect(
+      backend.calls.filter((c) =>
+        c.url.pathname.startsWith("/api/v1/connectors"),
+      ),
+    ).toEqual([]);
+    // 点击付费徽标展开升档说明（mailto CTA）
+    fireEvent.click(screen.getByTestId("connectors-paid-badge"));
+    const note = await screen.findByTestId("connectors-paid-note");
+    expect(note.textContent).toContain("付费档");
+    expect(
+      screen.getByTestId("connectors-paid-cta").getAttribute("href"),
+    ).toMatch(/^mailto:/);
+  });
+
+  it("免费档上传建档：同接口列表刷新出新卡片（api 层带存储徽标），配额条同步 0/3 → 1/3", async () => {
+    const backend = install({ planCode: "free", datasets: [] });
+    render(<DatasetsPage planCode="free" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("datasets-quota").textContent).toContain("0/3"),
+    );
+
+    fireEvent.change(
+      screen.getByTestId("upload-file-input"),
+      {
+        target: {
+          files: [
+            new File(["id,amount\n1,2"], "sales.csv", { type: "text/csv" }),
+          ],
+        },
+      },
+    );
+    await screen.findByTestId("upload-preview");
+    fireEvent.click(screen.getByTestId("upload-create"));
+
+    expect(await screen.findByTestId("upload-created")).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getAllByTestId("dataset-card").length).toBe(1),
+    );
+    // api 层数据集与 cell 层同列表：响应带 storage_tier 即显徽标
+    expect(
+      screen.getByTestId("dataset-tier-badge").getAttribute("data-tier"),
+    ).toBe("api");
+    // 配额条随建档刷新
+    await waitFor(() =>
+      expect(screen.getByTestId("datasets-quota").textContent).toContain("1/3"),
+    );
+    expect(postCalls(backend, "/api/v1/datasets").length).toBe(1);
+  });
+
+  it("免费档建集触限：400 配额语义错误 → 错误如实 + 内联升档提示（amber），页面不退墙", async () => {
+    install({
+      planCode: "free",
+      datasets: [],
+      failCreateDatasetStatus: 400,
+      failCreateDatasetDetail:
+        "免费档数据集数量已达上限（3 个），升档可解锁更多",
+    });
+    render(<DatasetsPage planCode="free" />);
+    await screen.findByTestId("datasets-quota");
+
+    fireEvent.change(screen.getByTestId("upload-file-input"), {
+      target: { files: [new File(["x"], "fourth.csv")] },
+    });
+    await screen.findByTestId("upload-preview");
+    fireEvent.click(screen.getByTestId("upload-create"));
+
+    // api 错误 detail 如实呈现
+    const error = await screen.findByTestId("upload-error");
+    expect(error.textContent).toContain("已达上限");
+    // 内联升档提示（非整页墙）
+    const hint = screen.getByTestId("upload-quota-hint");
+    expect(hint.textContent).toContain("已达免费档限额");
+    expect(
+      screen.getByTestId("upload-quota-cta").getAttribute("href"),
+    ).toMatch(/^mailto:/);
+    expect(screen.getByTestId("upload-section")).toBeTruthy();
+    expect(screen.getByTestId("connectors-section")).toBeTruthy();
+  });
+
+  it("免费档上传行数触限：错误如实 + 内联升档提示", async () => {
+    install({
+      planCode: "free",
+      datasets: [],
+      failUploadStatus: 400,
+      failUploadDetail: "行数超出免费档单集上限（10,000 行），已拒收",
+    });
+    render(<DatasetsPage planCode="free" />);
+    await screen.findByTestId("datasets-empty");
+
+    fireEvent.change(screen.getByTestId("upload-file-input"), {
+      target: { files: [new File(["x"], "big.csv")] },
+    });
+    expect(await screen.findByTestId("upload-error")).toBeTruthy();
+    expect(screen.getByTestId("upload-quota-hint")).toBeTruthy();
+  });
+
+  it("配额端点未就绪：配额条静默隐藏，页面其余照常（不阻塞）", async () => {
+    install({ planCode: "free", datasets: [], failQuotaStatus: 404 });
+    render(<DatasetsPage planCode="free" />);
+
+    expect(await screen.findByTestId("datasets-empty")).toBeTruthy();
+    expect(screen.queryByTestId("datasets-quota")).toBeNull();
+    expect(screen.getByTestId("upload-section")).toBeTruthy();
+    expect(screen.getByTestId("connectors-section")).toBeTruthy();
+  });
+
+  it("配额触达上限态：配额条转 amber（exhausted）并附升档 CTA", async () => {
+    install({
+      planCode: "free",
+      datasets: [
+        makeDataset({ id: "ds-1", name: "集一" }),
+        makeDataset({ id: "ds-2", name: "集二" }),
+        makeDataset({ id: "ds-3", name: "集三" }),
+      ],
+    });
+    render(<DatasetsPage planCode="free" />);
+
+    const quota = await screen.findByTestId("datasets-quota");
+    expect(quota.getAttribute("data-exhausted")).toBe("true");
+    expect(quota.textContent).toContain("3/3");
+    expect(
+      screen.getByTestId("datasets-quota-upgrade").getAttribute("href"),
+    ).toMatch(/^mailto:/);
+  });
+
+  it("付费档零变化：无配额条/付费徽标/存储徽标，连接器向导照常且不取配额", async () => {
+    const backend = install({
+      datasets: [makeDataset({ id: "ds-1", name: "门店销量" })],
+      connectors: [makeConnector({ id: "cn-1", name: "erp-connector" })],
+    });
+    render(<DatasetsPage planCode="basic" />);
+
+    expect(await screen.findByTestId("dataset-card")).toBeTruthy();
+    expect(screen.queryByTestId("datasets-quota")).toBeNull();
+    expect(screen.queryByTestId("dataset-tier-badge")).toBeNull();
+    expect(screen.queryByTestId("connectors-paid-badge")).toBeNull();
+    expect(screen.getByTestId("pairing-wizard")).toBeTruthy();
+    expect(screen.getByTestId("whitelist-section")).toBeTruthy();
+    expect(
+      backend.calls.filter(
+        (c) => c.url.pathname === "/api/v1/datasets/quota",
+      ),
+    ).toEqual([]);
   });
 
   it("plan_code 未下发（空串）→ 不按免费档阻塞，正常渲染数据面", async () => {

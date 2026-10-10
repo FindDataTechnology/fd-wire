@@ -134,6 +134,45 @@ const zh = {
     mcpNote:
       "agent 与自动化编排请优先走 MCP 调用面（wire 入口）：同源引擎、天然计量；REST 数据面面向自建前端与业务系统。",
   },
+  localData: {
+    // 「我的数据与连接器」客户教程（wire-connector-distribution 任务 4）：
+    // 面向客户的口径从 deploy/README.md「连接器」段提炼，运维细节不进文档页。
+    title: "我的数据与连接器",
+    intro:
+      "两条路把数据接入平台：公网上传（CSV / Excel，先预览后建档）或在内网部署连接器按调度同步——连接器只发起出站连接，源库凭据始终留在你的机器上。",
+    uploadTitle: "上传三步",
+    uploadStep1: "拖入或选择文件（CSV / Excel）：先解析预览列名与推断类型，不落库；",
+    uploadStep2: "确认列与类型：可逐列核对调整，行数超限会如实拒收；",
+    uploadStep3: "命名建档：上传类立即建成数据集，仅本企业可见。",
+    connectorTitle: "连接器安装三步",
+    connectorStep1:
+      "在控制台「我的数据 → 连接器 → 配对向导」生成一次性配对令牌（15 分钟、单次有效）；",
+    connectorStep2:
+      "按平台下载 fd-wire-connector，在可访问本地源的机器上运行配对命令（pair --token …）——连接器 key 只写本地配置文件（0600）；",
+    connectorStep3:
+      "run 常驻运行：心跳上报 + 按云端白名单与调度全量同步（--once 可单轮冒烟验证）。",
+    residencyTitle: "常驻方式",
+    residencyIntro:
+      "以下样例仅作起点；配置文件建议属专用账号并保持 0600 权限（过宽时启动即告警）。",
+    systemdTitle: "Linux · systemd",
+    systemdNote:
+      "unit 落 /etc/systemd/system/fd-wire-connector.service，随后 systemctl daemon-reload && systemctl enable --now fd-wire-connector。",
+    nssmTitle: "Windows · nssm",
+    nssmNote: "或用任务计划程序设「启动时」运行 fd-wire-connector.exe run。",
+    launchdTitle: "macOS · launchd",
+    launchdNote:
+      "plist 落 ~/Library/LaunchDaemons/com.finddata.fd-wire-connector.plist，随后 launchctl load 该文件；前台直接运行亦可。",
+    troubleshootTitle: "故障排查",
+    troubleshootWarnings:
+      "心跳 warnings：白名单里的源在连接器本地 sources 找不到 → 该数据集被跳过并回报到控制台连接器区块——核对本地源名拼写。",
+    troubleshootDrift:
+      "schema 漂移暂停：源端缺列 / 改类型时该数据集自动暂停（保持最后一次有效快照），在控制台确认新结构后 resume 恢复同步。",
+    troubleshootRows:
+      "行上限：单数据集默认 500,000 行，超限拒收——拆分或清洗后重新同步，或联系升配。",
+    troubleshootRevoked:
+      "吊销后重配对：控制台吊销即时生效（连接器收到 401）；重新生成配对令牌、重跑 pair 即可，数据集与白名单保留。",
+    consoleLink: "前往控制台「我的数据」→",
+  },
   demands: {
       title: "需求单流程",
       // 三态机（wire-ux-consolidation 任务 3.5）：submitted → in_progress →
@@ -293,17 +332,14 @@ const zh = {
       haveAccount: "已有壹座账号？直接进入",
     },
     artifacts: {
-      title: "产物草稿",
+      title: "产物",
       subtitle:
-        "AI 构建循环暂存的五类产物草稿——按会话归集，来源会话可回跳。",
-      draftBadge: "草稿",
-      draftNote:
-        "以下产物均为草稿（draft）——物化上线中：尚未落到企业 cell，不产生任何计量。",
+        "跨会话持久化的五类产物——spec 每次保存追加新版本，草稿/已发布/已归档三态可流转。",
       loading: "产物加载中…",
       errorTitle: "产物加载失败",
       retry: "重试",
-      empty: "暂无产物草稿",
-      emptyHint: "在 AI 对话构建里生成产物后，草稿会出现在这里。",
+      empty: "暂无产物",
+      emptyHint: "把 AI 构建会话里生成的草稿导入产物后，会出现在这里。",
       kindFilterLabel: "产物类型",
       kindAll: "全部类型",
       kinds: {
@@ -313,26 +349,76 @@ const zh = {
         alert_rule: "告警",
         refresh_schedule: "定时刷新",
       },
+      statusFilterLabel: "状态",
+      statusAll: "全部状态",
+      statuses: {
+        draft: "草稿",
+        published: "已发布",
+        archived: "已归档",
+      },
+      versionLabel: "v{{version}}",
+      updatedLabel: "更新于",
       source: "来源会话",
+      sourceNone: "直接创建",
       viewSpec: "查看 spec",
+      history: "版本历史",
+      publish: "发布",
+      archive: "归档",
+      restore: "恢复",
+      actionErrorTitle: "操作失败，请稍后重试。",
       viewer: {
-        title: "spec 查看器",
-        note: "编辑仅保存到本地浏览器（localStorage）——产物真保存与物化上线是后续任务。",
-        localDraft: "本地草稿",
-        saveLocal: "保存到本地",
-        saved: "已保存到本地浏览器（真保存为后续任务）",
-        restoreOriginal: "恢复原始 spec",
+        title: "spec 编辑器",
+        note: "保存到服务端会追加为新版本；未保存的编辑自动暂存到本地浏览器（仅作离开提示缓冲）。",
+        saveServer: "保存到服务端",
+        saving: "保存中…",
+        savedVersion: "已保存为版本 v{{version}}。",
         invalidJson: "不是合法 JSON——修正后再保存。",
+        saveFailed: "保存失败，请稍后重试。",
+        bufferBadge: "本地未保存编辑",
+        discardBuffer: "丢弃本地编辑",
+        locked: "产物已归档（archived），spec 只读——请先恢复为草稿再修改。",
+        loadError: "spec 加载失败。",
+      },
+      versions: {
+        title: "版本历史",
+        loading: "版本加载中…",
+        empty: "暂无版本",
+        fetchError: "版本历史加载失败。",
+        entry: "版本 v{{version}}",
+        operatorLabel: "操作者",
+        copy: "复制 spec",
+        copied: "已复制到剪贴板。",
+        close: "关闭",
       },
     },
     datasets: {
       title: "我的数据",
       subtitle:
         "上传文件或经连接器同步的客户数据集——仅本企业可见；读取不计入套餐额度。",
-      upgrade: {
-        title: "「我的数据」面向付费档开放",
-        body: "当前为免费档：仅含公网指标读取额度，不含我的数据（上传 / 连接器）能力。升档至基础版即开通。",
+      // 免费档限额内联呈现与升档引导（wire-free-tier-data-gate 4.1/4.4）：
+      // 升级墙退役为限额触达时的内联提示，数值一律来自配额端点（不写死）。
+      quota: {
+        bar: "免费档配额：已用 {{used}}/{{max}} 个数据集 · 每集 ≤{{rows}} 行",
+        exhausted:
+          "数据集数量已达免费档上限（{{max}} 个）——删除不需要的数据集可腾出名额，或升档解锁更多。",
+        hitTitle: "已达免费档限额",
+        hintBody:
+          "免费档对数据集个数与单集行数设有限额——删除不需要的数据集可腾出名额，或升档解锁更高限额与连接器、派生能力。",
         cta: "联系开通升档",
+      },
+      // 存储层徽标（api 层轻量存储 / cell 引擎物化；响应带 storage_tier 才显示）。
+      tierBadge: {
+        api: "轻量存储",
+        cell: "引擎物化",
+      },
+      // 付费面标注（wire-free-tier-data-gate 4.2：连接器/派生入口可见但标注付费）。
+      paidFeature: {
+        badge: "付费档",
+        connectorsTitle: "连接器同步面向付费档",
+        connectorsBody:
+          "连接器在你的网络内读取本地源，并经引擎物化进企业 cell——该链路需基础档及以上。当前为免费档，升档后即可在此配对连接器、圈定源与设置调度。",
+        connectorsShort:
+          "连接器同步与白名单建集在升档后开放（当前档位：免费档）。",
       },
       loading: "数据集加载中…",
       errorTitle: "数据集加载失败",
@@ -394,8 +480,16 @@ const zh = {
           expired: "令牌已过期——请重新生成。",
           dismiss: "我已复制，关闭",
           installTitle: "安装指引",
-          step1:
-            "从发布页下载对应平台（Linux / macOS / Windows）的 fd-wire-connector 二进制。",
+          // wire-connector-distribution 任务 3.1：第一步接下载清单——真实
+          // 平台链接 + 版本/sha256；manifest 不可用时如实「暂不可下载」。
+          downloadsTitle: "第一步 · 下载 fd-wire-connector（版本 {{version}}）：",
+          manifestLoading: "下载清单加载中…",
+          downloadUnavailable:
+            "暂不可下载（发布清单不可用）——请保留以下命令行指引，或联系支持获取产物。",
+          platformMissing: "该平台文件缺失，暂不可下载",
+          copySha: "复制 sha256",
+          copied: "已复制",
+          docsLink: "安装与常驻的详细教程见文档「我的数据与连接器」→",
           step2: "在可访问本地源的机器上运行配对命令：",
           pairCommand: "fd-wire-connector pair --token {{token}} --api {{api}}",
         },
@@ -403,6 +497,8 @@ const zh = {
           title: "连接器状态",
           empty: "还没有连接器——用上方配对向导接入第一个。",
           version: "版本",
+          latest: "最新版本",
+          upgradeHint: "落后于最新（{{version}}），建议升级",
           heartbeat: "最后心跳",
           online: "在线",
           offline: "离线",

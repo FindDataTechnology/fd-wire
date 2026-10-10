@@ -8,6 +8,9 @@
 - ``CATALOG_DATABASE_URL``：镜像库专用覆盖（缺省落平台库，见下）。
 - ``DATABASE_URL``：平台库（计量迁移链 ``api/alembic`` 管理的库）；
   未显式给 ``CATALOG_DATABASE_URL`` 时镜像表建在这里。
+- ``FD_WIRE_DATABASE_URL``：元数据库收敛开关（wire-dedicated-postgres）
+  ——设了即压过上面两条（effective_database_url 的最高优先级）；PG
+  历史形态（``postgres://`` 等）统一改写为 ``postgresql+psycopg://``。
 - ``CATALOG_INTERNAL_TOKEN``：内部手动触发同步的 token；为空时触发端点一律拒绝。
 - ``CATALOG_SYNC_MIN_TOTAL``：单次拉取最小可信条数（缺省 1,000）——低于它
   视为上游异常，同步中止且不提交，旧镜像原样保留。
@@ -15,7 +18,10 @@
 - ``CATALOG_SYNC_ENABLED`` / ``CATALOG_SYNC_ON_STARTUP``：调度开关与启动即同步。
 """
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from ..config import normalize_database_url
 
 _DEFAULT_INTERVAL_SECONDS = 24 * 60 * 60  # 每日
 _DEFAULT_PLATFORM_DB = "sqlite:///./fd_wire_dev.db"
@@ -28,6 +34,10 @@ class CatalogSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # 元数据库收敛开关（wire-dedicated-postgres）：设了即压过下面两条
+    fd_wire_database_url: str | None = Field(
+        default=None, validation_alias="FD_WIRE_DATABASE_URL"
+    )
     # 权威源（统一指标注册目录 / fd-open-data-mcp 的 list_registry_entries）。
     # 缺省指向网内权威副本（与权威库同一 Postgres）；公网入口
     # https://mcp.finddatatech.cloud/fd-open-data-mcp 亦可（走网关鉴权，
@@ -60,10 +70,9 @@ class CatalogSettings(BaseSettings):
 
     @property
     def effective_database_url(self) -> str:
-        if self.catalog_database_url:
-            return self.catalog_database_url
-        if self.database_url:
-            return self.database_url
+        for candidate in (self.fd_wire_database_url, self.catalog_database_url, self.database_url):
+            if candidate:
+                return normalize_database_url(candidate)
         return _DEFAULT_PLATFORM_DB
 
 

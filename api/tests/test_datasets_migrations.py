@@ -1,8 +1,8 @@
 """datasets 迁移链测试（任务 2.1）：干净库 upgrade/downgrade 往返。
 
-- upgrade head → 六表齐全、列与索引/唯一约束按契约 §3.2；
-- 链头 = 0013_provenance_foundation（wire-provenance-ledger 扩链 0012/0013）；
-- downgrade 到 0010 → 六表全清、链头回到 0010。
+- upgrade head → 六表 + api 层两表（wire-free-tier-data-gate 0020）齐全、
+  列与索引/唯一约束按契约 §3.2；
+- downgrade 到 0010 → 全部数据集表清空、链头回到 0010。
 """
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ TABLES = {
     "datasets",
     "dataset_syncs",
     "uploads",
+    "dataset_columns",
+    "dataset_rows",
 }
 
 
@@ -77,6 +79,7 @@ def test_upgrade_head_creates_dataset_tables(migrated_sqlite) -> None:
         "key",
         "name",
         "source_kind",
+        "storage_tier",
         "connector_id",
         "source_name",
         "source_ref",
@@ -111,6 +114,20 @@ def test_upgrade_head_creates_dataset_tables(migrated_sqlite) -> None:
         "created_at",
         "consumed_at",
     }
+    # api 层轻量行存储（wire-free-tier-data-gate 0020）
+    assert {c["name"] for c in inspector.get_columns("dataset_columns")} == {
+        "id",
+        "dataset_id",
+        "name",
+        "dtype",
+        "ordinal",
+    }
+    assert {c["name"] for c in inspector.get_columns("dataset_rows")} == {
+        "id",
+        "dataset_id",
+        "row_index",
+        "data",
+    }
     # 关键索引
     assert "ix_datasets_customer_id" in {
         ix["name"] for ix in inspector.get_indexes("datasets")
@@ -120,6 +137,12 @@ def test_upgrade_head_creates_dataset_tables(migrated_sqlite) -> None:
     }
     assert "ix_connector_keys_key_hash" in {
         ix["name"] for ix in inspector.get_indexes("connector_keys")
+    }
+    assert "ix_dataset_rows_dataset_id" in {
+        ix["name"] for ix in inspector.get_indexes("dataset_rows")
+    }
+    assert "ix_dataset_columns_dataset_id" in {
+        ix["name"] for ix in inspector.get_indexes("dataset_columns")
     }
     # datasets(customer_id, key) 唯一（sqlite 以 autoindex 实现，PRAGMA 按列断言）
     with engine.connect() as conn:
@@ -132,6 +155,24 @@ def test_upgrade_head_creates_dataset_tables(migrated_sqlite) -> None:
             cols = conn.exec_driver_sql(f"PRAGMA index_info({name})").fetchall()
             unique_sets.append({row[2] for row in cols})
     assert {"customer_id", "key"} in unique_sets
+    # dataset_rows(dataset_id, row_index) 唯一（幂等写保护，0020）
+    with engine.connect() as conn:
+        unique_sets = []
+        for _, name, unique, *_ in conn.exec_driver_sql(
+            "PRAGMA index_list(dataset_rows)"
+        ).fetchall():
+            if not unique:
+                continue
+            cols = conn.exec_driver_sql(f"PRAGMA index_info({name})").fetchall()
+            unique_sets.append({row[2] for row in cols})
+    assert {"dataset_id", "row_index"} in unique_sets
+    # storage_tier 存量缺省 cell（server_default；「存量不回填」语义的落地形态）
+    with engine.connect() as conn:
+        tier_default = conn.exec_driver_sql(
+            "SELECT dflt_value FROM pragma_table_info('datasets')"
+            " WHERE name='storage_tier'"
+        ).scalar()
+    assert tier_default == "'cell'"
     engine.dispose()
 
 
@@ -141,7 +182,26 @@ def test_chain_head_is_provenance_foundation(migrated_sqlite) -> None:
         version = conn.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
         ).scalar()
-    assert version == "0019_demand_three_state"
+    assert version == "0021_artifact_lifecycle"
+    engine.dispose()
+
+
+def test_free_tier_migration_roundtrip(migrated_sqlite, monkeypatch) -> None:
+    """0020 幂等可重跑（任务 1.1）：0019 → 0020 降/升往返后两表与列仍在。"""
+    monkeypatch.setenv("DATABASE_URL", migrated_sqlite)
+    command.downgrade(_alembic_config(), "0019_demand_three_state")
+    engine = create_engine(migrated_sqlite)
+    inspector = inspect(engine)
+    assert "storage_tier" not in {
+        c["name"] for c in inspector.get_columns("datasets")
+    }
+    assert not ({"dataset_columns", "dataset_rows"} & set(inspector.get_table_names()))
+    engine.dispose()
+    command.upgrade(_alembic_config(), "0020_free_tier_datasets")
+    engine = create_engine(migrated_sqlite)
+    inspector = inspect(engine)
+    assert "storage_tier" in {c["name"] for c in inspector.get_columns("datasets")}
+    assert {"dataset_columns", "dataset_rows"} <= set(inspector.get_table_names())
     engine.dispose()
 
 

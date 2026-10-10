@@ -226,6 +226,10 @@ def datasets_env(tmp_path, monkeypatch):
         monkeypatch,
         customers=[(SUB_A, "cust-001"), (SUB_B, "cust-002")],
         internal_token=INTERNAL_TOKEN,
+        # 付费档种子：本 fixture 的既有用例全是 cell 链路行为（引擎调用断言），
+        # tier 按建集时刻档位分流后（wire-free-tier-data-gate D1）须落在付费档；
+        # 免费档（api 层）路径见 test_datasets_free_tier.py（用例内切档）。
+        plan_code="basic",
     )
     reset_datasets_runtime()
     connector_routes._SYNC_SESSIONS.clear()

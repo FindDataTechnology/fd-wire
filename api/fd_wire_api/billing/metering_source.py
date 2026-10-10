@@ -7,8 +7,8 @@ billing 只读。真实表的关键列与计费口径：
 - ``caller``：调用者身份（identity.username）——结算聚合的「客户身份映射」键，
   billing 侧由 resolver 映射到 Customer（v1 暂用 sub2api_user_id 承载该映射，
   正式的 Logto username ↔ Customer 映射落地前可注入自定义 resolver）
-- ``event_timestamp``：period（YYYY-MM）由其派生（SQLite strftime；PG 需换
-  date_trunc/to_char——生产化时在此一处调整）
+- ``event_timestamp``：period（YYYY-MM）由其派生（双方言：SQLite strftime /
+  PG to_char，经 ``dbcompat.period_expression``——审计清单 dialect-01）
 - ``credential_track``：'customer' 才计费（platform=平台服务凭据/AI 探索
   归集，不进客户账单——spec wire-billing「AI 探索不计费」+ 8.2 归集不结算）
 - ``rows_returned``：计费行数唯一依据
@@ -23,8 +23,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table, func, select
-from sqlalchemy.engine import Engine
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    UniqueConstraint,
+    func,
+    select,
+)
+from sqlalchemy.engine import Connection, Engine
+
+from ..dbcompat import period_expression
 
 #: metering_records 的只读表定义（独立 MetaData：billing 侧 create_all/迁移不碰它；
 #: 列类型与 metering.models.MeteringRecord 对齐——那侧改表须同步这里）
@@ -35,13 +47,19 @@ metering_records = Table(
     Column("event_timestamp", DateTime(timezone=True), nullable=False),
     Column("request_id", String(200), nullable=False),
     Column("caller", String(255), nullable=False, default="anonymous"),
+    Column("caller_principal", String(255), nullable=True),
     Column("credential_track", String(16), nullable=False),
     Column("server_name", String(255), nullable=False),
+    Column("server_path", String(512), nullable=True),
+    Column("tool_name", String(255), nullable=True),
     Column("rows_returned", Integer, nullable=False),
     Column("source", String(32), nullable=False),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    UniqueConstraint("request_id", "server_name", name="uq_metering_request_server"),
 )
 
-#: 测试/临时环境建同构表用的 DDL（列与 metering 侧 alembic 0001 对齐）
+#: SQLite 专用建表 DDL（历史保留；PG/双方言路径一律用
+#: ``ensure_metering_records_table``，见审计清单 dialect-02）
 METERING_RECORDS_DDL = """
 CREATE TABLE IF NOT EXISTS metering_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,6 +77,16 @@ CREATE TABLE IF NOT EXISTS metering_records (
     CONSTRAINT uq_metering_request_server UNIQUE (request_id, server_name)
 )
 """
+
+
+def ensure_metering_records_table(bind: Engine | Connection) -> None:
+    """双方言建同构 metering_records 表（测试/临时环境专用，幂等）。
+
+    生产表归 metering 模块的 alembic 0001 建；这里经 SQLAlchemy Core
+    ``Table.create(checkfirst=True)`` 在 SQLite 与 PG 下都能建出等价表
+    （替换原 SQLite 专用的 METERING_RECORDS_DDL 裸 DDL）。
+    """
+    metering_records.create(bind=bind, checkfirst=True)
 
 CUSTOMER_TRACK = "customer"
 PLATFORM_TRACK = "platform"
@@ -108,7 +136,8 @@ class SqlMeteringSource:
             )
             .where(
                 metering_records.c.credential_track == CUSTOMER_TRACK,
-                func.strftime("%Y-%m", metering_records.c.event_timestamp) == period,
+                period_expression(self._engine, metering_records.c.event_timestamp)
+                == period,
             )
             .group_by(metering_records.c.caller)
         )

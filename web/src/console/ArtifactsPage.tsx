@@ -1,21 +1,36 @@
-// 产物草稿页（#/console/artifacts；wire-platform-v1 任务 5.5 web 面）。
-// - 五类产物（dashboard/composite_indicator/research_report/alert_rule/
-//   refresh_schedule）的 draft 列表：kind 徽标 + spec 摘要 + 来源会话链接。
-// - spec 查看器：格式化 JSON 可编辑 textarea；保存仅落 localStorage（本地
-//   草稿）——产物真保存与物化是后续任务，页面上如实标注。
+// 产物页（#/console/artifacts；wire-artifacts-persistence web 面）。
+// - 列表接 GET /api/v1/artifacts（持久化产物）：kind 徽标 + 状态徽标
+//   （draft/published/archived）+ 版本号 + 来源会话指针；kind/status 筛选。
+// - spec 编辑保存走 PUT（成功提示新版本号）；localStorage 退位为未保存
+//   离开提示的本地缓冲（自动暂存 + 可一键丢弃）；archived 只读（服务端
+//   409 文案如实呈现）。
+// - 版本历史抽屉：列出历史版本、查看任一版本 spec、可复制。
+// - 发布/归档/恢复操作（非法迁移 409 如实呈现）。
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ARTIFACT_KINDS,
-  fetchAllArtifacts,
+  ARTIFACT_STATUSES,
+  apiErrorText,
+  archiveArtifact,
+  fetchArtifactVersion,
+  fetchArtifactVersions,
   fetchConversations,
+  fetchLifecycleArtifact,
+  fetchLifecycleArtifacts,
+  publishArtifact,
+  restoreArtifact,
+  saveArtifactSpec,
+  type Artifact,
   type ArtifactKind,
+  type ArtifactStatus,
+  type ArtifactVersionDetail,
+  type ArtifactVersionSummary,
   type Conversation,
-  type DraftArtifact,
 } from "./api";
-import { artifactTitle, formatServerDate, summarizeSpec } from "./util";
+import { formatServerDate } from "./util";
 
-const SPEC_STORAGE_PREFIX = "wire-web-artifact-spec-";
+const BUFFER_STORAGE_PREFIX = "wire-web-artifact-buffer-";
 
 const KIND_BADGE_CLASS: Record<string, string> = {
   dashboard: "bg-indigo-50 text-indigo-700 ring-indigo-200",
@@ -25,23 +40,35 @@ const KIND_BADGE_CLASS: Record<string, string> = {
   refresh_schedule: "bg-teal-50 text-teal-700 ring-teal-200",
 };
 
+const STATUS_BADGE_CLASS: Record<string, string> = {
+  draft: "bg-amber-100 text-amber-700",
+  published: "bg-emerald-100 text-emerald-700",
+  archived: "bg-slate-200 text-slate-600",
+};
+
+type StatusAction = "publish" | "archive" | "restore";
+
 export function ArtifactsPage() {
   const { t } = useTranslation();
+  const [artifacts, setArtifacts] = useState<Artifact[] | null>(null);
   const [conversations, setConversations] = useState<Conversation[] | null>(null);
-  const [artifacts, setArtifacts] = useState<DraftArtifact[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState<ArtifactKind | "all">("all");
+  const [statusFilter, setStatusFilter] = useState<ArtifactStatus | "all">("all");
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [historyFor, setHistoryFor] = useState<number | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
-    setConversations(null);
     setArtifacts(null);
     try {
-      const convs = await fetchConversations();
-      const drafts = await fetchAllArtifacts(convs);
+      const [rows, convs] = await Promise.all([
+        fetchLifecycleArtifacts(),
+        fetchConversations(),
+      ]);
+      setArtifacts(rows);
       setConversations(convs);
-      setArtifacts(drafts);
     } catch {
       setError("artifacts");
     }
@@ -59,8 +86,38 @@ export function ArtifactsPage() {
 
   const visible = useMemo(
     () =>
-      artifacts?.filter((a) => kindFilter === "all" || a.kind === kindFilter) ?? [],
-    [artifacts, kindFilter],
+      artifacts?.filter(
+        (a) =>
+          (kindFilter === "all" || a.kind === kindFilter) &&
+          (statusFilter === "all" || a.status === statusFilter),
+      ) ?? [],
+    [artifacts, kindFilter, statusFilter],
+  );
+
+  const replaceArtifact = useCallback((next: Artifact) => {
+    setArtifacts((prev) =>
+      prev ? prev.map((a) => (a.id === next.id ? { ...a, ...next } : a)) : prev,
+    );
+  }, []);
+
+  const runAction = useCallback(
+    async (artifact: Artifact, action: StatusAction) => {
+      setActionError(null);
+      try {
+        const caller =
+          action === "publish"
+            ? publishArtifact
+            : action === "archive"
+              ? archiveArtifact
+              : restoreArtifact;
+        replaceArtifact(await caller(artifact.id));
+      } catch (err) {
+        setActionError(
+          apiErrorText(err, t("console.artifacts.actionErrorTitle")),
+        );
+      }
+    },
+    [replaceArtifact, t],
   );
 
   return (
@@ -90,15 +147,25 @@ export function ArtifactsPage() {
               </option>
             ))}
           </select>
+          <label htmlFor="artifact-status-filter" className="ml-2 text-xs text-slate-500">
+            {t("console.artifacts.statusFilterLabel")}
+          </label>
+          <select
+            id="artifact-status-filter"
+            data-testid="artifact-status-filter"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as ArtifactStatus | "all")}
+            className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+          >
+            <option value="all">{t("console.artifacts.statusAll")}</option>
+            {ARTIFACT_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {t(`console.artifacts.statuses.${status}`)}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
-
-      <p
-        data-testid="artifacts-draft-note"
-        className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-700"
-      >
-        {t("console.artifacts.draftNote")}
-      </p>
 
       {error && (
         <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-4" data-testid="artifacts-error">
@@ -126,14 +193,27 @@ export function ArtifactsPage() {
         </div>
       )}
 
+      {actionError && (
+        <div
+          data-testid="artifact-action-error"
+          className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-2.5 text-xs text-red-700"
+        >
+          {actionError}
+        </div>
+      )}
+
       {visible.length > 0 && (
         <ul data-testid="artifact-list" className="mt-4 space-y-2">
           {visible.map((artifact) => {
-            const conv = conversationById.get(artifact.conversation_id);
+            const conv =
+              artifact.origin_conversation_id != null
+                ? conversationById.get(artifact.origin_conversation_id)
+                : undefined;
             return (
               <li
                 key={artifact.id}
                 data-testid="artifact-item"
+                data-artifact-id={artifact.id}
                 className="rounded-lg border border-slate-200 bg-white p-4"
               >
                 <div className="flex flex-wrap items-center gap-2">
@@ -148,142 +228,296 @@ export function ArtifactsPage() {
                     {t(`console.artifacts.kinds.${artifact.kind}`, artifact.kind)}
                   </span>
                   <span
-                    data-testid="artifact-draft-badge"
-                    className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700"
+                    data-testid="artifact-status-badge"
+                    data-status={artifact.status}
+                    className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                      STATUS_BADGE_CLASS[artifact.status] ?? "bg-slate-100 text-slate-600"
+                    }`}
                   >
-                    {t("console.artifacts.draftBadge")}
+                    {t(`console.artifacts.statuses.${artifact.status}`, artifact.status)}
                   </span>
                   <span className="text-sm font-medium text-slate-800" data-testid="artifact-title">
-                    {artifactTitle(artifact, `${artifact.kind} #${artifact.id}`)}
+                    {artifact.title}
                   </span>
-                  <button
-                    type="button"
-                    data-testid="artifact-view"
-                    onClick={() => setSelectedId(artifact.id === selectedId ? null : artifact.id)}
-                    className="ml-auto rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                  <span
+                    data-testid="artifact-version"
+                    className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-500"
                   >
-                    {t("console.artifacts.viewSpec")}
-                  </button>
+                    {t("console.artifacts.versionLabel", { version: artifact.version })}
+                  </span>
+                  <div className="ml-auto flex flex-wrap gap-2">
+                    {artifact.status === "draft" && (
+                      <button
+                        type="button"
+                        data-testid="artifact-publish"
+                        onClick={() => void runAction(artifact, "publish")}
+                        className="rounded border border-emerald-300 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50"
+                      >
+                        {t("console.artifacts.publish")}
+                      </button>
+                    )}
+                    {artifact.status !== "archived" && (
+                      <button
+                        type="button"
+                        data-testid="artifact-archive"
+                        onClick={() => void runAction(artifact, "archive")}
+                        className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                      >
+                        {t("console.artifacts.archive")}
+                      </button>
+                    )}
+                    {artifact.status === "archived" && (
+                      <button
+                        type="button"
+                        data-testid="artifact-restore"
+                        onClick={() => void runAction(artifact, "restore")}
+                        className="rounded border border-amber-300 px-2 py-1 text-xs text-amber-700 hover:bg-amber-50"
+                      >
+                        {t("console.artifacts.restore")}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      data-testid="artifact-history"
+                      onClick={() => setHistoryFor(artifact.id)}
+                      className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                    >
+                      {t("console.artifacts.history")}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="artifact-view"
+                      onClick={() => setSelectedId(artifact.id === selectedId ? null : artifact.id)}
+                      className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                    >
+                      {t("console.artifacts.viewSpec")}
+                    </button>
+                  </div>
                 </div>
-                <p
-                  data-testid="artifact-spec-summary"
-                  className="mt-2 truncate font-mono text-[11px] text-slate-500"
-                  title={JSON.stringify(artifact.spec)}
-                >
-                  {summarizeSpec(artifact.spec)}
-                </p>
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
-                  <span>{formatServerDate(artifact.created_at)}</span>
-                  <span>·</span>
-                  <span>{t("console.artifacts.source")}</span>
-                  <a
-                    data-testid="artifact-source-link"
-                    href={`#/console/chat?c=${artifact.conversation_id}`}
-                    className="text-slate-600 underline decoration-dotted hover:text-slate-900"
-                  >
-                    {conv ? conv.title : `#${artifact.conversation_id}`}
-                  </a>
+                  <span data-testid="artifact-updated">
+                    {t("console.artifacts.updatedLabel")} {formatServerDate(artifact.updated_at)}
+                  </span>
+                  {artifact.origin_conversation_id != null ? (
+                    <>
+                      <span>·</span>
+                      <span>{t("console.artifacts.source")}</span>
+                      <a
+                        data-testid="artifact-source-link"
+                        href={`#/console/chat?c=${artifact.origin_conversation_id}`}
+                        className="text-slate-600 underline decoration-dotted hover:text-slate-900"
+                      >
+                        {conv ? conv.title : `#${artifact.origin_conversation_id}`}
+                      </a>
+                    </>
+                  ) : (
+                    <span data-testid="artifact-source-none">{t("console.artifacts.sourceNone")}</span>
+                  )}
                 </div>
                 {artifact.id === selectedId && (
-                  <SpecViewer key={artifact.id} artifact={artifact} />
+                  <SpecViewer
+                    key={`viewer-${artifact.id}`}
+                    artifactId={artifact.id}
+                    onSaved={replaceArtifact}
+                  />
                 )}
               </li>
             );
           })}
         </ul>
       )}
+
+      {historyFor != null && (
+        <VersionDrawer artifactId={historyFor} onClose={() => setHistoryFor(null)} />
+      )}
     </div>
   );
 }
 
-function SpecViewer({ artifact }: { artifact: DraftArtifact }) {
+function SpecViewer({
+  artifactId,
+  onSaved,
+}: {
+  artifactId: number;
+  onSaved: (artifact: Artifact) => void;
+}) {
   const { t } = useTranslation();
-  const storageKey = `${SPEC_STORAGE_PREFIX}${artifact.id}`;
-  const original = JSON.stringify(artifact.spec, null, 2);
-  const [text, setText] = useState(original);
+  const storageKey = `${BUFFER_STORAGE_PREFIX}${artifactId}`;
+  const [serverSpec, setServerSpec] = useState<Record<string, unknown> | null>(null);
+  const [status, setStatus] = useState<string>("draft");
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [text, setText] = useState("");
   const [fromLocal, setFromLocal] = useState(false);
   const [invalid, setInvalid] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedVersion, setSavedVersion] = useState<number | null>(null);
+  const [serverError, setServerError] = useState<string | null>(null);
 
   useEffect(() => {
-    try {
-      const local = localStorage.getItem(storageKey);
-      if (local != null) {
-        setText(local);
-        setFromLocal(true);
-      }
-    } catch {
-      /* localStorage 不可用：仅展示原始 spec */
-    }
-    // 重置其余编辑态
+    let alive = true;
+    setLoadFailed(false);
+    setSavedVersion(null);
     setInvalid(false);
-    setSaved(false);
-  }, [storageKey, original]);
+    setServerError(null);
+    fetchLifecycleArtifact(artifactId)
+      .then((detail) => {
+        if (!alive) return;
+        setServerSpec(detail.spec);
+        setStatus(detail.status);
+        const original = JSON.stringify(detail.spec, null, 2);
+        try {
+          const buffered = localStorage.getItem(storageKey);
+          if (buffered != null && buffered !== original) {
+            setText(buffered);
+            setFromLocal(true);
+            return;
+          }
+        } catch {
+          /* localStorage 不可用：仅展示服务端 spec */
+        }
+        setText(original);
+        setFromLocal(false);
+      })
+      .catch(() => {
+        if (alive) setLoadFailed(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [artifactId, storageKey]);
 
-  const saveLocal = () => {
+  const locked = status === "archived";
+
+  const editText = (next: string) => {
+    setText(next);
+    setInvalid(false);
+    setSavedVersion(null);
+    setServerError(null);
+    // localStorage 退位为未保存离开提示的本地缓冲：编辑即自动暂存，
+    // 保存到服务端成功或显式丢弃时清除。
+    if (!locked) {
+      try {
+        localStorage.setItem(storageKey, next);
+        setFromLocal(next !== (serverSpec ? JSON.stringify(serverSpec, null, 2) : next));
+      } catch {
+        /* 存不进去时仅本次会话可见 */
+      }
+    }
+  };
+
+  const saveToServer = async () => {
+    let parsed: unknown;
     try {
-      JSON.parse(text);
+      parsed = JSON.parse(text);
     } catch {
       setInvalid(true);
-      setSaved(false);
+      setSavedVersion(null);
+      return;
+    }
+    if (typeof parsed !== "object" || parsed === null) {
+      setInvalid(true);
       return;
     }
     setInvalid(false);
+    setSaving(true);
+    setServerError(null);
     try {
-      localStorage.setItem(storageKey, text);
-    } catch {
-      /* 存不进去时仅本次会话可见 */
+      const detail = await saveArtifactSpec(artifactId, parsed as Record<string, unknown>);
+      setSavedVersion(detail.version);
+      setServerSpec(detail.spec);
+      setStatus(detail.status);
+      setText(JSON.stringify(detail.spec, null, 2));
+      setFromLocal(false);
+      try {
+        localStorage.removeItem(storageKey);
+      } catch {
+        /* 清不掉时下次打开仍提示缓冲 */
+      }
+      onSaved(detail);
+    } catch (err) {
+      setServerError(apiErrorText(err, t("console.artifacts.viewer.saveFailed")));
+    } finally {
+      setSaving(false);
     }
-    setSaved(true);
-    setFromLocal(true);
   };
 
-  const restoreOriginal = () => {
+  const discardBuffer = () => {
     try {
       localStorage.removeItem(storageKey);
     } catch {
       /* 同上 */
     }
-    setText(original);
+    if (serverSpec != null) setText(JSON.stringify(serverSpec, null, 2));
     setFromLocal(false);
-    setSaved(false);
     setInvalid(false);
+    setSavedVersion(null);
+    setServerError(null);
   };
+
+  if (loadFailed) {
+    return (
+      <div data-testid="artifact-viewer" className="mt-3 rounded-md border border-red-200 bg-red-50/60 p-4">
+        <p className="text-xs text-red-700">{t("console.artifacts.viewer.loadError")}</p>
+      </div>
+    );
+  }
+
+  if (serverSpec == null) {
+    return (
+      <div data-testid="artifact-viewer" className="mt-3 rounded-md border border-slate-200 bg-slate-50/60 p-4">
+        <p className="text-xs text-slate-400">{t("console.artifacts.loading")}</p>
+      </div>
+    );
+  }
 
   return (
     <div data-testid="artifact-viewer" className="mt-3 rounded-md border border-slate-200 bg-slate-50/60 p-4">
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-sm font-semibold">{t("console.artifacts.viewer.title")}</h2>
         {fromLocal && (
-          <span data-testid="local-draft-badge" className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">
-            {t("console.artifacts.viewer.localDraft")}
+          <span data-testid="spec-buffer-badge" className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">
+            {t("console.artifacts.viewer.bufferBadge")}
           </span>
         )}
         <div className="ml-auto flex gap-2">
-          <button
-            type="button"
-            data-testid="spec-save-local"
-            onClick={saveLocal}
-            className="rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700"
-          >
-            {t("console.artifacts.viewer.saveLocal")}
-          </button>
-          <button
-            type="button"
-            data-testid="spec-restore-original"
-            onClick={restoreOriginal}
-            className="rounded border border-slate-300 bg-white px-3 py-1 text-xs text-slate-600 hover:bg-slate-100"
-          >
-            {t("console.artifacts.viewer.restoreOriginal")}
-          </button>
+          {!locked && (
+            <button
+              type="button"
+              data-testid="spec-save-server"
+              disabled={saving}
+              onClick={() => void saveToServer()}
+              className="rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700 disabled:opacity-50"
+            >
+              {saving
+                ? t("console.artifacts.viewer.saving")
+                : t("console.artifacts.viewer.saveServer")}
+            </button>
+          )}
+          {fromLocal && !locked && (
+            <button
+              type="button"
+              data-testid="spec-discard-buffer"
+              onClick={discardBuffer}
+              className="rounded border border-slate-300 bg-white px-3 py-1 text-xs text-slate-600 hover:bg-slate-100"
+            >
+              {t("console.artifacts.viewer.discardBuffer")}
+            </button>
+          )}
         </div>
       </div>
       <p className="mt-2 text-[11px] text-slate-500">
-        {t("console.artifacts.viewer.note")}
+        {locked
+          ? t("console.artifacts.viewer.locked")
+          : t("console.artifacts.viewer.note")}
       </p>
-      {saved && (
-        <p data-testid="spec-saved-hint" className="mt-1 text-[11px] text-emerald-600">
-          {t("console.artifacts.viewer.saved")}
+      {savedVersion != null && (
+        <p data-testid="spec-saved-version" className="mt-1 text-[11px] text-emerald-600">
+          {t("console.artifacts.viewer.savedVersion", { version: savedVersion })}
+        </p>
+      )}
+      {serverError && (
+        <p data-testid="spec-server-error" className="mt-1 text-[11px] text-red-600">
+          {serverError}
         </p>
       )}
       {invalid && (
@@ -294,15 +528,158 @@ function SpecViewer({ artifact }: { artifact: DraftArtifact }) {
       <textarea
         data-testid="spec-editor"
         value={text}
-        onChange={(e) => {
-          setText(e.target.value);
-          setSaved(false);
-          setInvalid(false);
-        }}
+        readOnly={locked}
+        onChange={(e) => editText(e.target.value)}
         rows={Math.min(20, Math.max(8, text.split("\n").length + 1))}
         spellCheck={false}
         className="mt-2 w-full resize-y rounded-md border border-slate-300 bg-white p-3 font-mono text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-400"
       />
+    </div>
+  );
+}
+
+function VersionDrawer({
+  artifactId,
+  onClose,
+}: {
+  artifactId: number;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [versions, setVersions] = useState<ArtifactVersionSummary[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [selected, setSelected] = useState<ArtifactVersionDetail | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setVersions(null);
+    setFailed(false);
+    setSelected(null);
+    fetchArtifactVersions(artifactId)
+      .then((rows) => {
+        if (alive) setVersions(rows);
+      })
+      .catch(() => {
+        if (alive) setFailed(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [artifactId]);
+
+  const openVersion = async (version: number) => {
+    setCopied(false);
+    try {
+      setSelected(await fetchArtifactVersion(artifactId, version));
+    } catch {
+      setSelected(null);
+    }
+  };
+
+  const copySpec = async () => {
+    if (selected == null) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(selected.spec, null, 2));
+      setCopied(true);
+    } catch {
+      /* 剪贴板不可用（如非安全上下文）：如实不提示已复制 */
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end" data-testid="version-drawer">
+      <button
+        type="button"
+        aria-label={t("console.artifacts.versions.close")}
+        data-testid="version-drawer-backdrop"
+        onClick={onClose}
+        className="absolute inset-0 bg-slate-900/30"
+      />
+      <aside className="relative flex h-full w-full max-w-xl flex-col overflow-y-auto border-l border-slate-200 bg-white p-5 shadow-xl">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold">{t("console.artifacts.versions.title")}</h2>
+          <button
+            type="button"
+            data-testid="version-drawer-close"
+            onClick={onClose}
+            className="ml-auto rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+          >
+            {t("console.artifacts.versions.close")}
+          </button>
+        </div>
+
+        {failed && (
+          <p className="mt-4 text-xs text-red-600" data-testid="version-list-error">
+            {t("console.artifacts.versions.fetchError")}
+          </p>
+        )}
+        {versions == null && !failed && (
+          <p className="mt-4 text-xs text-slate-400" data-testid="version-list-loading">
+            {t("console.artifacts.versions.loading")}
+          </p>
+        )}
+        {versions != null && versions.length === 0 && (
+          <p className="mt-4 text-xs text-slate-400" data-testid="version-list-empty">
+            {t("console.artifacts.versions.empty")}
+          </p>
+        )}
+
+        <ul data-testid="version-list" className="mt-4 space-y-2">
+          {versions?.map((entry) => (
+            <li key={entry.version}>
+              <button
+                type="button"
+                data-testid="version-item"
+                data-version={entry.version}
+                onClick={() => void openVersion(entry.version)}
+                className={`w-full rounded-md border px-3 py-2 text-left text-xs ${
+                  selected?.version === entry.version
+                    ? "border-slate-900 bg-slate-50"
+                    : "border-slate-200 hover:bg-slate-50"
+                }`}
+              >
+                <span className="font-mono font-medium text-slate-800">
+                  {t("console.artifacts.versions.entry", { version: entry.version })}
+                </span>
+                <span className="ml-2 text-slate-400">
+                  {t("console.artifacts.versions.operatorLabel")}: {entry.operator ?? "-"}
+                </span>
+                <span className="ml-2 text-slate-400">{formatServerDate(entry.created_at)}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        {selected != null && (
+          <div data-testid="version-detail" className="mt-4 rounded-md border border-slate-200 bg-slate-50/60 p-4">
+            <div className="flex items-center gap-2">
+              <h3 className="text-xs font-semibold">
+                {t("console.artifacts.versions.entry", { version: selected.version })}
+              </h3>
+              <button
+                type="button"
+                data-testid="version-copy"
+                onClick={() => void copySpec()}
+                className="ml-auto rounded border border-slate-300 bg-white px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-100"
+              >
+                {t("console.artifacts.versions.copy")}
+              </button>
+            </div>
+            {copied && (
+              <p data-testid="version-copied" className="mt-1 text-[11px] text-emerald-600">
+                {t("console.artifacts.versions.copied")}
+              </p>
+            )}
+            <pre
+              data-testid="version-spec"
+              className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-white p-3 font-mono text-[11px] text-slate-700"
+            >
+              {JSON.stringify(selected.spec, null, 2)}
+            </pre>
+          </div>
+        )}
+      </aside>
     </div>
   );
 }

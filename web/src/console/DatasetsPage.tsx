@@ -1,19 +1,23 @@
 // 控制台「我的数据」页（#/console/datasets，wire-customer-local-data 任务组 3）。
-// - 列表卡片：名称/来源徽标/行数/大小/同步状态（六态如实，暂停带原因）/最近更新；
-//   空态引导上传。
+// - 列表卡片：名称/来源徽标/存储层徽标/行数/大小/同步状态（六态如实，暂停带
+//   原因）/最近更新；空态引导上传。
 // - 上传流：拖拽或选择文件 → 上传解析预览（列名+推断类型+行数）→ 命名建档 → 刷新。
 // - 连接器管理在 DatasetsConnectors.tsx、数据集详情在 DatasetDetail.tsx（本页组合三者）。
-// - 免费档边界（wire-self-serve-launch 任务 4.6）：plan_code=free 呈现升级引导
-//   （CTA=联系开通 mailto），且不发起任何 cell/数据集请求——免费档无 cell 配给。
+// - 免费档放行（wire-free-tier-data-gate 4.1-4.3）：页面完整渲染（列表/上传/
+//   配额条内联）；升级墙退役为限额触达（建集超限/行数超限）时的内联升档提示；
+//   连接器区可见但标注付费。付费档渲染零变化。
 // 契约：openspec/changes/wire-customer-local-data/reports/interfaces.md §3.3/§4。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   apiErrorText,
+  ConsoleApiError,
   createDataset,
   fetchDatasets,
+  fetchDatasetQuota,
   uploadDataset,
   type Dataset,
+  type DatasetQuota,
   type SyncStatus,
   type UploadPreview,
 } from "./api";
@@ -30,6 +34,23 @@ const SYNC_BADGE_CLASS: Record<SyncStatus, string> = {
   paused_drift: "bg-amber-50 text-amber-700 ring-amber-200",
   paused_quota: "bg-rose-50 text-rose-700 ring-rose-200",
 };
+
+/**
+ * 配额语义识别（wire-free-tier-data-gate D3）：api 对建集/上传超限返回
+ * 4xx 且 detail 带余量/上限文案（中英关键词容错匹配）；命中即内联升档提示。
+ */
+export function isQuotaError(err: unknown): boolean {
+  if (!(err instanceof ConsoleApiError)) return false;
+  if (
+    err.status !== 400 &&
+    err.status !== 402 &&
+    err.status !== 403 &&
+    err.status !== 422
+  ) {
+    return false;
+  }
+  return /限额|配额|超限|上限|quota|limit/i.test(err.detail ?? "");
+}
 
 /** 字节数 → 人类可读（单位换算，非业务数字文案）。 */
 export function formatBytes(bytes: number): string {
@@ -49,9 +70,10 @@ export function DatasetsPage({ planCode }: { planCode: string }) {
   const [datasets, setDatasets] = useState<Dataset[] | null>(null);
   const [error, setError] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [quota, setQuota] = useState<DatasetQuota | null>(null);
 
-  // 免费档门禁：升级引导优先于一切数据请求（不为免费用户创建/查询 cell）。
-  const gated = planCode === "free";
+  // 免费档放行（wire-free-tier-data-gate）：不再整页门禁，数据面请求照常发起。
+  const free = planCode === "free";
 
   const load = useCallback(async () => {
     setError(false);
@@ -63,44 +85,32 @@ export function DatasetsPage({ planCode }: { planCode: string }) {
     }
   }, []);
 
+  const loadQuota = useCallback(async () => {
+    // 仅免费档取配额；端点未就绪/失败 → 配额条静默隐藏，绝不阻塞页面。
+    if (!free) return;
+    try {
+      setQuota(await fetchDatasetQuota());
+    } catch {
+      setQuota(null);
+    }
+  }, [free]);
+
   useEffect(() => {
-    if (gated) return;
     setDatasets(null);
     void load();
-  }, [gated, load]);
+    void loadQuota();
+  }, [load, loadQuota]);
 
-  if (!gated && selectedId != null) {
+  if (selectedId != null) {
     return (
       <DatasetDetail
         datasetId={selectedId}
         onBack={() => {
           setSelectedId(null);
           void load();
+          void loadQuota();
         }}
       />
-    );
-  }
-
-  if (gated) {
-    return (
-      <div
-        data-testid="datasets-upgrade"
-        className="max-w-xl rounded-lg border border-amber-200 bg-amber-50/50 p-8"
-      >
-        <h1 className="text-lg font-semibold">
-          {t("console.datasets.upgrade.title")}
-        </h1>
-        <p className="mt-3 text-sm text-slate-600">
-          {t("console.datasets.upgrade.body")}
-        </p>
-        <a
-          data-testid="datasets-upgrade-cta"
-          href={CONTACT_MAILTO}
-          className="mt-4 inline-block rounded-md bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700"
-        >
-          {t("console.datasets.upgrade.cta")}
-        </a>
-      </div>
     );
   }
 
@@ -110,6 +120,8 @@ export function DatasetsPage({ planCode }: { planCode: string }) {
       <p className="mt-1 max-w-2xl text-xs text-slate-500">
         {t("console.datasets.subtitle")}
       </p>
+
+      {free && quota != null && <QuotaBar quota={quota} />}
 
       {error && (
         <div
@@ -158,9 +170,60 @@ export function DatasetsPage({ planCode }: { planCode: string }) {
         </ul>
       )}
 
-      <UploadPanel onCreated={() => void load()} />
+      <UploadPanel
+        planCode={planCode}
+        onCreated={() => {
+          void load();
+          void loadQuota();
+        }}
+      />
 
-      <ConnectorsSection onCreated={() => void load()} />
+      <ConnectorsSection
+        planCode={planCode}
+        onCreated={() => void load()}
+      />
+    </div>
+  );
+}
+
+/**
+ * 免费档配额条（wire-free-tier-data-gate D6）：内联呈现「已用 X/N 集、
+ * 每集 ≤M 行」；触达上限时转 amber 并附升档引导（非整页墙）。
+ */
+function QuotaBar({ quota }: { quota: DatasetQuota }) {
+  const { t } = useTranslation();
+  const exhausted = quota.used_datasets >= quota.max_datasets;
+  return (
+    <div
+      data-testid="datasets-quota"
+      data-exhausted={exhausted ? "true" : "false"}
+      className={`mt-3 max-w-2xl rounded-md border px-3 py-2 text-xs ${
+        exhausted
+          ? "border-amber-200 bg-amber-50/60 text-amber-700"
+          : "border-slate-200 bg-slate-50/60 text-slate-600"
+      }`}
+    >
+      <span data-testid="datasets-quota-usage">
+        {t("console.datasets.quota.bar", {
+          used: quota.used_datasets,
+          max: quota.max_datasets,
+          rows: quota.max_rows_per_dataset.toLocaleString("en-US"),
+        })}
+      </span>
+      {exhausted && (
+        <>
+          <span className="mt-1 block">
+            {t("console.datasets.quota.exhausted", { max: quota.max_datasets })}
+          </span>
+          <a
+            data-testid="datasets-quota-upgrade"
+            href={CONTACT_MAILTO}
+            className="mt-1.5 inline-block rounded-md bg-slate-900 px-3 py-1.5 text-xs text-white hover:bg-slate-700"
+          >
+            {t("console.datasets.quota.cta")}
+          </a>
+        </>
+      )}
     </div>
   );
 }
@@ -173,6 +236,10 @@ function DatasetCard({
   onOpen: () => void;
 }) {
   const { t } = useTranslation();
+  // 存储层徽标（wire-free-tier-data-gate）：api 层与 cell 层数据集同列表，
+  // 响应带 storage_tier 才显示（容错——api 侧未下发时不渲染）。
+  const storageTier = (dataset as { storage_tier?: string }).storage_tier;
+  const showTierBadge = storageTier === "api" || storageTier === "cell";
   return (
     <li
       data-testid="dataset-card"
@@ -207,6 +274,15 @@ function DatasetCard({
         >
           {t(`console.datasets.syncStatus.${dataset.sync_status}`)}
         </span>
+        {showTierBadge && (
+          <span
+            data-testid="dataset-tier-badge"
+            data-tier={storageTier}
+            className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 ring-1 ring-slate-200"
+          >
+            {t(`console.datasets.tierBadge.${storageTier}`)}
+          </span>
+        )}
         {dataset.source_kind === "connector" &&
           (dataset.source_name || dataset.source_ref) && (
             <span
@@ -252,7 +328,14 @@ function DatasetCard({
   );
 }
 
-function UploadPanel({ onCreated }: { onCreated: () => void }) {
+function UploadPanel({
+  planCode,
+  onCreated,
+}: {
+  /** 客户档位（wire-free-tier-data-gate 4.3）：free=超限内联升档提示。 */
+  planCode: string;
+  onCreated: () => void;
+}) {
   const { t } = useTranslation();
   const [preview, setPreview] = useState<UploadPreview | null>(null);
   const [parsing, setParsing] = useState(false);
@@ -260,7 +343,10 @@ function UploadPanel({ onCreated }: { onCreated: () => void }) {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<{ title: string; detail: string } | null>(null);
   const [created, setCreated] = useState(false);
+  // 配额触达标记：上传/建档被 api 按限额拒绝时叠加内联升档引导（amber）。
+  const [quotaHit, setQuotaHit] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const free = planCode === "free";
 
   const handleFile = async (file: File | null | undefined) => {
     if (!file || parsing) return;
@@ -268,6 +354,7 @@ function UploadPanel({ onCreated }: { onCreated: () => void }) {
     setError(null);
     setPreview(null);
     setCreated(false);
+    setQuotaHit(false);
     try {
       const result = await uploadDataset(file);
       setPreview(result);
@@ -277,6 +364,7 @@ function UploadPanel({ onCreated }: { onCreated: () => void }) {
         title: t("console.datasets.upload.errorTitle"),
         detail: apiErrorText(err, t("console.datasets.upload.errorTitle")),
       });
+      if (free && isQuotaError(err)) setQuotaHit(true);
     } finally {
       setParsing(false);
     }
@@ -286,6 +374,7 @@ function UploadPanel({ onCreated }: { onCreated: () => void }) {
     if (!preview || !name.trim() || creating) return;
     setCreating(true);
     setError(null);
+    setQuotaHit(false);
     try {
       await createDataset({
         name: name.trim(),
@@ -300,6 +389,7 @@ function UploadPanel({ onCreated }: { onCreated: () => void }) {
         title: t("console.datasets.upload.createErrorTitle"),
         detail: apiErrorText(err, t("console.datasets.upload.createErrorTitle")),
       });
+      if (free && isQuotaError(err)) setQuotaHit(true);
     } finally {
       setCreating(false);
     }
@@ -360,6 +450,27 @@ function UploadPanel({ onCreated }: { onCreated: () => void }) {
           <p className="mt-1 break-all font-mono text-[11px] text-red-500">
             {error.detail}
           </p>
+        </div>
+      )}
+
+      {free && quotaHit && (
+        <div
+          data-testid="upload-quota-hint"
+          className="mt-3 rounded-md border border-amber-200 bg-amber-50/60 p-3"
+        >
+          <p className="text-sm text-amber-700">
+            {t("console.datasets.quota.hitTitle")}
+          </p>
+          <p className="mt-1 max-w-2xl text-xs text-amber-700">
+            {t("console.datasets.quota.hintBody")}
+          </p>
+          <a
+            data-testid="upload-quota-cta"
+            href={CONTACT_MAILTO}
+            className="mt-2 inline-block rounded-md bg-slate-900 px-3 py-1.5 text-xs text-white hover:bg-slate-700"
+          >
+            {t("console.datasets.quota.cta")}
+          </a>
         </div>
       )}
 

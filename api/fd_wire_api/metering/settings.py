@@ -2,8 +2,11 @@
 
 环境变量一览：
 
-- ``DATABASE_URL``：计量库连接串，默认 ``sqlite:///./fd_wire_dev.db``；
-  测试指向临时文件或内存库。
+- ``FD_WIRE_DATABASE_URL``：元数据库收敛开关（wire-dedicated-postgres）——
+  设了即优先于 ``DATABASE_URL``（引擎取 ``effective_database_url``）；PG
+  历史形态（``postgres://`` 等）统一改写为 ``postgresql+psycopg://``。
+- ``DATABASE_URL``：计量库连接串（既有 env，未设上一项时生效），默认
+  ``sqlite:///./fd_wire_dev.db``；测试指向临时文件或内存库。
 - ``METERING_INGEST_TOKEN``：``POST /internal/metering/events`` 与轮询触发
   端点的 bearer 校验令牌；未配置时推送端点 fail-closed（403），
   部署时必须显式提供。
@@ -37,8 +40,10 @@ import json
 from functools import lru_cache
 from typing import Any
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from ..config import normalize_database_url
 
 #: source 标记的合法取值（wire-facade-metering 规格口径）
 ALLOWED_SOURCES: tuple[str, ...] = ("yizuo", "wanxing", "platform-internal", "customer")
@@ -88,6 +93,10 @@ class MeteringSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # 元数据库收敛开关（wire-dedicated-postgres）：设了即压过 database_url
+    fd_wire_database_url: str | None = Field(
+        default=None, validation_alias="FD_WIRE_DATABASE_URL"
+    )
     database_url: str = "sqlite:///./fd_wire_dev.db"
     metering_ingest_token: str | None = None
     platform_identities: str = ""
@@ -129,6 +138,11 @@ class MeteringSettings(BaseSettings):
         """server → source 映射（解析后的 dict）。"""
         return _parse_source_map(self.metering_source_map)
 
+    @property
+    def effective_database_url(self) -> str:
+        """引擎实际连接串：FD_WIRE_DATABASE_URL > DATABASE_URL（均规范化）。"""
+        return normalize_database_url(self.fd_wire_database_url or self.database_url)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> MeteringSettings:
@@ -140,7 +154,7 @@ def describe() -> dict[str, Any]:
     """当前生效的计量配置一览（不含令牌明文，排障用）。"""
     s = get_settings()
     return {
-        "database_url": s.database_url,
+        "database_url": s.effective_database_url,
         "ingest_token_configured": bool(s.metering_ingest_token),
         "platform_identities": sorted(s.platform_identity_set()),
         "platform_identity_source_map": s.identity_source_map(),

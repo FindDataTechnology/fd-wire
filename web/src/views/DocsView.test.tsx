@@ -73,6 +73,63 @@ describe("DocsView（文档三节 · 如实呈现）", () => {
     expect(screen.getByText("需求单提交")).toBeTruthy();
   });
 
+  // 我的数据与连接器教程（wire-connector-distribution 任务 4）：
+  // 上传三步 / 连接器三步 / 常驻样例（systemd/nssm/launchd）/
+  // 故障排查四条 / 控制台互链与深链锚点定位。
+  it("「我的数据与连接器」：上传与连接器各三步、控制台互链", () => {
+    render(<DocsView />);
+
+    const section = screen.getByTestId("docs-local-data");
+    expect(section.getAttribute("id")).toBe("local-data");
+    expect(section.textContent).toContain("上传三步");
+    expect(section.textContent).toContain("连接器安装三步");
+    // 三步各含关键动作（拖拽 / 列类型确认 / 建集；令牌 / pair / run）
+    expect(section.textContent).toContain("拖入或选择文件");
+    expect(section.textContent).toContain("确认列与类型");
+    expect(section.textContent).toContain("命名建档");
+    expect(section.textContent).toContain("配对令牌");
+    expect(section.textContent).toContain("pair --token");
+    expect(section.textContent).toContain("run 常驻运行");
+    // 文档 → 控制台入口
+    const consoleLink = screen.getByTestId("docs-local-data-console-link");
+    expect(consoleLink.getAttribute("href")).toBe("#/console/datasets");
+  });
+
+  it("常驻方式样例：systemd / nssm / launchd 三平台配置齐备", () => {
+    render(<DocsView />);
+
+    const residency = screen.getByTestId("docs-local-data-residency");
+    expect(residency.textContent).toContain("systemd");
+    expect(residency.textContent).toContain("nssm");
+    expect(residency.textContent).toContain("launchd");
+    expect(residency.textContent).toContain("fd-wire-connector.service".replace(/\.service.*/, "")); // ExecStart 在场
+    expect(residency.textContent).toContain("ExecStart=/usr/local/bin/fd-wire-connector run");
+    expect(residency.textContent).toContain("nssm install fd-wire-connector");
+    expect(residency.textContent).toContain("com.finddata.fd-wire-connector");
+  });
+
+  it("故障排查四条：心跳 warnings / schema 漂移暂停 / 行上限 / 吊销后重配对", () => {
+    render(<DocsView />);
+
+    const block = screen.getByTestId("docs-local-data-troubleshooting");
+    expect(block.textContent).toContain("心跳 warnings");
+    expect(block.textContent).toContain("schema 漂移暂停");
+    expect(block.textContent).toContain("行上限");
+    expect(block.textContent).toContain("吊销后重配对");
+  });
+
+  it("英文文案同步（docs.localData 双语键齐备）", () => {
+    i18n.changeLanguage("en");
+    render(<DocsView />);
+
+    const section = screen.getByTestId("docs-local-data");
+    expect(section.textContent).toContain("My data & connectors");
+    expect(section.textContent).toContain("Uploading in three steps");
+    expect(section.textContent).toContain("Installing a connector in three steps");
+    expect(section.textContent).toContain("Troubleshooting");
+    i18n.changeLanguage("zh");
+  });
+
   it("路由：#/docs 解析为 docs（未登录可访问）", () => {
     expect(parseHash("#/docs")).toEqual({ name: "docs" });
   });

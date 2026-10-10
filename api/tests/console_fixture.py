@@ -174,12 +174,15 @@ def make_console_env(
     admin_role: str = "wire-admin",
     db_filename: str = "platform.db",
     internal_token: str | None = "wire-internal-dev",
+    plan_code: str = "free",
 ) -> ConsoleEnv:
     """建平台库环境（admin/billing/console 同一临时文件库，静态池单文件）。
 
-    customers: (sub, name) 列表 → billing_customers 种子（free 档 +
-    sub2api_user_id=caller-<n>）。logto=False 时清 Logto env（未配置
-    阻塞态用例）；gate 传 "off" 关 Bearer 角色闸（admin 单闸回归）。
+    customers: (sub, name) 列表 → billing_customers 种子（plan_code 档 +
+    sub2api_user_id=caller-<n>；缺省 free。datasets 切面按档位分流建集
+    tier——走 cell 链路的用例应传 "basic" 等付费档，wire-free-tier-data-gate）。
+    logto=False 时清 Logto env（未配置阻塞态用例）；gate 传 "off" 关
+    Bearer 角色闸（admin 单闸回归）。
     """
     from fd_wire_api.admin import reset_admin_runtime
     from fd_wire_api.admin.db import AdminBase, get_session
@@ -220,21 +223,23 @@ def make_console_env(
     BillingBase.metadata.create_all(engine)
     ConsoleBase.metadata.create_all(engine)
     with engine.begin() as conn:
-        from fd_wire_api.billing import METERING_RECORDS_DDL
+        from fd_wire_api.billing import ensure_metering_records_table
 
-        conn.execute(text(METERING_RECORDS_DDL))
+        ensure_metering_records_table(conn)
 
     subs: dict[str, int] = {}
     with get_session() as sess:
         seed_plans(sess)
         sess.commit()
-        free_plan = sess.execute(select(Plan).where(Plan.code == "free")).scalar_one()
+        seed_plan = sess.execute(
+            select(Plan).where(Plan.code == plan_code)
+        ).scalar_one()
         for n, (sub, name) in enumerate(customers or [], start=1):
             customer = Customer(
                 name=name,
                 sub2api_user_id=f"caller-{n}",
                 logto_sub=sub,
-                plan_id=free_plan.id,
+                plan_id=seed_plan.id,
             )
             sess.add(customer)
             sess.flush()

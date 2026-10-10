@@ -4,8 +4,10 @@
 // 追加 数据集/上传/修正/同步/连接器 路由；wire-self-serve-launch 追加
 // /api/console/{auth/config,session,usage} 路由——纯内存、零网络）。
 import type {
+  ArtifactStatus,
   ChatMessage,
   Connector,
+  ConnectorManifest,
   Conversation,
   ConversationDetail,
   Correction,
@@ -14,6 +16,7 @@ import type {
   CustomerDemand,
   Dataset,
   DatasetColumn,
+  DatasetQuota,
   DraftArtifact,
   MessageRole,
   SyncRecord,
@@ -36,11 +39,34 @@ export type FetchCall = {
   formData?: FormData;
 };
 
+/** 数据集 + 可选存储层字段（wire-free-tier-data-gate：api 侧免费档响应带
+ *  storage_tier，组件容错读取；Dataset 接口本体保持不动避免与并行改动冲突）。 */
+type DatasetWithTier = Dataset & { storage_tier?: string };
+
 interface StoredConversation {
   meta: Conversation;
   messages: ChatMessage[];
   artifacts: DraftArtifact[];
 }
+
+/** 生命周期产物种子（wire-artifacts-persistence；versions 不给时按 spec 造 v1）。 */
+export type LifecycleArtifactSeed = {
+  id: number;
+  kind: string;
+  title: string;
+  status?: ArtifactStatus;
+  version?: number;
+  origin_conversation_id?: number | null;
+  customer_id?: string;
+  spec?: Record<string, unknown>;
+  versions?: Array<{
+    spec: Record<string, unknown>;
+    operator?: string | null;
+    created_at?: string;
+  }>;
+  created_at?: string;
+  updated_at?: string;
+};
 
 function jsonResponse(body: unknown, status = 200): FakeResponse {
   return { ok: status < 400, status, json: () => Promise.resolve(body) };
@@ -99,6 +125,14 @@ export interface ConsoleBackendOptions {
   /** 强制上传失败（如 400 行数超限）。 */
   failUploadStatus?: number;
   failUploadDetail?: string;
+  /** GET /api/v1/datasets/quota 响应体覆盖（免费档配额条测试；缺省按档位与
+   *  当前数据集数推导：free=3 集 × 10,000 行）。 */
+  datasetQuota?: DatasetQuota;
+  /** 强制 /api/v1/datasets/quota 返回该状态（配额端点未就绪态）。 */
+  failQuotaStatus?: number;
+  /** 强制 POST /api/v1/datasets 返回该状态（如免费档建集触限 400）。 */
+  failCreateDatasetStatus?: number;
+  failCreateDatasetDetail?: string;
   /** 配对令牌有效期秒数（默认 900 = 15 分钟）。 */
   pairingTokenTtlSeconds?: number;
   /** 种子需求单（带 customer_id 的仅对同客户可见；wire-ux-consolidation 4.3）。 */
@@ -106,6 +140,12 @@ export interface ConsoleBackendOptions {
   /** 强制 POST /api/v1/demands 返回该状态（如 422 校验回显）。 */
   failDemandCreateStatus?: number;
   failDemandCreateDetail?: string;
+  /** 连接器下载清单（wire-connector-distribution 3.1）：GET
+   *  /api/v1/downloads/connector/manifest.json 的响应体注入（缺省 404——
+   *  端点未配置态；含 available=false 条目即「部分 unavailable」态）。 */
+  connectorManifest?: ConnectorManifest;
+  /** 强制 manifest 端点返回该状态（不可达/网络错态）。 */
+  failManifestStatus?: number;
 }
 
 /** 安装假后端为 global fetch；返回调用记录与状态注入接口。 */
@@ -121,6 +161,7 @@ export function installConsoleBackend(
     content: string,
   ) => ChatMessage;
   addArtifact: (artifact: Omit<DraftArtifact, "customer_id" | "status">) => void;
+  addLifecycleArtifact: (seed: LifecycleArtifactSeed) => void;
   addDataset: (dataset: Dataset) => void;
   addConnector: (connector: Connector) => void;
   addRows: (
@@ -249,6 +290,97 @@ export function installConsoleBackend(
     nextArtifactId = Math.max(nextArtifactId, artifact.id + 1);
   }
 
+  // ── 产物生命周期假后端状态（wire-artifacts-persistence）──
+  interface StoredArtifactVersion {
+    version: number;
+    spec: Record<string, unknown>;
+    operator: string | null;
+    created_at: string;
+  }
+
+  interface StoredLifecycleArtifact {
+    id: number;
+    customer_id?: string;
+    kind: string;
+    title: string;
+    status: ArtifactStatus;
+    version: number;
+    origin_conversation_id: number | null;
+    status_history: Array<{
+      status: string;
+      at: string;
+      by: string;
+      note: string | null;
+    }>;
+    created_at: string;
+    updated_at: string;
+    versions: StoredArtifactVersion[];
+  }
+
+  const lifecycleArtifacts = new Map<number, StoredLifecycleArtifact>();
+  let nextLifecycleArtifactId = 1;
+
+  function addLifecycleArtifact(seed: LifecycleArtifactSeed): void {
+    const specList = seed.versions ?? [{ spec: seed.spec ?? {} }];
+    const versions: StoredArtifactVersion[] = specList.map((entry, i) => ({
+      version: i + 1,
+      spec: entry.spec,
+      operator: entry.operator ?? `console:demo-customer`,
+      created_at: entry.created_at ?? `2026-10-04T09:${String(10 + i).padStart(2, "0")}:00`,
+    }));
+    const status = seed.status ?? "draft";
+    lifecycleArtifacts.set(seed.id, {
+      id: seed.id,
+      customer_id: seed.customer_id,
+      kind: seed.kind,
+      title: seed.title,
+      status,
+      version: seed.version ?? versions.length,
+      origin_conversation_id: seed.origin_conversation_id ?? null,
+      status_history: [
+        { status, at: "2026-10-04T09:00:00", by: "console:demo-customer", note: "seed" },
+      ],
+      created_at: seed.created_at ?? "2026-10-04T09:00:00",
+      updated_at: seed.updated_at ?? "2026-10-04T09:30:00",
+      versions,
+    });
+    nextLifecycleArtifactId = Math.max(nextLifecycleArtifactId, seed.id + 1);
+  }
+
+  /** 生命周期产物当前 spec（最新版本行）。 */
+  function currentLifecycleSpec(artifact: StoredLifecycleArtifact): Record<string, unknown> {
+    const row = artifact.versions.find((v) => v.version === artifact.version);
+    return row?.spec ?? {};
+  }
+
+  function lifecycleDetail(artifact: StoredLifecycleArtifact): unknown {
+    return {
+      id: artifact.id,
+      customer_id: artifact.customer_id ?? "demo-customer",
+      kind: artifact.kind,
+      title: artifact.title,
+      status: artifact.status,
+      version: artifact.version,
+      origin_conversation_id: artifact.origin_conversation_id,
+      created_at: artifact.created_at,
+      updated_at: artifact.updated_at,
+      spec: currentLifecycleSpec(artifact),
+      status_history: artifact.status_history,
+    };
+  }
+
+  /** 本客户可见的生命周期产物（未钉 customer_id 的种子对任何登录客户可见）。 */
+  function ownLifecycleArtifact(
+    id: number,
+    customerId: string,
+  ): StoredLifecycleArtifact | undefined {
+    const artifact = lifecycleArtifacts.get(id);
+    if (!artifact) return undefined;
+    return artifact.customer_id && artifact.customer_id !== customerId
+      ? undefined
+      : artifact;
+  }
+
   const calls: FetchCall[] = [];
 
   const fetchImpl = ((input: RequestInfo | URL, init?: RequestInit): Promise<FakeResponse> => {
@@ -309,6 +441,29 @@ export function installConsoleBackend(
           key_once: options.keyOnce ?? null,
         }),
       );
+    }
+
+    // ── 连接器下载清单（wire-connector-distribution 3.1：公开端点，置于
+    //    Bearer 校验之前——语义对齐 api 侧 downloads 路由；缺省 404 即
+    //    「FD_WIRE_DOWNLOADS_DIR 未配置」诚实降级态）──
+    if (path === "/api/v1/downloads/connector/manifest.json" && method === "GET") {
+      if (options.failManifestStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `downloads ${options.failManifestStatus}` },
+            options.failManifestStatus,
+          ),
+        );
+      }
+      if (!options.connectorManifest) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: "连接器下载目录未配置（FD_WIRE_DOWNLOADS_DIR 为空）" },
+            404,
+          ),
+        );
+      }
+      return Promise.resolve(jsonResponse(options.connectorManifest));
     }
 
     const customerId = subOfBearer(headers);
@@ -491,6 +646,180 @@ export function installConsoleBackend(
       return Promise.resolve(jsonResponse(stored.artifacts));
     }
 
+    // ── 产物生命周期（wire-artifacts-persistence）：列表/详情/PUT 版本化/
+    //    版本历史/发布/归档/恢复/草稿导入——语义对齐 api 仓 artifacts 路由 ──
+    let lifecycleTick = 0;
+    const lifecycleNow = () => `2026-10-11T0${8 + (lifecycleTick++ % 4)}:00:00`;
+
+    if (path === "/api/v1/artifacts/from-draft" && method === "POST") {
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        conversation_id?: number;
+        draft_id?: number;
+      };
+      const stored = store.get(payload.conversation_id ?? -1);
+      const draft = stored?.artifacts.find((d) => d.id === payload.draft_id);
+      if (!stored || stored.meta.customer_id !== customerId || !draft) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `conversation ${payload.conversation_id} 无草稿 ${payload.draft_id}` },
+            404,
+          ),
+        );
+      }
+      const id = nextLifecycleArtifactId++;
+      const created: StoredLifecycleArtifact = {
+        id,
+        customer_id: customerId,
+        kind: draft.kind,
+        title: String(draft.spec.title ?? draft.kind),
+        status: "draft",
+        version: 1,
+        origin_conversation_id: stored.meta.id,
+        status_history: [
+          {
+            status: "draft",
+            at: lifecycleNow(),
+            by: `console:${customerId}`,
+            note: `从会话 ${stored.meta.id} 草稿导入`,
+          },
+        ],
+        created_at: lifecycleNow(),
+        updated_at: lifecycleNow(),
+        versions: [
+          { version: 1, spec: draft.spec, operator: `console:${customerId}`, created_at: lifecycleNow() },
+        ],
+      };
+      lifecycleArtifacts.set(id, created);
+      return Promise.resolve(jsonResponse(lifecycleDetail(created), 201));
+    }
+
+    if (path === "/api/v1/artifacts" && method === "GET") {
+      const kind = url.searchParams.get("kind");
+      const status = url.searchParams.get("status");
+      const mine = [...lifecycleArtifacts.values()]
+        .filter((a) => !a.customer_id || a.customer_id === customerId)
+        .filter((a) => !kind || a.kind === kind)
+        .filter((a) => !status || a.status === status)
+        .sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : b.id - a.id));
+      return Promise.resolve(
+        jsonResponse(
+          mine.map(({ versions: _v, status_history: _h, ...summary }) => summary),
+        ),
+      );
+    }
+
+    match = path.match(/^\/api\/v1\/artifacts\/(\d+)$/);
+    if (match) {
+      const artifact = ownLifecycleArtifact(Number(match[1]), customerId);
+      if (!artifact) {
+        return Promise.resolve(jsonResponse({ detail: "artifact not found" }, 404));
+      }
+      if (method === "GET") {
+        return Promise.resolve(jsonResponse(lifecycleDetail(artifact)));
+      }
+      if (method === "PUT") {
+        if (artifact.status === "archived") {
+          return Promise.resolve(
+            jsonResponse(
+              {
+                detail:
+                  `产物 ${artifact.id} 已归档（archived），不可编辑——请先恢复（restore）为草稿再修改。`,
+              },
+              409,
+            ),
+          );
+        }
+        const payload = (calls[calls.length - 1]!.body ?? {}) as { spec?: unknown };
+        const spec = payload.spec as Record<string, unknown> | undefined;
+        const title = spec?.title;
+        const inner = spec?.spec;
+        if (!spec || typeof title !== "string" || !title.trim()) {
+          return Promise.resolve(
+            jsonResponse({ detail: "spec 缺少非空 title" }, 422),
+          );
+        }
+        if (typeof inner !== "object" || inner === null || Object.keys(inner).length === 0) {
+          return Promise.resolve(
+            jsonResponse({ detail: "spec.spec 必须是非空 JSON 对象" }, 422),
+          );
+        }
+        artifact.version += 1;
+        artifact.versions.push({
+          version: artifact.version,
+          spec,
+          operator: `console:${customerId}`,
+          created_at: lifecycleNow(),
+        });
+        artifact.title = title.trim();
+        artifact.updated_at = lifecycleNow();
+        return Promise.resolve(jsonResponse(lifecycleDetail(artifact)));
+      }
+    }
+
+    match = path.match(/^\/api\/v1\/artifacts\/(\d+)\/versions$/);
+    if (match && method === "GET") {
+      const artifact = ownLifecycleArtifact(Number(match[1]), customerId);
+      if (!artifact) {
+        return Promise.resolve(jsonResponse({ detail: "artifact not found" }, 404));
+      }
+      const rows = [...artifact.versions]
+        .sort((a, b) => b.version - a.version)
+        .map(({ spec: _s, ...summary }) => summary);
+      return Promise.resolve(jsonResponse(rows));
+    }
+
+    match = path.match(/^\/api\/v1\/artifacts\/(\d+)\/versions\/(\d+)$/);
+    if (match && method === "GET") {
+      const artifact = ownLifecycleArtifact(Number(match[1]), customerId);
+      const row = artifact?.versions.find((v) => v.version === Number(match![2]));
+      if (!artifact || !row) {
+        return Promise.resolve(jsonResponse({ detail: "version not found" }, 404));
+      }
+      return Promise.resolve(jsonResponse(row));
+    }
+
+    match = path.match(/^\/api\/v1\/artifacts\/(\d+)\/(publish|archive|restore)$/);
+    if (match && method === "POST") {
+      const artifact = ownLifecycleArtifact(Number(match[1]), customerId);
+      if (!artifact) {
+        return Promise.resolve(jsonResponse({ detail: "artifact not found" }, 404));
+      }
+      const action = match[2] as "publish" | "archive" | "restore";
+      const transitions: Record<string, Partial<Record<typeof action, ArtifactStatus>>> = {
+        draft: { publish: "published", archive: "archived" },
+        published: { archive: "archived" },
+        archived: { restore: "draft" },
+      };
+      const target = transitions[artifact.status]?.[action];
+      if (!target) {
+        const hints: Record<string, string> = {
+          publish:
+            "合法路径：draft --publish--> published（已发布或已归档的产物请先恢复为草稿）",
+          archive: "合法路径：draft/published --archive--> archived",
+          restore: "合法路径：archived --restore--> draft（仅归档产物可恢复）",
+        };
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                `产物 ${artifact.id} 当前状态 ${artifact.status} 不允许 ${action}——` +
+                hints[action],
+            },
+            409,
+          ),
+        );
+      }
+      artifact.status = target;
+      artifact.updated_at = lifecycleNow();
+      artifact.status_history.push({
+        status: target,
+        at: lifecycleNow(),
+        by: `console:${customerId}`,
+        note: `${action} → ${target}`,
+      });
+      return Promise.resolve(jsonResponse(lifecycleDetail(artifact)));
+    }
+
     // ── 我的数据：数据集列表 / 建档 / 详情 / 预览 ──
     if (path === "/api/v1/datasets" && method === "GET") {
       const mine = [...datasets.values()].filter(
@@ -500,6 +829,18 @@ export function installConsoleBackend(
     }
 
     if (path === "/api/v1/datasets" && method === "POST") {
+      if (options.failCreateDatasetStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failCreateDatasetDetail ??
+                `create dataset ${options.failCreateDatasetStatus}`,
+            },
+            options.failCreateDatasetStatus,
+          ),
+        );
+      }
       const payload = (calls[calls.length - 1]!.body ?? {}) as {
         name?: string;
         source?: {
@@ -515,6 +856,7 @@ export function installConsoleBackend(
       const upload = source.upload_id ? uploads.get(source.upload_id) : undefined;
       const nowIso = "2026-10-05T12:00:00";
       const id = `ds-${nextDatasetSeq++}`;
+      const free = (options.planCode ?? "basic") === "free";
       const dataset: Dataset = {
         id,
         key: `ds_${id.replace(/-/g, "_")}`,
@@ -533,8 +875,37 @@ export function installConsoleBackend(
         updated_at: nowIso,
         customer_id: customerId,
       };
+      // 免费档建集落 api 层（wire-free-tier-data-gate D1），响应带 storage_tier
+      // 供列表徽标（组件容错读取）；付费档不带——现状响应零变化。
+      if (free) (dataset as DatasetWithTier).storage_tier = "api";
       datasets.set(id, dataset);
       return Promise.resolve(jsonResponse(dataset, 201));
+    }
+
+    // 免费档配额端点（wire-free-tier-data-gate 4.1）：注意必须先于下方
+    // /api/v1/datasets/:id 正则命中（否则 "quota" 会被当成数据集 id）。
+    if (path === "/api/v1/datasets/quota" && method === "GET") {
+      if (options.failQuotaStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `dataset quota ${options.failQuotaStatus}` },
+            options.failQuotaStatus,
+          ),
+        );
+      }
+      const used = [...datasets.values()].filter(
+        (d) => !d.customer_id || d.customer_id === customerId,
+      ).length;
+      return Promise.resolve(
+        jsonResponse(
+          options.datasetQuota ?? {
+            plan_code: options.planCode ?? "basic",
+            used_datasets: used,
+            max_datasets: 3,
+            max_rows_per_dataset: 10_000,
+          },
+        ),
+      );
     }
 
     if (path === "/api/v1/datasets/uploads" && method === "POST") {
@@ -827,6 +1198,7 @@ export function installConsoleBackend(
     fetchImpl,
     addMessage,
     addArtifact,
+    addLifecycleArtifact,
     addDataset,
     addConnector,
     addRows,

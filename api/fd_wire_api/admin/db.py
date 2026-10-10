@@ -12,8 +12,10 @@
   （镜像只读 guard），admin 侧分别复用 ``demands.db.get_db`` 与
   ``catalog.db.readonly_session``，不经本会话。
 
-连接串优先级：``FD_WIRE_ADMIN_DATABASE_URL`` > ``DATABASE_URL``（平台库，
-与 alembic env 同源）> 本地开发默认 sqlite 文件。
+连接串优先级：``FD_WIRE_DATABASE_URL``（元数据库收敛开关，
+wire-dedicated-postgres）> ``FD_WIRE_ADMIN_DATABASE_URL`` > ``DATABASE_URL``
+（平台库，与 alembic env 同源）> 本地开发默认 sqlite 文件。PG 历史形态
+（``postgres://`` 等）统一改写为 ``postgresql+psycopg://``。
 """
 
 from __future__ import annotations
@@ -28,13 +30,16 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
+from ..config import canonical_metadata_database_url, normalize_database_url
+
 _DEFAULT_PLATFORM_DB = "sqlite:///./fd_wire_dev.db"
 
 
 def admin_database_url() -> str:
     """admin 联查库连接串（env 可重指；测试指向临时文件库）。"""
-    return (
-        os.getenv("FD_WIRE_ADMIN_DATABASE_URL")
+    return normalize_database_url(
+        canonical_metadata_database_url()
+        or os.getenv("FD_WIRE_ADMIN_DATABASE_URL")
         or os.getenv("DATABASE_URL")
         or _DEFAULT_PLATFORM_DB
     )

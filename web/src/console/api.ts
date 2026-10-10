@@ -818,3 +818,220 @@ export function fetchMyDemands(): Promise<CustomerDemand[]> {
     method: "GET",
   }) as Promise<CustomerDemand[]>;
 }
+
+// ── 连接器下载清单（wire-connector-distribution 任务 3.1/3.2）──────────
+// 契约：GET /api/v1/downloads/connector/manifest.json（公开端点，无鉴权；
+// 未配置下载目录时 404）。二进制取件同命名空间
+// GET /api/v1/downloads/connector/{platform}（Content-Length + X-Checksum-Sha256）。
+
+/** manifest 单平台条目：available=false 即该平台文件缺失（如实呈现，不可链）。 */
+export interface ConnectorDownloadPlatform {
+  platform: string;
+  filename: string;
+  sha256: string;
+  size: number;
+  available: boolean;
+}
+
+/** 连接器发布清单（CI/手动晋升生成；版本号即心跳上报口径 sha-<7>）。 */
+export interface ConnectorManifest {
+  version: string;
+  released_at: string;
+  platforms: ConnectorDownloadPlatform[];
+}
+
+/** 取连接器下载清单（配对向导下载链接与「最新版本」对照的数据源）。 */
+export function fetchConnectorManifest(): Promise<ConnectorManifest> {
+  return requestJson(`${API_BASE}/v1/downloads/connector/manifest.json`, {
+    method: "GET",
+  }) as Promise<ConnectorManifest>;
+}
+
+/** 平台二进制下载地址（同源公开端点；与 manifest.platform 一一对应）。 */
+export function connectorDownloadUrl(
+  apiBase: string,
+  platform: string,
+): string {
+  return `${apiBase}${API_BASE}/v1/downloads/connector/${encodeURIComponent(platform)}`;
+}
+
+// ── 免费档数据集配额（wire-free-tier-data-gate 任务 4.1）────────────────────
+// 契约：GET /api/v1/datasets/quota → { plan_code, used_datasets,
+// max_datasets, max_rows_per_dataset }。端点未就绪/失败时调用方应静默降级
+// （配额条隐藏），绝不阻塞「我的数据」页面。
+export interface DatasetQuota {
+  plan_code: string;
+  used_datasets: number;
+  max_datasets: number;
+  max_rows_per_dataset: number;
+}
+
+/** 免费档配额余量（已用集数 / 上限集数、单集行数上限）。 */
+export function fetchDatasetQuota(): Promise<DatasetQuota> {
+  return requestJson(`${API_BASE}/v1/datasets/quota`, {
+    method: "GET",
+  }) as Promise<DatasetQuota>;
+}
+
+// ── 产物生命周期（wire-artifacts-persistence）：持久化 + 版本化 + 状态机 ──
+// 契约：/api/v1/artifacts*（Bearer 登录身份，服务端按映射客户隔离，
+// 他企一律 404）；spec 每次保存追加新版本（append-only），状态机
+// draft → published → archived 单向、archived → draft 恢复。
+
+export type ArtifactStatus = "draft" | "published" | "archived";
+
+export const ARTIFACT_STATUSES = ["draft", "published", "archived"] as const;
+
+/** 产物概要（列表用；spec 在详情响应里）。 */
+export interface Artifact {
+  id: number;
+  customer_id: string;
+  kind: string;
+  title: string;
+  status: ArtifactStatus;
+  version: number;
+  /** 来源会话指针（会话草稿导入时保留；直接创建为 null）。 */
+  origin_conversation_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 产物详情：当前 spec + 状态迁移操作记录（append-only）。 */
+export interface ArtifactDetail extends Artifact {
+  spec: Record<string, unknown>;
+  status_history: Array<{
+    status: string;
+    at: string;
+    by: string;
+    note: string | null;
+  }>;
+}
+
+/** 版本历史条目（列表用；spec 在单查响应里）。 */
+export interface ArtifactVersionSummary {
+  version: number;
+  operator: string | null;
+  created_at: string;
+}
+
+/** 单个历史版本（含该版本 spec 快照，只读）。 */
+export interface ArtifactVersionDetail extends ArtifactVersionSummary {
+  spec: Record<string, unknown>;
+}
+
+interface PutRequestOptions {
+  body?: unknown;
+}
+
+/** 带任意 method 的 JSON 请求（上方 RequestOptions 联合不含 PUT，
+ * 本节追加的产物端点专用；鉴权与错误语义与 requestJson 完全一致）。 */
+async function requestJsonAnyMethod(
+  url: string,
+  method: "PUT" | "POST",
+  options: PutRequestOptions = {},
+): Promise<unknown> {
+  const { body } = options;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: {
+        Accept: "application/json",
+        ...bearerHeaders(),
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch (err) {
+    if (err instanceof ConsoleApiError) throw err;
+    throw new ConsoleApiError(
+      `network error fetching ${url}: ${(err as Error).message}`,
+    );
+  }
+  return readResponse(response, url);
+}
+
+/** 本企业产物列表（按更新时间倒序；kind/status 可选过滤）。 */
+export function fetchLifecycleArtifacts(
+  kind?: string,
+  status?: string,
+): Promise<Artifact[]> {
+  const params = new URLSearchParams();
+  if (kind) params.set("kind", kind);
+  if (status) params.set("status", status);
+  const query = params.size > 0 ? `?${params}` : "";
+  return requestJson(`${API_BASE}/v1/artifacts${query}`, {
+    method: "GET",
+  }) as Promise<Artifact[]>;
+}
+
+/** 产物详情（当前 spec + 状态操作记录；跨客户 404）。 */
+export function fetchLifecycleArtifact(id: number): Promise<ArtifactDetail> {
+  return requestJson(`${API_BASE}/v1/artifacts/${id}`, {
+    method: "GET",
+  }) as Promise<ArtifactDetail>;
+}
+
+/** spec 保存（PUT）：成功返回新版本号所在详情；archived 拒改 409。 */
+export function saveArtifactSpec(
+  id: number,
+  spec: Record<string, unknown>,
+): Promise<ArtifactDetail> {
+  return requestJsonAnyMethod(`${API_BASE}/v1/artifacts/${id}`, "PUT", {
+    body: { spec },
+  }) as Promise<ArtifactDetail>;
+}
+
+/** 版本历史（新版本在前；append-only）。 */
+export function fetchArtifactVersions(
+  id: number,
+): Promise<ArtifactVersionSummary[]> {
+  return requestJson(`${API_BASE}/v1/artifacts/${id}/versions`, {
+    method: "GET",
+  }) as Promise<ArtifactVersionSummary[]>;
+}
+
+/** 查看任一历史版本（含 spec 快照）。 */
+export function fetchArtifactVersion(
+  id: number,
+  version: number,
+): Promise<ArtifactVersionDetail> {
+  return requestJson(
+    `${API_BASE}/v1/artifacts/${id}/versions/${version}`,
+    { method: "GET" },
+  ) as Promise<ArtifactVersionDetail>;
+}
+
+/** 发布（draft → published；非法迁移 409 说明合法路径）。 */
+export function publishArtifact(id: number): Promise<ArtifactDetail> {
+  return requestJsonAnyMethod(
+    `${API_BASE}/v1/artifacts/${id}/publish`,
+    "POST",
+  ) as Promise<ArtifactDetail>;
+}
+
+/** 归档（draft/published → archived；不删除，可恢复）。 */
+export function archiveArtifact(id: number): Promise<ArtifactDetail> {
+  return requestJsonAnyMethod(
+    `${API_BASE}/v1/artifacts/${id}/archive`,
+    "POST",
+  ) as Promise<ArtifactDetail>;
+}
+
+/** 恢复（archived → draft；恢复后方可再编辑/发布）。 */
+export function restoreArtifact(id: number): Promise<ArtifactDetail> {
+  return requestJsonAnyMethod(
+    `${API_BASE}/v1/artifacts/${id}/restore`,
+    "POST",
+  ) as Promise<ArtifactDetail>;
+}
+
+/** 会话草稿导入：固化为 draft 产物（保留来源会话指针）。 */
+export function importArtifactFromDraft(
+  conversationId: number,
+  draftId: number,
+): Promise<ArtifactDetail> {
+  return requestJsonAnyMethod(`${API_BASE}/v1/artifacts/from-draft`, "POST", {
+    body: { conversation_id: conversationId, draft_id: draftId },
+  }) as Promise<ArtifactDetail>;
+}

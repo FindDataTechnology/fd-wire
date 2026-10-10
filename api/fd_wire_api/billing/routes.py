@@ -29,6 +29,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..admin.db import get_db
+from ..dbcompat import period_expression
 from ..metering.models import MeteringRecord
 from .models import Customer, CustomerStatus
 from .plans import list_public_plans
@@ -69,7 +70,7 @@ def monthly_used_lines(db: Session, caller: str | None, period: str) -> int:
     """当月已用行数：customer 轨 × caller 身份 × period 的 rows_returned 合计。
 
     与 admin ``/internal/admin/customers/{id}/usage`` 的聚合完全同源
-    （同一表、同一轨道过滤、同一 strftime period 派生）。
+    （同一表、同一轨道过滤、同一双方言 period 派生——dbcompat）。
     """
     if not caller:
         return 0
@@ -77,7 +78,7 @@ def monthly_used_lines(db: Session, caller: str | None, period: str) -> int:
         select(func.sum(MeteringRecord.rows_returned)).where(
             MeteringRecord.credential_track == "customer",
             MeteringRecord.caller == caller,
-            func.strftime("%Y-%m", MeteringRecord.event_timestamp) == period,
+            period_expression(db.get_bind(), MeteringRecord.event_timestamp) == period,
         )
     ).scalar_one()
     return int(used or 0)

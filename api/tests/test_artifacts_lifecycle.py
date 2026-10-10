@@ -1,0 +1,588 @@
+"""产物生命周期 API 测试（wire-artifacts-persistence）。
+
+覆盖（tasks 2.1–2.5 / 4.1）：
+- 会话草稿导入 → 两次编辑（版本追加）→ 发布 → 归档 → 恢复 → 版本历史
+  完整的 E2E，全程跨客户隔离（他企一律 404）；
+- 列表 kind/status 过滤与更新倒序；
+- archived 拒改 409（提示先恢复）与恢复后再编辑；
+- 非法迁移 409（说明合法路径）；状态迁移操作记录（status_history）；
+- append-only：历史版本内容不可变、无改写端点；
+- spec 最小校验 422；鉴权 401；
+- 模型约束（kind 五类 / status 三态，与 ai.tools 值域对表）；
+- 迁移链 0021（0020 未落盘时以临时 no-op stub 接链验证，集成后自动走真链）。
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+# 在导入 app 前把默认引擎指向内存库：TestClient 启动钩子里的
+# init_ai_db() 不至于在测试机上落下 fd_wire_ai.db 文件。
+os.environ.setdefault("AI_DATABASE_URL", "sqlite://")
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from fd_wire_api.ai.db import AiBase, get_db, reset_ai_runtime
+from fd_wire_api.ai.models import AIDraftArtifact
+from fd_wire_api.ai.service import create_conversation as create_ai_conversation
+from fd_wire_api.ai.schemas import ConversationCreate
+from fd_wire_api.ai.tools import ARTIFACT_TOOL_KINDS
+from fd_wire_api.app import app
+from fd_wire_api.artifacts.models import ARTIFACT_KINDS, ArtifactStatus
+
+from console_fixture import bearer, install_fake_jwks, make_console_env, mint_id_token
+
+SUB_CUST = "sub-art-001"
+SUB_OTHER = "sub-art-002"
+CUST = bearer(mint_id_token(SUB_CUST))
+OTHER = bearer(mint_id_token(SUB_OTHER))
+
+API_DIR = Path(__file__).resolve().parent.parent
+
+DASHBOARD_SPEC = {
+    "title": "中美日人均 GDP 对比",
+    "spec": {"indicators": ["IND-GDP-US", "IND-GDP-CN"], "chart": "line"},
+}
+
+
+@pytest.fixture()
+def db_session():
+    """独立内存库（含 artifacts 两表——import 即注册到 AiBase）的会话。"""
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    AiBase.metadata.create_all(bind=engine)
+    TestingSession = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    session = TestingSession()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@pytest.fixture()
+def client(monkeypatch, tmp_path, db_session):
+    """覆写 get_db（含 artifacts 路由——同一依赖对象）的 TestClient。"""
+    monkeypatch.setenv("AI_CELL_ENDPOINT_MAP", "cust-001=http://cell-001/mcp")
+
+    def override_get_db():
+        try:
+            yield db_session
+        finally:
+            pass
+
+    reset_ai_runtime()
+    app.dependency_overrides[get_db] = override_get_db
+    install_fake_jwks(monkeypatch)
+    make_console_env(
+        tmp_path, monkeypatch,
+        customers=[(SUB_CUST, "cust-001"), (SUB_OTHER, "cust-002")],
+    )
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+    reset_ai_runtime()
+
+
+def stage_draft(db_session, *, customer_id: str = "cust-001", spec=None, kind="dashboard"):
+    """直插一条会话草稿（模拟构建循环暂存产物），返回 (conversation, draft)。"""
+    conversation = create_ai_conversation(
+        db_session, customer_id=customer_id, payload=ConversationCreate(title="GDP 分析")
+    )
+    draft = AIDraftArtifact(
+        conversation_id=conversation.id,
+        customer_id=customer_id,
+        kind=kind,
+        spec=spec or DASHBOARD_SPEC,
+        status="draft",
+    )
+    db_session.add(draft)
+    db_session.commit()
+    db_session.refresh(draft)
+    return conversation, draft
+
+
+def import_draft(client, *, conversation_id: int, draft_id: int, headers=CUST) -> dict:
+    resp = client.post(
+        "/api/v1/artifacts/from-draft",
+        json={"conversation_id": conversation_id, "draft_id": draft_id},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+# ------------------------------------------------------------------ E2E（4.1）
+
+
+def test_e2e_import_edit_publish_archive_restore_versions(client, db_session) -> None:
+    """全链路：草稿导入→两次编辑→发布→归档→恢复→版本历史完整。"""
+    conversation, draft = stage_draft(db_session)
+    artifact = import_draft(
+        client, conversation_id=conversation.id, draft_id=draft.id
+    )
+
+    # 导入即 v1 draft 产物：spec 原样拷贝 + 来源会话指针 + 初始状态留痕
+    assert artifact["status"] == "draft"
+    assert artifact["version"] == 1
+    assert artifact["kind"] == "dashboard"
+    assert artifact["title"] == DASHBOARD_SPEC["title"]
+    assert artifact["spec"] == DASHBOARD_SPEC
+    assert artifact["origin_conversation_id"] == conversation.id
+    assert artifact["status_history"][0]["status"] == "draft"
+
+    # 两次编辑：版本递增到 3，title 随 spec 投影
+    spec_v2 = {
+        "title": "中美日人均 GDP 对比（修订）",
+        "spec": {"indicators": ["IND-GDP-US", "IND-GDP-CN", "IND-GDP-JP"], "chart": "line"},
+    }
+    put2 = client.put(
+        f"/api/v1/artifacts/{artifact['id']}",
+        json={"spec": spec_v2},
+        headers=CUST,
+    )
+    assert put2.status_code == 200, put2.text
+    assert put2.json()["version"] == 2
+    assert put2.json()["title"] == spec_v2["title"]
+
+    spec_v3 = {
+        "title": "中美日人均 GDP 对比（终版）",
+        "spec": {"indicators": ["IND-GDP-CN"], "chart": "bar"},
+    }
+    put3 = client.put(
+        f"/api/v1/artifacts/{artifact['id']}",
+        json={"spec": spec_v3},
+        headers=CUST,
+    )
+    assert put3.status_code == 200, put3.text
+    assert put3.json()["version"] == 3
+    assert put3.json()["spec"] == spec_v3
+
+    # 发布 → 归档 → 恢复（每次迁移更新 updated_at 并留操作记录）
+    published = client.post(
+        f"/api/v1/artifacts/{artifact['id']}/publish", headers=CUST
+    )
+    assert published.status_code == 200
+    assert published.json()["status"] == "published"
+
+    archived = client.post(
+        f"/api/v1/artifacts/{artifact['id']}/archive", headers=CUST
+    )
+    assert archived.status_code == 200
+    assert archived.json()["status"] == "archived"
+
+    restored = client.post(
+        f"/api/v1/artifacts/{artifact['id']}/restore", headers=CUST
+    )
+    assert restored.status_code == 200
+    assert restored.json()["status"] == "draft"
+
+    detail = client.get(f"/api/v1/artifacts/{artifact['id']}", headers=CUST)
+    assert detail.status_code == 200
+    body = detail.json()
+    # 状态操作记录完整：导入 + publish + archive + restore（append-only）
+    assert [entry["status"] for entry in body["status_history"]] == [
+        "draft", "published", "archived", "draft",
+    ]
+    assert all(entry["by"] == "console:cust-001" for entry in body["status_history"])
+
+    # 版本历史完整：v3 → v2 → v1（新在前），任一版本内容可查且不可变
+    versions = client.get(
+        f"/api/v1/artifacts/{artifact['id']}/versions", headers=CUST
+    )
+    assert versions.status_code == 200
+    assert [v["version"] for v in versions.json()] == [3, 2, 1]
+    assert all(v["operator"] == "console:cust-001" for v in versions.json())
+
+    v1 = client.get(
+        f"/api/v1/artifacts/{artifact['id']}/versions/1", headers=CUST
+    )
+    assert v1.status_code == 200
+    assert v1.json()["spec"] == DASHBOARD_SPEC  # 历史版本保持初始内容
+    v2 = client.get(
+        f"/api/v1/artifacts/{artifact['id']}/versions/2", headers=CUST
+    )
+    assert v2.json()["spec"] == spec_v2
+
+    # 不存在的版本 404；历史版本无任何改写端点（PUT 到版本路径 = 405/404）
+    assert client.get(
+        f"/api/v1/artifacts/{artifact['id']}/versions/99", headers=CUST
+    ).status_code == 404
+    assert client.put(
+        f"/api/v1/artifacts/{artifact['id']}/versions/1",
+        json={"spec": spec_v2},
+        headers=CUST,
+    ).status_code in (404, 405)
+
+
+def test_archived_rejects_edit_until_restored(client, db_session) -> None:
+    """archived 拒改 409（明示先恢复）；恢复后可继续编辑。"""
+    conversation, draft = stage_draft(db_session)
+    artifact = import_draft(client, conversation_id=conversation.id, draft_id=draft.id)
+    client.post(f"/api/v1/artifacts/{artifact['id']}/publish", headers=CUST)
+    client.post(f"/api/v1/artifacts/{artifact['id']}/archive", headers=CUST)
+
+    rejected = client.put(
+        f"/api/v1/artifacts/{artifact['id']}",
+        json={"spec": {"title": "偷改", "spec": {"x": 1}}},
+        headers=CUST,
+    )
+    assert rejected.status_code == 409
+    assert "恢复" in rejected.json()["detail"]
+
+    client.post(f"/api/v1/artifacts/{artifact['id']}/restore", headers=CUST)
+    ok = client.put(
+        f"/api/v1/artifacts/{artifact['id']}",
+        json={"spec": {"title": "恢复后修订", "spec": {"x": 1}}},
+        headers=CUST,
+    )
+    assert ok.status_code == 200
+    assert ok.json()["version"] == 2
+
+
+# ------------------------------------------------------------ 列表/过滤/排序
+
+
+def test_list_filters_and_ordering(client, db_session) -> None:
+    """列表：kind/status 过滤 + 更新时间倒序；跨客户互不可见。"""
+    conv, dash = stage_draft(db_session, spec={"title": "看盘", "spec": {"a": 1}})
+    alert_conv, alert = stage_draft(
+        db_session,
+        spec={"title": "告警", "spec": {"indicator": "X", "threshold": 1}},
+        kind="alert_rule",
+    )
+    first = import_draft(client, conversation_id=conv.id, draft_id=dash.id)
+    second = import_draft(client, conversation_id=alert_conv.id, draft_id=alert.id)
+    client.post(f"/api/v1/artifacts/{first['id']}/publish", headers=CUST)
+
+    # 全量（更新倒序：publish 触碰过 first 的 updated_at）
+    listing = client.get("/api/v1/artifacts", headers=CUST)
+    assert listing.status_code == 200
+    ids = [a["id"] for a in listing.json()]
+    assert ids == [first["id"], second["id"]]
+
+    # kind 过滤
+    only_alert = client.get("/api/v1/artifacts?kind=alert_rule", headers=CUST)
+    assert [a["kind"] for a in only_alert.json()] == ["alert_rule"]
+
+    # status 过滤
+    only_published = client.get("/api/v1/artifacts?status=published", headers=CUST)
+    assert [a["status"] for a in only_published.json()] == ["published"]
+
+    # 组合过滤无匹配 → 空列表
+    assert client.get(
+        "/api/v1/artifacts?kind=alert_rule&status=published", headers=CUST
+    ).json() == []
+
+
+# ------------------------------------------------------------- 非法状态迁移
+
+
+def test_illegal_transitions_409_with_legal_path(client, db_session) -> None:
+    """非法迁移 409 且说明合法路径：重复发布 / 归档态发布 / 草稿态恢复。"""
+    conv, draft = stage_draft(db_session)
+    artifact = import_draft(client, conversation_id=conv.id, draft_id=draft.id)
+
+    # published --publish--> ✗（合法路径提示 draft → published）
+    client.post(f"/api/v1/artifacts/{artifact['id']}/publish", headers=CUST)
+    republish = client.post(f"/api/v1/artifacts/{artifact['id']}/publish", headers=CUST)
+    assert republish.status_code == 409
+    assert "draft --publish--> published" in republish.json()["detail"]
+
+    # archived --publish--> ✗（提示先恢复）
+    client.post(f"/api/v1/artifacts/{artifact['id']}/archive", headers=CUST)
+    publish_archived = client.post(
+        f"/api/v1/artifacts/{artifact['id']}/publish", headers=CUST
+    )
+    assert publish_archived.status_code == 409
+    assert "恢复" in publish_archived.json()["detail"]
+
+    # draft --restore--> ✗（仅归档可恢复）
+    conv2, draft2 = stage_draft(db_session, spec={"title": "另一份", "spec": {"b": 2}})
+    artifact2 = import_draft(client, conversation_id=conv2.id, draft_id=draft2.id)
+    restore_draft = client.post(
+        f"/api/v1/artifacts/{artifact2['id']}/restore", headers=CUST
+    )
+    assert restore_draft.status_code == 409
+    assert "archived --restore--> draft" in restore_draft.json()["detail"]
+
+    # draft 可直接归档（draft --archive--> archived 合法）
+    archive_draft = client.post(
+        f"/api/v1/artifacts/{artifact2['id']}/archive", headers=CUST
+    )
+    assert archive_draft.status_code == 200
+    assert archive_draft.json()["status"] == "archived"
+
+
+# ----------------------------------------------------------------- 草稿导入
+
+
+def test_from_draft_not_found_variants(client, db_session) -> None:
+    """草稿导入 404：会话不存在 / 非本人会话 / 草稿不在该会话。"""
+    conv, draft = stage_draft(db_session)
+    other_conv, other_draft = stage_draft(
+        db_session, customer_id="cust-002", spec={"title": "别家", "spec": {"c": 3}}
+    )
+
+    # 非本人会话（别家草稿）：不泄露存在性，一律 404
+    assert client.post(
+        "/api/v1/artifacts/from-draft",
+        json={"conversation_id": other_conv.id, "draft_id": other_draft.id},
+        headers=CUST,
+    ).status_code == 404
+
+    # 会话不存在
+    assert client.post(
+        "/api/v1/artifacts/from-draft",
+        json={"conversation_id": 99999, "draft_id": draft.id},
+        headers=CUST,
+    ).status_code == 404
+
+    # 草稿不属于该会话
+    assert client.post(
+        "/api/v1/artifacts/from-draft",
+        json={"conversation_id": conv.id, "draft_id": other_draft.id},
+        headers=CUST,
+    ).status_code == 404
+
+    # 本人正常导入仍通（前面的 404 不产生副作用）
+    assert client.post(
+        "/api/v1/artifacts/from-draft",
+        json={"conversation_id": conv.id, "draft_id": draft.id},
+        headers=CUST,
+    ).status_code == 201
+
+
+# ---------------------------------------------------------------- 跨客户隔离
+
+
+def test_tenant_isolation_all_endpoints(client, db_session) -> None:
+    """跨客户隔离：他企访问我的产物（详情/改/版本/三迁移）一律 404。"""
+    conv, draft = stage_draft(db_session)
+    artifact = import_draft(client, conversation_id=conv.id, draft_id=draft.id)
+    aid = artifact["id"]
+
+    assert client.get(f"/api/v1/artifacts/{aid}", headers=OTHER).status_code == 404
+    assert client.put(
+        f"/api/v1/artifacts/{aid}",
+        json={"spec": {"title": "偷改", "spec": {"x": 1}}},
+        headers=OTHER,
+    ).status_code == 404
+    assert client.get(f"/api/v1/artifacts/{aid}/versions", headers=OTHER).status_code == 404
+    assert client.get(
+        f"/api/v1/artifacts/{aid}/versions/1", headers=OTHER
+    ).status_code == 404
+    assert client.post(f"/api/v1/artifacts/{aid}/publish", headers=OTHER).status_code == 404
+    assert client.post(f"/api/v1/artifacts/{aid}/archive", headers=OTHER).status_code == 404
+    assert client.post(f"/api/v1/artifacts/{aid}/restore", headers=OTHER).status_code == 404
+    # 列表互不可见
+    assert client.get("/api/v1/artifacts", headers=OTHER).json() == []
+    # 不存在的产物同样 404
+    assert client.get("/api/v1/artifacts/99999", headers=CUST).status_code == 404
+
+
+# ------------------------------------------------------------ 校验与鉴权
+
+
+def test_put_invalid_spec_422(client, db_session) -> None:
+    """spec 最小校验（沿用工具侧口径）：缺 title / 空 spec 对象 / 空 body 422。"""
+    conv, draft = stage_draft(db_session)
+    artifact = import_draft(client, conversation_id=conv.id, draft_id=draft.id)
+    aid = artifact["id"]
+
+    no_title = client.put(
+        f"/api/v1/artifacts/{aid}", json={"spec": {"spec": {"a": 1}}}, headers=CUST
+    )
+    assert no_title.status_code == 422
+    assert "title" in no_title.json()["detail"]
+
+    empty_inner = client.put(
+        f"/api/v1/artifacts/{aid}", json={"spec": {"title": "空规格"}}, headers=CUST
+    )
+    assert empty_inner.status_code == 422
+
+    empty_body = client.put(f"/api/v1/artifacts/{aid}", json={"spec": {}}, headers=CUST)
+    assert empty_body.status_code == 422
+
+    # 全部拒收后版本不动
+    assert client.get(f"/api/v1/artifacts/{aid}", headers=CUST).json()["version"] == 1
+
+
+def test_auth_required(client) -> None:
+    """缺 Bearer ID token 一律 401。"""
+    assert client.get("/api/v1/artifacts").status_code == 401
+    assert client.get("/api/v1/artifacts/1").status_code == 401
+    assert client.put(
+        "/api/v1/artifacts/1", json={"spec": {"title": "x", "spec": {"a": 1}}}
+    ).status_code == 401
+    assert client.post("/api/v1/artifacts/1/publish").status_code == 401
+    assert client.post(
+        "/api/v1/artifacts/from-draft",
+        json={"conversation_id": 1, "draft_id": 1},
+    ).status_code == 401
+
+
+# --------------------------------------------------------------- 模型约束（1.2）
+
+
+def test_model_enums_match_ai_tool_kinds() -> None:
+    """kind 限五类（与 ai.tools 产物工具值域一致）；status 三态。"""
+    assert set(ARTIFACT_KINDS) == set(ARTIFACT_TOOL_KINDS.values())
+    assert ARTIFACT_KINDS == (
+        "dashboard",
+        "composite_indicator",
+        "research_report",
+        "alert_rule",
+        "refresh_schedule",
+    )
+    assert {s.value for s in ArtifactStatus} == {"draft", "published", "archived"}
+
+
+def test_version_unique_constraint_db_level(db_session) -> None:
+    """(artifact_id, version) 唯一：库层拒绝重复版本号（append-only 兜底）。"""
+    from sqlalchemy.exc import IntegrityError
+
+    from fd_wire_api.artifacts.models import Artifact, ArtifactVersion
+
+    artifact = Artifact(
+        customer_id="cust-001",
+        kind="dashboard",
+        title="看盘",
+        status="draft",
+        version=1,
+    )
+    db_session.add(artifact)
+    db_session.flush()
+    db_session.add(
+        ArtifactVersion(artifact_id=artifact.id, version=1, spec={"title": "x", "spec": {}})
+    )
+    db_session.commit()
+    db_session.add(
+        ArtifactVersion(
+            artifact_id=artifact.id, version=1, spec={"title": "y", "spec": {}}
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
+
+
+# --------------------------------------------------------------- 迁移链（1.1）
+
+_STUB_0020 = '''"""stub: 0020_free_tier_datasets（并行批次预占位；仅本地测试接链用）"""
+revision = "0020_free_tier_datasets"
+down_revision = "0019_demand_three_state"
+branch_labels = None
+depends_on = None
+
+def upgrade() -> None:
+    pass
+
+def downgrade() -> None:
+    pass
+'''
+
+
+def _alembic_copy_with_stub(tmp_path: Path) -> Path:
+    """复制 alembic 脚本目录到临时处；0020 未落盘时补 no-op stub 接链
+    （真 0021 的 down_revision 指向它——集成后 stub 自动让位真链）。"""
+    import shutil
+
+    script_dir = tmp_path / "alembic"
+    (script_dir / "versions").mkdir(parents=True)
+    shutil.copy(API_DIR / "alembic" / "env.py", script_dir / "env.py")
+    for path in (API_DIR / "alembic" / "versions").glob("*.py"):
+        shutil.copy(path, script_dir / "versions" / path.name)
+    has_0020 = any(
+        'revision: str = "0020_free_tier_datasets"' in p.read_text()
+        for p in (script_dir / "versions").glob("*.py")
+    )
+    if not has_0020:
+        (script_dir / "versions" / "stub_0020.py").write_text(_STUB_0020, encoding="utf-8")
+    return script_dir
+
+
+@pytest.fixture()
+def migrated_0021(tmp_path, monkeypatch):
+    """对临时库跑 alembic upgrade 至 0021（0020 缺席时以 stub 接链）。"""
+    script_dir = _alembic_copy_with_stub(tmp_path)
+    db_url = f"sqlite:///{tmp_path}/artifacts_migration.db"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    cfg = Config(str(API_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(script_dir))
+    command.upgrade(cfg, "0021_artifact_lifecycle")
+    return cfg, db_url
+
+
+def test_migration_creates_artifact_tables(migrated_0021) -> None:
+    """0021 建两表 + 关键索引 + (artifact_id, version) 唯一；幂等重跑无恙。"""
+    from sqlalchemy import create_engine, inspect
+
+    cfg, db_url = migrated_0021
+    command.upgrade(cfg, "0021_artifact_lifecycle")  # 幂等重跑
+
+    engine = create_engine(db_url)
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    assert {"artifacts", "artifact_versions"} <= tables
+
+    assert {c["name"] for c in inspector.get_columns("artifacts")} == {
+        "id", "customer_id", "kind", "title", "status", "version",
+        "origin_conversation_id", "status_history", "created_at", "updated_at",
+    }
+    assert {c["name"] for c in inspector.get_columns("artifact_versions")} == {
+        "id", "artifact_id", "version", "spec", "operator", "created_at",
+    }
+    index_names = {ix["name"] for ix in inspector.get_indexes("artifacts")}
+    assert {
+        "ix_artifacts_customer_id", "ix_artifacts_kind", "ix_artifacts_status",
+        "ix_artifacts_origin_conversation_id",
+    } <= index_names
+
+    # (artifact_id, version) 唯一（sqlite autoindex，PRAGMA 按列断言）
+    with engine.connect() as conn:
+        unique_sets = []
+        for _, name, unique, *_ in conn.exec_driver_sql(
+            "PRAGMA index_list(artifact_versions)"
+        ).fetchall():
+            if not unique:
+                continue
+            cols = conn.exec_driver_sql(f"PRAGMA index_info({name})").fetchall()
+            unique_sets.append({row[2] for row in cols})
+    assert {"artifact_id", "version"} in unique_sets
+    engine.dispose()
+
+
+def test_migration_schema_matches_orm(migrated_0021) -> None:
+    """drift check：迁移产出列集与 ORM 声明（AiBase.metadata）逐表一致。"""
+    from sqlalchemy import create_engine, inspect
+
+    _, db_url = migrated_0021
+    engine = create_engine(db_url)
+    inspector = inspect(engine)
+    for table in ("artifacts", "artifact_versions"):
+        migrated = {c["name"] for c in inspector.get_columns(table)}
+        declared = set(AiBase.metadata.tables[table].columns.keys())
+        assert migrated == declared, f"{table} 迁移与 ORM 列漂移: {migrated ^ declared}"
+    engine.dispose()
+
+
+def test_migration_downgrade_drops_tables(migrated_0021, monkeypatch, tmp_path) -> None:
+    """降级回 0019：两表全清。"""
+    from sqlalchemy import create_engine, inspect
+
+    cfg, db_url = migrated_0021
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    command.downgrade(cfg, "0019_demand_three_state")
+    engine = create_engine(db_url)
+    assert not ({"artifacts", "artifact_versions"} & set(inspect(engine).get_table_names()))
+    engine.dispose()

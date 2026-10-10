@@ -50,6 +50,9 @@ class DatasetOut(BaseModel):
     key: str
     name: str
     source_kind: str
+    #: 存储分层徽标（wire-free-tier-data-gate）：api=api 层轻量存储（免费档）、
+    #: cell=引擎物化（付费档）——与 source_kind（从哪来）正交。
+    storage_tier: str = "cell"
     connector_id: str | None = None
     source_name: str | None = None
     source_ref: str | None = None
@@ -69,6 +72,7 @@ class DatasetOut(BaseModel):
             key=dataset.key,
             name=dataset.name,
             source_kind=dataset.source_kind,
+            storage_tier=getattr(dataset, "storage_tier", "cell"),
             connector_id=dataset.connector_id,
             source_name=getattr(dataset, "source_name", None),
             source_ref=dataset.source_ref,
@@ -92,6 +96,19 @@ class UploadOut(BaseModel):
     row_count: int
     within_limit: bool = True
     sample_rows: list[dict[str, Any]] = []
+
+
+class DatasetQuotaOut(BaseModel):
+    """免费档配额视图（wire-free-tier-data-gate §7；付费档 max 为 null =
+    无此限额，控制台隐藏配额条）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    plan_code: str
+    #: 免费档口径的已用数据集个数（= api 层数据集数）
+    used_datasets: int
+    max_datasets: int | None = None
+    max_rows_per_dataset: int | None = None
 
 
 class CorrectionIn(BaseModel):

@@ -2,15 +2,19 @@
 
 客户面（Bearer ID token → logto_sub → Customer，缺失/未映射 401；跨企业
 一律 404；X-Customer-Id 占位头退位不再接受）：
-- 列表/详情/删除（删除调引擎 ``delete``，引擎不可达即 502 fail-closed）
+- 列表/详情/删除（cell 层删除调引擎 ``delete``，引擎不可达即 502
+  fail-closed；api 层删除走本地行存储，零引擎调用）
 - 上传（multipart：CSV/Excel 解析 + 保守类型推断 + 样例预览 + 上限拒收）
-- 建档（upload 类立即分块 ingest 引擎；connector 类只登记白名单与调度）
-- 行预览（透传引擎 ``preview``）、修正三件套（透传引擎修正层）、
-  同步历史、漂移恢复 ``resume``
+- 建档（tier 判定在建集时刻按客户档位：免费档→api 层本地物化、付费档→
+  cell 引擎 ingest；wire-free-tier-data-gate D1/D4）
+- 行预览（cell 层透传引擎 ``preview``；api 层本地执行）、修正三件套
+  （透传引擎修正层；api 层数据集档位闸拒）、同步历史、漂移恢复 ``resume``
 - 连接器管理：配对令牌签发、列表（心跳推导状态）、改名、吊销
+- 配额：``GET /api/v1/datasets/quota``（免费档真实数字；付费档 max=null）
 
-纪律：本切面对 cell 数据的一切读写都经 ``ingest.EngineToolClient``
-（平台服务凭据轨道），不存在直接打开 daas.db/数据卷的路径（契约 §6.5）。
+纪律：cell 层对 cell 数据的一切读写都经 ``ingest.EngineToolClient``
+（平台服务凭据轨道），不存在直接打开 daas.db/数据卷的路径（契约 §6.5）；
+api 层数据集（免费档）全链路不触碰 EngineToolClient。
 """
 
 from __future__ import annotations
@@ -33,7 +37,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import service, uploads
+from . import api_store, service, uploads
 from .db import get_db
 from .ingest import (
     EngineCallError,
@@ -60,6 +64,7 @@ from .schemas import (
     CorrectionOut,
     DatasetCreateIn,
     DatasetOut,
+    DatasetQuotaOut,
     PairingTokenOut,
     ResumeIn,
     SyncOut,
@@ -109,6 +114,38 @@ def engine_failure(exc: Exception) -> HTTPException:
     """引擎不可达/报错一律 502 fail-closed（绝不假成功）。"""
     prefix = "engine_unavailable" if isinstance(exc, EngineUnavailable) else "engine"
     return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"{prefix}: {exc}")
+
+
+# ------------------------------------------------------------- 档位闸（free-tier）
+
+#: 付费面档位错误码（wire-free-tier-data-gate：连接器建集/派生/批量写等
+#: cell 耦合路径对无 cell 客户的统一 403 语义）
+PLAN_TIER_REQUIRED = "PLAN_TIER_REQUIRED"
+
+
+def plan_tier_error(action: str) -> HTTPException:
+    """403 档位闸：动作需要 cell 物化层（≥基础档）；附机器可读码与升档说明。"""
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "code": PLAN_TIER_REQUIRED,
+            "message": (
+                f"{action} 需要 cell 物化层（基础档及以上套餐）；"
+                "免费档数据集存于 api 层轻量存储，不参与引擎物化"
+            ),
+            "upgrade": "升级到基础档及以上套餐后可用（控制台「套餐与定价」）",
+        },
+    )
+
+
+def require_cell_tier(dataset: Dataset, action: str) -> None:
+    """api 层数据集（storage_tier=api）请求 cell 耦合路径 → 403 档位闸。
+
+    按数据集登记的 tier 判定（升档不迁移：升档客户的旧 api 集仍走本地
+    执行，cell 耦合动作依旧拒——数据不在引擎侧，如实不假执行）。
+    """
+    if getattr(dataset, "storage_tier", service.TIER_CELL) == service.TIER_API:
+        raise plan_tier_error(action)
 
 
 # ------------------------------------------------------------- 内部工具
@@ -244,22 +281,42 @@ def create_dataset(
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> DatasetOut:
-    """建档：upload 类立即 ingest 引擎（成功后 consumed_at 置位）。"""
+    """建档：tier 在建集时刻按客户档位判定（免费→api 层、付费→cell 层）。
+
+    upload 类：api 层走本地物化（零引擎调用）；cell 层立即 ingest 引擎。
+    connector/declared 类：cell 耦合路径，免费档 403 档位闸。
+    """
     source = payload.source
-    try:
-        service.ensure_new_dataset_room(db, customer_id=customer_id)
-    except service.QuotaExceeded as exc:
-        _raise_quota(exc)
+    tier = service.storage_tier_for(customer_id=customer_id)
+    if tier == service.TIER_API:
+        # 免费档两闸前置：建集闸（个数）在分流前统一强制
+        try:
+            service.ensure_free_dataset_quota(db, customer_id=customer_id)
+        except service.QuotaExceeded as exc:
+            _raise_quota(exc)
+    else:
+        try:
+            service.ensure_new_dataset_room(db, customer_id=customer_id)
+        except service.QuotaExceeded as exc:
+            _raise_quota(exc)
     if source.kind == "upload":
+        if tier == service.TIER_API:
+            return _create_from_upload_local(
+                db, customer_id=customer_id, name=payload.name, source=source
+            )
         return _create_from_upload(
             db, customer_id=customer_id, name=payload.name, source=source,
             engine_factory=engine_factory,
         )
     if source.kind == "connector":
+        if tier == service.TIER_API:
+            raise plan_tier_error("连接器建集")
         return _create_from_connector(
             db, customer_id=customer_id, name=payload.name, source=source
         )
     if source.kind == "declared":
+        if tier == service.TIER_API:
+            raise plan_tier_error("声明式建集")
         return _create_from_declared(
             db, customer_id=customer_id, name=payload.name, source=source,
             engine_factory=engine_factory,
@@ -446,12 +503,75 @@ def _create_from_upload(
     return DatasetOut.from_dataset(dataset)
 
 
+def _create_from_upload_local(
+    db: Session,
+    *,
+    customer_id: str,
+    name: str,
+    source,
+) -> DatasetOut:
+    """免费档建档：api 层本地物化（wire-free-tier-data-gate D4）。
+
+    CSV 解析/类型推断/分块读取全部复用 :mod:`.uploads`（同一暂存件、同一
+    归一语义），行落 ``dataset_rows``、列落 ``dataset_columns``——全链路
+    **零引擎调用**。写入闸（行数上限）先于任何行写入，超限即 429（上传
+    件不置 consumed、事务回滚，不留半写状态）。
+    """
+    if not source.upload_id:
+        raise HTTPException(status_code=400, detail="upload 来源必须带 upload_id")
+    record = db.get(Upload, source.upload_id)
+    if record is None or record.customer_id != customer_id:
+        raise HTTPException(status_code=404, detail=f"上传 {source.upload_id} 不存在")
+    if record.consumed_at is not None:
+        raise HTTPException(status_code=409, detail="该上传已建过数据集（单次消费）")
+    columns = [dict(c) for c in (record.columns_json or [])]
+    try:
+        service.ensure_storage_quota(
+            db, customer_id=customer_id, incoming_bytes=record.size_bytes
+        )
+        service.ensure_free_row_quota(record.row_count)  # 写入闸：先于任何行写入
+    except service.QuotaExceeded as exc:
+        _raise_quota(exc)
+
+    key = service.allocate_key(db, customer_id=customer_id, name=name)
+    dataset = Dataset(
+        customer_id=customer_id,
+        key=key,
+        name=name,
+        source_kind="upload",
+        storage_tier=service.TIER_API,
+        connector_id=None,
+        source_ref=record.filename,
+        columns_json=columns,
+        row_count=0,
+        size_bytes=0,
+        sync_status="ok",
+    )
+    db.add(dataset)
+    db.flush()  # 先取 dataset.id（行/列登记要引用）
+    try:
+        api_store.ingest_local(
+            db,
+            dataset=dataset,
+            path=Path(record.stored_path),
+            columns=columns,
+        )
+    except service.QuotaExceeded as exc:
+        # 行闸途中兜底：整事务回滚（数据集/列/行一起消失，无半写状态）
+        db.rollback()
+        _raise_quota(exc)
+    record.consumed_at = service.utcnow()
+    db.commit()
+    db.refresh(dataset)
+    return DatasetOut.from_dataset(dataset)
+
+
 @router.get("/api/v1/datasets", response_model=list[DatasetOut])
 def list_datasets(
     customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> list[DatasetOut]:
-    """本企业数据集列表（卡片）。"""
+    """本企业数据集列表（卡片；api 层与 cell 层同列呈现，tier 徽标区分）。"""
     datasets = (
         db.execute(
             select(Dataset)
@@ -464,13 +584,50 @@ def list_datasets(
     return [DatasetOut.from_dataset(d) for d in datasets]
 
 
+@router.get("/api/v1/datasets/quota", response_model=DatasetQuotaOut)
+def datasets_quota(
+    customer_id: str = Depends(require_console_customer_id),
+    db: Session = Depends(get_db),
+) -> DatasetQuotaOut:
+    """配额视图（wire-free-tier-data-gate §7，与 web 预约定）。
+
+    免费档返回真实数字（个数/行数上限来自 env 可覆盖的配置项）；付费档
+    max 为 null（无此限额展示）。档位不可解析时按付费口径呈现（max=null，
+    不放大免费额度；建集闸仍按 fail-closed 独立强制）。
+    """
+    settings = get_settings()
+    used = service.free_dataset_count(db, customer_id=customer_id)
+    if service.is_free_tier(customer_id=customer_id):
+        return DatasetQuotaOut(
+            plan_code=service.FREE_PLAN_CODE,
+            used_datasets=used,
+            max_datasets=settings.free_tier_max_datasets,
+            max_rows_per_dataset=settings.free_tier_max_rows,
+        )
+    return DatasetQuotaOut(
+        plan_code=service.plan_code_for(customer_id=customer_id) or "",
+        used_datasets=used,
+        max_datasets=None,
+        max_rows_per_dataset=None,
+    )
+
+
 @router.get("/api/v1/datasets/{dataset_id}", response_model=DatasetOut)
 def get_dataset(
     dataset_id: str,
     customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> DatasetOut:
-    return DatasetOut.from_dataset(_dataset_or_404(db, dataset_id, customer_id))
+    dataset = _dataset_or_404(db, dataset_id, customer_id)
+    if getattr(dataset, "storage_tier", service.TIER_CELL) == service.TIER_API:
+        # schema 预览复用 dataset_columns 聚合（任务 2.4）：列/类型以列注册表
+        # 为准、行数以 dataset_rows 实时计数（卡片快照之外的真值）。
+        stats = api_store.schema_of(db, dataset_id=dataset.id)
+        out = DatasetOut.from_dataset(dataset)
+        out.columns = [ColumnIn(**c) for c in stats["columns"]]
+        out.row_count = stats["row_count"]
+        return out
+    return DatasetOut.from_dataset(dataset)
 
 
 @router.delete("/api/v1/datasets/{dataset_id}")
@@ -480,13 +637,19 @@ def delete_dataset(
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> dict:
-    """删除：先调引擎 drop 三表与元数据（不可达即 502，绝不假删）。
+    """删除：cell 层先调引擎 drop 三表与元数据（不可达即 502，绝不假删）；
+    api 层删本地行/列存储（零引擎调用）。
 
     同步历史行**保留不删**（dataset_syncs append-only，触发器层禁删；
     行内只有状态/行数/错误文本，无客户数据——孤儿化由设计接受，
     wire-provenance-ledger「不可变登记基线」）。
     """
     dataset = _dataset_or_404(db, dataset_id, customer_id)
+    if getattr(dataset, "storage_tier", service.TIER_CELL) == service.TIER_API:
+        api_store.delete_local_rows(db, dataset_id=dataset.id)
+        db.delete(dataset)
+        db.commit()
+        return {"deleted": True}
     client = engine_factory(customer_id)
     try:
         client.call(TOOL_DELETE, {"dataset_key": dataset.key, "actor": _actor(customer_id)})
@@ -509,8 +672,14 @@ def preview_rows(
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> dict:
-    """行预览：透传引擎 ``preview``（含修正后的有效视图 + ``__row_id``）。"""
+    """行预览：cell 层透传引擎 ``preview``（含修正后的有效视图 +
+    ``__row_id``）；api 层本地执行（``__row_id``=建集行序）。"""
     dataset = _dataset_or_404(db, dataset_id, customer_id)
+    if getattr(dataset, "storage_tier", service.TIER_CELL) == service.TIER_API:
+        result = api_store.preview_rows(
+            db, dataset_id=dataset.id, page=page, page_size=page_size
+        )
+        return {**result, "page": page, "page_size": page_size}
     client = engine_factory(customer_id)
     try:
         result = client.call(
@@ -539,8 +708,12 @@ def add_correction(
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> CorrectionOut:
-    """修正三件套透传：改值/删行/加行，落引擎覆盖层（云端不写回客户源）。"""
+    """修正三件套透传：改值/删行/加行，落引擎覆盖层（云端不写回客户源）。
+
+    api 层数据集无引擎覆盖层 → 403 档位闸（修正层是 cell 耦合的付费面）。
+    """
     dataset = _dataset_or_404(db, dataset_id, customer_id)
+    require_cell_tier(dataset, "数据修正")
     if payload.op == "insert":
         if not payload.values:
             raise HTTPException(status_code=400, detail="insert 必须带 values（整行值）")
@@ -595,8 +768,13 @@ def list_corrections(
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> dict:
-    """修正历史（含悬空与已回滚；审计留痕，不静默丢弃）。"""
+    """修正历史（含悬空与已回滚；审计留痕，不静默丢弃）。
+
+    api 层数据集不可加修正 → 本地恒空清单（零引擎调用，如实呈现）。
+    """
     dataset = _dataset_or_404(db, dataset_id, customer_id)
+    if getattr(dataset, "storage_tier", service.TIER_CELL) == service.TIER_API:
+        return {"corrections": []}
     client = engine_factory(customer_id)
     try:
         result = client.call(
@@ -620,8 +798,12 @@ def revert_correction(
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> dict:
-    """单条回滚：引擎标记 reverted 并重建有效表；修正留档。"""
+    """单条回滚：引擎标记 reverted 并重建有效表；修正留档。
+
+    api 层数据集无覆盖层可回滚 → 403 档位闸。
+    """
     dataset = _dataset_or_404(db, dataset_id, customer_id)
+    require_cell_tier(dataset, "修正回滚")
     client = engine_factory(customer_id)
     try:
         result = client.call(

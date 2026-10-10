@@ -8,6 +8,8 @@ from . import __version__
 from .admin import router as admin_router
 from .ai import init_db as init_ai_db
 from .ai import router as ai_router
+# 产物生命周期（wire-artifacts-persistence）：/api/v1/artifacts 全端点
+from .artifacts import router as artifacts_router
 from .billing.routes import router as billing_router
 from .catalog import init_db as init_catalog_db
 from .catalog import register_catalog
@@ -18,6 +20,8 @@ from .console import router as console_router
 from .datasets import connector_router as datasets_connector_router
 from .datasets import init_datasets_db
 from .datasets import router as datasets_router
+# 连接器分发的公开下载面（wire-connector-distribution 任务 1）
+from .downloads import router as downloads_router
 from .demands import admin_router as demands_admin_router
 from .demands import init_db as init_demands_db
 from .demands import pipeline_router as demands_pipeline_router
@@ -116,6 +120,9 @@ app.include_router(demands_admin_router)
 app.include_router(demands_pipeline_router)
 # AI 对话构建循环（任务 5.4）：对话会话 + 构建循环 + 产物暂存端点
 app.include_router(ai_router)
+# 产物生命周期（wire-artifacts-persistence）：持久化/版本化/状态机
+# （表与 ai 切片同引擎，create_all 兜底由 init_ai_db 覆盖；生产走 0021）
+app.include_router(artifacts_router)
 # 指标目录镜像（任务 6.1）：公开目录查询 + internal 同步触发 + 每日调度
 register_catalog(app)
 # 内部后台（任务 7.1）：客户/账本/需求单派发/目录治理/用量分轨
@@ -138,6 +145,10 @@ app.include_router(data_plane_keys_routes.router)
 app.include_router(data_plane_keys_routes.admin_router)
 # 连接器面（Bearer fwc_...）与内部只读概览；客户数据读写全经引擎 MCP 通道
 app.include_router(datasets_connector_router)
+# 连接器分发的公开下载面（wire-connector-distribution 任务 1）：
+# /api/v1/downloads/connector/*（manifest + 二进制；无鉴权——下载件不含
+# 敏感数据；FD_WIRE_DOWNLOADS_DIR 未配置时诚实 404 并说明原因）
+app.include_router(downloads_router)
 # 溯源账本（wire-provenance-ledger 任务组 2）：客户面概览/时间线/状态/调档
 # （Bearer 身份，4.5）+ 内部 ingest 入账端点（X-Provenance-Token）
 app.include_router(provenance_router)

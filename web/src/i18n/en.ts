@@ -141,6 +141,50 @@ const en: Translation = {
     mcpNote:
       "Agents and automation should prefer the MCP calling face (wire entrance): same engine, metering built in. The REST data plane is for self-built frontends and business systems.",
   },
+  localData: {
+    // "My data & connectors" customer tutorial (wire-connector-distribution
+    // task 4): customer-facing wording distilled from deploy/README.md;
+    // ops-level detail stays out of the docs page.
+    title: "My data & connectors",
+    intro:
+      "Two ways in: upload over the public web (CSV / Excel, preview before creating) or run a connector inside your network that syncs on schedule — the connector only makes outbound connections and source credentials never leave your machines.",
+    uploadTitle: "Uploading in three steps",
+    uploadStep1:
+      "Drop or pick a file (CSV / Excel): column names and inferred types are previewed first, nothing is stored;",
+    uploadStep2:
+      "Confirm columns and types: adjust per column as needed; over-limit row counts are rejected honestly;",
+    uploadStep3:
+      "Name and create: upload datasets are created immediately and visible to your company only.",
+    connectorTitle: "Installing a connector in three steps",
+    connectorStep1:
+      "Generate a one-time pairing token in Console → My data → Connectors → Pairing wizard (valid for 15 minutes, single use);",
+    connectorStep2:
+      "Download fd-wire-connector for your platform and run the pairing command (pair --token …) on a machine that can reach the local source — the connector key is written only to the local config file (0600);",
+    connectorStep3:
+      "Run it with `run`: heartbeat reporting plus full syncs following the cloud-side allowlist and schedule (--once runs a single smoke pass).",
+    residencyTitle: "Keeping it running",
+    residencyIntro:
+      "The samples below are starting points; keep the config file owned by a dedicated account with 0600 permissions (the connector warns at startup when looser).",
+    systemdTitle: "Linux · systemd",
+    systemdNote:
+      "Place the unit at /etc/systemd/system/fd-wire-connector.service, then systemctl daemon-reload && systemctl enable --now fd-wire-connector.",
+    nssmTitle: "Windows · nssm",
+    nssmNote:
+      "Alternatively use Task Scheduler with an “At startup” trigger for fd-wire-connector.exe run.",
+    launchdTitle: "macOS · launchd",
+    launchdNote:
+      "Place the plist at ~/Library/LaunchDaemons/com.finddata.fd-wire-connector.plist and launchctl load it; running in the foreground works too.",
+    troubleshootTitle: "Troubleshooting",
+    troubleshootWarnings:
+      "Heartbeat warnings: an allowlisted source missing from the connector's local sources is skipped and reported in the console's connector block — check the local source name spelling.",
+    troubleshootDrift:
+      "Schema-drift pause: when the source drops a column or changes a type, the dataset pauses automatically (keeping the last valid snapshot); confirm the new structure in the console and resume.",
+    troubleshootRows:
+      "Row limit: 500,000 rows per dataset by default — over-limit syncs are rejected; split or clean the data and sync again, or ask for a higher quota.",
+    troubleshootRevoked:
+      "After revocation: revoking takes effect immediately (the connector gets a 401); generate a new pairing token and run pair again — datasets and allowlists are kept.",
+    consoleLink: "Open Console → My data →",
+  },
   demands: {
       title: "Demand workflow",
       // Three-state machine (wire-ux-consolidation task 3.5): submitted →
@@ -306,18 +350,15 @@ const en: Translation = {
       haveAccount: "Already have a Base account? Enter directly",
     },
     artifacts: {
-      title: "Artifact drafts",
+      title: "Artifacts",
       subtitle:
-        "Draft artifacts staged by the AI build loop — grouped per conversation, with a link back to the source.",
-      draftBadge: "Draft",
-      draftNote:
-        "All artifacts below are drafts — materialization in rollout: not yet landed in your enterprise cell, no metering incurred.",
+        "Five artifact kinds persisted across conversations — every spec save appends a new version, with a draft/published/archived lifecycle.",
       loading: "Loading artifacts…",
       errorTitle: "Failed to load artifacts",
       retry: "Retry",
-      empty: "No artifact drafts",
+      empty: "No artifacts",
       emptyHint:
-        "Drafts generated in the AI builder will appear here.",
+        "Import a draft generated in the AI builder and it will appear here.",
       kindFilterLabel: "Artifact kind",
       kindAll: "All kinds",
       kinds: {
@@ -327,26 +368,79 @@ const en: Translation = {
         alert_rule: "Alert rule",
         refresh_schedule: "Refresh schedule",
       },
+      statusFilterLabel: "Status",
+      statusAll: "All statuses",
+      statuses: {
+        draft: "Draft",
+        published: "Published",
+        archived: "Archived",
+      },
+      versionLabel: "v{{version}}",
+      updatedLabel: "Updated",
       source: "Source conversation",
+      sourceNone: "Created directly",
       viewSpec: "View spec",
+      history: "Version history",
+      publish: "Publish",
+      archive: "Archive",
+      restore: "Restore",
+      actionErrorTitle: "Action failed, please retry later.",
       viewer: {
-        title: "Spec viewer",
-        note: "Edits are saved only to this browser (localStorage) — real persistence and materialization are upcoming work.",
-        localDraft: "Local draft",
-        saveLocal: "Save locally",
-        saved: "Saved to this browser (real persistence is upcoming work)",
-        restoreOriginal: "Restore original spec",
+        title: "Spec editor",
+        note: "Saving to the server appends a new version; unsaved edits are buffered in this browser only as a leave-warning buffer.",
+        saveServer: "Save to server",
+        saving: "Saving…",
+        savedVersion: "Saved as version v{{version}}.",
         invalidJson: "Not valid JSON — fix before saving.",
+        saveFailed: "Save failed, please retry later.",
+        bufferBadge: "Unsaved local edits",
+        discardBuffer: "Discard local edits",
+        locked: "This artifact is archived — the spec is read-only. Restore it to draft before editing.",
+        loadError: "Failed to load the spec.",
+      },
+      versions: {
+        title: "Version history",
+        loading: "Loading versions…",
+        empty: "No versions",
+        fetchError: "Failed to load version history.",
+        entry: "Version v{{version}}",
+        operatorLabel: "Operator",
+        copy: "Copy spec",
+        copied: "Copied to clipboard.",
+        close: "Close",
       },
     },
     datasets: {
       title: "My data",
       subtitle:
         "Customer datasets uploaded or synced via a connector — visible to this enterprise only, reads never count against plan quota.",
-      upgrade: {
-        title: "“My data” is a paid-tier capability",
-        body: "You are on the free tier: it includes public indicator reads only, without My data (uploads / connectors). Upgrade to Basic to enable it.",
+      // Free-tier inline quota and upgrade guidance (wire-free-tier-data-gate
+      // 4.1/4.4): the full-page wall is retired into inline hints on limit
+      // hits; all numbers come from the quota endpoint (never hardcoded).
+      quota: {
+        bar: "Free-tier quota: {{used}} of {{max}} datasets used · ≤{{rows}} rows per dataset",
+        exhausted:
+          "You have reached the free-tier limit of {{max}} datasets — remove datasets you no longer need to free a slot, or upgrade for more.",
+        hitTitle: "Free-tier limit reached",
+        hintBody:
+          "The free tier caps the number of datasets and rows per dataset — remove datasets you no longer need to free a slot, or upgrade for higher limits plus connector and derivation capabilities.",
         cta: "Contact us to upgrade",
+      },
+      // Storage-tier badges (api lightweight storage / cell engine materialized;
+      // shown only when the response carries storage_tier).
+      tierBadge: {
+        api: "Lightweight storage",
+        cell: "Engine materialized",
+      },
+      // Paid-surface annotations (wire-free-tier-data-gate 4.2: connector and
+      // derivation entries stay visible but marked as paid).
+      paidFeature: {
+        badge: "Paid tier",
+        connectorsTitle: "Connector sync is a paid-tier capability",
+        connectorsBody:
+          "Connectors read local sources inside your network and materialize snapshots into your enterprise cell via the engine — that path requires Basic or above. You are on the free tier; after upgrading you can pair connectors, scope sources and set schedules here.",
+        connectorsShort:
+          "Connector sync and allowlist dataset creation open after upgrading (current tier: free).",
       },
       loading: "Loading datasets…",
       errorTitle: "Failed to load datasets",
@@ -409,8 +503,17 @@ const en: Translation = {
           expired: "Token expired — generate a new one.",
           dismiss: "Copied, close",
           installTitle: "Install guide",
-          step1:
-            "Download the fd-wire-connector binary for your platform (Linux / macOS / Windows) from the releases page.",
+          // wire-connector-distribution task 3.1: step 1 rides the download
+          // manifest — real per-platform links + version/sha256; honest
+          // "temporarily unavailable" when the manifest is unreachable.
+          downloadsTitle: "Step 1 · Download fd-wire-connector (version {{version}}):",
+          manifestLoading: "Loading download manifest…",
+          downloadUnavailable:
+            "Downloads temporarily unavailable (release manifest unreachable) — keep the command-line guide below, or contact support for the binaries.",
+          platformMissing: "File missing for this platform — temporarily unavailable",
+          copySha: "Copy sha256",
+          copied: "Copied",
+          docsLink: "See the full tutorial in Docs — “My data & connectors” →",
           step2: "On a machine that can reach the local source, run the pairing command:",
           pairCommand: "fd-wire-connector pair --token {{token}} --api {{api}}",
         },
@@ -418,6 +521,8 @@ const en: Translation = {
           title: "Connector status",
           empty: "No connectors yet — pair your first one with the wizard above.",
           version: "Version",
+          latest: "Latest",
+          upgradeHint: "Outdated (latest {{version}}) — upgrade recommended",
           heartbeat: "Last heartbeat",
           online: "Online",
           offline: "Offline",

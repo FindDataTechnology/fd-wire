@@ -16,7 +16,10 @@ import json
 import os
 from types import SimpleNamespace
 
-# 在导入 app 前把默认引擎指向内存库（与 test_demands_statemachine 同款纪律）。
+# 在导入 app 前把默认引擎指向内存库（与 test_demands_statemachine 同款纪律；
+# wire-dedicated-postgres 起该 env 升为元数据库收敛开关——只在导入期间生效，
+# 导入完即还原，避免泄漏进同会话其余模块的 URL 解析）。
+_OWNS_FD_WIRE_URL = "FD_WIRE_DATABASE_URL" not in os.environ
 os.environ.setdefault("FD_WIRE_DATABASE_URL", "sqlite://")
 
 import pytest
@@ -26,6 +29,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from fd_wire_api.app import app
+
+if _OWNS_FD_WIRE_URL:
+    del os.environ["FD_WIRE_DATABASE_URL"]
 from fd_wire_api.demands import evaluation as evaluation_module
 from fd_wire_api.demands import get_db
 from fd_wire_api.demands.db import Base

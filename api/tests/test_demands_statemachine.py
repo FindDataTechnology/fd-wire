@@ -21,6 +21,10 @@ from types import SimpleNamespace
 
 # 在导入 app 前把默认引擎指向内存库：TestClient 启动钩子里的
 # init_demands_db() 不至于在测试机上落下 fd_wire_demands.db 文件。
+# wire-dedicated-postgres 起 FD_WIRE_DATABASE_URL 升为元数据库收敛开关
+# （全平台模块最高优先级）：只在 app 导入期间生效，导入完即还原，避免
+# 「内存库」泄漏进同会话其余模块的 URL 解析。
+_OWNS_FD_WIRE_URL = "FD_WIRE_DATABASE_URL" not in os.environ
 os.environ.setdefault("FD_WIRE_DATABASE_URL", "sqlite://")
 
 import pytest
@@ -30,6 +34,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from fd_wire_api.app import app
+
+if _OWNS_FD_WIRE_URL:
+    del os.environ["FD_WIRE_DATABASE_URL"]
 from fd_wire_api.demands import DemandStatus, get_db
 from fd_wire_api.demands.db import Base
 from fd_wire_api.demands.models import Demand

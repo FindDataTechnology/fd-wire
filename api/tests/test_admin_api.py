@@ -29,9 +29,9 @@ from fd_wire_api.admin import reset_admin_runtime
 from fd_wire_api.admin.db import AdminBase, get_session
 from fd_wire_api.app import app
 from fd_wire_api.billing import (
-    METERING_RECORDS_DDL,
     Base as BillingBase,
     LedgerKind,
+    ensure_metering_records_table,
     seed_plans,
 )
 from fd_wire_api.billing.ledger import Ledger
@@ -79,8 +79,10 @@ def admin_env(tmp_path, monkeypatch):
     monkeypatch.setenv("FD_WIRE_LOGTO_ISSUER", ISSUER_BASE)
     monkeypatch.setenv("FD_WIRE_LOGTO_CLIENT_ID", CLIENT_ID)
     install_fake_jwks(monkeypatch)
-    # 需求单默认引擎不落本机文件（本测试不经它，仅防 import 副作用）
-    monkeypatch.setenv("FD_WIRE_DATABASE_URL", "sqlite://")
+    # 需求单默认引擎不落本机文件（本测试不经它，仅防 import 副作用）——
+    # 收敛开关（wire-dedicated-postgres）设为同一临时文件库：不压过上面的
+    # FD_WIRE_ADMIN_DATABASE_URL 语义，也保持 demands 可弃。
+    monkeypatch.setenv("FD_WIRE_DATABASE_URL", db_url)
     # 目录镜像指同一文件库
     monkeypatch.setattr(catalog_settings, "catalog_database_url", db_url)
     monkeypatch.setattr(catalog_settings, "database_url", None)
@@ -98,7 +100,7 @@ def admin_env(tmp_path, monkeypatch):
     BillingBase.metadata.create_all(engine)
     DemandsBase.metadata.create_all(engine)
     with engine.begin() as conn:
-        conn.execute(text(METERING_RECORDS_DDL))
+        ensure_metering_records_table(conn)
     # catalog 镜像经其 rw 引擎建表（同一文件库）
     init_catalog_db()
     # catalog_sync_state 单行兜底（同步器水位表语义：恒一行）
