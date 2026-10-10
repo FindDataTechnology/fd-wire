@@ -431,9 +431,26 @@ const zh = {
         addPanel: "添加面板",
         panelTitlePlaceholder: "面板标题",
         spanOption: "{{span}} 列",
-        moveLeft: "左移",
-        moveRight: "右移",
+        moveUp: "上移",
+        moveDown: "下移",
         remove: "删除",
+        duplicate: "复制",
+        duplicateSuffix: "副本",
+        convertLabel: "转换为…",
+        convertTo: {
+          kpi: "转为指标卡",
+          line: "转为折线图",
+          bar: "转为柱状图",
+          table: "转为数据表",
+        },
+        convertConfirm:
+          "指标卡与图表的数据口径不同（指标卡只取首值），转换后面板呈现方式将改变——确定转换吗？",
+        sourceLabel: "来源",
+        sourcePlaceholder: "指标 code / 数据集名（刷新依赖此标注取数）",
+        xNameLabel: "x 轴名",
+        yNameLabel: "y 轴名",
+        unsavedCount: "{{n}} 处未保存",
+        unsavedTitle: "与最近保存版本的差异面板数",
         kpiValue: "指标值",
         kpiUnit: "单位",
         kpiSubtitle: "副标题",
@@ -444,6 +461,15 @@ const zh = {
         dirtyLeaveConfirm: "有未保存的修改，确定离开编辑吗？",
         backToView: "返回查看",
         preview: "实时预览",
+      },
+      // 手动刷新（wire-dashboard-refresh）：查看态刷新按钮与状态文案；
+      // 403 档位引导与 502 引擎失败由服务端 detail 如实呈现（apiErrorText）。
+      refresh: {
+        button: "刷新数据",
+        refreshing: "刷新中…",
+        success: "已刷新为版本 v{{version}}。",
+        inProgress: "该看板刷新进行中，请稍候再试。",
+        failed: "刷新失败，请稍后重试。",
       },
       // 签名分享链接（wire-dashboard-share）：产物页入口 + 公开分享页文案
       //（分享页免登录只读、noindex、页脚「由柏讯分享」）。

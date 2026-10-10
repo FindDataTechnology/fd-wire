@@ -283,3 +283,195 @@ describe("DashboardEditor（基础编辑器 v1）", () => {
     );
   });
 });
+
+describe("DashboardEditor v2（wire-dashboard-editor-v2 任务 1.2/1.3）", () => {
+  /** PUT 请求体里指定面板（信封口径内层）。 */
+  function savedPanel(backend: ReturnType<typeof installConsoleBackend>, id: string) {
+    const put = backend.calls.find((c) => c.method === "PUT");
+    const body = put?.body as { spec: { spec: { panels: DashboardSpecV1["panels"] } } };
+    return body.spec.spec.panels.find((p) => p.id === id);
+  }
+
+  it("类型互转保数据：折线→表格零损失（图表类互转不 confirm），保存后 snapshot 原样", async () => {
+    const backend = install();
+    render(
+      <DashboardEditor artifactId={21} initial={INITIAL} onSaved={vi.fn()} onExit={vi.fn()} />,
+    );
+    const confirm = vi.fn();
+    vi.stubGlobal("confirm", confirm); // happy-dom 无原生 confirm：打桩
+
+    fireEvent.change(within(editorPanel("l1")).getByTestId("editor-panel-convert"), {
+      target: { value: "table" },
+    });
+    await waitFor(() => {
+      expect(editorPanel("l1").getAttribute("data-panel-type")).toBe("table");
+    });
+    expect(confirm).not.toHaveBeenCalled(); // line→table 无信息取舍，不确认
+    // 预览：同一快照以表格呈现（2 行）
+    expect(screen.getByTestId("dashboard-table").querySelectorAll("tbody tr")).toHaveLength(2);
+    expect(screen.queryByTestId("dashboard-chart")).toBeNull();
+
+    // 保存：PUT 里 type 已换、snapshot 逐字保留
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await screen.findByTestId("editor-saved-version");
+    const saved = savedPanel(backend, "l1");
+    expect(saved?.type).toBe("table");
+    expect(saved?.snapshot).toEqual(INITIAL.panels[1]!.snapshot);
+  });
+
+  it("kpi↔图表互转需确认：取消不动，确认后落地", async () => {
+    install();
+    render(
+      <DashboardEditor artifactId={21} initial={INITIAL} onSaved={vi.fn()} onExit={vi.fn()} />,
+    );
+    const confirm = vi.fn();
+    vi.stubGlobal("confirm", confirm);
+
+    // 第一次：取消 → 面板仍是 kpi
+    confirm.mockReturnValueOnce(false);
+    fireEvent.change(within(editorPanel("k1")).getByTestId("editor-panel-convert"), {
+      target: { value: "bar" },
+    });
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(editorPanel("k1").getAttribute("data-panel-type")).toBe("kpi");
+
+    // 第二次：确认 → 转为 bar
+    confirm.mockReturnValueOnce(true);
+    fireEvent.change(within(editorPanel("k1")).getByTestId("editor-panel-convert"), {
+      target: { value: "bar" },
+    });
+    await waitFor(() => {
+      expect(editorPanel("k1").getAttribute("data-panel-type")).toBe("bar");
+    });
+    // kpi 表单退场（值/单位/副标题不再呈现——config 表单按新 type 分发）
+    expect(within(editorPanel("k1")).queryByTestId("editor-kpi-value")).toBeNull();
+  });
+
+  it("面板复制：新 id + 副本标题 + 深拷贝数据，独立编辑不波及原件", async () => {
+    install();
+    render(
+      <DashboardEditor artifactId={21} initial={INITIAL} onSaved={vi.fn()} onExit={vi.fn()} />,
+    );
+
+    fireEvent.click(within(editorPanel("k1")).getByTestId("editor-panel-duplicate"));
+    await waitFor(() => {
+      expect(screen.getAllByTestId("editor-panel")).toHaveLength(3);
+    });
+    const copy = screen
+      .getAllByTestId("editor-panel")
+      .find((el) => el.getAttribute("data-panel-id") === "p1")!;
+    expect(copy).toBeTruthy(); // 新 id 避开 k1/l1 占用
+    expect(
+      (within(copy).getByTestId("editor-panel-title") as HTMLInputElement).value,
+    ).toBe("CPI 同比副本");
+    // 预览两份 kpi 同值（深拷贝生效）
+    expect(screen.getAllByTestId("dashboard-kpi-value").map((el) => el.textContent)).toEqual([
+      "2.1",
+      "2.1",
+    ]);
+
+    // 独立编辑：改副本值，原件不动
+    fireEvent.change(within(copy).getByTestId("editor-kpi-value"), {
+      target: { value: "9.9" },
+    });
+    await waitFor(() => {
+      expect(screen.getAllByTestId("dashboard-kpi-value").map((el) => el.textContent)).toEqual([
+        "2.1",
+        "9.9",
+      ]);
+    });
+  });
+
+  it("config 表单按 type 分发：kpi=值/单位/副标题，line/bar=x/y 轴名，table 均无", () => {
+    install();
+    render(
+      <DashboardEditor artifactId={21} initial={INITIAL} onSaved={vi.fn()} onExit={vi.fn()} />,
+    );
+
+    const k1 = editorPanel("k1");
+    expect(within(k1).getByTestId("editor-kpi-unit")).toBeTruthy();
+    expect(within(k1).queryByTestId("editor-panel-xname")).toBeNull();
+
+    const l1 = editorPanel("l1");
+    expect(within(l1).queryByTestId("editor-kpi-unit")).toBeNull();
+    expect((within(l1).getByTestId("editor-panel-xname") as HTMLInputElement).value).toBe("");
+    expect((within(l1).getByTestId("editor-panel-yname") as HTMLInputElement).value).toBe("");
+
+    // 新增 table 面板：无任何 config 表单（source 输入仍在）
+    fireEvent.change(screen.getByTestId("editor-add-type"), { target: { value: "table" } });
+    fireEvent.click(screen.getByTestId("editor-add-panel"));
+    const added = screen
+      .getAllByTestId("editor-panel")
+      .find((el) => el.getAttribute("data-panel-type") === "table")!;
+    expect(within(added).queryByTestId("editor-kpi-unit")).toBeNull();
+    expect(within(added).queryByTestId("editor-panel-xname")).toBeNull();
+    expect(within(added).getByTestId("editor-panel-source")).toBeTruthy();
+  });
+
+  it("source 编辑（placeholder=刷新依赖标注）+ 轴名写回：保存 PUT 断言落盘", async () => {
+    const backend = install();
+    render(
+      <DashboardEditor artifactId={21} initial={INITIAL} onSaved={vi.fn()} onExit={vi.fn()} />,
+    );
+
+    const l1 = editorPanel("l1");
+    expect(l1.querySelector('[data-testid="editor-panel-source"]')?.getAttribute("placeholder")).toContain(
+      "指标 code",
+    );
+    fireEvent.change(within(l1).getByTestId("editor-panel-source"), {
+      target: { value: "CN_PMI_OFFICIAL" },
+    });
+    fireEvent.change(within(l1).getByTestId("editor-panel-xname"), {
+      target: { value: "月份" },
+    });
+    fireEvent.change(within(l1).getByTestId("editor-panel-yname"), {
+      target: { value: "PMI 指数" },
+    });
+
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await screen.findByTestId("editor-saved-version");
+    const saved = savedPanel(backend, "l1");
+    expect(saved?.source).toBe("CN_PMI_OFFICIAL");
+    expect(saved?.config).toEqual({ xName: "月份", yName: "PMI 指数" });
+  });
+
+  it("未保存计数：按差异面板数如实（改/增/删各计 1），保存后归零", async () => {
+    install();
+    render(
+      <DashboardEditor artifactId={21} initial={INITIAL} onSaved={vi.fn()} onExit={vi.fn()} />,
+    );
+    expect(screen.queryByTestId("editor-unsaved-count")).toBeNull(); // 初态：无差异
+
+    // 改 1 个面板 → 1 处未保存
+    fireEvent.change(within(editorPanel("k1")).getByTestId("editor-panel-title"), {
+      target: { value: "CPI 环比" },
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("editor-unsaved-count").textContent).toBe("1 处未保存");
+    });
+
+    // 再改第二个面板（span 属面板内差异）→ 2 处
+    fireEvent.click(
+      within(editorPanel("l1"))
+        .getAllByTestId("editor-panel-span")
+        .find((el) => el.getAttribute("data-span") === "3")!,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("editor-unsaved-count").textContent).toBe("2 处未保存");
+    });
+
+    // 删除已改的 k1：差异面板 = l1（改）+ k1（删）→ 仍 2 处
+    fireEvent.click(within(editorPanel("k1")).getByTestId("editor-panel-remove"));
+    await waitFor(() => {
+      expect(screen.getAllByTestId("editor-panel")).toHaveLength(1);
+    });
+    expect(screen.getByTestId("editor-unsaved-count").textContent).toBe("2 处未保存");
+
+    // 保存：基线推进，计数归零
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await screen.findByTestId("editor-saved-version");
+    await waitFor(() => {
+      expect(screen.queryByTestId("editor-unsaved-count")).toBeNull();
+    });
+  });
+});

@@ -448,6 +448,9 @@ def test_dashboard_tool_spec_description_embeds_v1_contract() -> None:
         assert token in desc, token
     # 强调取到的数据写进 snapshot（不放占位符）
     assert "写进 snapshot" in desc
+    # source 标注提示（wire-dashboard-refresh 任务 1.3：刷新依赖此标注取数）
+    assert "刷新" in desc
+    assert '"source"' in desc
     # 其余四类工具的 spec 描述不受影响（仍为各自的概要文案）
     composite = next(
         t for t in TOOL_SCHEMAS if t["function"]["name"] == "composite_indicator_create"

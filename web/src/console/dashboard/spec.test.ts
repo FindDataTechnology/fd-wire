@@ -4,6 +4,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildArtifactEnvelope,
+  convertPanelType,
+  duplicatePanel,
   generatePanelId,
   moveItem,
   parseDashboardSpec,
@@ -201,5 +203,65 @@ describe("编辑器工具（任务 1.2）", () => {
       title: "宏观仪表盘",
       spec: { title: "宏观仪表盘", panels: spec.panels },
     });
+  });
+});
+
+describe("编辑器 v2 工具（wire-dashboard-editor-v2 任务 1.1）", () => {
+  it("convertPanelType：line↔bar↔table 互转保 snapshot/config 零损失、needConfirm=false", () => {
+    const line = V1_BODY.panels[1] as DashboardPanel;
+    const result = convertPanelType(line, "table");
+    expect(result.needConfirm).toBe(false);
+    expect(result.panel).toEqual({ ...line, type: "table" }); // 仅换 type
+    expect(result.panel.snapshot).toEqual(line.snapshot); // 数据原样
+    // 不可变：原面板不动
+    expect(line.type).toBe("line");
+
+    const withConfig = { ...line, config: { xName: "月份", yName: "PMI" } };
+    expect(convertPanelType(withConfig, "bar").panel).toEqual({
+      ...withConfig,
+      type: "bar",
+    });
+  });
+
+  it("convertPanelType：kpi↔图表类互转 needConfirm=true（两个方向）", () => {
+    const kpi = V1_BODY.panels[0] as DashboardPanel;
+    expect(convertPanelType(kpi, "line").needConfirm).toBe(true);
+    expect(convertPanelType(kpi, "table").needConfirm).toBe(true);
+
+    const chart = V1_BODY.panels[1] as DashboardPanel;
+    const intoKpi = convertPanelType(chart, "kpi");
+    expect(intoKpi.needConfirm).toBe(true);
+    // snapshot 仍原样保留（渲染层 kpi 只读首值——取舍由确认对话框交代）
+    expect(intoKpi.panel.snapshot).toEqual(chart.snapshot);
+  });
+
+  it("convertPanelType：同类型转换为幂等原样返回（needConfirm=false）", () => {
+    const kpi = V1_BODY.panels[0] as DashboardPanel;
+    const same = convertPanelType(kpi, "kpi");
+    expect(same.needConfirm).toBe(false);
+    expect(same.panel).toBe(kpi); // 原对象原样返回
+  });
+
+  it("duplicatePanel：新 id（避开占用）+ 副本标题 + snapshot/config 深拷贝", () => {
+    const kpi = V1_BODY.panels[0] as DashboardPanel;
+    const copy = duplicatePanel(kpi);
+    expect(copy.id).not.toBe(kpi.id); // 缺省避开原面板自身 id
+    expect(copy.id).toBe("p1"); // generatePanelId 口径
+    expect(copy.title).toBe("CPI 同比副本"); // 默认「副本」后缀
+    expect(copy.type).toBe("kpi");
+    expect(copy.snapshot).toEqual(kpi.snapshot);
+    expect(copy.config).toEqual(kpi.config);
+
+    // 深拷贝：改副本数据不波及原件
+    copy.snapshot?.rows.push([9.9]);
+    if (copy.config) copy.config.unit = "‰";
+    expect(kpi.snapshot?.rows).toEqual([[2.1]]);
+    expect(kpi.config?.unit).toBe("%");
+
+    // 传入既有 id 集合时避开占用；后缀可指定（i18n）
+    expect(duplicatePanel(kpi, ["p1"]).id).toBe("p2");
+    expect(duplicatePanel(kpi, ["p1", "p2"], " (copy)").title).toBe(
+      "CPI 同比 (copy)",
+    );
   });
 });

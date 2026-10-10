@@ -1,9 +1,13 @@
-// 仪表盘基础编辑器 v1（wire-dashboard-renderer 任务 3）。
-// - 面板增（选 type 出模板）/删/改标题/左移右移/span 三档切换；
-//   kpi 值（存 snapshot.rows[0][0]）/单位/副标题表单编辑。
-// - 编辑态实时预览复用 DashboardRenderer；保存走既有 PUT（saveArtifactSpec，
-//   version 递增由服务端）；未保存离开 confirm 提示（含 beforeunload 兜底）。
-// - 不做图表类型切换与数据绑定编辑（v2）；JSON 视图在产物页 spec 编辑器已有。
+// 仪表盘编辑器（wire-dashboard-renderer 任务 3 / wire-dashboard-editor-v2）。
+// v1：面板增（选 type 出模板）/删/改标题/移序/span 三档切换；kpi 值（存
+//   snapshot.rows[0][0]）/单位/副标题表单编辑。
+// v2：图表类型互转（convertPanelType——line↔bar↔table 保 snapshot 零损失；
+//   kpi↔图表互转先 confirm，信息取舍见 spec.ts）；面板复制（duplicatePanel
+//   新 id+副本标题+深拷贝）；source 文本编辑（刷新依赖此标注）；config 表单
+//   按 type 展开（kpi=单位/副标题，line/bar=x/y 轴名）；未保存变更计数
+//   （draft 与已保存基线按面板深比较的差异数）。
+// 编辑态实时预览复用 DashboardRenderer；保存走既有 PUT（saveArtifactSpec，
+// version 递增由服务端）；未保存离开 confirm 提示（含 beforeunload 兜底）。
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { apiErrorText, saveArtifactSpec, type ArtifactDetail } from "../api";
@@ -11,9 +15,12 @@ import {
   DASHBOARD_PANEL_SPANS,
   DASHBOARD_PANEL_TYPES,
   buildArtifactEnvelope,
+  convertPanelType,
+  duplicatePanel,
   moveItem,
   panelTemplate,
   type DashboardPanel,
+  type DashboardPanelConfig,
   type DashboardPanelType,
   type DashboardSpecV1,
 } from "./spec";
@@ -54,6 +61,23 @@ export function DashboardEditor({
     () => JSON.stringify(draft) !== JSON.stringify(baseline),
     [draft, baseline],
   );
+
+  /** 未保存变更计数：draft 与已保存基线按面板 id 对齐深比较——改动/新增/删除
+   *  各计 1（面板维度；看板标题改动不计入面板数）。 */
+  const unsavedPanelCount = useMemo(() => {
+    const baselineById = new Map(baseline.panels.map((p) => [p.id, p]));
+    let count = 0;
+    const seen = new Set<string>();
+    for (const panel of draft.panels) {
+      seen.add(panel.id);
+      const before = baselineById.get(panel.id);
+      if (!before || JSON.stringify(before) !== JSON.stringify(panel)) count += 1;
+    }
+    for (const panel of baseline.panels) {
+      if (!seen.has(panel.id)) count += 1;
+    }
+    return count;
+  }, [draft.panels, baseline.panels]);
 
   // 浏览器级离开兜底（页内返回查看的 confirm 在 requestExit 里）。
   useEffect(() => {
@@ -106,6 +130,43 @@ export function DashboardEditor({
     }));
     setSavedVersion(null);
     setServerError(null);
+  };
+
+  /** 类型转换（v2）：kpi↔图表互转先 confirm（needConfirm 由纯函数标记）。 */
+  const convertPanel = (id: string, target: DashboardPanelType) => {
+    const current = draft.panels.find((p) => p.id === id);
+    if (!current || current.type === target) return;
+    const result = convertPanelType(current, target);
+    if (
+      result.needConfirm &&
+      !window.confirm(t("console.dashboard.editor.convertConfirm"))
+    ) {
+      return;
+    }
+    patchPanel(id, () => result.panel);
+  };
+
+  /** 面板复制（v2）：副本插到原面板之后（新 id 避开全部占用）。 */
+  const duplicateAt = (id: string) => {
+    setDraft((prev) => {
+      const index = prev.panels.findIndex((p) => p.id === id);
+      if (index < 0) return prev;
+      const copy = duplicatePanel(
+        prev.panels[index]!,
+        prev.panels.map((p) => p.id),
+        t("console.dashboard.editor.duplicateSuffix"),
+      );
+      const panels = [...prev.panels];
+      panels.splice(index + 1, 0, copy);
+      return { ...prev, panels };
+    });
+    setSavedVersion(null);
+    setServerError(null);
+  };
+
+  /** config 局部写回（v2 的 x/y 轴名与后续 config 字段共用）。 */
+  const patchPanelConfig = (id: string, patch: Partial<DashboardPanelConfig>) => {
+    patchPanel(id, (p) => ({ ...p, config: { ...p.config, ...patch } }));
   };
 
   /** kpi 三件套写回：值进 snapshot.rows[0][0]，单位/副标题进 config。 */
@@ -189,6 +250,15 @@ export function DashboardEditor({
           }}
           className="w-56 rounded-md border border-slate-300 px-2 py-1 text-sm"
         />
+        {unsavedPanelCount > 0 && (
+          <span
+            data-testid="editor-unsaved-count"
+            title={t("console.dashboard.editor.unsavedTitle")}
+            className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700"
+          >
+            {t("console.dashboard.editor.unsavedCount", { n: unsavedPanelCount })}
+          </span>
+        )}
         <div className="ml-auto flex gap-2">
           <button
             type="button"
@@ -312,7 +382,7 @@ export function DashboardEditor({
                       onClick={() => movePanel(index, -1)}
                       className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100 disabled:opacity-40"
                     >
-                      {t("console.dashboard.editor.moveLeft")}
+                      {t("console.dashboard.editor.moveUp")}
                     </button>
                     <button
                       type="button"
@@ -321,8 +391,37 @@ export function DashboardEditor({
                       onClick={() => movePanel(index, 1)}
                       className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100 disabled:opacity-40"
                     >
-                      {t("console.dashboard.editor.moveRight")}
+                      {t("console.dashboard.editor.moveDown")}
                     </button>
+                    <button
+                      type="button"
+                      data-testid="editor-panel-duplicate"
+                      onClick={() => duplicateAt(panel.id)}
+                      className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100"
+                    >
+                      {t("console.dashboard.editor.duplicate")}
+                    </button>
+                    <select
+                      aria-label={t("console.dashboard.editor.convertLabel")}
+                      data-testid="editor-panel-convert"
+                      value=""
+                      onChange={(e) => {
+                        const target = e.target.value as DashboardPanelType;
+                        if (target) convertPanel(panel.id, target);
+                      }}
+                      className="rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100"
+                    >
+                      <option value="">
+                        {t("console.dashboard.editor.convertLabel")}
+                      </option>
+                      {DASHBOARD_PANEL_TYPES.filter((type) => type !== panel.type).map(
+                        (type) => (
+                          <option key={type} value={type}>
+                            {t(`console.dashboard.editor.convertTo.${type}`)}
+                          </option>
+                        ),
+                      )}
+                    </select>
                     <button
                       type="button"
                       data-testid="editor-panel-remove"
@@ -332,6 +431,21 @@ export function DashboardEditor({
                       {t("console.dashboard.editor.remove")}
                     </button>
                   </div>
+                </div>
+                {/* source 文本（v2）：指标 code / 数据集名——手动刷新按此标注取数。 */}
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <label className="text-[11px] text-slate-400">
+                    {t("console.dashboard.editor.sourceLabel")}
+                  </label>
+                  <input
+                    data-testid="editor-panel-source"
+                    value={panel.source ?? ""}
+                    placeholder={t("console.dashboard.editor.sourcePlaceholder")}
+                    onChange={(e) =>
+                      patchPanel(panel.id, (p) => ({ ...p, source: e.target.value }))
+                    }
+                    className="w-56 rounded border border-slate-300 px-2 py-1 font-mono text-xs"
+                  />
                 </div>
                 {panel.type === "kpi" && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -361,6 +475,32 @@ export function DashboardEditor({
                       value={panel.config?.subtitle ?? ""}
                       onChange={(e) => patchKpi(panel.id, { subtitle: e.target.value })}
                       className="w-44 rounded border border-slate-300 px-2 py-1 text-xs"
+                    />
+                  </div>
+                )}
+                {(panel.type === "line" || panel.type === "bar") && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <label className="text-[11px] text-slate-400">
+                      {t("console.dashboard.editor.xNameLabel")}
+                    </label>
+                    <input
+                      data-testid="editor-panel-xname"
+                      value={panel.config?.xName ?? ""}
+                      onChange={(e) =>
+                        patchPanelConfig(panel.id, { xName: e.target.value })
+                      }
+                      className="w-28 rounded border border-slate-300 px-2 py-1 text-xs"
+                    />
+                    <label className="text-[11px] text-slate-400">
+                      {t("console.dashboard.editor.yNameLabel")}
+                    </label>
+                    <input
+                      data-testid="editor-panel-yname"
+                      value={panel.config?.yName ?? ""}
+                      onChange={(e) =>
+                        patchPanelConfig(panel.id, { yName: e.target.value })
+                      }
+                      className="w-28 rounded border border-slate-300 px-2 py-1 text-xs"
                     />
                   </div>
                 )}

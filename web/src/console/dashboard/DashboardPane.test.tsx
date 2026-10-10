@@ -2,6 +2,9 @@
 // - dashboard kind 卡片「查看看板」内嵌展开（不走路由）→ 三类面板渲染；
 // - 「编辑」切编辑器 → 改标题保存 v2（PUT）→ 返回查看新版本生效；
 // - legacy spec 只读 + 编辑禁用；archived 只读；非 dashboard kind 无入口。
+// wire-dashboard-refresh 任务 2.2：查看态「刷新数据」——成功流（POST refresh
+// 落新版本 → 提示 + 重拉详情重渲染）/ 失败态（502/403 detail 如实）/ 409 单飞
+// 进行中提示 / archived 无按钮。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "../../i18n";
@@ -193,7 +196,7 @@ describe("产物页 dashboard 集成（查看看板 → 编辑 → 保存 v2 →
     );
   });
 
-  it("archived 仪表盘：只读徽标 + 编辑入口禁用（渲染不受影响）", async () => {
+  it("archived 仪表盘：只读徽标 + 编辑入口禁用（渲染不受影响）+ 无刷新入口", async () => {
     install();
     render(<ArtifactsPage />);
     await screen.findAllByTestId("artifact-item");
@@ -205,6 +208,7 @@ describe("产物页 dashboard 集成（查看看板 → 编辑 → 保存 v2 →
     expect((screen.getByTestId("dashboard-edit") as HTMLButtonElement).disabled).toBe(
       true,
     );
+    expect(screen.queryByTestId("dashboard-refresh")).toBeNull(); // archived 不可刷
   });
 
   it("看板加载失败如实呈现错误态", async () => {
@@ -232,5 +236,147 @@ describe("产物页 dashboard 集成（查看看板 → 编辑 → 保存 v2 →
     await screen.findAllByTestId("artifact-item");
     fireEvent.click(within(rowOf(41)).getByTestId("artifact-dashboard-view"));
     expect(await screen.findByTestId("dashboard-load-error")).toBeTruthy();
+  });
+});
+
+describe("看板手动刷新（wire-dashboard-refresh 任务 2.1/2.2）", () => {
+  /** 刷新后的新快照：kpi 值 2.1 → 3.4（重渲染断言锚点）。 */
+  const REFRESHED_SPEC = JSON.parse(JSON.stringify(V1_DASHBOARD_SPEC)) as typeof V1_DASHBOARD_SPEC;
+  (
+    REFRESHED_SPEC.spec.panels[0]!.snapshot as { rows: Array<Array<string | number | null>> }
+  ).rows[0]![0] = 3.4;
+
+  /** 包一层 fetch：POST /artifacts/31/refresh 注入失败态（其余透传真后端）。 */
+  function withRefreshFailure(
+    backend: ReturnType<typeof installConsoleBackend>,
+    status: number,
+    detail: string,
+  ): typeof fetch {
+    return (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://console.test");
+      if (
+        url.pathname === "/api/v1/artifacts/31/refresh" &&
+        (init?.method ?? "GET").toUpperCase() === "POST"
+      ) {
+        return { ok: false, status, json: () => Promise.resolve({ detail }) };
+      }
+      return backend.fetchImpl(input as RequestInfo, init);
+    }) as unknown as typeof fetch;
+  }
+
+  /** 打开 31 号看板的查看态（返回 pane 就绪后的断言起点）。 */
+  async function openDashboard31() {
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+    fireEvent.click(within(rowOf(31)).getByTestId("artifact-dashboard-view"));
+    await screen.findByTestId("dashboard-pane");
+    expect(screen.getByTestId("dashboard-kpi-value").textContent).toBe("2.1");
+  }
+
+  it("成功流：进行中 loading 禁用 → v2 提示 → 重拉详情重渲染 + 行版本号同步", async () => {
+    const backend = install();
+    let refreshed = false;
+    const refreshCalls: string[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const wrapped = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://console.test");
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.pathname === "/api/v1/artifacts/31/refresh" && method === "POST") {
+        refreshCalls.push(`${method} ${url.pathname}`);
+        return gate.then(() => ({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ version: 2, refreshed_at: "2026-10-11T09:00:00" }),
+        }));
+      }
+      if (refreshed && url.pathname === "/api/v1/artifacts/31" && method === "GET") {
+        // 刷新落地后的详情：v2 + 新快照（模拟服务端已按刷新结果落版本）
+        const base = (await backend.fetchImpl(input, init)) as {
+          json: () => Promise<Record<string, unknown>>;
+        };
+        const body = await base.json();
+        return {
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ ...body, version: 2, spec: REFRESHED_SPEC }),
+        };
+      }
+      return backend.fetchImpl(input as RequestInfo, init);
+    }) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", wrapped);
+
+    await openDashboard31();
+
+    fireEvent.click(screen.getByTestId("dashboard-refresh"));
+    // 进行中：按钮禁用 + loading 文案（POST 已发出、门未放行）
+    expect(refreshCalls).toEqual(["POST /api/v1/artifacts/31/refresh"]);
+    expect((screen.getByTestId("dashboard-refresh") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId("dashboard-refresh").textContent).toContain("刷新中");
+
+    release();
+    refreshed = true;
+
+    // 成功：新版本号提示 + 重拉详情重渲染（2.1 → 3.4）
+    expect((await screen.findByTestId("dashboard-refresh-success")).textContent).toContain("v2");
+    await waitFor(() => {
+      expect(screen.getByTestId("dashboard-kpi-value").textContent).toBe("3.4");
+    });
+    // 行版本号经 onSaved 同步为 v2，按钮恢复可用
+    await waitFor(() => {
+      expect(within(rowOf(31)).getByTestId("artifact-version").textContent).toBe("v2");
+    });
+    expect((screen.getByTestId("dashboard-refresh") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("失败态（502）：引擎失败 detail 如实呈现，旧快照不受影响", async () => {
+    const backend = install();
+    vi.stubGlobal(
+      "fetch",
+      withRefreshFailure(backend, 502, "刷新执行失败：LLM 输出解析失败（不是合法 spec JSON）"),
+    );
+
+    await openDashboard31();
+    fireEvent.click(screen.getByTestId("dashboard-refresh"));
+
+    expect((await screen.findByTestId("dashboard-refresh-error")).textContent).toContain(
+      "LLM 输出解析失败",
+    );
+    // 零半写：视图仍是旧快照；按钮恢复可重试
+    expect(screen.getByTestId("dashboard-kpi-value").textContent).toBe("2.1");
+    expect((screen.getByTestId("dashboard-refresh") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("档位边界（403）：免费档提示 detail 如实呈现（升档引导）", async () => {
+    const backend = install();
+    vi.stubGlobal(
+      "fetch",
+      withRefreshFailure(backend, 403, "数据刷新需开通基础档及以上（当前档位：免费档）"),
+    );
+
+    await openDashboard31();
+    fireEvent.click(screen.getByTestId("dashboard-refresh"));
+
+    expect((await screen.findByTestId("dashboard-refresh-error")).textContent).toContain(
+      "基础档及以上",
+    );
+  });
+
+  it("单飞（409）：刷新进行中提示，不显示后端机口径 detail", async () => {
+    const backend = install();
+    vi.stubGlobal(
+      "fetch",
+      withRefreshFailure(backend, 409, "refresh in progress"),
+    );
+
+    await openDashboard31();
+    fireEvent.click(screen.getByTestId("dashboard-refresh"));
+
+    const error = await screen.findByTestId("dashboard-refresh-error");
+    expect(error.textContent).toContain("刷新进行中");
+    expect(error.textContent).not.toContain("refresh in progress"); // 固定人话文案
+    expect((screen.getByTestId("dashboard-refresh") as HTMLButtonElement).disabled).toBe(false);
   });
 });

@@ -1198,3 +1198,28 @@ export async function fetchSharedDashboard(
   }
   return readResponse(response, url) as Promise<SharedDashboard>;
 }
+
+// ── 仪表盘手动刷新（wire-dashboard-refresh 任务 2.1 web 面）────────────────
+// 契约（api 仓 refresh 端点，proposal 冻结形状）：
+// - POST /api/v1/artifacts/{id}/refresh（Bearer 登录身份）：仅 kind=dashboard、
+//   archived 不可刷；服务端跑无头 AI 刷新轮——按各面板 source 重取数、结构与
+//   布局不动、以 PUT 语义落新版本。成功返回 {version, refreshed_at}。
+// - 409 = 同产物刷新进行中（单飞锁）；403 = 档位未开通（无 cell，detail 带
+//   升档引导）；502/503 = LLM/引擎失败（detail 带原因，零半写）——UI 如实
+//   呈现后端 detail。
+
+/** 手动刷新响应（POST /artifacts/{id}/refresh）。 */
+export interface DashboardRefreshResult {
+  /** 刷新落盘的新版本号（客户端据此提示并重拉详情）。 */
+  version: number;
+  /** 刷新完成时间（服务端 ISO 时间戳）。 */
+  refreshed_at: string;
+}
+
+/** 手动刷新仪表盘快照（draft/published 可刷；成功返回新版本号与时间）。 */
+export function refreshDashboard(id: number): Promise<DashboardRefreshResult> {
+  return requestJsonAnyMethod(
+    `${API_BASE}/v1/artifacts/${id}/refresh`,
+    "POST",
+  ) as Promise<DashboardRefreshResult>;
+}

@@ -11,6 +11,9 @@
 - ``POST /api/v1/artifacts/{id}/publish``      发布（draft → published）
 - ``POST /api/v1/artifacts/{id}/archive``      归档（→ archived，不删除）
 - ``POST /api/v1/artifacts/{id}/restore``      恢复（archived → draft）
+- ``POST /api/v1/artifacts/{id}/refresh``      手动刷新（wire-dashboard-refresh：
+                                               仅 dashboard；AI 无头轮按面板
+                                               source 重取数 → 新版本落盘）
 - ``POST /api/v1/artifacts/from-draft``        会话草稿导入为 draft 产物
 
 版本行只读——没有任何改写历史版本的端点（append-only 由路由面保证）。
@@ -22,12 +25,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from ..ai.db import get_db
+from ..ai.executor import CELL_NOT_PROVISIONED_MESSAGE, CellNotProvisionedError
+from ..ai.protocols import LlmClient, ToolExecutor
+# LLM/工具执行依赖直接复用 ai 路由的出口函数（同一依赖对象——测试照
+# test_ai_api 的 dependency_overrides 手法注入 mock，生产同为网关/cell 实现）。
+from ..ai.routes import get_llm_client, get_tool_executor
+from ..ai.settings import get_settings
 from ..console.auth import require_console_customer_id
-from . import service
+from . import refresh, service
+from .models import ArtifactStatus
 from .schemas import (
     ArtifactDetailOut,
     ArtifactFromDraftIn,
     ArtifactOut,
+    ArtifactRefreshOut,
     ArtifactUpdateIn,
     ArtifactVersionDetailOut,
     ArtifactVersionOut,
@@ -197,3 +208,86 @@ def import_from_draft(
     except service.InvalidArtifactSpec as exc:  # pragma: no cover - 防御位
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return artifact_detail(artifact, service.current_spec(db, artifact))
+
+
+def _release(client: object) -> None:
+    """释放带 close() 的依赖客户端（生产网关/执行器；测试假件无 close）。"""
+    if hasattr(client, "close"):
+        client.close()
+
+
+@router.post(
+    "/api/v1/artifacts/{artifact_id}/refresh", response_model=ArtifactRefreshOut
+)
+def refresh_artifact(
+    artifact_id: int,
+    customer_id: str = Depends(require_console_customer_id),
+    db: Session = Depends(get_db),
+    llm: LlmClient = Depends(get_llm_client),
+    tool_executor: ToolExecutor = Depends(get_tool_executor),
+) -> ArtifactRefreshOut:
+    """手动刷新（wire-dashboard-refresh）：AI 无头轮按各面板 source 重取数，
+    成功后同 PUT 语义落新版本（append-only + 审计）。
+
+    语义边界：跨客户 404；kind≠dashboard 403；archived 409（先恢复）；
+    同产物刷新进行中再触发 409（进程内单飞锁）；无 cell 403 档位提示
+    （零引擎调用）；LLM/引擎失败 502 带原因——**失败零半写**（任何失败
+    都不产生新版本行）。
+    """
+    artifact = _artifact_or_404(db, artifact_id, customer_id)
+    if artifact.kind != "dashboard":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"产物 {artifact.id} 是 {artifact.kind}，仅仪表盘（dashboard）"
+                "支持数据刷新。"
+            ),
+        )
+    if artifact.status == ArtifactStatus.archived.value:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"产物 {artifact.id} 已归档（archived），不可刷新——"
+                "请先恢复（restore）为草稿后再刷新。"
+            ),
+        )
+    if not refresh.acquire_refresh_lock(artifact.id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"产物 {artifact.id} 正在刷新中，请稍候再试"
+                "（同一产物同时仅允许一次刷新）"
+            ),
+        )
+    try:
+        try:
+            new_spec = refresh.refresh_dashboard_spec(
+                current_spec=service.current_spec(db, artifact),
+                llm=llm,
+                tool_executor=tool_executor,
+                customer_id=customer_id,
+                max_turns=get_settings().ai_max_turns,
+            )
+            # 成功才落盘：同 PUT 语义（最小校验已在轮内做过，此处追加
+            # 新版本行 + operator 审计 + title 投影）。
+            artifact = service.update_spec(
+                db, artifact, spec=new_spec, customer_id=customer_id
+            )
+        except CellNotProvisionedError:
+            # 无 cell（免费档）：沿用 AI 构建的未开通档位提示。
+            raise HTTPException(
+                status_code=403, detail=CELL_NOT_PROVISIONED_MESSAGE
+            )
+        except refresh.RefreshFailed as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except service.InvalidArtifactSpec as exc:  # pragma: no cover - 轮内已校验
+            raise HTTPException(status_code=502, detail=f"刷新输出未过校验：{exc}") from exc
+        except service.ArtifactLocked as exc:  # pragma: no cover - 竞态归档防御位
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    finally:
+        refresh.release_refresh_lock(artifact.id)
+        _release(llm)
+        _release(tool_executor)
+    return ArtifactRefreshOut(
+        version=artifact.version, refreshed_at=service.utc_now_iso()
+    )

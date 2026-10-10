@@ -451,9 +451,26 @@ const en: Translation = {
         addPanel: "Add panel",
         panelTitlePlaceholder: "Panel title",
         spanOption: "{{span}} col",
-        moveLeft: "Move left",
-        moveRight: "Move right",
+        moveUp: "Move up",
+        moveDown: "Move down",
         remove: "Delete",
+        duplicate: "Duplicate",
+        duplicateSuffix: " (copy)",
+        convertLabel: "Convert to…",
+        convertTo: {
+          kpi: "Convert to KPI card",
+          line: "Convert to line chart",
+          bar: "Convert to bar chart",
+          table: "Convert to data table",
+        },
+        convertConfirm:
+          "KPI cards and charts use different data calibers (a KPI card shows only the first value) — converting changes how this panel is presented. Convert anyway?",
+        sourceLabel: "Source",
+        sourcePlaceholder: "Indicator code / dataset name (refresh relies on this annotation)",
+        xNameLabel: "X axis name",
+        yNameLabel: "Y axis name",
+        unsavedCount: "{{n}} unsaved change(s)",
+        unsavedTitle: "Panels differing from the last saved version",
         kpiValue: "Value",
         kpiUnit: "Unit",
         kpiSubtitle: "Subtitle",
@@ -464,6 +481,16 @@ const en: Translation = {
         dirtyLeaveConfirm: "You have unsaved changes — leave the editor anyway?",
         backToView: "Back to view",
         preview: "Live preview",
+      },
+      // Manual refresh (wire-dashboard-refresh): view-mode button and status
+      // copy; 403 tier guidance and 502 engine failures surface the server
+      // detail verbatim (apiErrorText).
+      refresh: {
+        button: "Refresh data",
+        refreshing: "Refreshing…",
+        success: "Refreshed as version v{{version}}.",
+        inProgress: "A refresh is already running for this dashboard — please retry shortly.",
+        failed: "Refresh failed, please retry later.",
       },
       // Signed share links (wire-dashboard-share): the artifact-page entry and
       // the public share view (login-free read-only, noindex, "Shared by" footer).

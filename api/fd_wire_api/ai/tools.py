@@ -71,7 +71,8 @@ TOOL_SCHEMAS: list[dict] = [
             "（1/2/3）；把取到的数据写进 snapshot（columns 列名 + rows 行值，"
             "kpi 数值取 rows[0][0]，line/bar 首列为 x 轴其余为系列，table "
             "整表呈现）——渲染器只读 snapshot，不要放占位符或待查标记；"
-            "config 可选（unit/subtitle/yName/xName）。"
+            "config 可选（unit/subtitle/yName/xName）。面板 source 应填"
+            "指标 code 或数据集名（后续「刷新数据」依赖此标注重新取数）。"
         ),
     ),
     _artifact_tool_schema(

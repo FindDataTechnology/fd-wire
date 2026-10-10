@@ -2,9 +2,19 @@
 // 展开区（内嵌，不走路由）。拉取产物详情 → 查看态渲染 DashboardRenderer；
 // v1 spec 且未归档时提供「编辑」切换 DashboardEditor；保存后同步刷新列表行。
 // legacy spec（旧自由 JSON）只读呈现，不提供编辑（编辑器 v1 只吃 v1 契约）。
+// wire-dashboard-refresh 任务 2.1：查看态加「刷新数据」——POST refresh 落新
+// 版本后重拉详情重渲染；409 进行中 / 403 档位 / 502 引擎失败如实呈现；
+// archived 只读无入口；进行中 loading 禁用防重复触发。
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { fetchLifecycleArtifact, type Artifact, type ArtifactDetail } from "../api";
+import {
+  ConsoleApiError,
+  apiErrorText,
+  fetchLifecycleArtifact,
+  refreshDashboard,
+  type Artifact,
+  type ArtifactDetail,
+} from "../api";
 import { parseDashboardSpec } from "./spec";
 import { DashboardRenderer } from "./DashboardRenderer";
 import { DashboardEditor } from "./DashboardEditor";
@@ -20,12 +30,18 @@ export function DashboardPane({
   const [detail, setDetail] = useState<ArtifactDetail | null>(null);
   const [failed, setFailed] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshNotice, setRefreshNotice] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     setDetail(null);
     setFailed(false);
     setEditing(false);
+    setRefreshing(false);
+    setRefreshNotice(null);
+    setRefreshError(null);
     fetchLifecycleArtifact(artifactId)
       .then((row) => {
         if (alive) setDetail(row);
@@ -37,6 +53,33 @@ export function DashboardPane({
       alive = false;
     };
   }, [artifactId]);
+
+  /** 手动刷新：成功提示新版本号并重拉详情重渲染（行版本号经 onSaved 同步）。 */
+  const refresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshNotice(null);
+    setRefreshError(null);
+    try {
+      const result = await refreshDashboard(artifactId);
+      setRefreshNotice(
+        t("console.dashboard.refresh.success", { version: result.version }),
+      );
+      const row = await fetchLifecycleArtifact(artifactId);
+      setDetail(row);
+      onSaved(row);
+    } catch (err) {
+      if (err instanceof ConsoleApiError && err.status === 409) {
+        // 单飞锁：同产物刷新进行中——固定文案（后端 detail 是机口径）。
+        setRefreshError(t("console.dashboard.refresh.inProgress"));
+      } else {
+        // 403 档位引导 / 502 引擎失败等：后端 detail 如实呈现，无 detail 兜底。
+        setRefreshError(apiErrorText(err, t("console.dashboard.refresh.failed")));
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   if (failed) {
     return (
@@ -78,23 +121,48 @@ export function DashboardPane({
         )}
         <div className="ml-auto flex gap-2">
           {editing ? null : (
-            <button
-              type="button"
-              data-testid="dashboard-edit"
-              disabled={parsed.kind !== "v1" || locked}
-              onClick={() => setEditing(true)}
-              title={
-                parsed.kind === "legacy"
-                  ? t("console.dashboard.legacy.noEditHint")
-                  : undefined
-              }
-              className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {t("console.dashboard.editButton")}
-            </button>
+            <>
+              {!locked && (
+                <button
+                  type="button"
+                  data-testid="dashboard-refresh"
+                  disabled={refreshing}
+                  onClick={() => void refresh()}
+                  className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {refreshing
+                    ? t("console.dashboard.refresh.refreshing")
+                    : t("console.dashboard.refresh.button")}
+                </button>
+              )}
+              <button
+                type="button"
+                data-testid="dashboard-edit"
+                disabled={parsed.kind !== "v1" || locked}
+                onClick={() => setEditing(true)}
+                title={
+                  parsed.kind === "legacy"
+                    ? t("console.dashboard.legacy.noEditHint")
+                    : undefined
+                }
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {t("console.dashboard.editButton")}
+              </button>
+            </>
           )}
         </div>
       </div>
+      {refreshNotice && (
+        <p data-testid="dashboard-refresh-success" className="mt-1 text-[11px] text-emerald-600">
+          {refreshNotice}
+        </p>
+      )}
+      {refreshError && (
+        <p data-testid="dashboard-refresh-error" className="mt-1 text-[11px] text-red-600">
+          {refreshError}
+        </p>
+      )}
 
       {editing && parsed.kind === "v1" ? (
         <DashboardEditor

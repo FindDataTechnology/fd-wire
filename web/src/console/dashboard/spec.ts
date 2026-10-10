@@ -250,3 +250,55 @@ export function buildArtifactEnvelope(spec: DashboardSpecV1): {
 } {
   return { title: spec.title, spec: { title: spec.title, panels: spec.panels } };
 }
+
+/** convertPanelType 结果：转换后的面板 + kpi↔图表互转的确认标记。 */
+export interface ConvertPanelResult {
+  panel: DashboardPanel;
+  /**
+   * kpi 与图表类互转时为 true——kpi 只读 snapshot 首值、图表读整表，
+   * 两个方向都有信息取舍，调用方须先让用户确认再落地。
+   */
+  needConfirm: boolean;
+}
+
+/**
+ * 面板类型转换（编辑器 v2）：snapshot/config 原样保留（四类型共用同一
+ * snapshot 形状，line↔bar↔table 互转零数据损失），仅换 type；同类型转换
+ * 为幂等原样返回。kpi↔图表类互转带 needConfirm 标记（是否确认由调用方
+ * 决定，本函数不弹窗）。不可变：原面板不动，返回新对象。
+ */
+export function convertPanelType(
+  panel: DashboardPanel,
+  target: DashboardPanelType,
+): ConvertPanelResult {
+  const needConfirm = isKpi(panel.type) !== isKpi(target);
+  return {
+    panel: panel.type === target ? panel : { ...panel, type: target },
+    needConfirm,
+  };
+}
+
+function isKpi(type: DashboardPanelType): boolean {
+  return type === "kpi";
+}
+
+/**
+ * 面板复制（编辑器 v2）：新 id（generatePanelId 避开既有占用）、标题加
+ * 副本后缀、snapshot/config 深拷贝（structuredClone——副本的后续编辑绝不
+ * 波及原件）。existingIds 缺省只避开原面板自身 id；编辑器调用时应传入
+ * 当前全部面板 id 以杜绝碰撞。
+ */
+export function duplicatePanel(
+  panel: DashboardPanel,
+  existingIds: Iterable<string> = [],
+  titleSuffix = "副本",
+): DashboardPanel {
+  const used = new Set([...existingIds]);
+  used.add(panel.id);
+  const copy = structuredClone(panel);
+  return {
+    ...copy,
+    id: generatePanelId(used),
+    title: `${panel.title}${titleSuffix}`,
+  };
+}

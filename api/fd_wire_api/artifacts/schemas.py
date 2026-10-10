@@ -62,6 +62,13 @@ class ArtifactFromDraftIn(BaseModel):
     draft_id: int
 
 
+class ArtifactRefreshOut(BaseModel):
+    """手动刷新结果（wire-dashboard-refresh）：新版本号 + 完成时间。"""
+
+    version: int
+    refreshed_at: str
+
+
 def artifact_detail(artifact: Artifact, spec: dict) -> ArtifactDetailOut:
     """ORM + 当前 spec → 详情视图（spec 来自版本表最新行）。"""
     return ArtifactDetailOut(
