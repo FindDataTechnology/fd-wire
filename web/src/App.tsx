@@ -4,6 +4,8 @@
 // tabs, demand placeholder).
 // 页脚分发（wire-ux-consolidation 任务 1.2）：门户视图挂全量页脚，
 // #/console/* 挂紧凑页脚，#/admin 不渲染页脚。
+// 公开分享页（wire-dashboard-share）：#/share/dashboard/{id}?t=&v= 完全
+// 独立成壳（极简顶栏 + 分享页脚，noindex），不进上方任何布局。
 // 登录件（wire-self-serve-launch 4.4/5.2）：
 // - Logto 回调走真实路径 /console/callback（App 挂载时检测 pathname 进入
 //   CallbackView，完成后回 hash 路由）；
@@ -16,6 +18,7 @@ import { LoginView } from "./views/LoginView";
 import { CatalogView } from "./views/CatalogView";
 import { CatalogDetailView } from "./views/CatalogDetailView";
 import { DemandNewView } from "./views/DemandNewView";
+import { ShareView } from "./views/ShareView";
 import { PricingView } from "./views/PricingView";
 import { DocsView } from "./views/DocsView";
 import { AdminView } from "./admin/AdminView";
@@ -36,6 +39,7 @@ export type Route =
   | { name: "console"; tab: ConsoleTab }
   | { name: "demandNew"; indicator: string | null }
   | { name: "admin"; section: AdminSection }
+  | { name: "shareDashboard"; id: string; token: string | null; version: string | null }
   | { name: "login" };
 
 /** 控制台二级段 → tab（未知段回落默认 datasets）。 */
@@ -44,6 +48,7 @@ function parseConsoleTab(segment: string | undefined): ConsoleTab {
     segment === "chat" ||
     segment === "artifacts" ||
     segment === "datasets" ||
+    segment === "packs" ||
     segment === "demands" ||
     segment === "usage" ||
     segment === "keys"
@@ -76,6 +81,16 @@ export function parseHash(rawHash: string): Route {
     return { name: "admin", section: parseAdminSection(second) };
   }
   if (head === "login") return { name: "login" };
+  if (head === "share" && second === "dashboard" && third) {
+    // 公开分享深链 #/share/dashboard/{id}?t=…&v=…（wire-dashboard-share）：
+    // t 缺失/坏由 ShareView 如实落「链接无效或已过期」页，不在路由层拦截。
+    return {
+      name: "shareDashboard",
+      id: third,
+      token: query.get("t"),
+      version: query.get("v"),
+    };
+  }
   if (head === "catalog") {
     if (segments.length >= 2) {
       const raw = segments.slice(1).join("/");
@@ -113,6 +128,14 @@ function renderRoute(route: Route) {
       return <DemandNewView indicator={route.indicator} />;
     case "admin":
       return <AdminView section={route.section} />;
+    case "shareDashboard":
+      return (
+        <ShareView
+          artifactId={route.id}
+          token={route.token ?? ""}
+          version={route.version}
+        />
+      );
     case "login":
       return <LoginView />;
     case "home":
@@ -180,6 +203,12 @@ export function App() {
         <CallbackView />
       </div>
     );
+  }
+
+  // 公开分享页（wire-dashboard-share）：独立极简壳——自带「Wire」顶栏与
+  // 「由柏讯分享」页脚，不进站点导航/控制台布局，无需登录。
+  if (route.name === "shareDashboard") {
+    return renderRoute(route);
   }
 
   return (

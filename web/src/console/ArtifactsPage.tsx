@@ -8,6 +8,9 @@
 // - 发布/归档/恢复操作（非法迁移 409 如实呈现）。
 // - dashboard kind 卡片加「查看看板」内嵌展开区（wire-dashboard-renderer）：
 //   快照渲染器查看 + 编辑器切换，保存复用下方 PUT 与版本链。
+// - published dashboard 卡片加「生成分享链接」弹层（wire-dashboard-share）：
+//   展示公开页完整链接（origin + #/share/dashboard/…）+ 复制 + 到期时间；
+//   draft/archived/非 dashboard 不出现该入口。
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -15,6 +18,7 @@ import {
   ARTIFACT_STATUSES,
   apiErrorText,
   archiveArtifact,
+  createDashboardShareLink,
   fetchArtifactVersion,
   fetchArtifactVersions,
   fetchConversations,
@@ -29,6 +33,7 @@ import {
   type ArtifactVersionDetail,
   type ArtifactVersionSummary,
   type Conversation,
+  type DashboardShareLink,
 } from "./api";
 import { formatServerDate } from "./util";
 import { DashboardPane } from "./dashboard/DashboardPane";
@@ -62,6 +67,8 @@ export function ArtifactsPage() {
   // 看板视图展开的产物 id（wire-dashboard-renderer：dashboard kind 内嵌入口）。
   const [dashboardFor, setDashboardFor] = useState<number | null>(null);
   const [historyFor, setHistoryFor] = useState<number | null>(null);
+  // 分享弹层展开的产物 id（wire-dashboard-share：published dashboard 专属）。
+  const [shareFor, setShareFor] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -265,6 +272,18 @@ export function ArtifactsPage() {
                         {t("console.dashboard.viewButton")}
                       </button>
                     )}
+                    {artifact.kind === "dashboard" && artifact.status === "published" && (
+                      // 分享入口分发（wire-dashboard-share）：仅 published 且
+                      // kind=dashboard——draft/archived/非 dashboard 一律不渲染。
+                      <button
+                        type="button"
+                        data-testid="artifact-share"
+                        onClick={() => setShareFor(artifact.id)}
+                        className="rounded border border-sky-300 px-2 py-1 text-xs text-sky-700 hover:bg-sky-50"
+                      >
+                        {t("console.dashboard.share.button")}
+                      </button>
+                    )}
                     {artifact.status === "draft" && (
                       <button
                         type="button"
@@ -355,6 +374,14 @@ export function ArtifactsPage() {
 
       {historyFor != null && (
         <VersionDrawer artifactId={historyFor} onClose={() => setHistoryFor(null)} />
+      )}
+
+      {shareFor != null && (
+        <ShareLinkDialog
+          key={`share-${shareFor}`}
+          artifactId={shareFor}
+          onClose={() => setShareFor(null)}
+        />
       )}
     </div>
   );
@@ -706,6 +733,145 @@ function VersionDrawer({
           </div>
         )}
       </aside>
+    </div>
+  );
+}
+
+/**
+ * 分享链接弹层（wire-dashboard-share 任务 2.2）：打开即调
+ * POST /api/v1/artifacts/{id}/share，展示完整公开页链接 + 复制按钮 +
+ * 到期时间。响应的 url 是**数据端点**（/api/v1/share/...），给接收者的
+ * 展示链接必须另行构造：origin + /#/share/dashboard/{id}?t=…&v={version}
+ * （t 从响应 url 的 query 里解出，版本钉死生成时刻的响应 version）。
+ */
+function ShareLinkDialog({
+  artifactId,
+  onClose,
+}: {
+  artifactId: number;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [result, setResult] = useState<DashboardShareLink | null>(null);
+  const [shareUrl, setShareUrl] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setResult(null);
+    setShareUrl("");
+    setError(null);
+    setCopied(false);
+    createDashboardShareLink(artifactId)
+      .then((res) => {
+        if (!alive) return;
+        setResult(res);
+        // t 从数据端点 url 的 query 解出（相对路径也能被 URL 解析出 search）。
+        const token = new URL(res.url, window.location.origin).searchParams.get("t") ?? "";
+        setShareUrl(
+          `${window.location.origin}/#/share/dashboard/${artifactId}` +
+            `?t=${encodeURIComponent(token)}&v=${res.version}`,
+        );
+      })
+      .catch((err: unknown) => {
+        // 服务端 detail 如实呈现（403 状态说明 / 503 未配置 secret 原因）。
+        if (alive) setError(apiErrorText(err, t("console.dashboard.share.generateFailed")));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [artifactId, t]);
+
+  const copyLink = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+    } catch {
+      /* 剪贴板不可用（如非安全上下文）：如实不提示已复制 */
+    }
+  };
+
+  return (
+    <div
+      data-testid="share-dialog"
+      className="fixed inset-0 z-40 flex items-center justify-center p-4"
+    >
+      <button
+        type="button"
+        aria-label={t("console.dashboard.share.close")}
+        data-testid="share-dialog-backdrop"
+        onClick={onClose}
+        className="absolute inset-0 bg-slate-900/30"
+      />
+      <div className="relative w-full max-w-lg rounded-lg border border-slate-200 bg-white p-5 shadow-xl">
+        <div className="flex items-center gap-2">
+          <h2 data-testid="share-dialog-title" className="text-sm font-semibold">
+            {t("console.dashboard.share.dialogTitle")}
+          </h2>
+          <button
+            type="button"
+            data-testid="share-dialog-close"
+            onClick={onClose}
+            className="ml-auto rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+          >
+            {t("console.dashboard.share.close")}
+          </button>
+        </div>
+
+        {error && (
+          <p data-testid="share-error" className="mt-4 text-xs text-red-600">
+            {error}
+          </p>
+        )}
+
+        {!error && result == null && (
+          <p data-testid="share-generating" className="mt-4 text-xs text-slate-400">
+            {t("console.dashboard.share.generating")}
+          </p>
+        )}
+
+        {result != null && (
+          <div className="mt-4 space-y-3">
+            <div>
+              <p className="text-xs font-medium text-slate-600">
+                {t("console.dashboard.share.urlLabel")}
+              </p>
+              {/* readonly 输入框承载完整链接：可选中复制、长链接不撑破布局。 */}
+              <input
+                data-testid="share-url"
+                readOnly
+                value={shareUrl}
+                onFocus={(e) => e.currentTarget.select()}
+                className="mt-1 w-full rounded border border-slate-300 bg-slate-50 px-2 py-1.5 font-mono text-[11px] text-slate-700"
+              />
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  data-testid="share-copy"
+                  onClick={() => void copyLink()}
+                  className="rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700"
+                >
+                  {t("console.dashboard.share.copy")}
+                </button>
+                {copied && (
+                  <span data-testid="share-copied" className="text-[11px] text-emerald-600">
+                    {t("console.dashboard.share.copied")}
+                  </span>
+                )}
+              </div>
+            </div>
+            <p data-testid="share-expires" className="text-xs text-slate-500">
+              {t("console.dashboard.share.expiresLabel")}：
+              {formatServerDate(result.expires_at)}
+            </p>
+            <p className="text-[11px] text-slate-400">
+              {t("console.dashboard.share.versionNote", { version: result.version })}
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

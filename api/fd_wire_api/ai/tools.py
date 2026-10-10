@@ -57,7 +57,22 @@ TOOL_SCHEMAS: list[dict] = [
     _artifact_tool_schema(
         "dashboard_spec_create",
         "仪表盘",
-        "仪表盘规格：指标列/图表布局/筛选器等（JSON）",
+        # v1 结构示例对齐 web 渲染器契约（web/src/console/dashboard/spec.ts）：
+        # 面板 type 四值 / span 三档 / snapshot 内嵌取数结果——AI 产物默认
+        # 可渲染可分享（wire-dashboard-share）。
+        (
+            "仪表盘规格 v1（JSON）："
+            '{"title":"仪表盘名","panels":[{"id":"p1",'
+            '"type":"kpi|line|bar|table","title":"面板标题","span":1,'
+            '"source":"指标code或数据集名",'
+            '"snapshot":{"columns":["年份","GDP"],"rows":[["2023",129.4]]},'
+            '"config":{"unit":"万亿元","subtitle":"不变价"}}]}。'
+            "字段说明：type 必取 kpi/line/bar/table；span 为 3 列栅格宽度"
+            "（1/2/3）；把取到的数据写进 snapshot（columns 列名 + rows 行值，"
+            "kpi 数值取 rows[0][0]，line/bar 首列为 x 轴其余为系列，table "
+            "整表呈现）——渲染器只读 snapshot，不要放占位符或待查标记；"
+            "config 可选（unit/subtitle/yName/xName）。"
+        ),
     ),
     _artifact_tool_schema(
         "composite_indicator_create",

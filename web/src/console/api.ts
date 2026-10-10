@@ -1035,3 +1035,166 @@ export function importArtifactFromDraft(
     body: { conversation_id: conversationId, draft_id: draftId },
   }) as Promise<ArtifactDetail>;
 }
+
+// ── 源包（wire-source-packs 任务 3.3）──────────────────────────────────
+// 契约（tasks.md 2.1/2.2）：GET /api/v1/packs 与 GET /api/v1/packs/{id} 为
+// 公开端点（匿名可读——目录公开通道，不过计量轨道）；详情响应为平铺分页
+// {id,name_zh,name_en,desc,items,page,page_size,total}。订阅三端点
+// （GET subscriptions / POST subscribe / DELETE unsubscribe）走 Bearer 登录
+// 身份；重复订阅/退订幂等 200。
+
+/** 源包概要（列表卡片用；指标数由服务端按 filter 实时算）。 */
+export interface PackSummary {
+  id: string;
+  name_zh: string;
+  name_en: string;
+  desc: string;
+  indicator_count: number;
+}
+
+/** 包内指标条目（详情清单行；code 即目录详情页锚点 #/catalog/{code}）。 */
+export interface PackIndicator {
+  code: string;
+  name_zh: string;
+  domain: string | null;
+}
+
+/** 包详情：平铺分页（items/total 与包元信息同层）。 */
+export interface PackDetail extends PackSummary {
+  items: PackIndicator[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+/** 订阅/退订响应（幂等：重复操作仍 200 返回终态）。 */
+export interface PackSubscriptionResult {
+  pack_id: string;
+  subscribed: boolean;
+}
+
+/** 公开 GET（源包目录读）：有会话则附 Bearer，无会话不抛——匿名可浏览；
+ * 非 2xx 错误语义与 requestJson 完全一致（ConsoleApiError 带 detail）。 */
+async function requestJsonPublic(url: string): Promise<unknown> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  const session = loadSession();
+  if (session?.idToken) headers.Authorization = `Bearer ${session.idToken}`;
+  let response: Response;
+  try {
+    response = await fetch(url, { method: "GET", headers });
+  } catch (err) {
+    if (err instanceof ConsoleApiError) throw err;
+    throw new ConsoleApiError(
+      `network error fetching ${url}: ${(err as Error).message}`,
+    );
+  }
+  return readResponse(response, url);
+}
+
+/** 源包列表（公开；含各包指标数）。 */
+export function fetchPacks(): Promise<PackSummary[]> {
+  return requestJsonPublic(`${API_BASE}/v1/packs`) as Promise<PackSummary[]>;
+}
+
+/** 包详情 + 分页指标清单（公开；page 从 1 起）。 */
+export function fetchPackDetail(
+  packId: string,
+  page = 1,
+  pageSize = 20,
+): Promise<PackDetail> {
+  return requestJsonPublic(
+    `${API_BASE}/v1/packs/${encodeURIComponent(packId)}?page=${page}&page_size=${pageSize}`,
+  ) as Promise<PackDetail>;
+}
+
+/** 我的订阅（登录；返回已订阅包 id 列表）。 */
+export function fetchPackSubscriptions(): Promise<string[]> {
+  return requestJson(`${API_BASE}/v1/packs/subscriptions`, {
+    method: "GET",
+  }) as Promise<string[]>;
+}
+
+/** 订阅源包（登录；幂等）。 */
+export function subscribePack(packId: string): Promise<PackSubscriptionResult> {
+  return requestJson(
+    `${API_BASE}/v1/packs/${encodeURIComponent(packId)}/subscribe`,
+    { method: "POST" },
+  ) as Promise<PackSubscriptionResult>;
+}
+
+/** 退订源包（登录；幂等）。 */
+export function unsubscribePack(
+  packId: string,
+): Promise<PackSubscriptionResult> {
+  return requestJson(
+    `${API_BASE}/v1/packs/${encodeURIComponent(packId)}/unsubscribe`,
+    { method: "DELETE" },
+  ) as Promise<PackSubscriptionResult>;
+}
+
+// ── 仪表盘签名分享（wire-dashboard-share 任务 2 web 面）────────────────────
+// 契约（api 仓 share 模块，proposal 冻结形状）：
+// - POST /api/v1/artifacts/{id}/share（Bearer 登录身份）：仅 published 且
+//   kind=dashboard 的产物可生成（其他 403/404 明确）；未配置
+//   FD_WIRE_SHARE_SECRET 时 503 带原因。返回 {url, expires_at, version}——
+//   注意 url 是**数据端点**相对路径（/api/v1/share/dashboard/{id}?t=…&v=…），
+//   前端展示链接须另行构造（origin + #/share/dashboard/{id}?t=…&v={version}，
+//   t 从响应 url 的 query 里解出）。
+// - GET /api/v1/share/dashboard/{id}?t=&v=（公开端点，无鉴权）：验签 + 版本
+//   匹配 + 仍为 published，任一不满足 404（不泄露原因差异）；成功返回
+//   {title, spec, version, shared_at}。
+
+/** 分享链接生成响应（POST /artifacts/{id}/share）。 */
+export interface DashboardShareLink {
+  /** 数据端点相对路径（含 t/v 查询参数）——不是给用户看的公开页链接。 */
+  url: string;
+  /** 到期时间（naive UTC ISO；默认 30 天）。 */
+  expires_at: string;
+  /** 钉死的产物版本（生成时刻版本；改版后需重新生成链接）。 */
+  version: number;
+}
+
+/** 公开分享端点返回的只读看板载荷。 */
+export interface SharedDashboard {
+  title: string;
+  spec: Record<string, unknown>;
+  version: number;
+  shared_at: string;
+}
+
+/** 生成仪表盘分享链接（仅 published dashboard；draft/archived/非 dashboard
+ *  由服务端 403/404 拒绝，未配置 secret 503——UI 如实呈现后端 detail）。 */
+export function createDashboardShareLink(
+  id: number,
+): Promise<DashboardShareLink> {
+  return requestJsonAnyMethod(
+    `${API_BASE}/v1/artifacts/${id}/share`,
+    "POST",
+  ) as Promise<DashboardShareLink>;
+}
+
+/** 公开取分享看板（无鉴权端点——绝不携带登录头，未登录接收者直接打开）。
+ *  404 = 链接无效/过期/产物下线（服务端统一口径，不区分原因）；
+ *  503 = 分享功能未配置（FD_WIRE_SHARE_SECRET 缺失）。 */
+export async function fetchSharedDashboard(
+  id: number,
+  token: string,
+  version?: number | null,
+): Promise<SharedDashboard> {
+  const params = new URLSearchParams({ t: token });
+  if (version != null) params.set("v", String(version));
+  const url = `${API_BASE}/v1/share/dashboard/${id}?${params}`;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+  } catch (err) {
+    if (err instanceof ConsoleApiError) throw err;
+    throw new ConsoleApiError(
+      `network error fetching ${url}: ${(err as Error).message}`,
+    );
+  }
+  return readResponse(response, url) as Promise<SharedDashboard>;
+}

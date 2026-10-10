@@ -308,6 +308,7 @@ const en: Translation = {
       chat: "AI Build",
       artifacts: "Artifacts",
       datasets: "My data",
+      packs: "Packs",
       demands: "Demands",
       usage: "Usage",
     keys: "Data-Plane Keys",
@@ -463,6 +464,29 @@ const en: Translation = {
         dirtyLeaveConfirm: "You have unsaved changes — leave the editor anyway?",
         backToView: "Back to view",
         preview: "Live preview",
+      },
+      // Signed share links (wire-dashboard-share): the artifact-page entry and
+      // the public share view (login-free read-only, noindex, "Shared by" footer).
+      share: {
+        button: "Create share link",
+        docTitle: "Shared · {{title}}",
+        untitled: "Untitled dashboard",
+        loading: "Loading the dashboard…",
+        invalidTitle: "Link invalid or expired",
+        invalidBody: "This share link does not exist, has expired, or the artifact is no longer published — ask the sender to generate a new one.",
+        disabledTitle: "Sharing not enabled",
+        disabledBody: "No share secret is configured on the server; share links are unavailable for now.",
+        footer: "Shared by Baixun",
+        footerVersion: "Shared by Baixun · version v{{version}}",
+        dialogTitle: "Share link",
+        generating: "Generating the share link…",
+        generateFailed: "Failed to create the share link, please retry later.",
+        urlLabel: "Public link (viewable without sign-in)",
+        copy: "Copy link",
+        copied: "Copied to clipboard.",
+        expiresLabel: "Expires at",
+        versionNote: "The link pins the version snapshot at creation time (v{{version}}) — regenerate it after edits.",
+        close: "Close",
       },
     },
     datasets: {
@@ -818,6 +842,44 @@ const en: Translation = {
       errorTitle: "Data-plane key operation failed",
       disciplineNote:
         "Key discipline: the key is a server-side secret. Browser frontends always reach the data plane through a BFF (session + server-side forwarding) — never embed the key in pages or client code.",
+    },
+    // Source packs (wire-source-packs task 3.3): themed pack card wall +
+    // subscription toggling; browsing and subscribing are free (public catalog
+    // channel, never through the metering track).
+    packs: {
+      title: "Packs",
+      subtitle:
+        "Themed slices of the indicator catalog — subscribe to track a whole pack; browsing and subscribing are free and available on every plan.",
+      loading: "Loading packs…",
+      errorTitle: "Failed to load packs",
+      retry: "Retry",
+      empty: "No packs yet",
+      emptySubscribed:
+        "You have not subscribed to any pack yet — hit “Subscribe” on a card to start.",
+      indicatorCount: "{{count}} indicators",
+      subscribedBadge: "Subscribed",
+      onlySubscribed: "Subscribed only",
+      expand: "View indicators",
+      collapse: "Collapse",
+      subscribe: "Subscribe",
+      unsubscribe: "Unsubscribe",
+      subscribing: "Subscribing…",
+      unsubscribing: "Unsubscribing…",
+      actionErrorTitle: "The subscription action failed — try again shortly.",
+      loginHint: "Sign in to subscribe to packs — browsing stays open.",
+      loginCta: "Go to sign-in",
+      detail: {
+        loading: "Loading indicators…",
+        errorTitle: "Failed to load indicators",
+        retry: "Retry",
+        empty: "This pack has no indicators yet",
+        colCode: "Code",
+        colName: "Name",
+        colDomain: "Domain",
+        pageOf: "Page {{page}} of {{pages}} · {{total}} items",
+        prev: "Previous",
+        next: "Next",
+      },
     },
   },
   admin: {

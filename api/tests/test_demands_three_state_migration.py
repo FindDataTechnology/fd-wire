@@ -210,12 +210,12 @@ def test_active_stock_and_new_columns(migrated_stock):
 
 
 def test_chain_head_follows_migration_chain(migrated_stock):
-    """链头随迁移链推进（wire-dedicated-postgres 并行批次起 = 0021_artifact_lifecycle）。"""
+    """链头随迁移链推进（wire-source-packs 起 = 0022_pack_subscriptions）。"""
     db_url, _ = migrated_stock
     engine = create_engine(db_url)
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    assert version == "0021_artifact_lifecycle"
+    assert version == "0022_pack_subscriptions"
     engine.dispose()
 
 

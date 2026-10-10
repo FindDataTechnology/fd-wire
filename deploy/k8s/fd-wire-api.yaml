@@ -59,6 +59,11 @@ spec:
             # 为唯一事实源）。未配置时下载端点 404 带原因（诚实降级）。
             - name: FD_WIRE_DOWNLOADS_DIR
               value: /var/lib/fd-wire/downloads
+            # 看板分享签名钥（wire-dashboard-share）：HMAC 令牌；未配置时分享端点
+            # 503 带原因（诚实禁用）。随机 32 字节，存 fd-wire-env。
+            - name: FD_WIRE_SHARE_SECRET
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: share_secret }
             # 溯源账本（wire-provenance-ledger）：OTS 公链锚定后端（免费，
             # BTC 确认异步）；私有化部署改 customer（客户自持检查点，零出站）。
             - name: FD_WIRE_PROVENANCE_ANCHOR_BACKEND

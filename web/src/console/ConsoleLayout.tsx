@@ -1,5 +1,5 @@
-// 控制台布局：左侧栏（AI 构建 / 产物 / 我的数据 / 我的需求 / 用量）+ 顶栏
-//（登录客户标识 + 当前档位 + 登出）+ 内容区。
+// 控制台布局：左侧栏（AI 构建 / 产物 / 我的数据 / 源包 / 我的需求 / 用量 /
+// 数据面 Key）+ 顶栏（登录客户标识 + 当前档位 + 登出）+ 内容区。
 // chat tab 显示名「AI 构建」，id 保持 chat 不变（路由兼容，任务 2.2）；
 // 页面为壹座试用引导卡（ChatPage）。
 // demands tab 已转正（wire-ux-consolidation 任务 4.3）：「我的需求」只读列表
@@ -13,6 +13,7 @@ export type ConsoleTab =
   | "chat"
   | "artifacts"
   | "datasets"
+  | "packs"
   | "demands"
   | "usage"
   | "keys";
@@ -29,6 +30,12 @@ export const CONSOLE_TABS: ReadonlyArray<{
     id: "datasets",
     href: "#/console/datasets",
     labelKey: "console.nav.datasets",
+  },
+  // 源包（wire-source-packs 任务 3.1）：主题包订阅入口，免费档可用。
+  {
+    id: "packs",
+    href: "#/console/packs",
+    labelKey: "console.nav.packs",
   },
   {
     id: "demands",

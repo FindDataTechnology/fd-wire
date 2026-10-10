@@ -71,6 +71,25 @@ describe("parseHash（hash 路由解析）", () => {
     });
     expect(parseHash("#/login")).toEqual({ name: "login" });
   });
+
+  it("公开分享深链（wire-dashboard-share）：id/t/v 齐全解析；t/v 缺失为 null", () => {
+    expect(parseHash("#/share/dashboard/11?t=tok-abc&v=3")).toEqual({
+      name: "shareDashboard",
+      id: "11",
+      token: "tok-abc",
+      version: "3",
+    });
+    // 缺 t/v（接收者手改链接）：token/version 如实为 null，ShareView 落无效页
+    expect(parseHash("#/share/dashboard/11")).toEqual({
+      name: "shareDashboard",
+      id: "11",
+      token: null,
+      version: null,
+    });
+    // 缺 id 段不构成分享路由，回落首页
+    expect(parseHash("#/share/dashboard")).toEqual({ name: "home" });
+    expect(parseHash("#/share/other/11?t=x")).toEqual({ name: "home" });
+  });
 });
 
 describe("App shell（admin 导航按角色显隐 · Logto 回调真实路径）", () => {
@@ -170,5 +189,53 @@ describe("App 页脚分发（wire-ux-consolidation 任务 1.2）", () => {
     expect(screen.getByTestId("admin-role-gate")).toBeTruthy();
     expect(screen.queryByTestId("site-footer")).toBeNull();
     expect(screen.queryByTestId("console-footer")).toBeNull();
+  });
+});
+
+describe("App 公开分享壳（wire-dashboard-share）", () => {
+  beforeEach(() => {
+    i18n.changeLanguage("zh");
+    resetCatalogStatsCacheForTests();
+    localStorage.clear();
+    sessionStorage.clear();
+    window.location.hash = "";
+    document.title = "柏讯 Wire — B2B 数据平台";
+    // 分享页调公开端点（无鉴权）——404 即「链接无效」态，零依赖。
+    vi.stubGlobal(
+      "fetch",
+      (() =>
+        Promise.resolve({
+          ok: false,
+          status: 404,
+          json: () => Promise.resolve({ detail: "not found" }),
+        } as unknown as Response)) as unknown as typeof fetch,
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+    sessionStorage.clear();
+    window.location.hash = "";
+  });
+
+  it("#/share/dashboard/* 渲染独立极简壳：Wire 顶栏在，站点导航/页脚不渲染", async () => {
+    window.location.hash = "#/share/dashboard/9?t=tok&v=2";
+    // 无登录会话（分享页免登录红线）
+    render(<App />);
+
+    expect(await screen.findByTestId("share-invalid")).toBeTruthy();
+    expect(screen.getByTestId("share-topbar").textContent).toBe("Wire");
+    // 独立成壳：不进站点 header/footer，也无控制台布局
+    expect(screen.queryByTestId("site-footer")).toBeNull();
+    expect(screen.queryByTestId("console-footer")).toBeNull();
+    // 标题前缀与 noindex 红线在 App 壳层同样生效
+    expect(document.title).toContain("分享 · ");
+    expect(
+      document
+        .querySelector('meta[name="robots"]')
+        ?.getAttribute("content"),
+    ).toBe("noindex");
   });
 });

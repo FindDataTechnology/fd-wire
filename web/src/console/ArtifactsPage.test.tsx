@@ -9,6 +9,7 @@ import "../i18n";
 import i18n from "../i18n";
 import { ArtifactsPage } from "./ArtifactsPage";
 import { installConsoleBackend, seedConsoleSession } from "./testing";
+import { formatServerDate } from "./util";
 import type { Conversation } from "./api";
 
 const CONVERSATIONS: Conversation[] = [
@@ -354,5 +355,190 @@ describe("ArtifactsPage（产物列表：持久化 + 版本 + 状态机）", () 
     );
     render(<ArtifactsPage />);
     expect(await screen.findByTestId("artifacts-empty")).toBeTruthy();
+  });
+});
+
+// ── 分享入口与弹层（wire-dashboard-share 任务 2.2/2.3）──────────────────────
+// 端点 POST /api/v1/artifacts/{id}/share 未进通用假后端——本文件内联拦截
+// （语义对齐 api：仅 published dashboard 发 {url, expires_at, version}，其余
+// 403；可选强制状态注入测失败态）。展示链接须从响应自构：
+// origin + /#/share/dashboard/{id}?t=…&v={version}（t 从数据端点 url 解出）。
+
+/** 在 install() 三产物（11 dashboard draft / 12 alert published / 13 refresh
+ *  archived）之上补两条：14 dashboard published（唯一合法分享对象）、
+ *  15 dashboard archived——覆盖入口分发的全部组合。 */
+function installShareRows() {
+  const backend = install();
+  backend.addLifecycleArtifact({
+    id: 14,
+    kind: "dashboard",
+    title: "已发布看板",
+    status: "published",
+    version: 2,
+    origin_conversation_id: 1,
+    spec: V1_DASH,
+    created_at: "2026-10-09T12:00:00",
+    updated_at: "2026-10-10T12:00:00",
+  });
+  backend.addLifecycleArtifact({
+    id: 15,
+    kind: "dashboard",
+    title: "已归档看板",
+    status: "archived",
+    version: 1,
+    origin_conversation_id: null,
+    spec: V1_DASH,
+    created_at: "2026-10-09T13:00:00",
+    updated_at: "2026-10-10T13:00:00",
+  });
+  return backend;
+}
+
+function localJson(body: unknown, status = 200) {
+  return {
+    ok: status < 400,
+    status,
+    json: () => Promise.resolve(body),
+  };
+}
+
+/** 包装假后端：拦截 share POST（Bearer 断言 + 成功/403/强制态），其余透传。 */
+function withShareEndpoint(
+  backend: ReturnType<typeof installConsoleBackend>,
+  force?: { status: number; detail: string },
+): typeof fetch {
+  const original = backend.fetchImpl;
+  return ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://console.test");
+    const match = url.pathname.match(/^\/api\/v1\/artifacts\/(\d+)\/share$/);
+    if (match && (init?.method ?? "GET").toUpperCase() === "POST") {
+      const id = Number(match[1]);
+      const headers: Record<string, string> = {};
+      new Headers(init?.headers as HeadersInit | undefined).forEach((v, k) => {
+        headers[k.toLowerCase()] = v;
+      });
+      backend.calls.push({ method: "POST", url, headers });
+      if (force) {
+        return Promise.resolve(localJson({ detail: force.detail }, force.status));
+      }
+      // 语义对齐 api：仅已发布仪表盘可分享（本种子集中即 14），其余 403。
+      if (id !== 14) {
+        return Promise.resolve(
+          localJson(
+            { detail: `产物 ${id} 不允许生成分享链接（仅已发布仪表盘可分享）` },
+            403,
+          ),
+        );
+      }
+      return Promise.resolve(
+        localJson({
+          url: `/api/v1/share/dashboard/14?t=share-token-14&v=2`,
+          expires_at: "2026-11-10T08:00:00",
+          version: 2,
+        }),
+      );
+    }
+    return original(input, init);
+  }) as unknown as typeof fetch;
+}
+
+describe("ArtifactsPage 分享入口（wire-dashboard-share 2.2/2.3）", () => {
+  beforeEach(() => {
+    i18n.changeLanguage("zh");
+    localStorage.clear();
+    sessionStorage.clear();
+    seedConsoleSession({ sub: "demo-customer" });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  it("入口按 kind+status 分发：仅 published dashboard 出「生成分享链接」", async () => {
+    const backend = installShareRows();
+    vi.stubGlobal("fetch", withShareEndpoint(backend));
+
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+
+    // 唯一合法对象：14（dashboard × published）
+    expect(
+      within(rowOf(14)).getByTestId("artifact-share").textContent,
+    ).toContain("生成分享链接");
+    // draft dashboard（11）/ published 非 dashboard（12）/ archived 非
+    // dashboard（13）/ archived dashboard（15）一律无入口
+    expect(within(rowOf(11)).queryByTestId("artifact-share")).toBeNull();
+    expect(within(rowOf(12)).queryByTestId("artifact-share")).toBeNull();
+    expect(within(rowOf(13)).queryByTestId("artifact-share")).toBeNull();
+    expect(within(rowOf(15)).queryByTestId("artifact-share")).toBeNull();
+  });
+
+  it("弹层：POST share → 展示自构公开页链接（origin+hash 路由+t/v）+ 到期时间 + 复制", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const backend = installShareRows();
+    vi.stubGlobal("fetch", withShareEndpoint(backend));
+
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+
+    fireEvent.click(within(rowOf(14)).getByTestId("artifact-share"));
+    expect(await screen.findByTestId("share-dialog")).toBeTruthy();
+
+    // 请求：POST /api/v1/artifacts/14/share，带登录 Bearer
+    const post = backend.calls.find(
+      (c) =>
+        c.method === "POST" &&
+        /^\/api\/v1\/artifacts\/14\/share$/.test(c.url.pathname),
+    );
+    expect(post).toBeTruthy();
+    expect(post?.headers["authorization"]).toMatch(/^Bearer /);
+
+    // 展示链接 = origin + #/share/dashboard/14?t=<响应 url 解出的 t>&v=<响应 version>
+    const expectedUrl = `${window.location.origin}/#/share/dashboard/14?t=share-token-14&v=2`;
+    expect(
+      (await screen.findByTestId("share-url") as HTMLInputElement).value,
+    ).toBe(expectedUrl);
+    // 到期时间如实呈现（同 formatServerDate 口径）
+    expect(screen.getByTestId("share-expires").textContent).toContain(
+      formatServerDate("2026-11-10T08:00:00"),
+    );
+    expect(screen.getByTestId("share-expires").textContent).toContain("到期时间");
+
+    // 复制按钮：完整公开页链接进剪贴板
+    fireEvent.click(screen.getByTestId("share-copy"));
+    expect(await screen.findByTestId("share-copied")).toBeTruthy();
+    expect(writeText).toHaveBeenCalledWith(expectedUrl);
+
+    // 关闭弹层
+    fireEvent.click(screen.getByTestId("share-dialog-close"));
+    expect(screen.queryByTestId("share-dialog")).toBeNull();
+  });
+
+  it("失败态：服务端拒绝（如 503 未配置 secret）时后端 detail 如实呈现", async () => {
+    const backend = installShareRows();
+    vi.stubGlobal(
+      "fetch",
+      withShareEndpoint(backend, {
+        status: 503,
+        detail: "分享功能未配置（FD_WIRE_SHARE_SECRET 为空）",
+      }),
+    );
+
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+
+    fireEvent.click(within(rowOf(14)).getByTestId("artifact-share"));
+    expect(await screen.findByTestId("share-error")).toBeTruthy();
+    expect(screen.getByTestId("share-error").textContent).toContain(
+      "分享功能未配置",
+    );
+    expect(screen.queryByTestId("share-url")).toBeNull();
   });
 });

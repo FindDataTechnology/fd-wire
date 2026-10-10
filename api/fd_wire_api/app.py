@@ -22,6 +22,11 @@ from .datasets import init_datasets_db
 from .datasets import router as datasets_router
 # 连接器分发的公开下载面（wire-connector-distribution 任务 1）
 from .downloads import router as downloads_router
+# 签名分享链接（wire-dashboard-share）：published 仪表盘对外只读链接
+from .share import router as share_router
+# 源包订阅（wire-source-packs）：/api/v1/packs 全端点
+from .packs import init_db as init_packs_db
+from .packs import router as packs_router
 from .demands import admin_router as demands_admin_router
 from .demands import init_db as init_demands_db
 from .demands import pipeline_router as demands_pipeline_router
@@ -87,6 +92,9 @@ async def lifespan(_: FastAPI):
     start_forwarder_loop()
     start_sealer_loop()
     start_selfcheck_loop()
+    # 源包订阅（wire-source-packs）：pack_subscriptions 幂等建表兜底
+    # （生产走 alembic 0022；指标切片实时查目录镜像，无自身快照表）。
+    init_packs_db()
     try:
         yield
     finally:
@@ -149,6 +157,13 @@ app.include_router(datasets_connector_router)
 # /api/v1/downloads/connector/*（manifest + 二进制；无鉴权——下载件不含
 # 敏感数据；FD_WIRE_DOWNLOADS_DIR 未配置时诚实 404 并说明原因）
 app.include_router(downloads_router)
+# 签名分享链接（wire-dashboard-share）：POST 生成（客户鉴权，仅 published
+# dashboard）+ GET /api/v1/share/dashboard/* 公开验签（任一不满足统一 404）；
+# FD_WIRE_SHARE_SECRET 未配置时两端正点 503 诚实禁用（无表 HMAC 令牌）
+app.include_router(share_router)
+# 源包订阅（wire-source-packs）：公开包列表/详情（实时目录切片）+ 登录
+# 订阅/退订/我的订阅（pack_subscriptions 走元数据库，alembic 0022）
+app.include_router(packs_router)
 # 溯源账本（wire-provenance-ledger 任务组 2）：客户面概览/时间线/状态/调档
 # （Bearer 身份，4.5）+ 内部 ingest 入账端点（X-Provenance-Token）
 app.include_router(provenance_router)

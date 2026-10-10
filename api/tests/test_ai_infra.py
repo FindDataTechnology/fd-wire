@@ -426,6 +426,35 @@ def test_tool_schemas_are_the_five_artifact_kinds() -> None:
         assert params["properties"]["spec"]["type"] == "object"
 
 
+def test_dashboard_tool_spec_description_embeds_v1_contract() -> None:
+    """dashboard_spec_create 的 spec 描述内嵌 v1 结构示例（快照口径，
+    wire-dashboard-share 任务 1.4：AI 新仪表盘默认可渲染可分享）。"""
+    dashboard = next(
+        t for t in TOOL_SCHEMAS if t["function"]["name"] == "dashboard_spec_create"
+    )
+    desc = dashboard["function"]["parameters"]["properties"]["spec"]["description"]
+    # v1 契约要素在场：panels/type 四值/span/snapshot(含 columns+rows)/config
+    for token in (
+        "panels",
+        "kpi|line|bar|table",
+        '"span"',
+        "snapshot",
+        "columns",
+        "rows",
+        "config",
+        "unit",
+        "subtitle",
+    ):
+        assert token in desc, token
+    # 强调取到的数据写进 snapshot（不放占位符）
+    assert "写进 snapshot" in desc
+    # 其余四类工具的 spec 描述不受影响（仍为各自的概要文案）
+    composite = next(
+        t for t in TOOL_SCHEMAS if t["function"]["name"] == "composite_indicator_create"
+    )
+    assert "panels" not in composite["function"]["parameters"]["properties"]["spec"]["description"]
+
+
 @pytest.mark.parametrize(
     "args, expect_error",
     [
@@ -514,8 +543,8 @@ def test_migration_0005_creates_ai_tables(migrated_sqlite) -> None:
     }
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    # 迁移链只增不改：head 随链推进（wire-dedicated-postgres 并行批次起 = 0021_artifact_lifecycle）
-    assert version == "0021_artifact_lifecycle"
+    # 迁移链只增不改：head 随链推进（wire-source-packs 起 = 0022_pack_subscriptions）
+    assert version == "0022_pack_subscriptions"
 
 
 def _cfg() -> Config:

@@ -19,6 +19,7 @@ import type {
   DatasetQuota,
   DraftArtifact,
   MessageRole,
+  PackIndicator,
   SyncRecord,
   UploadPreview,
 } from "./api";
@@ -146,7 +147,24 @@ export interface ConsoleBackendOptions {
   connectorManifest?: ConnectorManifest;
   /** 强制 manifest 端点返回该状态（不可达/网络错态）。 */
   failManifestStatus?: number;
+  /** 种子源包（wire-source-packs 3.3）：indicator_count 按 indicators 长度推导。 */
+  packs?: FakePackSeed[];
+  /** 预置订阅包 id（缺省归属 demo-customer；订阅面 Bearer 身份隔离）。 */
+  packSubscriptions?: string[];
+  /** 强制源包公开端点（列表/详情）返回该状态。 */
+  failPacksStatus?: number;
+  /** 强制订阅/退订端点返回该状态（如 401 会话失效态）。 */
+  failPackSubscribeStatus?: number;
 }
+
+/** 源包种子（wire-source-packs）：假后端按 indicators 分页切片出详情。 */
+export type FakePackSeed = {
+  id: string;
+  name_zh: string;
+  name_en: string;
+  desc: string;
+  indicators: PackIndicator[];
+};
 
 /** 安装假后端为 global fetch；返回调用记录与状态注入接口。 */
 export function installConsoleBackend(
@@ -173,6 +191,7 @@ export function installConsoleBackend(
   addSync: (sync: SyncRecord) => void;
   getDatasets: () => Dataset[];
   getCorrections: (datasetId: string) => Correction[];
+  getPackSubscriptions: (customerId?: string) => string[];
 } {
   const store = new Map<number, StoredConversation>();
   let nextConversationId = 1;
@@ -228,6 +247,13 @@ export function installConsoleBackend(
   let nextUploadSeq = 1;
   let nextCorrectionId = 1;
   let nextTokenSeq = 1;
+  // ── 源包假后端状态（wire-source-packs）：订阅按 Bearer 客户隔离 ──
+  const packsStore = new Map<string, FakePackSeed>();
+  for (const pack of options.packs ?? []) packsStore.set(pack.id, pack);
+  const packSubscriptions = new Map<string, string[]>();
+  if (options.packSubscriptions?.length) {
+    packSubscriptions.set("demo-customer", [...options.packSubscriptions]);
+  }
 
   function addDataset(dataset: Dataset): void {
     datasets.set(dataset.id, dataset);
@@ -466,6 +492,66 @@ export function installConsoleBackend(
       return Promise.resolve(jsonResponse(options.connectorManifest));
     }
 
+    // ── 源包公开面（wire-source-packs 2.1：列表/详情匿名可读，置于 Bearer
+    //    校验之前；subscriptions 需登录，先于 /{id} 详情正则匹配以免撞名）──
+    if (path === "/api/v1/packs" && method === "GET") {
+      if (options.failPacksStatus) {
+        return Promise.resolve(
+          jsonResponse({ detail: `packs ${options.failPacksStatus}` }, options.failPacksStatus),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse(
+          [...packsStore.values()].map((pack) => ({
+            id: pack.id,
+            name_zh: pack.name_zh,
+            name_en: pack.name_en,
+            desc: pack.desc,
+            indicator_count: pack.indicators.length,
+          })),
+        ),
+      );
+    }
+    if (path === "/api/v1/packs/subscriptions" && method === "GET") {
+      const bearerSub = subOfBearer(headers);
+      if (!bearerSub) {
+        return Promise.resolve(
+          jsonResponse({ detail: "缺少 Authorization: Bearer <ID token>（登录会话）" }, 401),
+        );
+      }
+      return Promise.resolve(jsonResponse([...(packSubscriptions.get(bearerSub) ?? [])]));
+    }
+    const packDetailMatch = path.match(/^\/api\/v1\/packs\/([^/]+)$/);
+    if (packDetailMatch && method === "GET") {
+      if (options.failPacksStatus) {
+        return Promise.resolve(
+          jsonResponse({ detail: `packs ${options.failPacksStatus}` }, options.failPacksStatus),
+        );
+      }
+      const pack = packsStore.get(decodeURIComponent(packDetailMatch[1]!));
+      if (!pack) {
+        return Promise.resolve(jsonResponse({ detail: "pack not found" }, 404));
+      }
+      const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);
+      const pageSize = Math.max(
+        1,
+        Number(url.searchParams.get("page_size") ?? "20") || 20,
+      );
+      const start = (page - 1) * pageSize;
+      return Promise.resolve(
+        jsonResponse({
+          id: pack.id,
+          name_zh: pack.name_zh,
+          name_en: pack.name_en,
+          desc: pack.desc,
+          items: pack.indicators.slice(start, start + pageSize),
+          page,
+          page_size: pageSize,
+          total: pack.indicators.length,
+        }),
+      );
+    }
+
     const customerId = subOfBearer(headers);
     if (!customerId) {
       return Promise.resolve(
@@ -473,6 +559,33 @@ export function installConsoleBackend(
           { detail: "缺少 Authorization: Bearer <ID token>（登录会话）" },
           401,
         ),
+      );
+    }
+
+    // ── 源包订阅面（wire-source-packs 2.2：登录；重复订阅/退订幂等 200；
+    //    未知包 404；按 Bearer 客户隔离）──
+    const packSubMatch = path.match(/^\/api\/v1\/packs\/([^/]+)\/(subscribe|unsubscribe)$/);
+    if (packSubMatch) {
+      if (options.failPackSubscribeStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `pack subscribe ${options.failPackSubscribeStatus}` },
+            options.failPackSubscribeStatus,
+          ),
+        );
+      }
+      const packId = decodeURIComponent(packSubMatch[1]!);
+      if (!packsStore.has(packId)) {
+        return Promise.resolve(jsonResponse({ detail: "pack not found" }, 404));
+      }
+      const subscribing = packSubMatch[2] === "subscribe";
+      const mine = [...(packSubscriptions.get(customerId) ?? [])];
+      const at = mine.indexOf(packId);
+      if (subscribing && at < 0) mine.push(packId);
+      if (!subscribing && at >= 0) mine.splice(at, 1);
+      packSubscriptions.set(customerId, mine);
+      return Promise.resolve(
+        jsonResponse({ pack_id: packId, subscribed: subscribing }),
       );
     }
 
@@ -1206,6 +1319,8 @@ export function installConsoleBackend(
     addSync,
     getDatasets: () => [...datasets.values()],
     getCorrections: (datasetId: string) => corrections.get(datasetId) ?? [],
+    getPackSubscriptions: (customerId = "demo-customer") =>
+      [...(packSubscriptions.get(customerId) ?? [])],
   };
 }
 

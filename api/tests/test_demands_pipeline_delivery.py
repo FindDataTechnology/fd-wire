@@ -745,5 +745,5 @@ def test_migration_head_adds_demand_columns(migrated_demands_sqlite):
     } <= columns
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    # 链头唯一且随链推进（wire-dedicated-postgres 并行批次起链头=0021_artifact_lifecycle）
-    assert version == "0021_artifact_lifecycle"
+    # 链头唯一且随链推进（wire-source-packs 起链头=0022_pack_subscriptions）
+    assert version == "0022_pack_subscriptions"
