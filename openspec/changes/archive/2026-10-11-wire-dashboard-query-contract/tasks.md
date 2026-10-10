@@ -35,6 +35,6 @@
 
 ## 3. 收口
 
-- [ ] 3.1 api 全量 pytest + web vitest + tsc 全绿
-- [ ] 3.2 生产发布（镜像滚版 + manifest + ArgoCD）与实弹验证（契约看板
+- [x] 3.1 api 全量 pytest + web vitest + tsc 全绿
+- [x] 3.2 生产发布（镜像滚版 + manifest + ArgoCD）与实弹验证（契约看板
   刷新零 LLM、旧看板 AI 路径不回归）

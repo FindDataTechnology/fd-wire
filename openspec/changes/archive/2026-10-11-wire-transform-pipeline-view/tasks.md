@@ -21,5 +21,5 @@
 
 ## 3. 收口
 
-- [ ] 3.1 api pytest + web vitest + tsc 全绿
-- [ ] 3.2 生产发布与实弹验证（graph 端点 200 带真实节点、视图渲染）
+- [x] 3.1 api pytest + web vitest + tsc 全绿
+- [x] 3.2 生产发布与实弹验证（graph 端点 200 带真实节点、视图渲染）
