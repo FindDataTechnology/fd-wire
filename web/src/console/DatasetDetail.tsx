@@ -3,6 +3,8 @@
 // 同步历史（失败原因；漂移暂停行确认列并恢复）、悬空清单（逐条回滚）。
 // 溯源区块（wire-provenance-ledger 任务组 8）：档位/链完整性/锚定进度状态条、
 // 倒序事件时间线（before_seq 加载更早）、证据包下载。
+// 定时刷新小节（wire-refresh-scheduler 任务 4.1）：仅 derived 来源数据集在
+// 详情页底部出现（间隔预设 1h/6h/24h，创建/暂停恢复/删除/状态展示）。
 // 契约：openspec/changes/wire-customer-local-data/reports/interfaces.md §3.3/§4、
 // openspec/changes/wire-provenance-ledger /api/v1/provenance/*。
 import { useCallback, useEffect, useState } from "react";
@@ -37,6 +39,10 @@ import {
   type SyncStatus,
 } from "./api";
 import { formatServerDate, truncate } from "./util";
+import {
+  DATASET_SCHEDULE_INTERVALS,
+  RefreshScheduleSection,
+} from "./RefreshScheduleSection";
 
 const SYNC_BADGE_CLASS: Record<SyncStatus, string> = {
   idle: "bg-slate-100 text-slate-600 ring-slate-200",
@@ -325,6 +331,15 @@ export function DatasetDetail({
       />
       <DanglingPanel corrections={corrections} revert={revert} />
       <ProvenancePanel datasetKey={dataset.key} />
+      {/* 定时刷新小节（wire-refresh-scheduler 4.1）：仅 derived 来源数据集——
+          调度器按间隔自动跑 dataset_refresh（上传/连接器来源走各自的同步链路）。 */}
+      {dataset.source_kind === "derived" && (
+        <RefreshScheduleSection
+          targetType="dataset"
+          targetId={dataset.id}
+          intervals={DATASET_SCHEDULE_INTERVALS}
+        />
+      )}
     </div>
   );
 }

@@ -512,9 +512,53 @@ const en: Translation = {
         copy: "Copy link",
         copied: "Copied to clipboard.",
         expiresLabel: "Expires at",
+        // Validity options (wire-share-ttl-options): 7/30/90-day enum,
+        // default 30; changing it regenerates the link, with the expiry
+        // preview following the selection (server response overrides it).
+        ttlLabel: "Validity",
+        ttlOptions: {
+          "7": "7 days",
+          "30": "30 days",
+          "90": "90 days",
+        },
+        ttlNote: "Changing the validity regenerates the link.",
         versionNote: "The link pins the version snapshot at creation time (v{{version}}) — regenerate it after edits.",
         close: "Close",
       },
+    },
+    // Scheduled refresh section (wire-refresh-scheduler task 4.1): shared by
+    // the derived-dataset detail page and the dashboard view mode — create
+    // (preset intervals) / pause / resume / delete plus status display.
+    schedules: {
+      title: "Scheduled refresh",
+      hint: "Refresh this target automatically on a fixed interval — the background scheduler runs it when due; pause or delete at any time.",
+      loading: "Loading the schedule…",
+      loadError: "Failed to load the schedule.",
+      retry: "Retry",
+      intervalLabel: "Refresh interval",
+      intervals: {
+        "60": "Every 1 hour",
+        "360": "Every 6 hours",
+        "1440": "Every 24 hours",
+        "10080": "Every 7 days",
+      },
+      createSubmit: "Create schedule",
+      creating: "Creating…",
+      opError: "Schedule operation failed, please retry later.",
+      pausedBadge: "Paused",
+      activeBadge: "Scheduled",
+      nextRunLabel: "Next run",
+      lastStatusLabel: "Last result",
+      statuses: {
+        pending: "Awaiting first run",
+        running: "Refreshing",
+        ok: "Succeeded",
+        failed: "Failed",
+      },
+      lastErrorLabel: "Last error",
+      pause: "Pause",
+      resume: "Resume",
+      delete: "Delete",
     },
     datasets: {
       title: "My data",

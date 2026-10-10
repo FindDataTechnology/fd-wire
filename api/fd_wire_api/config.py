@@ -57,7 +57,16 @@ def canonical_metadata_database_url() -> str | None:
 
 
 class Settings(BaseSettings):
-    """运行时配置：同名环境变量优先（如 REGISTRY_URL=...）。"""
+    """运行时配置：同名环境变量优先（如 REGISTRY_URL=...）。
+
+    统一刷新调度器（wire-refresh-scheduler）的环境项不在本类——归
+    ``schedules/settings.py`` 自有单例：``FD_WIRE_REFRESH_SCHEDULER_ENABLED``
+    （默认 true）、``FD_WIRE_REFRESH_SCHEDULER_TICK_SECONDS``（默认 60）、
+    ``FD_WIRE_SCHEDULE_MIN_INTERVAL_DATASET``（默认 60 分钟）、
+    ``FD_WIRE_SCHEDULE_MIN_INTERVAL_ARTIFACT``（默认 360 分钟——AI 刷新耗
+    token，地板封无人值守成本）、``FD_WIRE_SCHEDULE_MAX_PER_CUSTOMER``
+    （默认 10）。
+    """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

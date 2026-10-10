@@ -11,6 +11,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import "../i18n";
 import i18n from "../i18n";
@@ -870,5 +871,159 @@ describe("DatasetsPage（免费档放行，wire-free-tier-data-gate 4.1-4.3）",
     install();
     render(<DatasetsPage planCode="" />);
     expect(await screen.findByTestId("upload-section")).toBeTruthy();
+  });
+});
+
+// ── 定时刷新小节（wire-refresh-scheduler 任务 4.1/4.2）──────────────────────
+// derived 数据集详情页：创建流（POST body 断言）/暂停恢复切换/错误展示；
+// 非 derived 数据集不出现该小节。端点走 testing.ts 假后端 schedules 路由。
+describe("DatasetDetail 定时刷新小节（wire-refresh-scheduler 4.1/4.2）", () => {
+  /** 调度行种子公共段（next_run_at/上次运行/上次错误等）。 */
+  const SCHEDULE_BASE = {
+    next_run_at: "2026-10-11T09:00:00",
+    last_status: "ok" as const,
+    last_run_at: "2026-10-11T08:00:00",
+    last_error: null,
+    created_at: "2026-10-10T08:00:00",
+  };
+
+  it("创建流：derived 数据集出小节，预设 1h/6h/24h，选 24h 创建 → POST body 断言 → 状态行", async () => {
+    const backend = install({
+      datasets: [
+        makeDataset({ id: "ds-1", name: "派生集", source_kind: "derived" }),
+      ],
+    });
+    render(<DatasetsPage planCode="basic" />);
+    fireEvent.click(await screen.findByTestId("dataset-open"));
+
+    const section = await screen.findByTestId("schedule-section");
+    // 等列表落地（无调度 → 创建面）再交互，避开 loading 态竞态。
+    const create = await within(section).findByTestId("schedule-create");
+    // 预设档 = dataset 地板（60 分钟）起步：1h/6h/24h
+    expect(
+      within(create)
+        .getAllByTestId("schedule-interval")
+        .map((el) => el.getAttribute("data-minutes")),
+    ).toEqual(["60", "360", "1440"]);
+    // 默认选中首档；改选 24h（1440）后创建
+    fireEvent.click(within(create).getAllByTestId("schedule-interval")[2]!);
+    fireEvent.click(within(create).getByTestId("schedule-create-submit"));
+
+    expect(await screen.findByTestId("schedule-row")).toBeTruthy();
+    const post = postCalls(backend, "/api/v1/refresh-schedules");
+    expect(post).toHaveLength(1);
+    expect(post[0]!.body).toEqual({
+      target_type: "dataset",
+      target_id: "ds-1",
+      interval_minutes: 1440,
+    });
+    // 创建后状态行：调度中徽标 + 下次运行时间
+    expect(
+      screen.getByTestId("schedule-row").getAttribute("data-paused"),
+    ).toBe("false");
+    expect(screen.getByTestId("schedule-state-badge").textContent).toContain(
+      "调度中",
+    );
+    expect(screen.getByTestId("schedule-next-run").textContent).toContain(
+      "下次运行",
+    );
+  });
+
+  it("上传来源数据集：详情页无定时刷新小节（也不发起 schedules 请求）", async () => {
+    const backend = install({
+      datasets: [makeDataset({ id: "ds-1", name: "上传集" })],
+    });
+    render(<DatasetsPage planCode="basic" />);
+    fireEvent.click(await screen.findByTestId("dataset-open"));
+    await screen.findByTestId("preview-grid");
+
+    expect(screen.queryByTestId("schedule-section")).toBeNull();
+    expect(
+      backend.calls.filter(
+        (c) => c.url.pathname === "/api/v1/refresh-schedules",
+      ),
+    ).toEqual([]);
+  });
+
+  it("暂停/恢复：POST /{id}/pause → 已暂停徽标；再点恢复 → 回调度中（含上次结果/错误展示）", async () => {
+    const backend = install({
+      datasets: [
+        makeDataset({ id: "ds-1", name: "派生集", source_kind: "derived" }),
+      ],
+      refreshSchedules: [
+        {
+          id: 7,
+          target_type: "dataset",
+          target_id: "ds-1",
+          interval_minutes: 360,
+          paused: false,
+          ...SCHEDULE_BASE,
+          last_status: "failed",
+          last_error: "上游列缺失：price",
+        },
+      ],
+    });
+    render(<DatasetsPage planCode="basic" />);
+    fireEvent.click(await screen.findByTestId("dataset-open"));
+
+    // 状态行如实呈现：上次结果 failed + 上次错误
+    await screen.findByTestId("schedule-row");
+    expect(
+      screen.getByTestId("schedule-last-status").getAttribute("data-status"),
+    ).toBe("failed");
+    expect(screen.getByTestId("schedule-last-error").textContent).toContain(
+      "price",
+    );
+
+    // 暂停：POST /7/pause → 已暂停徽标
+    fireEvent.click(screen.getByTestId("schedule-toggle"));
+    await waitFor(() =>
+      expect(
+        postCalls(backend, "/api/v1/refresh-schedules/7/pause"),
+      ).toHaveLength(1),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("schedule-row").getAttribute("data-paused"),
+      ).toBe("true");
+      expect(screen.getByTestId("schedule-state-badge").textContent).toContain(
+        "已暂停",
+      );
+    });
+
+    // 恢复：POST /7/resume → 回调度中
+    fireEvent.click(screen.getByTestId("schedule-toggle"));
+    await waitFor(() =>
+      expect(
+        postCalls(backend, "/api/v1/refresh-schedules/7/resume"),
+      ).toHaveLength(1),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("schedule-row").getAttribute("data-paused"),
+      ).toBe("false"),
+    );
+  });
+
+  it("创建被拒（422 地板）：后端 detail 如实呈现，停留在创建面可重试", async () => {
+    install({
+      datasets: [
+        makeDataset({ id: "ds-1", name: "派生集", source_kind: "derived" }),
+      ],
+      failScheduleCreateStatus: 422,
+      failScheduleCreateDetail: "刷新间隔不能低于 60 分钟（当前 30）",
+    });
+    render(<DatasetsPage planCode="basic" />);
+    fireEvent.click(await screen.findByTestId("dataset-open"));
+
+    const create = await screen.findByTestId("schedule-create");
+    fireEvent.click(within(create).getByTestId("schedule-create-submit"));
+
+    expect(
+      (await screen.findByTestId("schedule-op-error")).textContent,
+    ).toContain("刷新间隔不能低于 60 分钟");
+    // 失败后不切换状态行，创建面仍在（可改选重试）
+    expect(screen.getByTestId("schedule-create")).toBeTruthy();
+    expect(screen.queryByTestId("schedule-row")).toBeNull();
   });
 });

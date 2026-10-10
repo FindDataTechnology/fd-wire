@@ -31,6 +31,16 @@ router = APIRouter(tags=["share"])
 _NOT_FOUND_DETAIL = "not found"
 
 
+#: 有效期枚举（wire-share-ttl-options）：天数三选一，缺省 30
+ALLOWED_TTL_DAYS: tuple[int, ...] = (7, 30, 90)
+
+
+class ShareCreateIn(BaseModel):
+    """生成请求体（可选）：``ttl_days`` 有效期三选一（7|30|90，缺省 30）。"""
+
+    ttl_days: int | None = None
+
+
 class ShareLinkOut(BaseModel):
     """生成结果：相对 url（web 拼前缀即用）+ 到期时间 + 钉死的版本号。"""
 
@@ -61,14 +71,30 @@ def _share_disabled(exc: service.ShareDisabled) -> HTTPException:
 )
 def create_share_link(
     artifact_id: int,
+    payload: ShareCreateIn | None = None,
     customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> ShareLinkOut:
-    """生成分享链接：钉死当前版本，默认 30 天（FD_WIRE_SHARE_TTL_SECONDS 可覆盖）。"""
+    """生成分享链接：钉死当前版本，有效期可选 7/30/90 天（缺省 30——
+    FD_WIRE_SHARE_TTL_SECONDS 可覆盖缺省；显式 ttl_days 时以选择为准）。"""
     try:
         secret = service.require_share_secret()
     except service.ShareDisabled as exc:
         raise _share_disabled(exc) from exc
+    # ttl_days 三态：缺省（无 body / 无字段）走 service 默认；显式给出则
+    # 须在枚举内，否则 422 列出合法值（wire-share-ttl-options 1.1）
+    if payload is None or payload.ttl_days is None:
+        ttl = service.ttl_seconds()
+    elif payload.ttl_days not in ALLOWED_TTL_DAYS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"ttl_days 仅支持 {'、'.join(str(d) for d in ALLOWED_TTL_DAYS)}"
+                f"（天）——收到 {payload.ttl_days}"
+            ),
+        )
+    else:
+        ttl = payload.ttl_days * 24 * 3600
     try:
         artifact = artifacts_service.get_customer_artifact(
             db, artifact_id=artifact_id, customer_id=customer_id
@@ -95,7 +121,7 @@ def create_share_link(
         secret,
         artifact_id=artifact.id,
         version=artifact.version,
-        ttl=service.ttl_seconds(),
+        ttl=ttl,
     )
     return ShareLinkOut(
         url=f"/api/v1/share/dashboard/{artifact.id}?t={token}&v={artifact.version}",

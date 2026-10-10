@@ -491,9 +491,51 @@ const zh = {
         copy: "复制链接",
         copied: "已复制到剪贴板。",
         expiresLabel: "到期时间",
+        // 有效期三选一（wire-share-ttl-options）：7/30/90 天枚举，缺省 30；
+        // 改选后重新生成链接，到期时间随选联动（响应覆盖本地预览）。
+        ttlLabel: "有效期",
+        ttlOptions: {
+          "7": "7 天",
+          "30": "30 天",
+          "90": "90 天",
+        },
+        ttlNote: "调整有效期将重新生成链接。",
         versionNote: "链接固定生成时刻的版本快照（v{{version}}）——改版后请重新生成。",
         close: "关闭",
       },
+    },
+    // 定时刷新调度小节（wire-refresh-scheduler 任务 4.1）：derived 数据集
+    // 详情页与看板查看态共用——创建（预设间隔档）/暂停恢复/删除与状态展示。
+    schedules: {
+      title: "定时刷新",
+      hint: "按固定间隔自动刷新该目标——到点由后台调度器执行，可随时暂停或删除。",
+      loading: "定时刷新加载中…",
+      loadError: "定时刷新加载失败。",
+      retry: "重试",
+      intervalLabel: "刷新间隔",
+      intervals: {
+        "60": "每 1 小时",
+        "360": "每 6 小时",
+        "1440": "每 24 小时",
+        "10080": "每 7 天",
+      },
+      createSubmit: "创建定时刷新",
+      creating: "创建中…",
+      opError: "定时刷新操作失败，请稍后重试。",
+      pausedBadge: "已暂停",
+      activeBadge: "调度中",
+      nextRunLabel: "下次运行",
+      lastStatusLabel: "上次结果",
+      statuses: {
+        pending: "等待首次运行",
+        running: "刷新中",
+        ok: "成功",
+        failed: "失败",
+      },
+      lastErrorLabel: "上次错误",
+      pause: "暂停",
+      resume: "恢复",
+      delete: "删除",
     },
     datasets: {
       title: "我的数据",

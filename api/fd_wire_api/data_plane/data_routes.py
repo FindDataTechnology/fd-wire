@@ -419,15 +419,99 @@ def dataset_join(
     return DatasetOut.from_dataset(child)
 
 
-@router.post("/api/v1/datasets/{dataset_id}/refresh", response_model=DatasetOut)
+# ── 重派生与级联（wire-refresh-scheduler 2.1/2.2；调度执行器复用同段）──
+
+#: 级联深度上限（transitive 展开的护栏；visited 防环之外的第二道闸）
+MAX_CASCADE_DEPTH = 10
+
+
+def refresh_derived_dataset(
+    db: Session,
+    dataset: Dataset,
+    engine_factory: EngineClientFactory,
+    principal: DataPlanePrincipal,
+) -> None:
+    """单派生数据集重派生（可内部调用段）：引擎 derive_refresh + 元数据回填。
+
+    手动端点与刷新调度执行器（schedules/executor）共用同一实现，行为零漂移。
+    """
+    _engine_call(
+        engine_factory, principal, TOOL_DERIVE_REFRESH, {"dataset_key": dataset.key}
+    )
+    _sync_columns_and_size(db, dataset, engine_factory, principal)
+
+
+def direct_derived_children(db: Session, dataset: Dataset) -> list[Dataset]:
+    """直接派生子反查：derive/join 登记时 ``source_ref=父 key``、
+    ``source_kind='derived'``（见 _register_derived_child）——与 GET lineage
+    端点回显的引擎 children 同源的血缘元数据，本地反查零引擎调用。"""
+    return list(
+        db.execute(
+            select(Dataset).where(
+                Dataset.customer_id == dataset.customer_id,
+                Dataset.source_kind == "derived",
+                Dataset.source_ref == dataset.key,
+            )
+        ).scalars()
+    )
+
+
+def cascade_refresh_children(
+    db: Session,
+    dataset: Dataset,
+    engine_factory: EngineClientFactory,
+    principal: DataPlanePrincipal,
+    *,
+    max_depth: int = MAX_CASCADE_DEPTH,
+) -> list[dict]:
+    """级联刷新：刷新本体后 transitive 依次刷新派生子链。
+
+    visited 集合防环（异常数据态不无限递归）+ 深度上限 10；任一环失败记录
+    该环 error 但继续其余环（失败隔离）——返回各级结果摘要（端点透出）。
+    """
+    results: list[dict] = []
+    visited = {dataset.id}
+
+    def _walk(parent: Dataset, depth: int) -> None:
+        if depth >= max_depth:
+            return
+        for child in direct_derived_children(db, parent):
+            if child.id in visited:  # 环防护：路径上已访问集合阻断
+                continue
+            visited.add(child.id)
+            entry: dict = {
+                "dataset_id": child.id,
+                "name": child.name,
+                "depth": depth + 1,
+            }
+            try:
+                refresh_derived_dataset(db, child, engine_factory, principal)
+                entry["status"] = "ok"
+                entry["error"] = None
+            except Exception as exc:  # noqa: BLE001 - 失败隔离：记录后继续其余环
+                entry["status"] = "failed"
+                entry["error"] = str(getattr(exc, "detail", None) or exc)
+            results.append(entry)
+            _walk(child, depth + 1)
+
+    _walk(dataset, 0)
+    return results
+
+
+@router.post("/api/v1/datasets/{dataset_id}/refresh")
 def dataset_refresh(
     dataset_id: str,
+    cascade: bool = True,
     principal: DataPlanePrincipal = Depends(require_data_plane_principal),
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
-) -> DatasetOut:
+) -> dict:
     """重派生：按存档 spec 对源当前有效态重算（join 会重拉指标=再次计量）。
-    api 层数据集不可派生 → 403 档位闸（source_kind 校验之外的兜底）。"""
+
+    ``cascade`` 查询参数（默认 true）：刷新本体后依次级联刷新派生子链
+    （transitively、visited 防环、深度上限 10、单环失败隔离）——响应在
+    数据集字段外附 ``cascade`` 各级结果摘要。api 层数据集不可派生 →
+    403 档位闸（source_kind 校验之外的兜底）。"""
     dataset = _dataset_or_404(db, dataset_id, principal.customer_id)
     ensure_dataset_allowed(principal, dataset_id)
     require_cell_tier(dataset, "重派生（refresh）")
@@ -436,12 +520,16 @@ def dataset_refresh(
             status_code=400,
             detail=f"仅派生数据集可刷新（source_kind={dataset.source_kind}）",
         )
-    _engine_call(
-        engine_factory, principal, TOOL_DERIVE_REFRESH, {"dataset_key": dataset.key}
+    refresh_derived_dataset(db, dataset, engine_factory, principal)
+    cascade_results = (
+        cascade_refresh_children(db, dataset, engine_factory, principal)
+        if cascade
+        else []
     )
-    _sync_columns_and_size(db, dataset, engine_factory, principal)
     db.refresh(dataset)
-    return DatasetOut.from_dataset(dataset)
+    payload = DatasetOut.from_dataset(dataset).model_dump(mode="json")
+    payload["cascade"] = cascade_results
+    return payload
 
 
 @router.get("/api/v1/datasets/{dataset_id}/lineage")

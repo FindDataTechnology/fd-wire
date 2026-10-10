@@ -20,6 +20,7 @@ import type {
   DraftArtifact,
   MessageRole,
   PackIndicator,
+  RefreshSchedule,
   SyncRecord,
   UploadPreview,
 } from "./api";
@@ -155,6 +156,11 @@ export interface ConsoleBackendOptions {
   failPacksStatus?: number;
   /** 强制订阅/退订端点返回该状态（如 401 会话失效态）。 */
   failPackSubscribeStatus?: number;
+  /** 种子定时刷新调度（wire-refresh-scheduler 4.1；带 customer_id 的仅同客户可见）。 */
+  refreshSchedules?: Array<RefreshSchedule & { customer_id?: string }>;
+  /** 强制 POST /api/v1/refresh-schedules 返回该状态（创建失败态）。 */
+  failScheduleCreateStatus?: number;
+  failScheduleCreateDetail?: string;
 }
 
 /** 源包种子（wire-source-packs）：假后端按 indicators 分页切片出详情。 */
@@ -189,6 +195,7 @@ export function installConsoleBackend(
   ) => void;
   addCorrection: (correction: Correction) => void;
   addSync: (sync: SyncRecord) => void;
+  addRefreshSchedule: (seed: RefreshSchedule & { customer_id?: string }) => void;
   getDatasets: () => Dataset[];
   getCorrections: (datasetId: string) => Correction[];
   getPackSubscriptions: (customerId?: string) => string[];
@@ -253,6 +260,21 @@ export function installConsoleBackend(
   const packSubscriptions = new Map<string, string[]>();
   if (options.packSubscriptions?.length) {
     packSubscriptions.set("demo-customer", [...options.packSubscriptions]);
+  }
+
+  // ── 定时刷新调度假后端状态（wire-refresh-scheduler 4.1）：带 customer_id
+  //    的种子仅同客户可见；创建校验语义对齐 api（类型/地板/配额）。──
+  type StoredSchedule = RefreshSchedule & { customer_id?: string };
+  const schedulesStore = new Map<number, StoredSchedule>();
+  let nextScheduleId = 1;
+  for (const seed of options.refreshSchedules ?? []) {
+    schedulesStore.set(seed.id, { ...seed });
+    nextScheduleId = Math.max(nextScheduleId, seed.id + 1);
+  }
+
+  function addRefreshSchedule(seed: StoredSchedule): void {
+    schedulesStore.set(seed.id, { ...seed });
+    nextScheduleId = Math.max(nextScheduleId, seed.id + 1);
   }
 
   function addDataset(dataset: Dataset): void {
@@ -1303,6 +1325,125 @@ export function installConsoleBackend(
       return Promise.resolve(jsonResponse(connector));
     }
 
+    // ── 定时刷新调度（wire-refresh-scheduler 4.1）：列表/建（类型+地板+配额
+    //    校验）/删/暂停恢复——语义对齐 api 仓 schedules 路由（Bearer 客户隔离）──
+    const ownSchedules = (): StoredSchedule[] =>
+      [...schedulesStore.values()].filter(
+        (s) => !s.customer_id || s.customer_id === customerId,
+      );
+    const scheduleRow = (row: StoredSchedule): RefreshSchedule => {
+      const { customer_id: _c, ...out } = row;
+      return out;
+    };
+    const scheduleBase = Date.parse("2026-10-11T08:00:00Z");
+
+    if (path === "/api/v1/refresh-schedules" && method === "GET") {
+      return Promise.resolve(jsonResponse(ownSchedules().map(scheduleRow)));
+    }
+    if (path === "/api/v1/refresh-schedules" && method === "POST") {
+      if (options.failScheduleCreateStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failScheduleCreateDetail ??
+                `schedule create ${options.failScheduleCreateStatus}`,
+            },
+            options.failScheduleCreateStatus,
+          ),
+        );
+      }
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        target_type?: string;
+        target_id?: string;
+        interval_minutes?: number;
+      };
+      // 类型校验：dataset 须 derived 来源、artifact 须 kind=dashboard（跨客户
+      // 与失存目标一律 404——不泄露存在性）。
+      let reject: { status: number; detail: string } | null = null;
+      if (payload.target_type === "dataset") {
+        const dataset = ownDataset(String(payload.target_id ?? ""));
+        if (!dataset) {
+          reject = { status: 404, detail: "dataset not found" };
+        } else if (dataset.source_kind !== "derived") {
+          reject = {
+            status: 422,
+            detail: "仅派生（derived）来源数据集可设定时刷新（上传/连接器来源走各自同步链路）",
+          };
+        }
+      } else if (payload.target_type === "artifact") {
+        const artifact = ownLifecycleArtifact(Number(payload.target_id), customerId);
+        if (!artifact) {
+          reject = { status: 404, detail: "artifact not found" };
+        } else if (artifact.kind !== "dashboard") {
+          reject = {
+            status: 422,
+            detail: "仅仪表盘（dashboard）产物可设定时刷新",
+          };
+        }
+      } else {
+        reject = {
+          status: 422,
+          detail: "target_type 必须是 dataset 或 artifact",
+        };
+      }
+      // 间隔地板：dataset ≥60、artifact ≥360（AI 刷新耗 token，封无人值守成本）。
+      const floor = payload.target_type === "artifact" ? 360 : 60;
+      const minutes = payload.interval_minutes;
+      if (
+        !reject &&
+        (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes < floor)
+      ) {
+        reject = {
+          status: 422,
+          detail: `刷新间隔不能低于 ${floor} 分钟（当前 ${String(minutes)}）`,
+        };
+      }
+      // 每客户配额（默认 10）。
+      if (!reject && ownSchedules().length >= 10) {
+        reject = { status: 422, detail: "定时刷新数量已达上限（10 个）" };
+      }
+      if (reject) {
+        return Promise.resolve(jsonResponse({ detail: reject.detail }, reject.status));
+      }
+      const id = nextScheduleId++;
+      const created: StoredSchedule = {
+        id,
+        customer_id: customerId,
+        target_type: payload.target_type as StoredSchedule["target_type"],
+        target_id: String(payload.target_id),
+        interval_minutes: minutes!,
+        next_run_at: new Date(scheduleBase + minutes! * 60_000)
+          .toISOString()
+          .slice(0, 19),
+        paused: false,
+        last_status: "pending",
+        last_run_at: null,
+        last_error: null,
+        created_at: "2026-10-11T08:00:00",
+      };
+      schedulesStore.set(id, created);
+      return Promise.resolve(jsonResponse(scheduleRow(created), 201));
+    }
+    match = path.match(/^\/api\/v1\/refresh-schedules\/(\d+)$/);
+    if (match && method === "DELETE") {
+      const row = schedulesStore.get(Number(match[1]));
+      if (!row || (row.customer_id && row.customer_id !== customerId)) {
+        return Promise.resolve(jsonResponse({ detail: "schedule not found" }, 404));
+      }
+      schedulesStore.delete(row.id);
+      return Promise.resolve(jsonResponse(scheduleRow(row)));
+    }
+    match = path.match(/^\/api\/v1\/refresh-schedules\/(\d+)\/(pause|resume)$/);
+    if (match && method === "POST") {
+      const row = schedulesStore.get(Number(match[1]));
+      if (!row || (row.customer_id && row.customer_id !== customerId)) {
+        return Promise.resolve(jsonResponse({ detail: "schedule not found" }, 404));
+      }
+      row.paused = match[2] === "pause";
+      return Promise.resolve(jsonResponse(scheduleRow(row)));
+    }
+
     return Promise.resolve(jsonResponse({ detail: "not found" }, 404));
   }) as unknown as typeof fetch;
 
@@ -1317,6 +1458,7 @@ export function installConsoleBackend(
     addRows,
     addCorrection,
     addSync,
+    addRefreshSchedule,
     getDatasets: () => [...datasets.values()],
     getCorrections: (datasetId: string) => corrections.get(datasetId) ?? [],
     getPackSubscriptions: (customerId = "demo-customer") =>

@@ -47,6 +47,11 @@ from .metering.driver import start_metering_driver, stop_metering_driver
 from .metering.settings import get_settings
 from .metering.routes import router as metering_router
 from .routes import example
+# 统一刷新调度器（wire-refresh-scheduler）：/api/v1/refresh-schedules 端点 +
+# lifespan 后台 tick 循环（refresh_schedules 走元数据库，alembic 0023）
+from .schedules import init_db as init_schedules_db
+from .schedules import router as schedules_router
+from .schedules import start_refresh_scheduler, stop_refresh_scheduler
 
 
 @asynccontextmanager
@@ -82,6 +87,11 @@ async def lifespan(_: FastAPI):
     # 计量入账驱动（sub2api 入账管道）：周期「registry 审计摄取 → 当月结算」。
     # REGISTRY_MONGO_URI / SUB2API_ADMIN_KEY 未配置时对应段自动跳过。
     start_metering_driver()
+    # 统一刷新调度器（wire-refresh-scheduler）：refresh_schedules 幂等建表
+    # 兜底（生产走 alembic 0023）+ tick 循环（due 调度串行执行；
+    # FD_WIRE_REFRESH_SCHEDULER_ENABLED=false 可关）。
+    init_schedules_db()
+    start_refresh_scheduler()
     # 客户数据集（wire-customer-local-data 任务组 2）：登记/同步/修正/上传
     # 表幂等建表兜底（生产走 Alembic 0011）。
     init_datasets_db()
@@ -101,6 +111,7 @@ async def lifespan(_: FastAPI):
         stop_selfcheck_loop()
         stop_sealer_loop()
         stop_forwarder_loop()
+        stop_refresh_scheduler()
         stop_metering_driver()
         stop_materialization_scheduler()
         shutdown_catalog()
@@ -161,6 +172,9 @@ app.include_router(downloads_router)
 # dashboard）+ GET /api/v1/share/dashboard/* 公开验签（任一不满足统一 404）；
 # FD_WIRE_SHARE_SECRET 未配置时两端正点 503 诚实禁用（无表 HMAC 令牌）
 app.include_router(share_router)
+# 统一刷新调度器（wire-refresh-scheduler）：定时刷新 CRUD（Bearer 身份，
+# 派生数据集 / dashboard 产物两类目标；间隔地板与每客户配额见 service）
+app.include_router(schedules_router)
 # 源包订阅（wire-source-packs）：公开包列表/详情（实时目录切片）+ 登录
 # 订阅/退订/我的订阅（pack_subscriptions 走元数据库，alembic 0022）
 app.include_router(packs_router)

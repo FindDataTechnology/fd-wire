@@ -11,6 +11,8 @@
 // - published dashboard 卡片加「生成分享链接」弹层（wire-dashboard-share）：
 //   展示公开页完整链接（origin + #/share/dashboard/…）+ 复制 + 到期时间；
 //   draft/archived/非 dashboard 不出现该入口。
+//   wire-share-ttl-options：弹层内有效期三选一（7/30/90 天，缺省 30）——
+//   改选即按新 ttl_days 重新生成，到期时间随选联动（响应覆盖本地预览）。
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -27,6 +29,7 @@ import {
   publishArtifact,
   restoreArtifact,
   saveArtifactSpec,
+  SHARE_TTL_DAYS,
   type Artifact,
   type ArtifactKind,
   type ArtifactStatus,
@@ -34,6 +37,7 @@ import {
   type ArtifactVersionSummary,
   type Conversation,
   type DashboardShareLink,
+  type ShareTtlDays,
 } from "./api";
 import { formatServerDate } from "./util";
 import { DashboardPane } from "./dashboard/DashboardPane";
@@ -743,6 +747,9 @@ function VersionDrawer({
  * 到期时间。响应的 url 是**数据端点**（/api/v1/share/...），给接收者的
  * 展示链接必须另行构造：origin + /#/share/dashboard/{id}?t=…&v={version}
  * （t 从响应 url 的 query 里解出，版本钉死生成时刻的响应 version）。
+ * wire-share-ttl-options 任务 2.1：有效期三选一（7/30/90 天，缺省 30）——
+ * 改选即按新 ttl_days 重新生成；到期时间随选联动（生成中显示本地预览，
+ * 响应到达后以 expires_at 覆盖）。
  */
 function ShareLinkDialog({
   artifactId,
@@ -752,6 +759,7 @@ function ShareLinkDialog({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const [ttlDays, setTtlDays] = useState<ShareTtlDays>(30);
   const [result, setResult] = useState<DashboardShareLink | null>(null);
   const [shareUrl, setShareUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -763,7 +771,7 @@ function ShareLinkDialog({
     setShareUrl("");
     setError(null);
     setCopied(false);
-    createDashboardShareLink(artifactId)
+    createDashboardShareLink(artifactId, ttlDays)
       .then((res) => {
         if (!alive) return;
         setResult(res);
@@ -781,7 +789,15 @@ function ShareLinkDialog({
     return () => {
       alive = false;
     };
-  }, [artifactId, t]);
+  }, [artifactId, ttlDays, t]);
+
+  /** 到期展示值：有响应用服务端 expires_at（覆盖本地预览），生成中按当前
+   *  有效期本地预览（now + ttlDays，naive UTC 与后端同口径）。 */
+  const expiresText = result
+    ? formatServerDate(result.expires_at)
+    : formatServerDate(
+        new Date(Date.now() + ttlDays * 86_400_000).toISOString().slice(0, 19),
+      );
 
   const copyLink = async () => {
     if (!shareUrl) return;
@@ -826,6 +842,36 @@ function ShareLinkDialog({
           </p>
         )}
 
+        {!error && (
+          <div data-testid="share-ttl" className="mt-4">
+            <p className="text-xs font-medium text-slate-600">
+              {t("console.dashboard.share.ttlLabel")}
+            </p>
+            <div
+              role="radiogroup"
+              aria-label={t("console.dashboard.share.ttlLabel")}
+              className="mt-1.5 flex flex-wrap gap-4"
+            >
+              {SHARE_TTL_DAYS.map((days) => (
+                <label key={days} className="flex items-center gap-1 text-xs text-slate-700">
+                  <input
+                    type="radio"
+                    data-testid="share-ttl-option"
+                    data-days={days}
+                    name={`share-ttl-${artifactId}`}
+                    checked={ttlDays === days}
+                    onChange={() => setTtlDays(days)}
+                  />
+                  {t(`console.dashboard.share.ttlOptions.${days}`)}
+                </label>
+              ))}
+            </div>
+            <p className="mt-1 text-[11px] text-slate-400">
+              {t("console.dashboard.share.ttlNote")}
+            </p>
+          </div>
+        )}
+
         {!error && result == null && (
           <p data-testid="share-generating" className="mt-4 text-xs text-slate-400">
             {t("console.dashboard.share.generating")}
@@ -863,13 +909,19 @@ function ShareLinkDialog({
               </div>
             </div>
             <p data-testid="share-expires" className="text-xs text-slate-500">
-              {t("console.dashboard.share.expiresLabel")}：
-              {formatServerDate(result.expires_at)}
+              {t("console.dashboard.share.expiresLabel")}：{expiresText}
             </p>
             <p className="text-[11px] text-slate-400">
               {t("console.dashboard.share.versionNote", { version: result.version })}
             </p>
           </div>
+        )}
+
+        {/* 生成中（改选有效期重新生成）：本地预览到期时间随选联动。 */}
+        {!error && result == null && (
+          <p data-testid="share-expires" className="mt-2 text-xs text-slate-400">
+            {t("console.dashboard.share.expiresLabel")}：{expiresText}
+          </p>
         )}
       </div>
     </div>

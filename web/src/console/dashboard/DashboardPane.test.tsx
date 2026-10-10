@@ -380,3 +380,154 @@ describe("看板手动刷新（wire-dashboard-refresh 任务 2.1/2.2）", () => 
     expect((screen.getByTestId("dashboard-refresh") as HTMLButtonElement).disabled).toBe(false);
   });
 });
+
+// ── 定时刷新小节（wire-refresh-scheduler 任务 4.1/4.2）──────────────────────
+// 看板查看态：创建流（POST body 断言：target_type=artifact）/暂停恢复/错误
+// 展示；archived 与编辑态不出小节。schedules 端点走 testing.ts 假后端。
+describe("看板定时刷新小节（wire-refresh-scheduler 4.1/4.2）", () => {
+  /** 打开指定产物 id 的看板查看态（复用 install() 四产物种子）。 */
+  async function openView(id: number) {
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+    fireEvent.click(within(rowOf(id)).getByTestId("artifact-dashboard-view"));
+    await screen.findByTestId("dashboard-pane");
+  }
+
+  /** 包装假后端：拦截 POST /api/v1/refresh-schedules 注入失败态，其余透传。 */
+  function withScheduleCreateFailure(
+    backend: ReturnType<typeof installConsoleBackend>,
+    status: number,
+    detail: string,
+  ): typeof fetch {
+    return (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://console.test");
+      if (
+        url.pathname === "/api/v1/refresh-schedules" &&
+        (init?.method ?? "GET").toUpperCase() === "POST"
+      ) {
+        return { ok: false, status, json: () => Promise.resolve({ detail }) };
+      }
+      return backend.fetchImpl(input as RequestInfo, init);
+    }) as unknown as typeof fetch;
+  }
+
+  it("创建流：预设 6h/24h/7d，选 24h 创建 → POST body（artifact）断言 → 状态行", async () => {
+    const backend = install();
+    await openView(31);
+
+    const section = await screen.findByTestId("schedule-section");
+    expect(section.getAttribute("data-target-type")).toBe("artifact");
+    // 等列表落地（无调度 → 创建面）再交互，避开 loading 态竞态。
+    const create = await within(section).findByTestId("schedule-create");
+    // 预设档 = artifact 地板（360 分钟）起步：6h/24h/7d
+    expect(
+      within(create)
+        .getAllByTestId("schedule-interval")
+        .map((el) => el.getAttribute("data-minutes")),
+    ).toEqual(["360", "1440", "10080"]);
+    // 默认选中首档（360）；改选 24h（1440）后创建
+    fireEvent.click(within(create).getAllByTestId("schedule-interval")[1]!);
+    fireEvent.click(within(create).getByTestId("schedule-create-submit"));
+
+    expect(await screen.findByTestId("schedule-row")).toBeTruthy();
+    const post = backend.calls.find(
+      (c) => c.method === "POST" && c.url.pathname === "/api/v1/refresh-schedules",
+    );
+    expect(post?.body).toEqual({
+      target_type: "artifact",
+      target_id: "31",
+      interval_minutes: 1440,
+    });
+    expect(screen.getByTestId("schedule-row").getAttribute("data-paused")).toBe(
+      "false",
+    );
+  });
+
+  it("archived 看板无小节（调度器自动清理其调度行）；切编辑态后小节隐藏", async () => {
+    install();
+    await openView(34);
+    expect(screen.queryByTestId("schedule-section")).toBeNull();
+
+    // 31（draft v1）切编辑器：编辑态不管理调度
+    await openView(31);
+    expect(await screen.findByTestId("schedule-section")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("dashboard-edit"));
+    await screen.findByTestId("dashboard-editor");
+    expect(screen.queryByTestId("schedule-section")).toBeNull();
+  });
+
+  it("暂停/恢复：POST /{id}/pause → 已暂停；再点恢复 → 回调度中（含上次结果/错误展示）", async () => {
+    const backend = install();
+    backend.addRefreshSchedule({
+      id: 5,
+      target_type: "artifact",
+      target_id: "31",
+      interval_minutes: 360,
+      next_run_at: "2026-10-11T14:00:00",
+      paused: false,
+      last_status: "failed",
+      last_run_at: "2026-10-11T08:00:00",
+      last_error: "LLM 输出解析失败",
+      created_at: "2026-10-10T08:00:00",
+    });
+    await openView(31);
+
+    // 状态行如实呈现：上次结果 failed + 上次错误
+    await screen.findByTestId("schedule-row");
+    expect(
+      screen.getByTestId("schedule-last-status").getAttribute("data-status"),
+    ).toBe("failed");
+    expect(screen.getByTestId("schedule-last-error").textContent).toContain(
+      "LLM 输出解析失败",
+    );
+
+    // 暂停：POST /5/pause → 已暂停徽标
+    fireEvent.click(screen.getByTestId("schedule-toggle"));
+    await waitFor(() => {
+      expect(screen.getByTestId("schedule-row").getAttribute("data-paused")).toBe(
+        "true",
+      );
+    });
+    expect(
+      backend.calls.find(
+        (c) =>
+          c.method === "POST" &&
+          c.url.pathname === "/api/v1/refresh-schedules/5/pause",
+      ),
+    ).toBeTruthy();
+
+    // 恢复：POST /5/resume → 回调度中
+    fireEvent.click(screen.getByTestId("schedule-toggle"));
+    await waitFor(() => {
+      expect(screen.getByTestId("schedule-row").getAttribute("data-paused")).toBe(
+        "false",
+      );
+    });
+    expect(
+      backend.calls.find(
+        (c) =>
+          c.method === "POST" &&
+          c.url.pathname === "/api/v1/refresh-schedules/5/resume",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("创建失败态（422 地板）：后端 detail 如实呈现，创建面保留", async () => {
+    const backend = install();
+    vi.stubGlobal(
+      "fetch",
+      withScheduleCreateFailure(backend, 422, "刷新间隔不能低于 360 分钟（当前 60）"),
+    );
+    await openView(31);
+
+    // 等创建面落地再触发（GET 列表返回 [] → 创建面）。
+    const create = await screen.findByTestId("schedule-create");
+    fireEvent.click(within(create).getByTestId("schedule-create-submit"));
+
+    expect(
+      (await screen.findByTestId("schedule-op-error")).textContent,
+    ).toContain("360 分钟");
+    expect(screen.getByTestId("schedule-create")).toBeTruthy();
+    expect(screen.queryByTestId("schedule-row")).toBeNull();
+  });
+});

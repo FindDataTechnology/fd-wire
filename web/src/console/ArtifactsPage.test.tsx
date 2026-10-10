@@ -402,7 +402,8 @@ function localJson(body: unknown, status = 200) {
   };
 }
 
-/** 包装假后端：拦截 share POST（Bearer 断言 + 成功/403/强制态），其余透传。 */
+/** 包装假后端：拦截 share POST（Bearer 断言 + 成功/403/强制态 + body 记录
+ *  ——wire-share-ttl-options 的 ttl_days 断言依赖），其余透传。 */
 function withShareEndpoint(
   backend: ReturnType<typeof installConsoleBackend>,
   force?: { status: number; detail: string },
@@ -417,7 +418,13 @@ function withShareEndpoint(
       new Headers(init?.headers as HeadersInit | undefined).forEach((v, k) => {
         headers[k.toLowerCase()] = v;
       });
-      backend.calls.push({ method: "POST", url, headers });
+      backend.calls.push({
+        method: "POST",
+        url,
+        headers,
+        body:
+          typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      });
       if (force) {
         return Promise.resolve(localJson({ detail: force.detail }, force.status));
       }
@@ -540,5 +547,54 @@ describe("ArtifactsPage 分享入口（wire-dashboard-share 2.2/2.3）", () => {
       "分享功能未配置",
     );
     expect(screen.queryByTestId("share-url")).toBeNull();
+  });
+
+  // wire-share-ttl-options 任务 2.1：有效期三选一（7/30/90，缺省 30）——
+  // 默认 POST body 带 ttl_days=30；改选 90 天即重新生成，body 带 ttl_days=90；
+  // 到期时间生成中为本地预览、响应到达后以 expires_at 覆盖。
+  it("有效期三选一：默认 30 天 body；改选 90 天重新生成，body 带 ttl_days=90", async () => {
+    const backend = installShareRows();
+    vi.stubGlobal("fetch", withShareEndpoint(backend));
+
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+    fireEvent.click(within(rowOf(14)).getByTestId("artifact-share"));
+    expect(await screen.findByTestId("share-url")).toBeTruthy();
+
+    // 三档单选（7/30/90）且默认选中 30
+    const options = screen.getAllByTestId("share-ttl-option");
+    expect(options.map((el) => el.getAttribute("data-days"))).toEqual([
+      "7",
+      "30",
+      "90",
+    ]);
+    expect(options.map((el) => (el as HTMLInputElement).checked)).toEqual([
+      false,
+      true,
+      false,
+    ]);
+
+    // 默认创建请求：POST body 携带 ttl_days=30
+    const sharePosts = () =>
+      backend.calls.filter(
+        (c) =>
+          c.method === "POST" && /\/artifacts\/14\/share$/.test(c.url.pathname),
+      );
+    expect(sharePosts()).toHaveLength(1);
+    expect(sharePosts()[0]!.body).toEqual({ ttl_days: 30 });
+
+    // 改选 90 天：触发重新生成（第二个 POST），body 带 ttl_days=90
+    fireEvent.click(
+      options.find((el) => el.getAttribute("data-days") === "90")!,
+    );
+    await waitFor(() => expect(sharePosts()).toHaveLength(2));
+    expect(sharePosts()[1]!.body).toEqual({ ttl_days: 90 });
+    // 到期时间以响应 expires_at 覆盖本地预览；链接来自新响应
+    expect(
+      (await screen.findByTestId("share-url") as HTMLInputElement).value,
+    ).toContain("share-token-14");
+    expect(screen.getByTestId("share-expires").textContent).toContain(
+      formatServerDate("2026-11-10T08:00:00"),
+    );
   });
 });

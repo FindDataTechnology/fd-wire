@@ -5,6 +5,8 @@
 // wire-dashboard-refresh 任务 2.1：查看态加「刷新数据」——POST refresh 落新
 // 版本后重拉详情重渲染；409 进行中 / 403 档位 / 502 引擎失败如实呈现；
 // archived 只读无入口；进行中 loading 禁用防重复触发。
+// wire-refresh-scheduler 任务 4.1：查看态底部加「定时刷新」小节（间隔预设
+// 6h/24h/7d）；archived 目标的调度行由调度器自动清理，不再提供管理入口。
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -18,6 +20,10 @@ import {
 import { parseDashboardSpec } from "./spec";
 import { DashboardRenderer } from "./DashboardRenderer";
 import { DashboardEditor } from "./DashboardEditor";
+import {
+  ARTIFACT_SCHEDULE_INTERVALS,
+  RefreshScheduleSection,
+} from "../RefreshScheduleSection";
 
 export function DashboardPane({
   artifactId,
@@ -175,9 +181,20 @@ export function DashboardPane({
           onExit={() => setEditing(false)}
         />
       ) : (
-        <div className="mt-1">
-          <DashboardRenderer spec={detail.spec} />
-        </div>
+        <>
+          <div className="mt-1">
+            <DashboardRenderer spec={detail.spec} />
+          </div>
+          {/* 定时刷新小节（wire-refresh-scheduler 4.1）：查看态管理入口；
+              archived 由调度器自动清理调度行，不再展示。 */}
+          {!locked && (
+            <RefreshScheduleSection
+              targetType="artifact"
+              targetId={String(artifactId)}
+              intervals={ARTIFACT_SCHEDULE_INTERVALS}
+            />
+          )}
+        </>
       )}
     </div>
   );

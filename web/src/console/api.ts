@@ -1140,9 +1140,8 @@ export function unsubscribePack(
 //   注意 url 是**数据端点**相对路径（/api/v1/share/dashboard/{id}?t=…&v=…），
 //   前端展示链接须另行构造（origin + #/share/dashboard/{id}?t=…&v={version}，
 //   t 从响应 url 的 query 里解出）。
-// - GET /api/v1/share/dashboard/{id}?t=&v=（公开端点，无鉴权）：验签 + 版本
-//   匹配 + 仍为 published，任一不满足 404（不泄露原因差异）；成功返回
-//   {title, spec, version, shared_at}。
+//   wire-share-ttl-options：body 可选 ttl_days（枚举 7|30|90，缺省 30；
+//   非法值 422 列合法值）；expires_at 按所选有效期计算。
 
 /** 分享链接生成响应（POST /artifacts/{id}/share）。 */
 export interface DashboardShareLink {
@@ -1162,14 +1161,22 @@ export interface SharedDashboard {
   shared_at: string;
 }
 
+/** 分享链接有效期三档（wire-share-ttl-options）：枚举对齐 api 契约。 */
+export const SHARE_TTL_DAYS = [7, 30, 90] as const;
+
+export type ShareTtlDays = (typeof SHARE_TTL_DAYS)[number];
+
 /** 生成仪表盘分享链接（仅 published dashboard；draft/archived/非 dashboard
- *  由服务端 403/404 拒绝，未配置 secret 503——UI 如实呈现后端 detail）。 */
+ *  由服务端 403/404 拒绝，未配置 secret 503——UI 如实呈现后端 detail）。
+ *  ttlDays：有效期三选一（wire-share-ttl-options），缺省 30 天。 */
 export function createDashboardShareLink(
   id: number,
+  ttlDays: ShareTtlDays = 30,
 ): Promise<DashboardShareLink> {
   return requestJsonAnyMethod(
     `${API_BASE}/v1/artifacts/${id}/share`,
     "POST",
+    { body: { ttl_days: ttlDays } },
   ) as Promise<DashboardShareLink>;
 }
 
@@ -1222,4 +1229,77 @@ export function refreshDashboard(id: number): Promise<DashboardRefreshResult> {
     `${API_BASE}/v1/artifacts/${id}/refresh`,
     "POST",
   ) as Promise<DashboardRefreshResult>;
+}
+
+// ── 定时刷新调度（wire-refresh-scheduler 任务 4.1 web 面）──────────────────
+// 契约（api 仓 schedules 路由，proposal 冻结形状；Bearer 登录身份，跨客户 404）：
+// - GET /api/v1/refresh-schedules：本人（本客户）调度行数组；
+// - POST /api/v1/refresh-schedules：body
+//   {target_type: "dataset"|"artifact", target_id, interval_minutes}
+//   → 新建行（服务端校验属主 / 类型——dataset 须 derived 来源、artifact 须
+//   kind=dashboard / 间隔地板 dataset ≥60、artifact ≥360 / 每客户配额，
+//   非法 4xx 带 detail 如实呈现）；
+// - DELETE /api/v1/refresh-schedules/{id} 与 POST /{id}/pause|resume
+//   → 返回操作后的调度行。
+
+/** 调度目标类型：派生数据集（复用 dataset_refresh，零 LLM 成本）与
+ *  dashboard 产物（无头 AI 刷新轮）。 */
+export type RefreshScheduleTargetType = "dataset" | "artifact";
+
+/** 调度行（refresh_schedules 表的客户面投影）。 */
+export interface RefreshSchedule {
+  id: number;
+  target_type: RefreshScheduleTargetType;
+  /** dataset 目标 = 数据集 id；artifact 目标 = 产物 id（字符串化）。 */
+  target_id: string;
+  interval_minutes: number;
+  /** 下次运行时间（naive UTC ISO；暂停期间不推进）。 */
+  next_run_at: string;
+  paused: boolean;
+  /** 首轮前为 null；取值 pending | running | ok | failed。 */
+  last_status: "pending" | "running" | "ok" | "failed" | null;
+  last_run_at: string | null;
+  /** 上次失败原因（last_status=failed 时非空；如实呈现）。 */
+  last_error: string | null;
+  created_at: string;
+}
+
+/** 本客户调度列表（含 dataset 与 artifact 两类目标）。 */
+export function listRefreshSchedules(): Promise<RefreshSchedule[]> {
+  return requestJson(`${API_BASE}/v1/refresh-schedules`, {
+    method: "GET",
+  }) as Promise<RefreshSchedule[]>;
+}
+
+/** 创建调度（间隔地板与配额由服务端校验，4xx detail 如实呈现）。 */
+export function createRefreshSchedule(payload: {
+  target_type: RefreshScheduleTargetType;
+  target_id: string;
+  interval_minutes: number;
+}): Promise<RefreshSchedule> {
+  return requestJson(`${API_BASE}/v1/refresh-schedules`, {
+    method: "POST",
+    body: payload,
+  }) as Promise<RefreshSchedule>;
+}
+
+/** 删除调度（返回被删除的行；目标失存时调度器也会自动清理）。 */
+export function deleteRefreshSchedule(id: number): Promise<RefreshSchedule> {
+  return requestJson(`${API_BASE}/v1/refresh-schedules/${id}`, {
+    method: "DELETE",
+  }) as Promise<RefreshSchedule>;
+}
+
+/** 暂停调度（保留行与 next_run_at，不再到点执行）。 */
+export function pauseRefreshSchedule(id: number): Promise<RefreshSchedule> {
+  return requestJson(`${API_BASE}/v1/refresh-schedules/${id}/pause`, {
+    method: "POST",
+  }) as Promise<RefreshSchedule>;
+}
+
+/** 恢复已暂停的调度。 */
+export function resumeRefreshSchedule(id: number): Promise<RefreshSchedule> {
+  return requestJson(`${API_BASE}/v1/refresh-schedules/${id}/resume`, {
+    method: "POST",
+  }) as Promise<RefreshSchedule>;
 }

@@ -12,6 +12,8 @@
 - 版本钉死：编辑出新版本后旧链接仍看旧版本（artifact_versions 历史行
   spec，非当前指针）；重新生成返回新版本；
 - 归档即失效（published 兜底）；
+- TTL 三态（wire-share-ttl-options）：缺省 30 / 自选 7|90 天（链接可打开、
+  exp 按所选窗口）；非法值 422 detail 列合法值；显式选择压过 env 缺省；
 - FD_WIRE_SHARE_SECRET 未配置：两端点 503 detail 带原因（惰性 env，逐
   请求生效）。
 """
@@ -163,8 +165,12 @@ def _make_artifact(
     return artifact
 
 
-def _share(client, artifact_id: int, headers=CUST) -> dict:
-    resp = client.post(f"/api/v1/artifacts/{artifact_id}/share", headers=headers)
+def _share(client, artifact_id: int, headers=CUST, *, ttl_days: int | None = None) -> dict:
+    """生成分享链接的测试捷径；ttl_days 显式给出时带 body。"""
+    json = None if ttl_days is None else {"ttl_days": ttl_days}
+    resp = client.post(
+        f"/api/v1/artifacts/{artifact_id}/share", headers=headers, json=json
+    )
     assert resp.status_code == 200, resp.text
     return resp.json()
 
@@ -230,6 +236,58 @@ def test_ttl_env_override_controls_expiry_window(client, db_session, monkeypatch
     short = _share(client, artifact["id"])
     _, exp_short, _ = _parse_token(short["url"])
     assert 58 <= exp_short - int(time.time()) <= 60
+
+
+def test_ttl_days_option_three_states(client, db_session, monkeypatch) -> None:
+    """有效期三态（wire-share-ttl-options 1.1）：缺省 30 / 7 天 / 90 天；
+    非法值 422 detail 列合法值；显式选择压过 env 缺省。"""
+    import time
+
+    artifact = _make_artifact(db_session, client)
+
+    # 缺省（无 body）：30 天
+    default_link = _share(client, artifact["id"])
+    _, exp_default, _ = _parse_token(default_link["url"])
+    assert 30 * 24 * 3600 - 2 <= exp_default - int(time.time()) <= 30 * 24 * 3600
+
+    # 显式 7 天：链接可打开（令牌按所选有效期验签）
+    link_7 = _share(client, artifact["id"], ttl_days=7)
+    _, exp_7, _ = _parse_token(link_7["url"])
+    assert 7 * 24 * 3600 - 2 <= exp_7 - int(time.time()) <= 7 * 24 * 3600
+    assert client.get(link_7["url"]).status_code == 200
+
+    # 显式 90 天：链接可打开
+    link_90 = _share(client, artifact["id"], ttl_days=90)
+    _, exp_90, _ = _parse_token(link_90["url"])
+    assert 90 * 24 * 3600 - 2 <= exp_90 - int(time.time()) <= 90 * 24 * 3600
+    assert client.get(link_90["url"]).status_code == 200
+
+    # 非法值（不在枚举）：422，detail 列出全部合法值
+    for bad in (14, 1, 365, 0, -7):
+        rejected = client.post(
+            f"/api/v1/artifacts/{artifact['id']}/share",
+            headers=CUST,
+            json={"ttl_days": bad},
+        )
+        assert rejected.status_code == 422, bad
+        detail = rejected.json()["detail"]
+        for legal in ("7", "30", "90"):
+            assert legal in detail
+
+    # 显式选择压过 env 缺省（FD_WIRE_SHARE_TTL_SECONDS 不再生效）
+    monkeypatch.setenv("FD_WIRE_SHARE_TTL_SECONDS", "60")
+    override = _share(client, artifact["id"], ttl_days=90)
+    _, exp_override, _ = _parse_token(override["url"])
+    assert 90 * 24 * 3600 - 2 <= exp_override - int(time.time()) <= 90 * 24 * 3600
+
+    # 空 body（仅 {} 无字段）= 缺省 30（撤掉 env 覆盖后回到默认窗口）
+    monkeypatch.delenv("FD_WIRE_SHARE_TTL_SECONDS", raising=False)
+    empty = client.post(
+        f"/api/v1/artifacts/{artifact['id']}/share", headers=CUST, json={}
+    )
+    assert empty.status_code == 200
+    _, exp_empty, _ = _parse_token(empty.json()["url"])
+    assert 30 * 24 * 3600 - 2 <= exp_empty - int(time.time()) <= 30 * 24 * 3600
 
 
 # ----------------------------------------------------------------- 生成闸
