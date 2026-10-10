@@ -123,10 +123,19 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
   };
 
   if (phase.kind === "loading") {
+    // 启动期可见加载指示（wire-console-boot-ux）：居中 spinner + 文案——
+    // 静默续期挂起（如 iframe 沙箱）不再表现为整页空白。
     return (
-      <p className="text-xs text-slate-400" data-testid="console-boot-loading">
-        {t("console.auth.loading")}
-      </p>
+      <div
+        data-testid="console-boot-loading"
+        className="flex min-h-[50vh] flex-col items-center justify-center gap-3"
+      >
+        <span
+          aria-hidden
+          className="h-8 w-8 animate-spin rounded-full border-2 border-slate-200 border-t-slate-600"
+        />
+        <p className="text-sm text-slate-500">{t("console.boot.loading")}</p>
+      </div>
     );
   }
 

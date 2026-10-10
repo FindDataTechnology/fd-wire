@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -105,7 +105,7 @@ class Dataset(DatasetsBase):
     #: [{name, type(INTEGER|REAL|TEXT)}]（漂移基线）
     columns_json: Mapped[list] = mapped_column(JSON, default=list)
     row_count: Mapped[int] = mapped_column(Integer, default=0)
-    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     sync_cron: Mapped[str | None] = mapped_column(String(64), nullable=True)
     #: idle|syncing|ok|failed|paused_drift|paused_quota
     sync_status: Mapped[str] = mapped_column(String(16), default="idle")
@@ -148,7 +148,7 @@ class Upload(DatasetsBase):
     filename: Mapped[str] = mapped_column(String(512))
     columns_json: Mapped[list] = mapped_column(JSON, default=list)
     row_count: Mapped[int] = mapped_column(Integer, default=0)
-    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     #: api 侧暂存路径（CSV 原样存；Excel 转 CSV 暂存）
     stored_path: Mapped[str] = mapped_column(String(1024))
     #: 原始文件内容哈希 sha256:<hex>（存量行无原件、如实置 NULL——wire-provenance-ledger）

@@ -82,7 +82,7 @@ class IndicatorSnapshot(Base):
     domain: Mapped[str | None] = mapped_column(String(128))
     frequency: Mapped[str | None] = mapped_column(String(64))
     # 计量单位（登记行直映；条目属性呈现，不进标识）
-    unit: Mapped[str | None] = mapped_column(String(128))
+    unit: Mapped[str | None] = mapped_column(String(256))
     time_span_start: Mapped[str | None] = mapped_column(String(64))
     time_span_end: Mapped[str | None] = mapped_column(String(64))
     entity_coverage_count: Mapped[int | None] = mapped_column(Integer)

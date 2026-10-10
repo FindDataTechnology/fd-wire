@@ -17,7 +17,7 @@ import enum
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
@@ -72,9 +72,9 @@ class Plan(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     code: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(64), nullable=False)
-    monthly_price_micro: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    monthly_price_micro: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     included_lines: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    overage_unit_price_micro: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    overage_unit_price_micro: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -136,7 +136,7 @@ class LedgerEntry(Base):
     )
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    amount_micro: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    amount_micro: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     period: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
     idempotency_key: Mapped[str] = mapped_column(String(191), unique=True, nullable=False)
     source_ref: Mapped[str | None] = mapped_column(String(191))

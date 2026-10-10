@@ -282,6 +282,10 @@ const zh = {
     viewMine: "查看我的需求",
   },
   console: {
+    // 启动期加载指示（wire-console-boot-ux）：loading 态可见 spinner + 文案。
+    boot: {
+      loading: "正在进入控制台…",
+    },
     title: "控制台",
     chartTitle: "仪表盘占位",
     chartEmpty: "暂无数据",
@@ -389,6 +393,56 @@ const zh = {
         copy: "复制 spec",
         copied: "已复制到剪贴板。",
         close: "关闭",
+      },
+    },
+    // 仪表盘渲染器 + 基础编辑器（wire-dashboard-renderer）：dashboard kind
+    // 的看板视图入口、快照口径标注、legacy 兼容与编辑器表单文案。
+    dashboard: {
+      viewButton: "查看看板",
+      editButton: "编辑看板",
+      paneTitle: "看板视图",
+      loading: "看板加载中…",
+      loadError: "看板加载失败。",
+      lockedBadge: "已归档 · 只读",
+      snapshotNote: "快照数据，实时刷新后续开通",
+      emptyPanels: "还没有面板——添加一个开始。",
+      noData: "无数据",
+      badPanel: "面板 #{{index}} 无法渲染：",
+      badPanelReason: {
+        not_object: "面板必须是 JSON 对象",
+        bad_type: "面板 type 必须是 kpi / line / bar / table 之一",
+      },
+      type: {
+        kpi: "指标卡",
+        line: "折线图",
+        bar: "柱状图",
+        table: "数据表",
+      },
+      legacy: {
+        badge: "旧版自由格式",
+        note: "该看板来自早期自由 JSON spec，暂不支持渲染——可查看原始 JSON。",
+        noEditHint: "旧版自由格式不支持可视化编辑——可在 spec 编辑器中改为 v1 面板结构。",
+      },
+      editor: {
+        titleLabel: "看板标题",
+        panelListTitle: "面板",
+        addTypeLabel: "面板类型",
+        addPanel: "添加面板",
+        panelTitlePlaceholder: "面板标题",
+        spanOption: "{{span}} 列",
+        moveLeft: "左移",
+        moveRight: "右移",
+        remove: "删除",
+        kpiValue: "指标值",
+        kpiUnit: "单位",
+        kpiSubtitle: "副标题",
+        save: "保存为新版本",
+        saving: "保存中…",
+        savedVersion: "已保存为版本 v{{version}}。",
+        saveFailed: "保存失败，请稍后重试。",
+        dirtyLeaveConfirm: "有未保存的修改，确定离开编辑吗？",
+        backToView: "返回查看",
+        preview: "实时预览",
       },
     },
     datasets: {

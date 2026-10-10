@@ -34,7 +34,7 @@ def upgrade() -> None:
     )
     op.add_column(
         "indicator_snapshots",
-        sa.Column("unit", sa.String(length=128), nullable=True),
+        sa.Column("unit", sa.String(length=256), nullable=True),
     )
     op.create_index(
         "ix_indicator_snapshots_source_db", "indicator_snapshots", ["source_db"]

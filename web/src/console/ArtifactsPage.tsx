@@ -6,6 +6,8 @@
 //   409 文案如实呈现）。
 // - 版本历史抽屉：列出历史版本、查看任一版本 spec、可复制。
 // - 发布/归档/恢复操作（非法迁移 409 如实呈现）。
+// - dashboard kind 卡片加「查看看板」内嵌展开区（wire-dashboard-renderer）：
+//   快照渲染器查看 + 编辑器切换，保存复用下方 PUT 与版本链。
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -29,6 +31,7 @@ import {
   type Conversation,
 } from "./api";
 import { formatServerDate } from "./util";
+import { DashboardPane } from "./dashboard/DashboardPane";
 
 const BUFFER_STORAGE_PREFIX = "wire-web-artifact-buffer-";
 
@@ -56,6 +59,8 @@ export function ArtifactsPage() {
   const [kindFilter, setKindFilter] = useState<ArtifactKind | "all">("all");
   const [statusFilter, setStatusFilter] = useState<ArtifactStatus | "all">("all");
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // 看板视图展开的产物 id（wire-dashboard-renderer：dashboard kind 内嵌入口）。
+  const [dashboardFor, setDashboardFor] = useState<number | null>(null);
   const [historyFor, setHistoryFor] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -246,6 +251,20 @@ export function ArtifactsPage() {
                     {t("console.artifacts.versionLabel", { version: artifact.version })}
                   </span>
                   <div className="ml-auto flex flex-wrap gap-2">
+                    {artifact.kind === "dashboard" && (
+                      <button
+                        type="button"
+                        data-testid="artifact-dashboard-view"
+                        onClick={() =>
+                          setDashboardFor(
+                            artifact.id === dashboardFor ? null : artifact.id,
+                          )
+                        }
+                        className="rounded border border-indigo-300 px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-50"
+                      >
+                        {t("console.dashboard.viewButton")}
+                      </button>
+                    )}
                     {artifact.status === "draft" && (
                       <button
                         type="button"
@@ -317,6 +336,13 @@ export function ArtifactsPage() {
                 {artifact.id === selectedId && (
                   <SpecViewer
                     key={`viewer-${artifact.id}`}
+                    artifactId={artifact.id}
+                    onSaved={replaceArtifact}
+                  />
+                )}
+                {artifact.id === dashboardFor && (
+                  <DashboardPane
+                    key={`dashboard-${artifact.id}`}
                     artifactId={artifact.id}
                     onSaved={replaceArtifact}
                   />

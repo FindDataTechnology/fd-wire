@@ -4,6 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ADMIN_ROLE,
+  REFRESH_TIMEOUT_MS,
   SESSION_STORAGE_KEY,
   beginLogin,
   clearSession,
@@ -12,6 +13,7 @@ import {
   hasAdminRole,
   isExpired,
   loadSession,
+  refreshSession,
   saveSession,
   type ConsoleSession,
 } from "./auth";
@@ -100,5 +102,92 @@ describe("console/auth（PKCE 登录流）", () => {
     await expect(
       completeLogin(CONFIG, new URLSearchParams("code=abc&state=other")),
     ).rejects.toThrow("state mismatch");
+  });
+});
+
+describe("console/auth（静默续期超时兜底，wire-console-boot-ux）", () => {
+  it("token 端点挂起 → REFRESH_TIMEOUT_MS 后按续期失败返回 null（不落会话）", async () => {
+    vi.useFakeTimers();
+    try {
+      // fetch 永不 resolve：模拟 iframe 沙箱等静默续期挂起。
+      vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+      let settled = false;
+      const pending = refreshSession(
+        CONFIG,
+        makeSession({ refreshToken: "rt-1" }),
+      ).then((result) => {
+        settled = true;
+        return result;
+      });
+
+      // 超时窗口内不提前放弃（仍在等待）。
+      await vi.advanceTimersByTimeAsync(REFRESH_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+
+      // 到点：按续期失败处理（null），且不落 sessionStorage。
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toBeNull();
+      expect(settled).toBe(true);
+      expect(sessionStorage.getItem(SESSION_STORAGE_KEY)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("超时窗口内 token 正常返回 → 续期成功（race 不影响成功路径）", async () => {
+    const idToken = `aaa.${btoa(
+      JSON.stringify({ sub: "s2", email: "s2@example.com" }),
+    )}.bbb`;
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(
+          JSON.stringify({
+            id_token: idToken,
+            refresh_token: "rt-2",
+            expires_in: 3600,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const customer = { id: 7, name: "壹座演示", plan_code: "basic" };
+    const renewed = await refreshSession(
+      CONFIG,
+      makeSession({ refreshToken: "rt-1", customer }),
+    );
+
+    // 请求形状：refresh_token 授权 + 合并既有客户信息落会话。
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "https://auth.test/oidc/oidc/token",
+    );
+    expect(String(fetchMock.mock.calls[0][1]?.body)).toContain(
+      "grant_type=refresh_token",
+    );
+    expect(renewed?.refreshToken).toBe("rt-2");
+    expect(renewed?.identity).toBe("s2@example.com");
+    expect(renewed?.customer).toEqual(customer);
+    expect(loadSession()?.refreshToken).toBe("rt-2");
+    vi.unstubAllGlobals();
+  });
+
+  it("token 端点报错（非超时）→ 仍按失败返回 null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("invalid_grant", { status: 400 })),
+    );
+    await expect(
+      refreshSession(CONFIG, makeSession({ refreshToken: "rt-1" })),
+    ).resolves.toBeNull();
+    expect(sessionStorage.getItem(SESSION_STORAGE_KEY)).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it("无 refreshToken → 直接返回 null（不发请求）", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(refreshSession(CONFIG, makeSession())).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 });

@@ -40,6 +40,17 @@ afterEach(() => {
 });
 
 describe("ConsoleView（登录引导 / 阻塞态 / 会话建立）", () => {
+  it("启动 loading 期渲染可见加载指示（居中 spinner + 文案，不再空白）", () => {
+    // auth/config 永不返回：bootstrap 停在 loading 态，验证启动期有可见反馈。
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    render(<ConsoleView />);
+
+    const loading = screen.getByTestId("console-boot-loading");
+    // i18n 文案（zh）+ spinner 圆环（animate-spin）均在场。
+    expect(loading.textContent).toContain("正在进入控制台…");
+    expect(loading.querySelector(".animate-spin")).toBeTruthy();
+  });
+
   it("登录配置未下发（configured=false）→ 阻塞态提示，不发起任何受保护请求", async () => {
     const backend = installConsoleBackend(CONVERSATIONS, {
       authConfig: { configured: false },

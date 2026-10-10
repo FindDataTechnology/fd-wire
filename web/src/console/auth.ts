@@ -67,6 +67,11 @@ export const SESSION_STORAGE_KEY = "wire.console.session";
 export const PKCE_STORAGE_KEY = "wire.console.pkce";
 /** 内部后台角色门禁（ID token roles claim；admin 双闸的前端半边）。 */
 export const ADMIN_ROLE = "wire-admin";
+/**
+ * 静默续期等待上限（ms，wire-console-boot-ux）：iframe 沙箱等环境下
+ * token 端点可能无限挂起——超时按续期失败处理（null，回落登录引导）。
+ */
+export const REFRESH_TIMEOUT_MS = 15_000;
 
 // ---------------------------------------------------------------------------
 // 配置（运行时下发；未配置 → 前端阻塞态，不发起假登录）
@@ -426,8 +431,19 @@ export async function refreshSession(
     refresh_token: session.refreshToken,
     client_id: config.client_id,
   });
+  // 超时兜底：REFRESH_TIMEOUT_MS 内 token 端点未回即按续期失败处理，
+  // 不再无限等待（挂起的浏览器环境此前表现为整页无反馈）。
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   try {
-    const tokens = await tokenRequest(config, body);
+    const tokens = await Promise.race([
+      tokenRequest(config, body),
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new ConsoleAuthError("refresh timed out")),
+          REFRESH_TIMEOUT_MS,
+        );
+      }),
+    ]);
     const next = sessionFromTokens({
       refresh_token: session.refreshToken,
       ...tokens,
@@ -438,6 +454,9 @@ export async function refreshSession(
     return merged;
   } catch {
     return null;
+  } finally {
+    // 先到者胜出后清掉另一侧定时器，避免迟到的 reject 变成未处理拒绝。
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
   }
 }
 

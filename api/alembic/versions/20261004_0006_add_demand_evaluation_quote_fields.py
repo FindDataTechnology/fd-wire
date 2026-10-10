@@ -28,7 +28,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.add_column("demands", sa.Column("evaluation_detail", sa.JSON(), nullable=True))
-    op.add_column("demands", sa.Column("quote_amount_micro", sa.Integer(), nullable=True))
+    op.add_column("demands", sa.Column("quote_amount_micro", sa.BigInteger(), nullable=True))
     op.add_column("demands", sa.Column("quote_valid_until", sa.DateTime(), nullable=True))
     op.add_column("demands", sa.Column("quote_operator", sa.String(length=64), nullable=True))
     op.add_column(

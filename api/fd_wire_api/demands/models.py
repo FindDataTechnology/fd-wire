@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import JSON, DateTime, Integer, Numeric, String, Text
+from sqlalchemy import JSON, BigInteger, DateTime, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -65,7 +65,7 @@ class Demand(Base):
         Numeric(12, 2), nullable=True
     )
     #: 报价金额（微元整数，账内权威单位；与 billing.money 约定一致）
-    quote_amount_micro: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quote_amount_micro: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     #: 报价说明
     quote_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: 报价有效期（旧单展示用）

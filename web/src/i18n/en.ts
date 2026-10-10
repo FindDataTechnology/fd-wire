@@ -297,6 +297,10 @@ const en: Translation = {
     viewMine: "View my demands",
   },
   console: {
+    // Boot-time loading indicator (wire-console-boot-ux): visible spinner + text.
+    boot: {
+      loading: "Entering the console…",
+    },
     title: "Console",
     chartTitle: "Dashboard placeholder",
     chartEmpty: "No data yet",
@@ -408,6 +412,57 @@ const en: Translation = {
         copy: "Copy spec",
         copied: "Copied to clipboard.",
         close: "Close",
+      },
+    },
+    // Dashboard renderer + basic editor (wire-dashboard-renderer): the
+    // dashboard-kind view entry, snapshot-caliber note, legacy compat and
+    // editor form labels.
+    dashboard: {
+      viewButton: "View dashboard",
+      editButton: "Edit dashboard",
+      paneTitle: "Dashboard view",
+      loading: "Loading the dashboard…",
+      loadError: "Failed to load the dashboard.",
+      lockedBadge: "Archived · read-only",
+      snapshotNote: "Snapshot data — live refresh coming later",
+      emptyPanels: "No panels yet — add one to start.",
+      noData: "No data",
+      badPanel: "Panel #{{index}} could not be rendered: ",
+      badPanelReason: {
+        not_object: "a panel must be a JSON object",
+        bad_type: "panel type must be one of kpi / line / bar / table",
+      },
+      type: {
+        kpi: "KPI card",
+        line: "Line chart",
+        bar: "Bar chart",
+        table: "Data table",
+      },
+      legacy: {
+        badge: "Legacy free-form",
+        note: "This dashboard comes from an early free-form JSON spec and cannot be rendered yet — the raw JSON is shown below.",
+        noEditHint: "Legacy free-form specs do not support visual editing — switch to the v1 panel structure in the spec editor.",
+      },
+      editor: {
+        titleLabel: "Dashboard title",
+        panelListTitle: "Panels",
+        addTypeLabel: "Panel type",
+        addPanel: "Add panel",
+        panelTitlePlaceholder: "Panel title",
+        spanOption: "{{span}} col",
+        moveLeft: "Move left",
+        moveRight: "Move right",
+        remove: "Delete",
+        kpiValue: "Value",
+        kpiUnit: "Unit",
+        kpiSubtitle: "Subtitle",
+        save: "Save as new version",
+        saving: "Saving…",
+        savedVersion: "Saved as version v{{version}}.",
+        saveFailed: "Save failed, please retry later.",
+        dirtyLeaveConfirm: "You have unsaved changes — leave the editor anyway?",
+        backToView: "Back to view",
+        preview: "Live preview",
       },
     },
     datasets: {
