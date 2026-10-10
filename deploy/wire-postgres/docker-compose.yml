@@ -8,7 +8,9 @@
 #   initdb/01-create-databases.sh 建——分库即备份节奏与爆炸半径边界。
 #
 # 凭据走 .env（模板 env.example，真实口令永不入 git；OpenBAO 接管为后续任务）。
-# 部署目标 cheap-1（与 cells 同机，就近低延迟）。
+# 部署目标 cheap-3（2026-10-11 用户裁决：cheap-1 空间不足；Jenkins 退役释放）。
+# cheap-3 实况无 compose → 等价 docker run 部署（偏差表与实证见
+# openspec/changes/wire-dedicated-postgres/reports/cheap3-deployment.md）。
 
 services:
   wire-postgres:
