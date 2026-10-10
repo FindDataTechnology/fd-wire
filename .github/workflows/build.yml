@@ -187,7 +187,8 @@ jobs:
     timeout-minutes: 15
     env:
       HAS_DOWNLOADS_CREDS: ${{ secrets.DOWNLOADS_SSH_HOST != '' && secrets.DOWNLOADS_SSH_USER != '' && secrets.DOWNLOADS_SSH_KEY != '' }}
-      DOWNLOADS_REMOTE_DIR: fd-wire/downloads
+      # 生产落点=cheap-6 /var/lib/fd-wire/downloads（repo 变量覆盖，见 deploy/README）
+      DOWNLOADS_REMOTE_DIR: ${{ vars.DOWNLOADS_REMOTE_DIR || 'fd-wire/downloads' }}
     steps:
       - name: Gather all platform artifacts
         uses: actions/download-artifact@v4
@@ -221,15 +222,17 @@ jobs:
           SSH_HOST: ${{ secrets.DOWNLOADS_SSH_HOST }}
           SSH_USER: ${{ secrets.DOWNLOADS_SSH_USER }}
           SSH_KEY: ${{ secrets.DOWNLOADS_SSH_KEY }}
+          # 非标 SSH 端口支持（cheap 系共享 IP 各自端口）；缺省 22
+          SSH_PORT: ${{ vars.DOWNLOADS_SSH_PORT || '22' }}
         run: |
           set -eu
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/downloads_key
           chmod 600 ~/.ssh/downloads_key
-          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           # 目标子目录与 api 端点命名空间一一对应（<root>/connector/）；
           # --delete：该目录专属本批产物，保持目录与 manifest 一致
-          rsync -avz --delete -e "ssh -i ~/.ssh/downloads_key" \
+          rsync -avz --delete -e "ssh -i ~/.ssh/downloads_key -p $SSH_PORT" \
             staging/ "$SSH_USER@$SSH_HOST:$DOWNLOADS_REMOTE_DIR/connector/"
           echo "### 连接器产物已晋升（$DOWNLOADS_REMOTE_DIR/connector/）" >> "$GITHUB_STEP_SUMMARY"
 
