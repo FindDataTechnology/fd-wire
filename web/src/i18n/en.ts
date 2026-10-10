@@ -467,6 +467,13 @@ const en: Translation = {
           "KPI cards and charts use different data calibers (a KPI card shows only the first value) — converting changes how this panel is presented. Convert anyway?",
         sourceLabel: "Source",
         sourcePlaceholder: "Indicator code / dataset name (refresh relies on this annotation)",
+        // Query contract badge (wire-dashboard-query-contract): panels with a
+        // bound query show the dataset read-only (refresh executes the
+        // contract; form editing is not available in v0).
+        queryBadge: "Query bound",
+        queryDataset: "Dataset {{id}}",
+        queryReadonlyHint:
+          "This panel is bound to a dataset query (refresh executes it); form editing is not available yet.",
         xNameLabel: "X axis name",
         yNameLabel: "Y axis name",
         unsavedCount: "{{n}} unsaved change(s)",
@@ -484,13 +491,18 @@ const en: Translation = {
       },
       // Manual refresh (wire-dashboard-refresh): view-mode button and status
       // copy; 403 tier guidance and 502 engine failures surface the server
-      // detail verbatim (apiErrorText).
+      // detail verbatim (apiErrorText). Contract stats
+      // (wire-dashboard-query-contract): mode=contract renders per-panel
+      // counts and failure reasons; the ai path keeps the success copy.
       refresh: {
         button: "Refresh data",
         refreshing: "Refreshing…",
         success: "Refreshed as version v{{version}}.",
         inProgress: "A refresh is already running for this dashboard — please retry shortly.",
         failed: "Refresh failed, please retry later.",
+        contractSummary:
+          "Refreshed as version v{{version}} (contract): {{refreshed}} refreshed / {{kept}} kept / {{failed}} failed.",
+        contractFailure: "{{title}}: {{error}}",
       },
       // Signed share links (wire-dashboard-share): the artifact-page entry and
       // the public share view (login-free read-only, noindex, "Shared by" footer).
@@ -836,6 +848,31 @@ const en: Translation = {
             cellLifecycle: "Cell lifecycle",
             epochSealed: "Epoch sealed",
           },
+        },
+      },
+      // Pipeline sub-view (wire-transform-pipeline-view tasks 2.1/2.2): the
+      // data page offers a "Datasets / Pipeline" sub-view switch; pipeline is
+      // the enterprise-wide derivation lineage graph (read-only v0).
+      pipeline: {
+        viewList: "Datasets",
+        tab: "Pipeline",
+        subtitle:
+          "Derivation lineage of this enterprise's datasets — sources in the leftmost column, each derivation one column further right; click a node to open the dataset detail. The view is read-only; refresh and derive actions live on the dataset detail page.",
+        loading: "Loading pipeline graph…",
+        errorTitle: "Failed to load pipeline graph",
+        retry: "Retry",
+        emptyHint:
+          "No derived datasets yet — start a derivation or indicator join from a dataset's detail page.",
+        truncated:
+          "More than 500 datasets — the graph is truncated, only some nodes are shown.",
+        anomalies:
+          "{{count}} lineage edges were skipped (cycle or missing parent).",
+        columnLabel: "Depth {{depth}}",
+        updatedLabel: "Updated",
+        scheduled: "Scheduled",
+        tier: {
+          api: "Free tier",
+          cell: "cell",
         },
       },
     },

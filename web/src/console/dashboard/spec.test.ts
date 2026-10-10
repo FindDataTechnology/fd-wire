@@ -1,6 +1,9 @@
 // 仪表盘 spec v1 契约测试（wire-dashboard-renderer 任务 1.1/1.2）：
 // 宽容校验三态（合法 v1 / 含非法面板的 v1 / 旧自由 JSON legacy）+
 // id 生成器 / 移序 / 面板模板 / 信封组装。
+// wire-dashboard-query-contract 任务 2.1/2.4：面板 query 契约——宽容归一
+// （合法/非法/limit 回退/列去重保序）、parse 挂载与非法丢弃、编辑 helpers
+// （duplicate/convert）保留 query。
 import { describe, expect, it } from "vitest";
 import {
   buildArtifactEnvelope,
@@ -8,9 +11,11 @@ import {
   duplicatePanel,
   generatePanelId,
   moveItem,
+  normalizePanelQuery,
   parseDashboardSpec,
   panelTemplate,
   type DashboardPanel,
+  type DashboardPanelQuery,
 } from "./spec";
 
 /** v1 本体（编辑器预览 / 内层直给形态）。 */
@@ -263,5 +268,224 @@ describe("编辑器 v2 工具（wire-dashboard-editor-v2 任务 1.1）", () => {
     expect(duplicatePanel(kpi, ["p1", "p2"], " (copy)").title).toBe(
       "CPI 同比 (copy)",
     );
+  });
+});
+
+describe("面板 query 契约（wire-dashboard-query-contract 任务 2.1）", () => {
+  /** 合法全字段 query（kpi 单值约定：sort 到最近一行 + limit 1 + 投影值列）。 */
+  const VALID_QUERY: DashboardPanelQuery = {
+    dataset_id: "ds_coal_price",
+    filters: [{ column: "city", op: "eq", value: "秦皇岛" }],
+    sort: [{ column: "date", dir: "desc" }],
+    limit: 1,
+    columns: ["price"],
+  };
+
+  it("合法 query 原样归一（全字段；value 原样透传不猜类型）", () => {
+    expect(normalizePanelQuery(VALID_QUERY)).toEqual(VALID_QUERY);
+    // 只带 dataset_id：可选字段缺省不落
+    expect(normalizePanelQuery({ dataset_id: "ds_x" })).toEqual({ dataset_id: "ds_x" });
+    // value 为任意 JSON 值（数组/对象/布尔）均透传
+    expect(
+      normalizePanelQuery({
+        dataset_id: "ds_x",
+        filters: [
+          { column: "tags", op: "in", value: ["a", "b"] },
+          { column: "ok", op: "eq", value: true },
+        ],
+      }),
+    ).toEqual({
+      dataset_id: "ds_x",
+      filters: [
+        { column: "tags", op: "in", value: ["a", "b"] },
+        { column: "ok", op: "eq", value: true },
+      ],
+    });
+  });
+
+  it("顶层非对象（含数组/null）或 dataset_id 缺失/非字符串/空串 → undefined", () => {
+    expect(normalizePanelQuery(undefined)).toBeUndefined();
+    expect(normalizePanelQuery(null)).toBeUndefined();
+    expect(normalizePanelQuery("query")).toBeUndefined();
+    expect(normalizePanelQuery(42)).toBeUndefined();
+    expect(normalizePanelQuery([])).toBeUndefined();
+    expect(normalizePanelQuery({ filters: [] })).toBeUndefined(); // 缺 dataset_id
+    expect(normalizePanelQuery({ dataset_id: "" })).toBeUndefined(); // 空串
+    expect(normalizePanelQuery({ dataset_id: 123 })).toBeUndefined(); // 非字符串
+    expect(normalizePanelQuery({ dataset_id: "  " })).toEqual({ dataset_id: "  " }); // 仅要求非空，不 trim
+  });
+
+  it("filters 宽容归一：非法项丢弃（算子白名单/空 column/非对象项），全不合法不落字段", () => {
+    expect(
+      normalizePanelQuery({
+        dataset_id: "ds_x",
+        filters: [
+          { column: "city", op: "between", value: [1, 2] }, // 算子不在白名单 → 丢弃
+          { column: "", op: "eq", value: 1 }, // 空 column → 丢弃
+          { column: "date", op: "regex", value: ".*" }, // 丢弃
+          "只是一个字符串", // 非对象项 → 丢弃
+          null,
+          { column: "city", op: "gte", value: 500 }, // 合法 → 保留
+          { column: "name", op: "contains", value: "煤" }, // 合法 → 保留
+        ],
+      }),
+    ).toEqual({
+      dataset_id: "ds_x",
+      filters: [
+        { column: "city", op: "gte", value: 500 },
+        { column: "name", op: "contains", value: "煤" },
+      ],
+    });
+    // 全不合法 → 字段不落（query 本体仍保留 dataset_id）
+    expect(
+      normalizePanelQuery({ dataset_id: "ds_x", filters: [{ column: "c", op: "bad" }] }),
+    ).toEqual({ dataset_id: "ds_x" });
+    // 非数组 / 空数组 → 同样不落字段
+    expect(normalizePanelQuery({ dataset_id: "ds_x", filters: "oops" })).toEqual({
+      dataset_id: "ds_x",
+    });
+    expect(normalizePanelQuery({ dataset_id: "ds_x", filters: [] })).toEqual({
+      dataset_id: "ds_x",
+    });
+  });
+
+  it("sort 宽容归一：dir 不在 asc/desc 或空 column 丢弃；全不合法/非数组不落字段", () => {
+    expect(
+      normalizePanelQuery({
+        dataset_id: "ds_x",
+        sort: [
+          { column: "date", dir: "DESC" }, // 方向白名单外 → 丢弃
+          { column: "", dir: "asc" }, // 空 column → 丢弃
+          { column: "price", dir: "desc" }, // 合法 → 保留
+          "只是一个字符串",
+        ],
+      }),
+    ).toEqual({ dataset_id: "ds_x", sort: [{ column: "price", dir: "desc" }] });
+    expect(
+      normalizePanelQuery({ dataset_id: "ds_x", sort: [{ column: "date", dir: "up" }] }),
+    ).toEqual({ dataset_id: "ds_x" });
+    expect(normalizePanelQuery({ dataset_id: "ds_x", sort: "oops" })).toEqual({
+      dataset_id: "ds_x",
+    });
+    expect(normalizePanelQuery({ dataset_id: "ds_x", sort: [] })).toEqual({
+      dataset_id: "ds_x",
+    });
+  });
+
+  it("limit：非法（非数字/非整数/越界 1..1000）回退 100；合法保留；缺省不落", () => {
+    for (const bad of [0, -5, 1001, 2000, 2.5, "50", null, NaN]) {
+      expect(normalizePanelQuery({ dataset_id: "ds_x", limit: bad })).toEqual({
+        dataset_id: "ds_x",
+        limit: 100,
+      });
+    }
+    expect(normalizePanelQuery({ dataset_id: "ds_x", limit: 1 })).toEqual({
+      dataset_id: "ds_x",
+      limit: 1,
+    });
+    expect(normalizePanelQuery({ dataset_id: "ds_x", limit: 1000 })).toEqual({
+      dataset_id: "ds_x",
+      limit: 1000,
+    });
+    expect(normalizePanelQuery({ dataset_id: "ds_x" })).toEqual({ dataset_id: "ds_x" }); // 未给出不落
+  });
+
+  it("columns：只留字符串、去重保序；非字符串丢弃；全非法/非数组/空不落字段", () => {
+    expect(
+      normalizePanelQuery({
+        dataset_id: "ds_x",
+        columns: ["价格", "日期", "价格", 42, null, "城市", true, "日期"],
+      }),
+    ).toEqual({ dataset_id: "ds_x", columns: ["价格", "日期", "城市"] });
+    expect(
+      normalizePanelQuery({ dataset_id: "ds_x", columns: [42, null, {}] }),
+    ).toEqual({ dataset_id: "ds_x" }); // 全非法 → 不落
+    expect(normalizePanelQuery({ dataset_id: "ds_x", columns: "oops" })).toEqual({
+      dataset_id: "ds_x",
+    });
+    expect(normalizePanelQuery({ dataset_id: "ds_x", columns: [] })).toEqual({
+      dataset_id: "ds_x",
+    });
+  });
+
+  it("parseDashboardSpec：合法 query 挂载到面板；非法 query 整体丢弃（面板照常收下）", () => {
+    const parsed = parseDashboardSpec({
+      spec: {
+        panels: [
+          {
+            id: "q1",
+            type: "table",
+            title: "契约面板",
+            snapshot: { columns: ["日期", "价格"], rows: [["7月", 850]] },
+            query: {
+              dataset_id: "ds_coal",
+              filters: [{ column: "c", op: "bad" }, { column: "city", op: "eq", value: 1 }],
+              limit: 5000,
+              columns: ["价格", "价格", 9],
+            },
+          },
+          {
+            id: "q2",
+            type: "kpi",
+            title: "坏契约面板",
+            snapshot: { columns: ["value"], rows: [[1]] },
+            query: { filters: [{ column: "c", op: "eq", value: 1 }] }, // 缺 dataset_id
+          },
+        ],
+      },
+    });
+    expect(parsed.kind).toBe("v1");
+    if (parsed.kind !== "v1") return;
+    // 合法 query：归一后挂载（非法 filters 项丢弃、limit 越界回退 100、列去重保序）
+    expect(parsed.panels[0]?.query).toEqual({
+      dataset_id: "ds_coal",
+      filters: [{ column: "city", op: "eq", value: 1 }],
+      limit: 100,
+      columns: ["价格"],
+    });
+    // 非法 query：整体丢弃，面板本体不受影响（snapshot 原样，渲染读快照）
+    expect(parsed.panels[1]?.query).toBeUndefined();
+    expect(parsed.panels[1]?.snapshot).toEqual({ columns: ["value"], rows: [[1]] });
+    expect(parsed.badPanels).toEqual([]); // 非法 query 不计坏面板
+  });
+
+  it("duplicatePanel 保留 query（structuredClone 深拷贝，副本改 query 不波及原件）", () => {
+    const panel: DashboardPanel = {
+      id: "q1",
+      type: "table",
+      title: "契约面板",
+      span: 2,
+      snapshot: { columns: ["日期"], rows: [["7月"]] },
+      query: { ...VALID_QUERY, filters: [{ column: "city", op: "eq", value: "秦皇岛" }] },
+    };
+    const copy = duplicatePanel(panel, ["q1"]);
+    expect(copy.query).toEqual(panel.query); // 原样保留
+    // 深拷贝独立：改副本 query 字段不波及原件
+    copy.query!.dataset_id = "ds_other";
+    copy.query!.filters![0]!.column = "mutated";
+    expect(panel.query!.dataset_id).toBe("ds_coal_price");
+    expect(panel.query!.filters![0]!.column).toBe("city");
+  });
+
+  it("convertPanelType 保留 query（对象展开——仅换 type，kpi↔图表互转同样保留）", () => {
+    const kpi: DashboardPanel = {
+      id: "q1",
+      type: "kpi",
+      title: "契约指标",
+      span: 1,
+      snapshot: { columns: ["value"], rows: [[850]] },
+      query: VALID_QUERY,
+    };
+    const toLine = convertPanelType(kpi, "line");
+    expect(toLine.needConfirm).toBe(true);
+    expect(toLine.panel.type).toBe("line");
+    expect(toLine.panel.query).toEqual(VALID_QUERY); // 原样保留
+    expect(kpi.query).toEqual(VALID_QUERY); // 不可变：原面板不动
+
+    const toKpi = convertPanelType(
+      { ...kpi, type: "line", query: { dataset_id: "ds_y", limit: 7 } },
+      "kpi",
+    );
+    expect(toKpi.panel.query).toEqual({ dataset_id: "ds_y", limit: 7 });
   });
 });

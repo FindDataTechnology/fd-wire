@@ -447,6 +447,12 @@ const zh = {
           "指标卡与图表的数据口径不同（指标卡只取首值），转换后面板呈现方式将改变——确定转换吗？",
         sourceLabel: "来源",
         sourcePlaceholder: "指标 code / 数据集名（刷新依赖此标注取数）",
+        // 查询契约徽标（wire-dashboard-query-contract）：带 query 的面板只读
+        // 展示绑定数据集（刷新按此契约取数；v0 不做表单编辑）。
+        queryBadge: "已绑定查询",
+        queryDataset: "数据集 {{id}}",
+        queryReadonlyHint:
+          "该面板绑定了数据集查询（刷新按此契约取数）；本版暂不支持表单编辑。",
         xNameLabel: "x 轴名",
         yNameLabel: "y 轴名",
         unsavedCount: "{{n}} 处未保存",
@@ -464,12 +470,17 @@ const zh = {
       },
       // 手动刷新（wire-dashboard-refresh）：查看态刷新按钮与状态文案；
       // 403 档位引导与 502 引擎失败由服务端 detail 如实呈现（apiErrorText）。
+      // 契约刷新统计（wire-dashboard-query-contract）：mode=contract 时按
+      // panels 呈现成功/保留/失败计数与失败原因；ai 路径仍用 success 文案。
       refresh: {
         button: "刷新数据",
         refreshing: "刷新中…",
         success: "已刷新为版本 v{{version}}。",
         inProgress: "该看板刷新进行中，请稍候再试。",
         failed: "刷新失败，请稍后重试。",
+        contractSummary:
+          "已刷新为版本 v{{version}}（契约刷新）：成功 {{refreshed}} / 保留 {{kept}} / 失败 {{failed}}。",
+        contractFailure: "{{title}}：{{error}}",
       },
       // 签名分享链接（wire-dashboard-share）：产物页入口 + 公开分享页文案
       //（分享页免登录只读、noindex、页脚「由柏讯分享」）。
@@ -804,6 +815,27 @@ const zh = {
             cellLifecycle: "cell 生命周期",
             epochSealed: "锚定封存",
           },
+        },
+      },
+      // 管线子视图（wire-transform-pipeline-view 任务 2.1/2.2）：数据页内
+      // 「数据集 / 管线」二选一子视图；管线为全企业派生血缘图（只读 v0）。
+      pipeline: {
+        viewList: "数据集",
+        tab: "管线",
+        subtitle:
+          "本企业数据集的派生血缘图——源数据集在最左列，派生逐级向右；点击节点查看数据集详情。视图只读，刷新与派生入口在数据集详情页。",
+        loading: "管线图加载中…",
+        errorTitle: "管线图加载失败",
+        retry: "重试",
+        emptyHint: "尚无派生数据集——从数据集详情发起派生或指标联合。",
+        truncated: "数据集超过 500 个，图已截断——仅显示部分节点。",
+        anomalies: "{{count}} 条血缘边异常（成环或父级缺失），已在图中省略。",
+        columnLabel: "深度 {{depth}}",
+        updatedLabel: "更新",
+        scheduled: "定时",
+        tier: {
+          api: "免费档",
+          cell: "cell",
         },
       },
     },

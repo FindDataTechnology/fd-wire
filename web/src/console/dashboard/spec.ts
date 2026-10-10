@@ -8,6 +8,8 @@
 // 校验口径（宽容）：panels 里的非法面板逐个收集原因并跳过，不整板失败；
 // snapshot 列行数不齐截断/补 null 标注不拒收；缺 id 的面板自动补 id；
 // span 非法回退 1。旧自由 JSON（内层无 panels 数组）返回 legacy 态。
+// wire-dashboard-query-contract 任务 2.1：面板新增可选 query 引用（刷新
+// 契约，非渲染输入）——normalizePanelQuery 宽容归一，非法整体丢弃。
 export const DASHBOARD_PANEL_TYPES = ["kpi", "line", "bar", "table"] as const;
 export type DashboardPanelType = (typeof DASHBOARD_PANEL_TYPES)[number];
 
@@ -42,6 +44,9 @@ export interface DashboardPanel {
   source?: string;
   snapshot?: DashboardSnapshot;
   config?: DashboardPanelConfig;
+  /** 查询契约引用（wire-dashboard-query-contract）：刷新按此确定性取数，
+   * 非渲染输入——渲染永远读 snapshot；非法 query 在 parse 时整体丢弃。 */
+  query?: DashboardPanelQuery;
 }
 
 /** 仪表盘 v1 本体（信封的 spec 内层）。 */
@@ -116,12 +121,138 @@ function normalizeConfig(raw: unknown): DashboardPanelConfig | undefined {
   return Object.keys(config).length > 0 ? config : undefined;
 }
 
+/** 查询过滤算子白名单（与数据面 query 端点入参同界）。 */
+const DASHBOARD_QUERY_FILTER_OPS = [
+  "eq",
+  "in",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "contains",
+  "startswith",
+] as const;
+export type DashboardQueryFilterOp = (typeof DASHBOARD_QUERY_FILTER_OPS)[number];
+
+/** 契约过滤项：column 非空 + 白名单算子；value 原样透传（不猜类型）。 */
+export interface DashboardQueryFilter {
+  column: string;
+  op: DashboardQueryFilterOp;
+  value: unknown;
+}
+
+/** 契约排序项：column 非空 + 方向白名单 asc/desc。 */
+export interface DashboardQuerySort {
+  column: string;
+  dir: "asc" | "desc";
+}
+
+/**
+ * 面板查询契约引用（wire-dashboard-query-contract）：面板刷新的确定性取数
+ * 契约（与服务端 parse_panel_query 同形同界）——渲染数据源仍是 snapshot，
+ * query 不参与渲染。携带 query 的面板刷新走契约路径（零 LLM）。
+ */
+export interface DashboardPanelQuery {
+  /** 目标数据集 id（非空——缺失/空则整个 query 丢弃）。 */
+  dataset_id: string;
+  filters?: DashboardQueryFilter[];
+  sort?: DashboardQuerySort[];
+  /** 行数上限 1..1000；非法（非整数/越界）回退 100。 */
+  limit?: number;
+  /** 投影列序（即刷新后快照列序）；字符串过滤、去重保序。 */
+  columns?: string[];
+}
+
+/** filters 宽容归一：非数组不落字段；逐项校验（column 非空 + 算子白名单），
+ * 非法项丢弃；归一后为空（全不合法/空数组）同样不落字段。 */
+function normalizeQueryFilters(raw: unknown): DashboardQueryFilter[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const filters: DashboardQueryFilter[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    if (typeof record.column !== "string" || !record.column) continue;
+    if (
+      typeof record.op !== "string" ||
+      !(DASHBOARD_QUERY_FILTER_OPS as readonly string[]).includes(record.op)
+    ) {
+      continue;
+    }
+    filters.push({
+      column: record.column,
+      op: record.op as DashboardQueryFilterOp,
+      value: record.value,
+    });
+  }
+  return filters.length > 0 ? filters : undefined;
+}
+
+/** sort 宽容归一：与 filters 同界（column 非空 + dir ∈ asc/desc，逐项丢弃）。 */
+function normalizeQuerySort(raw: unknown): DashboardQuerySort[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const sort: DashboardQuerySort[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    if (typeof record.column !== "string" || !record.column) continue;
+    if (record.dir !== "asc" && record.dir !== "desc") continue;
+    sort.push({ column: record.column, dir: record.dir });
+  }
+  return sort.length > 0 ? sort : undefined;
+}
+
+/** columns 宽容归一：非数组不落字段；只留字符串、去重保序；空则不落字段。 */
+function normalizeQueryColumns(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (typeof entry === "string") seen.add(entry);
+  }
+  return seen.size > 0 ? [...seen] : undefined;
+}
+
+/**
+ * query 宽容归一（与服务端同界）：顶层非对象（含数组/null）或 dataset_id
+ * 缺失/非字符串/空串 → undefined（整体丢弃，面板照常按 snapshot 渲染）；
+ * filters/sort 逐项校验丢弃（全不合法则字段不落）；limit 给出但非法（非
+ * 整数或越界 1..1000）回退 100、未给出不落；columns 只留字符串去重保序。
+ */
+export function normalizePanelQuery(raw: unknown): DashboardPanelQuery | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const record = raw as Record<string, unknown>;
+  if (typeof record.dataset_id !== "string" || !record.dataset_id) return undefined;
+
+  const filters = normalizeQueryFilters(record.filters);
+  const sort = normalizeQuerySort(record.sort);
+  const columns = normalizeQueryColumns(record.columns);
+  // limit：未给出不落字段；给出但非法（非数字/非整数/越界）回退 100。
+  let limit: number | undefined;
+  if (record.limit !== undefined) {
+    limit =
+      typeof record.limit === "number" &&
+      Number.isInteger(record.limit) &&
+      record.limit >= 1 &&
+      record.limit <= 1000
+        ? record.limit
+        : 100;
+  }
+
+  return {
+    dataset_id: record.dataset_id,
+    ...(filters !== undefined ? { filters } : {}),
+    ...(sort !== undefined ? { sort } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    ...(columns !== undefined ? { columns } : {}),
+  };
+}
+
 /**
  * 宽容解析仪表盘 spec：接受产物信封（`{title, spec:{title, panels}}`）或
  * v1 本体（`{title, panels}`）。内层无 panels 数组 → legacy 态（旧自由
  * JSON，调用方整体只读呈现）；有 panels 数组 → v1 态，逐面板校验：
  * 非 JSON 对象 / type 不在枚举 → 收集进 badPanels 跳过；id 缺失自动补、
- * span 非法回退 1、snapshot/config 归一（不拒收）。
+ * span 非法回退 1、snapshot/config 归一（不拒收）、query 宽容归一（非法
+ * 整体丢弃——面板仍按 snapshot 渲染，不受影响）。
  */
 export function parseDashboardSpec(raw: unknown): DashboardParseResult {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
@@ -164,6 +295,7 @@ export function parseDashboardSpec(raw: unknown): DashboardParseResult {
     const snapshot = normalizeSnapshot(record.snapshot);
     const config = normalizeConfig(record.config);
     const source = typeof record.source === "string" ? record.source : undefined;
+    const query = normalizePanelQuery(record.query);
     panels.push({
       id,
       type: record.type,
@@ -172,6 +304,7 @@ export function parseDashboardSpec(raw: unknown): DashboardParseResult {
       ...(source !== undefined ? { source } : {}),
       ...(snapshot !== undefined ? { snapshot } : {}),
       ...(config !== undefined ? { config } : {}),
+      ...(query !== undefined ? { query } : {}),
     });
   });
 
@@ -284,8 +417,9 @@ function isKpi(type: DashboardPanelType): boolean {
 
 /**
  * 面板复制（编辑器 v2）：新 id（generatePanelId 避开既有占用）、标题加
- * 副本后缀、snapshot/config 深拷贝（structuredClone——副本的后续编辑绝不
- * 波及原件）。existingIds 缺省只避开原面板自身 id；编辑器调用时应传入
+ * 副本后缀、snapshot/config/query 深拷贝（structuredClone——副本的后续编辑
+ * 绝不波及原件；query 引用同样完整保留，wire-dashboard-query-contract）。
+ * existingIds 缺省只避开原面板自身 id；编辑器调用时应传入
  * 当前全部面板 id 以杜绝碰撞。
  */
 export function duplicatePanel(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -62,11 +62,26 @@ class ArtifactFromDraftIn(BaseModel):
     draft_id: int
 
 
+class PanelRefreshResult(BaseModel):
+    """契约刷新的单面板结果（面板级失败隔离的如实呈现）。"""
+
+    panel_id: str
+    #: refreshed=快照已更新；kept=无合法 query 保留原快照；failed=保留原快照带原因
+    status: Literal["refreshed", "kept", "failed"]
+    error: str | None = None
+
+
 class ArtifactRefreshOut(BaseModel):
-    """手动刷新结果（wire-dashboard-refresh）：新版本号 + 完成时间。"""
+    """手动刷新结果（wire-dashboard-refresh / wire-dashboard-query-contract）。
+
+    mode：契约路径（≥1 面板带合法 query，零 LLM 确定性执行）="contract"，
+    旧 AI 无头轮 ="ai"；panels 仅契约路径携带（AI 路径 None，向后兼容）。
+    """
 
     version: int
     refreshed_at: str
+    mode: Literal["contract", "ai"] | None = None
+    panels: list[PanelRefreshResult] | None = None
 
 
 def artifact_detail(artifact: Artifact, spec: dict) -> ArtifactDetailOut:

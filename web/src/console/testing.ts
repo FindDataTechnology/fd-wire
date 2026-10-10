@@ -20,6 +20,7 @@ import type {
   DraftArtifact,
   MessageRole,
   PackIndicator,
+  PipelineGraph,
   RefreshSchedule,
   SyncRecord,
   UploadPreview,
@@ -161,6 +162,12 @@ export interface ConsoleBackendOptions {
   /** 强制 POST /api/v1/refresh-schedules 返回该状态（创建失败态）。 */
   failScheduleCreateStatus?: number;
   failScheduleCreateDetail?: string;
+  /** 管线图响应体覆盖（wire-transform-pipeline-view 2.2；不传则按种子数据集
+   *  组装：derived 的 source_ref 解析父 key 成边、BFS 深度、环/孤儿计 anomalies）。 */
+  pipelineGraph?: PipelineGraph;
+  /** 强制 GET /api/v1/pipeline/graph 返回该状态（错误态测试）。 */
+  failPipelineGraphStatus?: number;
+  failPipelineGraphDetail?: string;
 }
 
 /** 源包种子（wire-source-packs）：假后端按 indicators 分页切片出详情。 */
@@ -1442,6 +1449,101 @@ export function installConsoleBackend(
       }
       row.paused = match[2] === "pause";
       return Promise.resolve(jsonResponse(scheduleRow(row)));
+    }
+
+    // ── 管线图（wire-transform-pipeline-view 2.2）：GET /api/v1/pipeline/graph
+    //    ——语义对齐 api 仓组装：本客户数据集全量节点（storage_tier 容错读取、
+    //    dataset 调度登记→schedule_cron）、derived 的 source_ref 解析父 key 成边
+    //    （op 统一 derived）、BFS 深度（源=0）、环/孤儿边跳过计 anomalies、
+    //    节点超 500 截断 truncated。pipelineGraph 覆盖时原样返回。──
+    if (path === "/api/v1/pipeline/graph" && method === "GET") {
+      if (options.failPipelineGraphStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failPipelineGraphDetail ??
+                `pipeline graph ${options.failPipelineGraphStatus}`,
+            },
+            options.failPipelineGraphStatus,
+          ),
+        );
+      }
+      if (options.pipelineGraph) {
+        return Promise.resolve(jsonResponse(options.pipelineGraph));
+      }
+      const mine = [...datasets.values()].filter(
+        (d) => !d.customer_id || d.customer_id === customerId,
+      );
+      const byKey = new Map(mine.map((d) => [d.key, d]));
+      let anomalies = 0;
+      const parentOf = new Map<string, string>();
+      const edges: PipelineGraph["edges"] = [];
+      for (const dataset of mine) {
+        if (dataset.source_kind !== "derived") continue;
+        const parent = dataset.source_ref ? byKey.get(dataset.source_ref) : undefined;
+        if (!parent) {
+          anomalies += 1; // 孤儿边：父 key 无对应行
+          continue;
+        }
+        edges.push({
+          from_dataset_id: parent.id,
+          to_dataset_id: dataset.id,
+          op: "derived",
+        });
+        parentOf.set(dataset.id, parent.id);
+      }
+      // 深度（源=0，派生按链深）；沿父链遇已访问节点即环 → 计 anomalies、按 0 层。
+      const depthCache = new Map<string, number>();
+      const depthOf = (id: string, seen: Set<string>): number => {
+        const cached = depthCache.get(id);
+        if (cached != null) return cached;
+        const parent = parentOf.get(id);
+        if (!parent) {
+          depthCache.set(id, 0);
+          return 0;
+        }
+        if (seen.has(id)) {
+          anomalies += 1;
+          depthCache.set(id, 0);
+          return 0;
+        }
+        seen.add(id);
+        const depth = depthOf(parent, seen) + 1;
+        depthCache.set(id, depth);
+        return depth;
+      };
+      const truncated = mine.length > 500;
+      const kept = new Set(mine.slice(0, 500).map((d) => d.id));
+      const nodes: PipelineGraph["nodes"] = mine
+        .filter((d) => kept.has(d.id))
+        .map((d) => {
+          const scheduled = [...schedulesStore.values()].some(
+            (s) =>
+              (!s.customer_id || s.customer_id === customerId) &&
+              s.target_type === "dataset" &&
+              s.target_id === d.id,
+          );
+          return {
+            dataset_id: d.id,
+            key: d.key,
+            name: d.name,
+            source_kind: d.source_kind,
+            storage_tier: (d as DatasetWithTier).storage_tier ?? null,
+            row_count: d.row_count,
+            updated_at: d.updated_at,
+            depth: depthOf(d.id, new Set()),
+            schedule_cron: scheduled ? "0 * * * *" : null,
+          };
+        });
+      return Promise.resolve(
+        jsonResponse({
+          nodes,
+          edges: edges.filter((e) => kept.has(e.from_dataset_id) && kept.has(e.to_dataset_id)),
+          anomalies,
+          truncated,
+        }),
+      );
     }
 
     return Promise.resolve(jsonResponse({ detail: "not found" }, 404));

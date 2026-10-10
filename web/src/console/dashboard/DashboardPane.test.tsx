@@ -5,6 +5,8 @@
 // wire-dashboard-refresh 任务 2.2：查看态「刷新数据」——成功流（POST refresh
 // 落新版本 → 提示 + 重拉详情重渲染）/ 失败态（502/403 detail 如实）/ 409 单飞
 // 进行中提示 / archived 无按钮。
+// wire-dashboard-query-contract 任务 2.3/2.4：契约刷新响应呈现（mode=contract
+// 按面板统计 + 失败原因列表；ai 响应不回归）；带 query 面板渲染仍读 snapshot。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "../../i18n";
@@ -529,5 +531,167 @@ describe("看板定时刷新小节（wire-refresh-scheduler 4.1/4.2）", () => {
     ).toContain("360 分钟");
     expect(screen.getByTestId("schedule-create")).toBeTruthy();
     expect(screen.queryByTestId("schedule-row")).toBeNull();
+  });
+});
+
+// ── 契约刷新响应呈现（wire-dashboard-query-contract 任务 2.3/2.4）──────────
+// 35 号看板：面板带 query 引用（渲染仍读 snapshot）；刷新 POST 返回
+// mode/panels —— 契约路径按面板统计 + 失败原因列表；ai 路径维持既有呈现。
+describe("契约刷新响应呈现（wire-dashboard-query-contract 任务 2.3/2.4）", () => {
+  /** 契约看板：kpi 带 query（kpi 单值约定），table 带 query（对照：kept）。 */
+  const CONTRACT_SPEC = {
+    title: "契约看板",
+    spec: {
+      title: "契约看板",
+      panels: [
+        {
+          id: "k1",
+          type: "kpi",
+          title: "秦皇岛煤价",
+          span: 1,
+          snapshot: { columns: ["value"], rows: [[850]] },
+          query: {
+            dataset_id: "ds_coal_price",
+            sort: [{ column: "date", dir: "desc" }],
+            limit: 1,
+            columns: ["price"],
+          },
+        },
+        {
+          id: "t1",
+          type: "table",
+          title: "煤价明细",
+          span: 2,
+          snapshot: { columns: ["日期", "价格"], rows: [["7月", 850], ["8月", 845]] },
+          query: { dataset_id: "ds_coal_price", limit: 100 },
+        },
+      ],
+    },
+  };
+
+  /** 刷新落地后的 v2 详情：k1 快照更新（850 → 860），t1 失败保留原快照。 */
+  const REFRESHED_CONTRACT_SPEC = JSON.parse(JSON.stringify(CONTRACT_SPEC)) as typeof CONTRACT_SPEC;
+  (
+    REFRESHED_CONTRACT_SPEC.spec.panels[0]!.snapshot as { rows: Array<Array<string | number | null>> }
+  ).rows[0]![0] = 860;
+
+  /** 种 35 号契约看板 + 包一层 fetch：POST refresh 返回指定响应体，刷新后
+   * GET 详情返回 v2 新快照（其余透传真后端）。 */
+  function installContractRefresh(refreshBody: Record<string, unknown>): ReturnType<typeof installConsoleBackend> {
+    const backend = installConsoleBackend([]);
+    backend.addLifecycleArtifact({
+      id: 35,
+      kind: "dashboard",
+      title: "契约看板",
+      version: 1,
+      spec: CONTRACT_SPEC,
+    });
+    let refreshed = false;
+    const wrapped = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://console.test");
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.pathname === "/api/v1/artifacts/35/refresh" && method === "POST") {
+        refreshed = true;
+        return { ok: true, status: 200, json: () => Promise.resolve(refreshBody) };
+      }
+      if (refreshed && url.pathname === "/api/v1/artifacts/35" && method === "GET") {
+        const base = (await backend.fetchImpl(input, init)) as {
+          json: () => Promise<Record<string, unknown>>;
+        };
+        const body = await base.json();
+        return {
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({ ...body, version: 2, spec: REFRESHED_CONTRACT_SPEC }),
+        };
+      }
+      return backend.fetchImpl(input as RequestInfo, init);
+    }) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", wrapped);
+    return backend;
+  }
+
+  /** 打开 35 号契约看板查看态（面板渲染断言起点）。 */
+  async function openContract() {
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+    fireEvent.click(within(rowOf(35)).getByTestId("artifact-dashboard-view"));
+    expect(await screen.findByTestId("dashboard-pane")).toBeTruthy();
+  }
+
+  it("带 query 面板渲染读 snapshot（契约不参与渲染）+ 契约响应：统计与失败原因如实呈现", async () => {
+    installContractRefresh({
+      version: 2,
+      refreshed_at: "2026-10-11T09:00:00",
+      mode: "contract",
+      panels: [
+        { panel_id: "k1", status: "refreshed" },
+        { panel_id: "ghost", status: "kept" }, // spec 外面板 id：标题回退 id 本身
+        { panel_id: "t1", status: "failed", error: "列名不存在：price_usd" },
+      ],
+    });
+    await openContract();
+
+    // 刷新前：带 query 面板按 snapshot 渲染（query 不参与渲染）
+    expect(screen.getByTestId("dashboard-kpi-value").textContent).toBe("850");
+    expect(screen.getByTestId("dashboard-table").querySelectorAll("tbody tr")).toHaveLength(2);
+
+    fireEvent.click(screen.getByTestId("dashboard-refresh"));
+
+    // 契约统计：v2 + 成功 1 / 保留 1 / 失败 1
+    const success = await screen.findByTestId("dashboard-refresh-success");
+    expect(success.textContent).toContain("v2");
+    expect(success.textContent).toContain("成功 1");
+    expect(success.textContent).toContain("保留 1");
+    expect(success.textContent).toContain("失败 1");
+    // 失败原因列表：面板标题（按 spec 解析）+ 服务端 error
+    const failures = await screen.findByTestId("dashboard-refresh-failures");
+    const failureItems = within(failures).getAllByTestId("dashboard-refresh-failure");
+    expect(failureItems).toHaveLength(1);
+    expect(failureItems[0]!.textContent).toContain("煤价明细");
+    expect(failureItems[0]!.textContent).toContain("列名不存在：price_usd");
+    // spec 外 panel_id 的非失败项不进原因列表；ghost 的标题回退只对 failed 生效
+
+    // 重拉详情重渲染：k1 快照更新（850 → 860），t1 失败保留原快照（2 行）
+    await waitFor(() => {
+      expect(screen.getByTestId("dashboard-kpi-value").textContent).toBe("860");
+    });
+    expect(screen.getByTestId("dashboard-table").querySelectorAll("tbody tr")).toHaveLength(2);
+  });
+
+  it("spec 外 panel_id 的失败项：标题回退为 panel_id 本身", async () => {
+    installContractRefresh({
+      version: 2,
+      refreshed_at: "2026-10-11T09:00:00",
+      mode: "contract",
+      panels: [{ panel_id: "ghost", status: "failed", error: "数据集不存在" }],
+    });
+    await openContract();
+    fireEvent.click(screen.getByTestId("dashboard-refresh"));
+
+    const failures = await screen.findByTestId("dashboard-refresh-failures");
+    const failureItem = within(failures).getAllByTestId("dashboard-refresh-failure")[0]!;
+    expect(failureItem.textContent).toContain("ghost"); // 标题缺失回退 id
+    expect(failureItem.textContent).toContain("数据集不存在");
+  });
+
+  it("ai 响应不回归：仍按既有版本号提示呈现，无契约统计与失败列表", async () => {
+    installContractRefresh({
+      version: 2,
+      refreshed_at: "2026-10-11T09:00:00",
+      mode: "ai",
+      panels: null,
+    });
+    await openContract();
+    fireEvent.click(screen.getByTestId("dashboard-refresh"));
+
+    const success = await screen.findByTestId("dashboard-refresh-success");
+    expect(success.textContent).toBe("已刷新为版本 v2。");
+    expect(success.textContent).not.toContain("契约刷新"); // 无契约统计
+    expect(screen.queryByTestId("dashboard-refresh-failures")).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByTestId("dashboard-kpi-value").textContent).toBe("860");
+    });
   });
 });

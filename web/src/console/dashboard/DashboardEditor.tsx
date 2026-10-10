@@ -6,6 +6,10 @@
 //   新 id+副本标题+深拷贝）；source 文本编辑（刷新依赖此标注）；config 表单
 //   按 type 展开（kpi=单位/副标题，line/bar=x/y 轴名）；未保存变更计数
 //   （draft 与已保存基线按面板深比较的差异数）。
+// wire-dashboard-query-contract 任务 2.2：带 query 的面板在详情区显示
+//   「已绑定查询」徽标 + dataset_id（只读——刷新契约，v0 不做表单编辑）；
+//   增删/移序/复制/互转/保存一律保留 query 不抹掉（helpers 结构化拷贝天然
+//   覆盖，spec.test 断言）。
 // 编辑态实时预览复用 DashboardRenderer；保存走既有 PUT（saveArtifactSpec，
 // version 递增由服务端）；未保存离开 confirm 提示（含 beforeunload 兜底）。
 import { useEffect, useMemo, useState } from "react";
@@ -447,6 +451,27 @@ export function DashboardEditor({
                     className="w-56 rounded border border-slate-300 px-2 py-1 font-mono text-xs"
                   />
                 </div>
+                {/* 查询契约徽标（wire-dashboard-query-contract 任务 2.2）：带
+                    query 的面板只读展示绑定数据集——刷新按此契约取数，v0 不做
+                    表单编辑（编辑动作不抹 query，由 helpers 深拷贝/展开保证）。 */}
+                {panel.query && (
+                  <div
+                    className="mt-2 flex flex-wrap items-center gap-2"
+                    data-testid="editor-panel-query"
+                  >
+                    <span
+                      title={t("console.dashboard.editor.queryReadonlyHint")}
+                      className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] text-sky-700"
+                    >
+                      {t("console.dashboard.editor.queryBadge")}
+                    </span>
+                    <span className="font-mono text-[11px] text-slate-500">
+                      {t("console.dashboard.editor.queryDataset", {
+                        id: panel.query.dataset_id,
+                      })}
+                    </span>
+                  </div>
+                )}
                 {panel.type === "kpi" && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <label className="text-[11px] text-slate-400">

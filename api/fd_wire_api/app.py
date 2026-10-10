@@ -27,6 +27,8 @@ from .share import router as share_router
 # 源包订阅（wire-source-packs）：/api/v1/packs 全端点
 from .packs import init_db as init_packs_db
 from .packs import router as packs_router
+# 管线图（wire-transform-pipeline-view）：本企业数据集派生图（console 身份）
+from .pipeline import router as pipeline_router
 from .demands import admin_router as demands_admin_router
 from .demands import init_db as init_demands_db
 from .demands import pipeline_router as demands_pipeline_router
@@ -154,6 +156,9 @@ app.include_router(materialization_router)
 # 客户数据集（wire-customer-local-data 任务组 2）：客户面（Bearer ID token，
 # wire-self-serve-launch 4.5 身份切换）
 app.include_router(datasets_router)
+# 管线图（wire-transform-pipeline-view 任务 1.2）：本企业数据集派生图
+# （零引擎调用纯本地元数据；调度徽标来自 materialization 登记行）
+app.include_router(pipeline_router)
 
 # REST 数据面（wire-customer-data-engine）：读写端点 + key 管理面 + 后台只读
 from .data_plane import routes as data_plane_keys_routes  # noqa: E402

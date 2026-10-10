@@ -5,6 +5,9 @@
 // wire-dashboard-refresh 任务 2.1：查看态加「刷新数据」——POST refresh 落新
 // 版本后重拉详情重渲染；409 进行中 / 403 档位 / 502 引擎失败如实呈现；
 // archived 只读无入口；进行中 loading 禁用防重复触发。
+// wire-dashboard-query-contract 任务 2.3：刷新响应按模式呈现——mode=contract
+// 带逐面板结果（成功 N / 保留 M / 失败 K 统计 + 失败面板原因列表，标题按
+// spec 解析）；mode=ai（或缺省）维持既有版本号提示。
 // wire-refresh-scheduler 任务 4.1：查看态底部加「定时刷新」小节（间隔预设
 // 6h/24h/7d）；archived 目标的调度行由调度器自动清理，不再提供管理入口。
 import { useEffect, useState } from "react";
@@ -16,6 +19,7 @@ import {
   refreshDashboard,
   type Artifact,
   type ArtifactDetail,
+  type DashboardRefreshResult,
 } from "../api";
 import { parseDashboardSpec } from "./spec";
 import { DashboardRenderer } from "./DashboardRenderer";
@@ -37,7 +41,11 @@ export function DashboardPane({
   const [failed, setFailed] = useState(false);
   const [editing, setEditing] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [refreshNotice, setRefreshNotice] = useState<string | null>(null);
+  // 刷新响应原样留存（呈现文案在渲染层按 mode 派生——契约路径需逐面板
+  // 统计，ai 路径只要版本号；面板标题随重拉后的 spec 解析）。
+  const [refreshResult, setRefreshResult] = useState<DashboardRefreshResult | null>(
+    null,
+  );
   const [refreshError, setRefreshError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -46,7 +54,7 @@ export function DashboardPane({
     setFailed(false);
     setEditing(false);
     setRefreshing(false);
-    setRefreshNotice(null);
+    setRefreshResult(null);
     setRefreshError(null);
     fetchLifecycleArtifact(artifactId)
       .then((row) => {
@@ -60,17 +68,16 @@ export function DashboardPane({
     };
   }, [artifactId]);
 
-  /** 手动刷新：成功提示新版本号并重拉详情重渲染（行版本号经 onSaved 同步）。 */
+  /** 手动刷新：留存响应（提示文案按 mode 派生）并重拉详情重渲染（行版本号
+   * 经 onSaved 同步）。 */
   const refresh = async () => {
     if (refreshing) return;
     setRefreshing(true);
-    setRefreshNotice(null);
+    setRefreshResult(null);
     setRefreshError(null);
     try {
       const result = await refreshDashboard(artifactId);
-      setRefreshNotice(
-        t("console.dashboard.refresh.success", { version: result.version }),
-      );
+      setRefreshResult(result);
       const row = await fetchLifecycleArtifact(artifactId);
       setDetail(row);
       onSaved(row);
@@ -115,6 +122,35 @@ export function DashboardPane({
 
   const parsed = parseDashboardSpec(detail.spec);
   const locked = detail.status === "archived";
+
+  // 刷新响应呈现（wire-dashboard-query-contract 任务 2.3）：契约路径
+  // （mode=contract 且带 panels）按面板统计 + 失败原因列表（标题按当前
+  // spec 的面板 id 解析，缺省回退 id 本身）；ai 路径（或缺省/兼容旧响应）
+  // 维持既有版本号提示。
+  const contractPanels =
+    refreshResult?.mode === "contract" && Array.isArray(refreshResult.panels)
+      ? refreshResult.panels
+      : null;
+  const refreshNotice = !refreshResult
+    ? null
+    : contractPanels
+      ? t("console.dashboard.refresh.contractSummary", {
+          version: refreshResult.version,
+          refreshed: contractPanels.filter((p) => p.status === "refreshed").length,
+          kept: contractPanels.filter((p) => p.status === "kept").length,
+          failed: contractPanels.filter((p) => p.status === "failed").length,
+        })
+      : t("console.dashboard.refresh.success", { version: refreshResult.version });
+  const refreshFailures = (contractPanels ?? [])
+    .filter((p) => p.status === "failed")
+    .map((p) => ({
+      panelId: p.panel_id,
+      title:
+        (parsed.kind === "v1"
+          ? parsed.panels.find((panel) => panel.id === p.panel_id)?.title
+          : undefined) || p.panel_id,
+      error: p.error ?? "",
+    }));
 
   return (
     <div data-testid="dashboard-pane" className="mt-3 rounded-md border border-slate-200 bg-slate-50/60 p-4">
@@ -168,6 +204,22 @@ export function DashboardPane({
         <p data-testid="dashboard-refresh-error" className="mt-1 text-[11px] text-red-600">
           {refreshError}
         </p>
+      )}
+      {refreshFailures.length > 0 && (
+        <ul data-testid="dashboard-refresh-failures" className="mt-1 space-y-0.5">
+          {refreshFailures.map((failure) => (
+            <li
+              key={failure.panelId}
+              data-testid="dashboard-refresh-failure"
+              className="text-[11px] text-red-600"
+            >
+              {t("console.dashboard.refresh.contractFailure", {
+                title: failure.title,
+                error: failure.error,
+              })}
+            </li>
+          ))}
+        </ul>
       )}
 
       {editing && parsed.kind === "v1" ? (

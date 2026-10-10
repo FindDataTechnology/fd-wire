@@ -2,6 +2,9 @@
 // 面板增（选 type 出模板）/删/改标题/移序/span 切换、kpi 值+单位+副标题
 // 表单编辑、实时预览复用渲染器、保存走 PUT（信封口径断言 + 新版本号提示）、
 // 未保存离开 confirm、归档 409 如实呈现。
+// wire-dashboard-query-contract 任务 2.2/2.4：带 query 的面板显示「已绑定
+// 查询」徽标 + dataset_id（只读）；无 query 不显示；编辑（复制等）+保存
+// 不抹 query。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "../../i18n";
@@ -473,5 +476,83 @@ describe("DashboardEditor v2（wire-dashboard-editor-v2 任务 1.2/1.3）", () =
     await waitFor(() => {
       expect(screen.queryByTestId("editor-unsaved-count")).toBeNull();
     });
+  });
+});
+
+describe("DashboardEditor 查询契约徽标（wire-dashboard-query-contract 任务 2.2/2.4）", () => {
+  /** 契约看板：q1 带 query（表），n1 无 query（kpi 对照）。 */
+  const WITH_QUERY: DashboardSpecV1 = {
+    title: "契约看板",
+    panels: [
+      {
+        id: "q1",
+        type: "table",
+        title: "煤价明细",
+        span: 2,
+        snapshot: { columns: ["日期", "价格"], rows: [["7月", 850]] },
+        query: {
+          dataset_id: "ds_coal_price",
+          filters: [{ column: "city", op: "eq", value: "秦皇岛" }],
+          sort: [{ column: "date", dir: "desc" }],
+          limit: 1,
+          columns: ["date", "price"],
+        },
+      },
+      {
+        id: "n1",
+        type: "kpi",
+        title: "无契约指标",
+        span: 1,
+        snapshot: { columns: ["value"], rows: [[1.2]] },
+      },
+    ],
+  };
+
+  it("带 query 的面板显示「已绑定查询」徽标 + dataset_id（只读文本）；无 query 不显示", () => {
+    install();
+    render(
+      <DashboardEditor artifactId={21} initial={WITH_QUERY} onSaved={vi.fn()} onExit={vi.fn()} />,
+    );
+
+    const q1 = editorPanel("q1");
+    const badge = within(q1).getByTestId("editor-panel-query");
+    expect(badge.textContent).toContain("已绑定查询");
+    expect(badge.textContent).toContain("ds_coal_price"); // dataset_id 如实展示
+    // 无输入控件：query 只读（v0 不做表单编辑）——徽标区无 input
+    expect(badge.querySelectorAll("input")).toHaveLength(0);
+
+    // 对照面板：无 query → 无徽标区
+    expect(within(editorPanel("n1")).queryByTestId("editor-panel-query")).toBeNull();
+  });
+
+  it("编辑不抹 query：复制带 query 的面板 → 保存 PUT 里两份面板 query 原样落盘", async () => {
+    const backend = install();
+    render(
+      <DashboardEditor artifactId={21} initial={WITH_QUERY} onSaved={vi.fn()} onExit={vi.fn()} />,
+    );
+
+    // 复制 q1（structuredClone 深拷贝含 query）
+    fireEvent.click(within(editorPanel("q1")).getByTestId("editor-panel-duplicate"));
+    await waitFor(() => {
+      expect(screen.getAllByTestId("editor-panel")).toHaveLength(3);
+    });
+    const copy = screen
+      .getAllByTestId("editor-panel")
+      .find((el) => el.getAttribute("data-panel-id") === "p1")!;
+    expect(within(copy).getByTestId("editor-panel-query").textContent).toContain(
+      "ds_coal_price",
+    );
+
+    // 保存：PUT 信封里原件与副本的 query 均原样
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await screen.findByTestId("editor-saved-version");
+    const put = backend.calls.find((c) => c.method === "PUT");
+    const body = put?.body as { spec: { spec: { panels: DashboardSpecV1["panels"] } } };
+    const savedQ1 = body.spec.spec.panels.find((p) => p.id === "q1");
+    const savedCopy = body.spec.spec.panels.find((p) => p.id === "p1");
+    expect(savedQ1?.query).toEqual(WITH_QUERY.panels[0]!.query);
+    expect(savedCopy?.query).toEqual(WITH_QUERY.panels[0]!.query);
+    // 无契约面板保存后仍无 query
+    expect(body.spec.spec.panels.find((p) => p.id === "n1")?.query).toBeUndefined();
   });
 });

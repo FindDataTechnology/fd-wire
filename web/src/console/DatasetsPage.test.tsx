@@ -1027,3 +1027,110 @@ describe("DatasetDetail 定时刷新小节（wire-refresh-scheduler 4.1/4.2）",
     expect(screen.queryByTestId("schedule-row")).toBeNull();
   });
 });
+
+// ── 管线子视图（wire-transform-pipeline-view 任务 2.2/2.3）──────────────────
+// 数据页「数据集 / 管线」分段切换；管线视图由种子数据集在假后端组装成图
+//（上传源 ds-1 ← derived ds-2，source_ref 指父 key），点击节点进详情。
+describe("DatasetsPage 管线子视图（wire-transform-pipeline-view 2.2/2.3）", () => {
+  it("子视图入口与切换：默认列表；切「管线」拉图（Bearer），列表/上传/连接器区让位", async () => {
+    const backend = install({
+      datasets: [
+        makeDataset({ id: "ds-1", name: "上传源" }),
+        makeDataset({
+          id: "ds-2",
+          name: "派生集",
+          source_kind: "derived",
+          source_ref: "ds_1",
+        }),
+      ],
+    });
+    render(<DatasetsPage planCode="basic" />);
+
+    // 默认列表视图：列表在、管线未请求
+    expect(await screen.findAllByTestId("dataset-card")).toHaveLength(2);
+    expect(screen.getByTestId("datasets-subview")).toBeTruthy();
+    expect(
+      backend.calls.filter((c) => c.url.pathname === "/api/v1/pipeline/graph"),
+    ).toEqual([]);
+
+    fireEvent.click(screen.getByTestId("datasets-subview-pipeline"));
+    expect(await screen.findByTestId("pipeline-view")).toBeTruthy();
+    // 图请求带 Bearer 登录头；假后端组装：两节点两深度、一条父→子边
+    const graphCalls = backend.calls.filter(
+      (c) => c.url.pathname === "/api/v1/pipeline/graph",
+    );
+    expect(graphCalls).toHaveLength(1);
+    expect(graphCalls[0]!.headers["authorization"]).toMatch(/^Bearer /);
+    expect(
+      screen
+        .getAllByTestId("pipeline-column")
+        .map((el) => el.getAttribute("data-depth")),
+    ).toEqual(["0", "1"]);
+    expect(screen.getAllByTestId("pipeline-edge")).toHaveLength(1);
+    // 列表视图专属区块让位（管线视图自身管理加载/错误态）
+    expect(screen.queryByTestId("dataset-list")).toBeNull();
+    expect(screen.queryByTestId("upload-section")).toBeNull();
+    expect(screen.queryByTestId("connectors-section")).toBeNull();
+  });
+
+  it("管线节点点击进详情，返回后仍停留在管线子视图", async () => {
+    install({
+      datasets: [
+        makeDataset({ id: "ds-1", name: "上传源" }),
+        makeDataset({
+          id: "ds-2",
+          name: "派生集",
+          source_kind: "derived",
+          source_ref: "ds_1",
+        }),
+      ],
+      datasetRows: { "ds-2": { columns: [{ name: "id", type: "INTEGER" }], rows: [{ id: 1 }] } },
+    });
+    render(<DatasetsPage planCode="basic" />);
+    fireEvent.click(screen.getByTestId("datasets-subview-pipeline"));
+
+    const node = (await screen.findAllByTestId("pipeline-node")).find(
+      (el) => el.getAttribute("data-dataset-id") === "ds-2",
+    );
+    fireEvent.click(node!);
+    expect(await screen.findByTestId("dataset-detail")).toBeTruthy();
+    expect(screen.getByTestId("detail-name").textContent).toBe("派生集");
+
+    fireEvent.click(screen.getByTestId("detail-back"));
+    // 返回后回到管线子视图（子视图选择在详情态期间保持）
+    expect(await screen.findByTestId("pipeline-view")).toBeTruthy();
+    expect(screen.queryByTestId("dataset-list")).toBeNull();
+  });
+
+  it("切回列表视图：列表重取渲染，管线视图卸载", async () => {
+    const backend = install({
+      datasets: [
+        makeDataset({ id: "ds-1", name: "上传源" }),
+        makeDataset({
+          id: "ds-2",
+          name: "派生集",
+          source_kind: "derived",
+          source_ref: "ds_1",
+        }),
+      ],
+    });
+    render(<DatasetsPage planCode="basic" />);
+    await screen.findAllByTestId("dataset-card");
+    fireEvent.click(screen.getByTestId("datasets-subview-pipeline"));
+    await screen.findByTestId("pipeline-view");
+
+    fireEvent.click(screen.getByTestId("datasets-subview-list"));
+    expect(await screen.findAllByTestId("dataset-card")).toHaveLength(2);
+    expect(screen.queryByTestId("pipeline-view")).toBeNull();
+    expect(screen.getByTestId("upload-section")).toBeTruthy();
+    // 切回列表重取数据集列表（第二次 GET /api/v1/datasets）
+    await waitFor(() =>
+      expect(
+        backend.calls.filter(
+          (c) =>
+            c.method === "GET" && c.url.pathname === "/api/v1/datasets",
+        ).length,
+      ).toBe(2),
+    );
+  });
+});

@@ -24,6 +24,7 @@ import {
 import { formatServerDate } from "./util";
 import { ConnectorsSection } from "./DatasetsConnectors";
 import { DatasetDetail } from "./DatasetDetail";
+import { PipelineView } from "./pipeline/PipelineView";
 import { CONTACT_MAILTO } from "../views/HomeView";
 
 const SYNC_BADGE_CLASS: Record<SyncStatus, string> = {
@@ -71,6 +72,9 @@ export function DatasetsPage({ planCode }: { planCode: string }) {
   const [error, setError] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [quota, setQuota] = useState<DatasetQuota | null>(null);
+  // 子视图切换（wire-transform-pipeline-view 任务 2.2）：列表 / 管线二选一；
+  // 详情态（selectedId）优先于两者，返回后回到切换前的子视图。
+  const [view, setView] = useState<"list" | "pipeline">("list");
 
   // 免费档放行（wire-free-tier-data-gate）：不再整页门禁，数据面请求照常发起。
   const free = planCode === "free";
@@ -96,10 +100,12 @@ export function DatasetsPage({ planCode }: { planCode: string }) {
   }, [free]);
 
   useEffect(() => {
+    // 管线子视图自取图数据；列表/配额仅在列表视图加载（切回时重取）。
+    if (view !== "list") return;
     setDatasets(null);
     void load();
     void loadQuota();
-  }, [load, loadQuota]);
+  }, [view, load, loadQuota]);
 
   if (selectedId != null) {
     return (
@@ -107,8 +113,10 @@ export function DatasetsPage({ planCode }: { planCode: string }) {
         datasetId={selectedId}
         onBack={() => {
           setSelectedId(null);
-          void load();
-          void loadQuota();
+          if (view === "list") {
+            void load();
+            void loadQuota();
+          }
         }}
       />
     );
@@ -121,67 +129,116 @@ export function DatasetsPage({ planCode }: { planCode: string }) {
         {t("console.datasets.subtitle")}
       </p>
 
-      {free && quota != null && <QuotaBar quota={quota} />}
-
-      {error && (
-        <div
-          data-testid="datasets-error"
-          className="mt-4 rounded-md border border-red-200 bg-red-50 p-4"
+      {/* 子视图入口（管线）：分段切换器，活跃项反白，与页内过滤器同风格。 */}
+      <div
+        data-testid="datasets-subview"
+        className="mt-3 inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50/60 p-1"
+        role="tablist"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "list"}
+          data-testid="datasets-subview-list"
+          onClick={() => setView("list")}
+          className={`rounded-md px-3 py-1 text-xs transition-colors ${
+            view === "list"
+              ? "bg-slate-900 text-white"
+              : "text-slate-600 hover:bg-slate-100"
+          }`}
         >
-          <p className="text-sm text-red-700">{t("console.datasets.errorTitle")}</p>
-          <button
-            type="button"
-            data-testid="datasets-retry"
-            onClick={() => void load()}
-            className="mt-2 rounded border border-red-300 px-2 py-0.5 text-xs text-red-700 hover:bg-red-100"
-          >
-            {t("console.datasets.retry")}
-          </button>
-        </div>
-      )}
-
-      {datasets == null && !error && (
-        <p className="mt-6 text-xs text-slate-400" data-testid="datasets-loading">
-          {t("console.datasets.loading")}
-        </p>
-      )}
-
-      {datasets != null && datasets.length === 0 && !error && (
-        <div
-          data-testid="datasets-empty"
-          className="mt-6 rounded-lg border border-dashed border-slate-300 p-8 text-center"
+          {t("console.datasets.pipeline.viewList")}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "pipeline"}
+          data-testid="datasets-subview-pipeline"
+          onClick={() => setView("pipeline")}
+          className={`rounded-md px-3 py-1 text-xs transition-colors ${
+            view === "pipeline"
+              ? "bg-slate-900 text-white"
+              : "text-slate-600 hover:bg-slate-100"
+          }`}
         >
-          <p className="text-sm text-slate-600">{t("console.datasets.empty")}</p>
-          <p className="mt-1 text-xs text-slate-400">
-            {t("console.datasets.emptyHint")}
-          </p>
-        </div>
+          {t("console.datasets.pipeline.tab")}
+        </button>
+      </div>
+
+      {view === "pipeline" ? (
+        <PipelineView onOpenDataset={(datasetId) => setSelectedId(datasetId)} />
+      ) : (
+        <>
+          {free && quota != null && <QuotaBar quota={quota} />}
+
+          {error && (
+            <div
+              data-testid="datasets-error"
+              className="mt-4 rounded-md border border-red-200 bg-red-50 p-4"
+            >
+              <p className="text-sm text-red-700">
+                {t("console.datasets.errorTitle")}
+              </p>
+              <button
+                type="button"
+                data-testid="datasets-retry"
+                onClick={() => void load()}
+                className="mt-2 rounded border border-red-300 px-2 py-0.5 text-xs text-red-700 hover:bg-red-100"
+              >
+                {t("console.datasets.retry")}
+              </button>
+            </div>
+          )}
+
+          {datasets == null && !error && (
+            <p
+              className="mt-6 text-xs text-slate-400"
+              data-testid="datasets-loading"
+            >
+              {t("console.datasets.loading")}
+            </p>
+          )}
+
+          {datasets != null && datasets.length === 0 && !error && (
+            <div
+              data-testid="datasets-empty"
+              className="mt-6 rounded-lg border border-dashed border-slate-300 p-8 text-center"
+            >
+              <p className="text-sm text-slate-600">
+                {t("console.datasets.empty")}
+              </p>
+              <p className="mt-1 text-xs text-slate-400">
+                {t("console.datasets.emptyHint")}
+              </p>
+            </div>
+          )}
+
+          {datasets != null && datasets.length > 0 && (
+            <ul data-testid="dataset-list" className="mt-4 space-y-2">
+              {datasets.map((dataset) => (
+                <DatasetCard
+                  key={dataset.id}
+                  dataset={dataset}
+                  onOpen={() => setSelectedId(dataset.id)}
+                />
+              ))}
+            </ul>
+          )}
+
+          <UploadPanel
+            planCode={planCode}
+            onCreated={() => {
+              void load();
+              void loadQuota();
+            }}
+          />
+
+          <ConnectorsSection
+            planCode={planCode}
+            onCreated={() => void load()}
+          />
+        </>
       )}
-
-      {datasets != null && datasets.length > 0 && (
-        <ul data-testid="dataset-list" className="mt-4 space-y-2">
-          {datasets.map((dataset) => (
-            <DatasetCard
-              key={dataset.id}
-              dataset={dataset}
-              onOpen={() => setSelectedId(dataset.id)}
-            />
-          ))}
-        </ul>
-      )}
-
-      <UploadPanel
-        planCode={planCode}
-        onCreated={() => {
-          void load();
-          void loadQuota();
-        }}
-      />
-
-      <ConnectorsSection
-        planCode={planCode}
-        onCreated={() => void load()}
-      />
     </div>
   );
 }

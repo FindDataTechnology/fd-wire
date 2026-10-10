@@ -12,8 +12,11 @@
 - ``POST /api/v1/artifacts/{id}/archive``      归档（→ archived，不删除）
 - ``POST /api/v1/artifacts/{id}/restore``      恢复（archived → draft）
 - ``POST /api/v1/artifacts/{id}/refresh``      手动刷新（wire-dashboard-refresh：
-                                               仅 dashboard；AI 无头轮按面板
-                                               source 重取数 → 新版本落盘）
+                                               仅 dashboard；≥1 面板带合法 query
+                                               → 契约路径零 LLM 确定性重取
+                                               （wire-dashboard-query-contract），
+                                               否则 AI 无头轮按面板 source 取数
+                                               → 新版本落盘）
 - ``POST /api/v1/artifacts/from-draft``        会话草稿导入为 draft 产物
 
 版本行只读——没有任何改写历史版本的端点（append-only 由路由面保证）。
@@ -32,7 +35,9 @@ from ..ai.protocols import LlmClient, ToolExecutor
 from ..ai.routes import get_llm_client, get_tool_executor
 from ..ai.settings import get_settings
 from ..console.auth import require_console_customer_id
-from . import refresh, service
+from ..datasets.db import get_db as get_datasets_db
+from ..datasets.ingest import EngineClientFactory, get_engine_client_factory
+from . import query_contract, refresh, service
 from .models import ArtifactStatus
 from .schemas import (
     ArtifactDetailOut,
@@ -223,16 +228,20 @@ def refresh_artifact(
     artifact_id: int,
     customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
+    datasets_db: Session = Depends(get_datasets_db),
     llm: LlmClient = Depends(get_llm_client),
     tool_executor: ToolExecutor = Depends(get_tool_executor),
+    engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> ArtifactRefreshOut:
-    """手动刷新（wire-dashboard-refresh）：AI 无头轮按各面板 source 重取数，
-    成功后同 PUT 语义落新版本（append-only + 审计）。
+    """手动刷新：契约决策——≥1 面板带合法 query → 契约路径（确定性逐面板
+    执行，零 LLM，响应 mode=contract + 逐面板结果）；0 个 → AI 无头轮按
+    各面板 source 重取数（mode=ai，既有行为零漂移）。两路成功后同 PUT
+    语义落新版本（append-only + 审计）。
 
     语义边界：跨客户 404；kind≠dashboard 403；archived 409（先恢复）；
-    同产物刷新进行中再触发 409（进程内单飞锁）；无 cell 403 档位提示
-    （零引擎调用）；LLM/引擎失败 502 带原因——**失败零半写**（任何失败
-    都不产生新版本行）。
+    同产物刷新进行中再触发 409（进程内单飞锁，两路共用）；AI 路径无
+    cell 403 档位提示（零引擎调用）；LLM/引擎失败或契约全面板失败 502
+    带原因——**失败零半写**（任何失败都不产生新版本行）。
     """
     artifact = _artifact_or_404(db, artifact_id, customer_id)
     if artifact.kind != "dashboard":
@@ -260,34 +269,49 @@ def refresh_artifact(
             ),
         )
     try:
-        try:
+        # 契约决策（锁内看当前版本）：≥1 合法 query 面板 → 确定性路径，
+        # 不触碰 llm/tool_executor；空计划（旧看板/全非法 query）→ AI 轮。
+        current = service.current_spec(db, artifact)
+        if query_contract.contract_refresh_plan(current):
+            # 契约路径查 datasets 表 → 必须用 datasets 库会话（生产
+            # wire_platform/wire_datasets 分库，ai 会话落不到表）。
+            new_spec, panel_results = query_contract.refresh_spec_with_contracts(
+                datasets_db,
+                spec=current,
+                customer_id=customer_id,
+                engine_factory=engine_factory,
+            )
+            mode, panels = "contract", panel_results
+        else:
             new_spec = refresh.refresh_dashboard_spec(
-                current_spec=service.current_spec(db, artifact),
+                current_spec=current,
                 llm=llm,
                 tool_executor=tool_executor,
                 customer_id=customer_id,
                 max_turns=get_settings().ai_max_turns,
             )
-            # 成功才落盘：同 PUT 语义（最小校验已在轮内做过，此处追加
-            # 新版本行 + operator 审计 + title 投影）。
-            artifact = service.update_spec(
-                db, artifact, spec=new_spec, customer_id=customer_id
-            )
-        except CellNotProvisionedError:
-            # 无 cell（免费档）：沿用 AI 构建的未开通档位提示。
-            raise HTTPException(
-                status_code=403, detail=CELL_NOT_PROVISIONED_MESSAGE
-            )
-        except refresh.RefreshFailed as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        except service.InvalidArtifactSpec as exc:  # pragma: no cover - 轮内已校验
-            raise HTTPException(status_code=502, detail=f"刷新输出未过校验：{exc}") from exc
-        except service.ArtifactLocked as exc:  # pragma: no cover - 竞态归档防御位
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            mode, panels = "ai", None
+        # 成功才落盘：同 PUT 语义（契约路径快照即终态、AI 轮内已做最小
+        # 校验，此处追加新版本行 + operator 审计 + title 投影）。
+        artifact = service.update_spec(db, artifact, spec=new_spec, customer_id=customer_id)
+    except CellNotProvisionedError:
+        # 无 cell（免费档，仅 AI 路径会走到）：沿用 AI 构建的未开通档位提示。
+        raise HTTPException(
+            status_code=403, detail=CELL_NOT_PROVISIONED_MESSAGE
+        )
+    except refresh.RefreshFailed as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except service.InvalidArtifactSpec as exc:  # pragma: no cover - 轮内已校验
+        raise HTTPException(status_code=502, detail=f"刷新输出未过校验：{exc}") from exc
+    except service.ArtifactLocked as exc:  # pragma: no cover - 竞态归档防御位
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     finally:
         refresh.release_refresh_lock(artifact.id)
         _release(llm)
         _release(tool_executor)
     return ArtifactRefreshOut(
-        version=artifact.version, refreshed_at=service.utc_now_iso()
+        version=artifact.version,
+        refreshed_at=service.utc_now_iso(),
+        mode=mode,
+        panels=panels,
     )

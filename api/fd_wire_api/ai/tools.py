@@ -59,12 +59,16 @@ TOOL_SCHEMAS: list[dict] = [
         "仪表盘",
         # v1 结构示例对齐 web 渲染器契约（web/src/console/dashboard/spec.ts）：
         # 面板 type 四值 / span 三档 / snapshot 内嵌取数结果——AI 产物默认
-        # 可渲染可分享（wire-dashboard-share）。
+        # 可渲染可分享（wire-dashboard-share）；面板可选 query 引用——刷新
+        # 走确定性契约路径零 AI（wire-dashboard-query-contract）。
         (
             "仪表盘规格 v1（JSON）："
             '{"title":"仪表盘名","panels":[{"id":"p1",'
             '"type":"kpi|line|bar|table","title":"面板标题","span":1,'
             '"source":"指标code或数据集名",'
+            '"query":{"dataset_id":"数据集id",'
+            '"filters":[{"column":"列名","op":"eq|in|gt|gte|lt|lte|contains|startswith","value":null}],'
+            '"sort":[{"column":"列名","dir":"asc|desc"}],"limit":100,"columns":["列名"]},'
             '"snapshot":{"columns":["年份","GDP"],"rows":[["2023",129.4]]},'
             '"config":{"unit":"万亿元","subtitle":"不变价"}}]}。'
             "字段说明：type 必取 kpi/line/bar/table；span 为 3 列栅格宽度"
@@ -73,6 +77,11 @@ TOOL_SCHEMAS: list[dict] = [
             "整表呈现）——渲染器只读 snapshot，不要放占位符或待查标记；"
             "config 可选（unit/subtitle/yName/xName）。面板 source 应填"
             "指标 code 或数据集名（后续「刷新数据」依赖此标注重新取数）。"
+            "面板数据取自数据集查询工具（dataset_query 等）时，该面板必须"
+            "同时带 query 引用：把所用 dataset_id 与 filters/sort/limit/"
+            "columns 查询形参如实写进 panel.query（「刷新数据」按契约确定性"
+            "重取，零 AI）；kpi 单值面板用 rows 模式约定：sort 到最近一期 + "
+            "limit 1 + columns 投影到值列；source 仍填展示标注。"
         ),
     ),
     _artifact_tool_schema(

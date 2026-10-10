@@ -1206,14 +1206,27 @@ export async function fetchSharedDashboard(
   return readResponse(response, url) as Promise<SharedDashboard>;
 }
 
-// ── 仪表盘手动刷新（wire-dashboard-refresh 任务 2.1 web 面）────────────────
+// ── 仪表盘手动刷新（wire-dashboard-refresh 任务 2.1 web 面；
+//    wire-dashboard-query-contract 任务 2.3 响应扩展）──────────────────────
 // 契约（api 仓 refresh 端点，proposal 冻结形状）：
 // - POST /api/v1/artifacts/{id}/refresh（Bearer 登录身份）：仅 kind=dashboard、
-//   archived 不可刷；服务端跑无头 AI 刷新轮——按各面板 source 重取数、结构与
-//   布局不动、以 PUT 语义落新版本。成功返回 {version, refreshed_at}。
-// - 409 = 同产物刷新进行中（单飞锁）；403 = 档位未开通（无 cell，detail 带
-//   升档引导）；502/503 = LLM/引擎失败（detail 带原因，零半写）——UI 如实
-//   呈现后端 detail。
+//   archived 不可刷；服务端按契约决策路径——≥1 面板带合法 query → 契约路径
+//   （零 LLM 确定性执行，响应 mode="contract" + 逐面板结果 panels）；0 个 →
+//   无头 AI 刷新轮（按各面板 source 重取数，响应 mode="ai"）。结构布局不动、
+//   以 PUT 语义落新版本。成功返回 {version, refreshed_at, mode?, panels?}。
+// - 409 = 同产物刷新进行中（单飞锁，两路共用）；403 = 档位未开通（无 cell，
+//   detail 带升档引导——仅 AI 路径）；502/503 = LLM/引擎失败或契约全失败
+//   （detail 带原因，零半写）——UI 如实呈现后端 detail。
+
+/** 契约刷新逐面板结果（mode="contract" 响应的 panels 项）。 */
+export interface DashboardRefreshPanelResult {
+  /** 面板 id（spec 内 id；标题由前端按 spec 解析呈现）。 */
+  panel_id: string;
+  /** refreshed=快照已更新；kept=无契约原样保留；failed=保留原快照并记录原因。 */
+  status: "refreshed" | "kept" | "failed";
+  /** failed 面板的失败原因（服务端口径，如实呈现）。 */
+  error?: string;
+}
 
 /** 手动刷新响应（POST /artifacts/{id}/refresh）。 */
 export interface DashboardRefreshResult {
@@ -1221,6 +1234,11 @@ export interface DashboardRefreshResult {
   version: number;
   /** 刷新完成时间（服务端 ISO 时间戳）。 */
   refreshed_at: string;
+  /** 刷新路径：contract=确定性契约执行（零 LLM）；ai=无头 AI 轮（旧看板）。
+   *  可选字段——旧后端/测试种子不带 mode 时按 ai 呈现（向后兼容）。 */
+  mode?: "contract" | "ai";
+  /** 逐面板结果（仅契约路径携带；AI 路径缺省或 null）。 */
+  panels?: Array<DashboardRefreshPanelResult> | null;
 }
 
 /** 手动刷新仪表盘快照（draft/published 可刷；成功返回新版本号与时间）。 */
@@ -1302,4 +1320,51 @@ export function resumeRefreshSchedule(id: number): Promise<RefreshSchedule> {
   return requestJson(`${API_BASE}/v1/refresh-schedules/${id}/resume`, {
     method: "POST",
   }) as Promise<RefreshSchedule>;
+}
+
+// ── 变换管线图（wire-transform-pipeline-view 任务 2.2 web 面）────────────────
+// 契约：GET /api/v1/pipeline/graph（Bearer 登录身份，require_console_customer_id
+// 按映射客户隔离，他企节点/边不出现）——纯本地元数据组装、零引擎调用：
+// nodes 为本企业全部数据集（含拓扑深度 depth：源=0，派生按链深）；
+// edges 为父→子派生边（derived 的 source_ref 解析父 key，op v0 统一
+// derived）；环/孤儿边跳过并计入 anomalies；节点上限 500、超出 truncated。
+
+/** 管线图节点（数据集投影 + 拓扑深度标注）。 */
+export interface PipelineGraphNode {
+  dataset_id: string;
+  key: string;
+  name: string;
+  source_kind: DatasetSourceKind;
+  /** api（免费档轻量存储）/ cell（引擎物化）；未下发给 null。 */
+  storage_tier: string | null;
+  row_count: number;
+  updated_at: string;
+  /** 拓扑深度：源=0，派生逐级 +1（分层布局用）。 */
+  depth: number;
+  /** 定时重派生登记 cron；无登记为 null。 */
+  schedule_cron: string | null;
+}
+
+/** 派生边：from（父）→ to（子）；op v0 统一 derived。 */
+export interface PipelineGraphEdge {
+  from_dataset_id: string;
+  to_dataset_id: string;
+  op: string;
+}
+
+/** 企业级数据集派生图。 */
+export interface PipelineGraph {
+  nodes: PipelineGraphNode[];
+  edges: PipelineGraphEdge[];
+  /** 被跳过的环/孤儿边计数（异常数据态，如实呈现）。 */
+  anomalies: number;
+  /** 节点超 500 上限被截断。 */
+  truncated: boolean;
+}
+
+/** 本企业数据集派生图（管线视图数据源）。 */
+export function getPipelineGraph(): Promise<PipelineGraph> {
+  return requestJson(`${API_BASE}/v1/pipeline/graph`, {
+    method: "GET",
+  }) as Promise<PipelineGraph>;
 }
