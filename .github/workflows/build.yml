@@ -216,8 +216,36 @@ jobs:
           done
           cat manifest.json
 
-      - name: Promote artifacts to downloads dir (rsync)
-        if: env.HAS_DOWNLOADS_CREDS == 'true'
+      # ── 主通道：OCI 中继（2026-10-11 定为正道）────────────────────────
+      # 实测 US runner→国内 SSH 高端口的 TCP 被网络层静默断（auth.log 零记录、
+      # keyscan stderr 被吞后 set -e 即死），runner 直推 rsync 不可用；国内节点
+      # 反向拉 GitHub artifact 同样超时。唯一全链验证在役的通道 = TCR 中继：
+      # runner 推 hkccr（跨洋快）→ cheap-3 tcr-relay 回灌 ccr → cheap-6
+      # wire-downloads-sync cron 拉取原子换目录（脚本见 deploy/README.md）。
+      - name: Login to TCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.TCR_USERNAME }}
+          password: ${{ secrets.TCR_PASSWORD }}
+
+      - name: Pack & push downloads image (OCI relay)
+        run: |
+          set -eu
+          tag="sha-${GITHUB_SHA::7}"
+          mkdir -p oci/connector
+          cp staging/fd-wire-connector-* staging/manifest.json oci/connector/
+          printf 'FROM busybox:1.37-uclibc\nCOPY connector /connector\n' > oci/Dockerfile
+          docker build -t "$REGISTRY/$NAMESPACE/downloads:$tag" oci
+          docker tag  "$REGISTRY/$NAMESPACE/downloads:$tag" "$REGISTRY/$NAMESPACE/downloads:current"
+          docker push "$REGISTRY/$NAMESPACE/downloads:$tag"
+          docker push "$REGISTRY/$NAMESPACE/downloads:current"
+          echo "### 连接器产物已入 OCI 中继：downloads:$tag + :current（cheap-6 cron 自动落盘）" >> "$GITHUB_STEP_SUMMARY"
+
+      # ── 可选通道：runner 直推 rsync（默认关；网络环境允许时经 repo 变量开启）
+      - name: Promote artifacts to downloads dir (rsync, optional)
+        continue-on-error: true
+        if: vars.DOWNLOADS_RSYNC_ENABLED == 'true' && env.HAS_DOWNLOADS_CREDS == 'true'
         env:
           SSH_HOST: ${{ secrets.DOWNLOADS_SSH_HOST }}
           SSH_USER: ${{ secrets.DOWNLOADS_SSH_USER }}
@@ -229,33 +257,24 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/downloads_key
           chmod 600 ~/.ssh/downloads_key
-          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
           # 目标子目录与 api 端点命名空间一一对应（<root>/connector/）；
           # --delete：该目录专属本批产物，保持目录与 manifest 一致
           rsync -avz --delete -e "ssh -i ~/.ssh/downloads_key -p $SSH_PORT" \
             staging/ "$SSH_USER@$SSH_HOST:$DOWNLOADS_REMOTE_DIR/connector/"
-          echo "### 连接器产物已晋升（$DOWNLOADS_REMOTE_DIR/connector/）" >> "$GITHUB_STEP_SUMMARY"
+          echo "### 连接器产物已直推晋升（$DOWNLOADS_REMOTE_DIR/connector/）" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Skip promote — print manual promotion commands
-        if: env.HAS_DOWNLOADS_CREDS != 'true'
+      - name: Manual promotion commands (always documented)
         run: |
           {
-            echo "### 连接器晋升跳过：未配置 DOWNLOADS_SSH_* secrets，请手动晋升"
-            echo
-            echo '凭证缺席（DOWNLOADS_SSH_HOST/USER/KEY），本 job 仅保留 GHA artifact（90 天、需仓库权限）。手动晋升：'
+            echo '### 手动晋升（OCI 中继之外的兜底）'
             echo '```bash'
             echo '# 1. 本 run 页面下载全部 fd-wire-connector-* artifact 到 ./staging'
-            echo '# 2. 重建 manifest.json（与本 job 上一步逐字节同逻辑）：'
-            echo 'version="sha-<本次 GITHUB_SHA 前 7 位>"'
-            echo 'for f in staging/fd-wire-connector-*; do'
-            echo '  p="$(basename "$f")"; p="${p#fd-wire-connector-}"; p="${p%.exe}"'
-            echo '  sha256sum "$f"  # 逐平台写入 manifest.platforms[].sha256'
-            echo 'done'
+            echo '# 2. 重建 manifest.json（与本 job 逐字节同逻辑，sha256 逐平台）'
             echo '# 3. 归档到下载目录（与 api 的 FD_WIRE_DOWNLOADS_DIR 指向一致）：'
             echo 'rsync -avz staging/ <user>@<host>:<downloads_dir>/connector/'
-            echo '# 4. 客户侧下载后按 manifest 的 sha256 校验：'
-            echo 'sha256sum fd-wire-connector-linux-amd64   # 对照 manifest.json'
+            echo '# 4. 客户侧下载后按 manifest 的 sha256 校验'
             echo '```'
-            echo
-            echo '完整步骤（含 sha256 校验命令与 GHA artifact 定位）见 deploy/README.md「连接器取件与晋升」。'
+            echo '完整步骤见 deploy/README.md「连接器取件与晋升」。'
           } >> "$GITHUB_STEP_SUMMARY"
+
