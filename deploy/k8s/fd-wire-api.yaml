@@ -54,6 +54,11 @@ spec:
             # 上传原件暂存目录：同一 PVC（原件哈希登记后文件即证据，不在 /tmp）
             - name: FD_WIRE_DATASETS_UPLOAD_DIR
               value: /var/lib/fd-wire/uploads
+            # 连接器下载目录（wire-connector-distribution）：hostPath=cheap-6
+            # /var/lib/fd-wire/downloads（CI promote / 手动晋升的落盘处；manifest
+            # 为唯一事实源）。未配置时下载端点 404 带原因（诚实降级）。
+            - name: FD_WIRE_DOWNLOADS_DIR
+              value: /var/lib/fd-wire/downloads
             # 溯源账本（wire-provenance-ledger）：OTS 公链锚定后端（免费，
             # BTC 确认异步）；私有化部署改 customer（客户自持检查点，零出站）。
             - name: FD_WIRE_PROVENANCE_ANCHOR_BACKEND
@@ -191,9 +196,19 @@ spec:
             - name: datasets-data
               mountPath: /var/lib/fd-wire/uploads
               subPath: uploads
+            # 连接器下载目录（hostPath，只读）：文件由 CI promote / 手动晋升
+            # 直接落在宿主机，pod 只读消费——不经 PVC（避免 local-path 单节点
+            # 卷与晋升写路径耦合）。
+            - name: downloads
+              mountPath: /var/lib/fd-wire/downloads
+              readOnly: true
           resources:
             requests: { cpu: 100m, memory: 192Mi }
             limits: { memory: 512Mi }
+      # 显式钉 cheap-6：datasets PVC 是 local-path（卷数据在该节点），下载
+      # hostPath 也在该节点——双依赖同一节点，显式声明防未来漂移断挂载。
+      nodeSelector:
+        kubernetes.io/hostname: cheap-6
       volumes:
         - name: provenance-key
           secret:
@@ -201,6 +216,10 @@ spec:
         - name: datasets-data
           persistentVolumeClaim:
             claimName: fd-wire-datasets-data
+        - name: downloads
+          hostPath:
+            path: /var/lib/fd-wire/downloads
+            type: Directory
 ---
 # datasets 模块持久卷（wire-provenance-ledger D8.1）：sqlite 库 + 上传
 # 原件暂存，迁出 /tmp（容器临时层 pod 重建即丢）。容量口径：客户级存储
