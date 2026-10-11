@@ -20,6 +20,13 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: fd-wire-api
+  # 单副本 + fd-prod compute-quota 常满（12 核限 11.7 在用，滚动 surge 挤不
+  # 进——2026-10-12 实锤 api 滚版卡死）：先杀后起（秒级空窗），配额永远够。
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
   template:
     metadata:
       labels:
