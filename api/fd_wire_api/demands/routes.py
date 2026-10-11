@@ -30,7 +30,6 @@ pipeline_routes.py：流水线事实 / gate 结果 / 交付 / 授权转公开端
 
 from __future__ import annotations
 
-import hashlib
 import os
 import secrets
 
@@ -41,7 +40,12 @@ from sqlalchemy.orm import Session
 from . import delivery as delivery_service
 from . import notifications, orchestration, service
 from .db import get_db
-from .orchestration import WorkorderAckIn, WorkorderIn, WorkorderNotFound
+from .orchestration import (
+    WorkorderAckIn,
+    WorkorderExportError,
+    WorkorderIn,
+    WorkorderNotFound,
+)
 from ..console.auth import require_console_customer_id
 from ..delivery.scope_client import ScopeClient, scope_client_dep
 from .schemas import (
@@ -239,80 +243,20 @@ def export_workorder(
 ) -> dict:
     """生成 health-loop 工单入拉取队列（操作员/内部身份；出单不迁移状态）。
 
-    映射与脱敏红线见 ``demands/orchestration.py``（工单全文不含
-    contact_email、公司名只以客户代号留档）。流程：
-    - 仅 ``in_progress`` 可出单（409 如实回绝，文案照状态机风格）；
-    - 无 source_urls 的存量单 422（生成流只承接带合法源地址的新单）；
-    - slug 仓内已占用 → 409 转人工（非 greenfield 不走生成流）；
-    - 出单 → ``workorder_exported`` 全文+哈希 append-only 留档即入队，
-      由 fd-industry-data 侧拉取工作流拉取-落仓-自推-回 ack（wire 零
-      外部 git 凭据，design D1 舰队拉取通道）；
-    - 响应恒带工单全文供人工推送降级——出单时刻未投递（``delivered``
-      =false），绝不展示自动化投递成功假象。
+    业务实现在 ``orchestration.export_workorder_service``——与 admin
+    控制台端点 ``/internal/admin/demands/{id}/workorder`` 共用同一
+    service，语义与拒绝口径完全一致（映射与脱敏红线见
+    ``demands/orchestration.py``；响应恒带工单全文供人工推送降级）。
     """
     demand = _demand_or_404(db, demand_id)
-    current = DemandStatus(demand.status)
-    if current is not DemandStatus.in_progress:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"生成工单只能在 in_progress 状态导出（当前 {current.value}）"
-                "——工单属于处理期（出单不迁移状态）"
-            ),
-        )
-    source_urls = orchestration.demand_source_urls(demand)
-    if not source_urls:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                f"需求单 {demand.code} 没有 source_urls（存量单无源地址）——"
-                "生成工单必须来自带合法源地址的新单；存量单请人工补源地址"
-                "或线下处理"
-            ),
-        )
-    override = payload.slug if payload is not None else None
     try:
-        slug = orchestration.derive_slug(source_urls[0], override=override)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-        ) from exc
-    slug_status = orchestration.check_slug_free(slug)
-    if slug_status == "occupied":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"slug {slug} 在 fd-industry-data 仓内已占用——"
-                "非 greenfield 不走生成流，请转人工处理"
-            ),
+        return orchestration.export_workorder_service(
+            db, demand, slug_override=payload.slug if payload is not None else None
         )
-    try:
-        ticket_yaml, ticket_path = orchestration.build_workorder(
-            demand, slug=slug
-        )
-    except ValueError as exc:
+    except WorkorderExportError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=exc.status_code, detail=exc.detail
         ) from exc
-    sha256 = hashlib.sha256(ticket_yaml.encode("utf-8")).hexdigest()
-    demand.append_pipeline_event(
-        {
-            "type": "workorder_exported",
-            "ticket_path": ticket_path,
-            "ticket_yaml": ticket_yaml,
-            "sha256": sha256,
-        }
-    )
-    db.commit()  # 工单不丢：exported 事件落库即入拉取队列
-    db.refresh(demand)
-    return {
-        "ticket_yaml": ticket_yaml,  # 全文恒随响应返回：人工推送降级始终可用
-        "ticket_path": ticket_path,
-        "delivered": False,  # 投递由舰队拉取器 ack 确认——出单时刻未投递
-        "queued_for_pull": True,  # 已入队：等待拉取器（~30min）或人工推送
-        "slug_check": slug_status,  # free=已确证空闲；unverified=探测通道
-        # 不可达如实放行，占用复检在拉取器本地 checkout 权威执行
-    }
 
 
 @router.get(

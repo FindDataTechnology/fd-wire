@@ -225,6 +225,114 @@ describe("DemandsPage（需求单派发台）", () => {
       expect(pageText).not.toContain(legacy);
     }
   });
+
+  it("转生成工单：仅 in_progress 单渲染出单区（submitted 面板无）", async () => {
+    // 模块级 DEMANDS 会被前序用例的 transition 就地改状态（假后端共享
+    // 引用）——这里自造新鲜数据，状态断言才可靠。
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend(
+        {
+          demands: [
+            demand({ id: 1, status: "submitted" }),
+            demand({ id: 2, status: "in_progress" }),
+          ],
+          bearerToken: TOKEN,
+        },
+      ).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    openPanel(2); // in_progress：出单区在场
+    expect(screen.getByTestId("admin-workorder-section")).toBeDefined();
+    expect(screen.getByTestId("admin-workorder-submit")).toBeDefined();
+
+    openPanel(1); // submitted：派发面板在场但无出单区
+    expect(screen.getByTestId("admin-dispatch-panel")).toBeDefined();
+    expect(screen.queryByTestId("admin-workorder-section")).toBeNull();
+  });
+
+  it("出单成功：调用形状 + 路径/全文/未投递文案，无投递成功假象", async () => {
+    const backend = installAdminBackend({
+      demands: [DEMANDS[1]!],
+      bearerToken: TOKEN,
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    openPanel(2);
+    fireEvent.click(screen.getByTestId("admin-workorder-submit"));
+
+    const result = await screen.findByTestId("admin-workorder-result");
+    expect(result.textContent).toContain(
+      "reports/health-tickets/20261004-wire-DE-20261004-02.yaml",
+    );
+    // 工单全文在场（人工推送降级红线）且形态正确
+    expect(screen.getByTestId("admin-workorder-yaml").textContent).toContain(
+      "kind: generate",
+    );
+    // 诚实降级：明示未投递，页面无任何投递成功字样
+    expect(screen.getByTestId("admin-workorder-undelivered").textContent).toContain(
+      "未投递",
+    );
+    expect(document.body.textContent ?? "").not.toContain("投递成功");
+
+    const call = backend.calls
+      .filter((c) => c.method === "POST")
+      .find((c) => c.url.pathname === "/internal/admin/demands/2/workorder")!;
+    expect(call).toBeDefined();
+    expect(call.body).toBeUndefined(); // 无 slug 覆写：不带请求体
+    expect(call.headers["authorization"]).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("出单失败（422 无源地址）：琥珀框如实回显服务端 detail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [DEMANDS[1]!],
+        bearerToken: TOKEN,
+        failWorkorderStatus: 422,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    openPanel(2);
+    fireEvent.click(screen.getByTestId("admin-workorder-submit"));
+
+    const conflict = await screen.findByTestId("admin-dispatch-conflict");
+    expect(conflict.textContent).toContain("source_urls");
+    // 失败不渲染任何成功面
+    expect(screen.queryByTestId("admin-workorder-result")).toBeNull();
+  });
+
+  it("slug 探测 unverified：如实放行释义在场（free 文案不出现）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [DEMANDS[1]!],
+        bearerToken: TOKEN,
+        workorderResult: {
+          ticket_yaml: "kind: generate\nunit: spiders/example-com/\n",
+          ticket_path: "reports/health-tickets/20261004-wire-DE-20261004-02.yaml",
+          delivered: false,
+          queued_for_pull: true,
+          slug_check: "unverified",
+        },
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    openPanel(2);
+    fireEvent.click(screen.getByTestId("admin-workorder-submit"));
+
+    const slug = await screen.findByTestId("admin-workorder-slug");
+    expect(slug.textContent).toContain("探测通道不可达");
+    expect(slug.textContent).not.toContain("已确证空闲");
+  });
 });
 
 describe("demandsMachine 镜像（wire-ux-consolidation 任务 3.5）", () => {

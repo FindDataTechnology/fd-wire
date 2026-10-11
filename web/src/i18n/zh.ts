@@ -1186,6 +1186,18 @@ const zh = {
       submit: "执行迁移",
       illegalSuffix: "非法",
       machineNote: "客户端只禁用非法项；服务端状态机是唯一裁决面（409 如实回显）。",
+      workorder: {
+        title: "转生成工单",
+        hint: "生成 health-loop 生成工单并加入舰队拉取队列（约 30 分钟一轮）；出单不迁移状态，同一单可重出、历史不改写。",
+        submit: "转生成工单",
+        pathLabel: "工单路径",
+        slugFree: "slug 已确证空闲（目标仓探测 404）。",
+        slugUnverified:
+          "slug 探测通道不可达，如实放行——占用复检由拉取器在本地仓库权威执行。",
+        yamlSummary: "工单全文（人工推送降级用）",
+        undelivered: "已入队未投递——等待舰队拉取器（约 30 分钟）或人工推送。",
+        errorDefault: "出单失败——服务端口径回显见上方提示，稍后可重试。",
+      },
     },
     catalog: {
       title: "目录治理",

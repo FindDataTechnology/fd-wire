@@ -6,9 +6,11 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AdminErrorBox, AdminStates } from "./AdminLayout";
 import {
+  exportDemandWorkorder,
   fetchDemands,
   transitionDemand,
   type AdminDemand,
+  type AdminWorkorderResult,
   type DemandStatus,
 } from "./api";
 import { ALL_DEMAND_STATUSES, allowedTargets, needsReason } from "./demandsMachine";
@@ -155,14 +157,22 @@ export function DemandsPage() {
                 </p>
               )}
               {openId === demand.id && (
-                <DispatchPanel
-                  demand={demand}
-                  onDone={async () => {
-                    setOpenId(null);
-                    await load();
-                  }}
-                  onConflict={(message) => setActionError(message)}
-                />
+                <>
+                  <DispatchPanel
+                    demand={demand}
+                    onDone={async () => {
+                      setOpenId(null);
+                      await load();
+                    }}
+                    onConflict={(message) => setActionError(message)}
+                  />
+                  {demand.status === "in_progress" && (
+                    <WorkorderSection
+                      demandId={demand.id}
+                      onConflict={(message) => setActionError(message)}
+                    />
+                  )}
+                </>
               )}
             </li>
           ))}
@@ -285,6 +295,100 @@ function DispatchPanel({
       <p className="mt-2 text-[11px] text-slate-400">
         {t("admin.demands.machineNote")}
       </p>
+    </div>
+  );
+}
+
+/** 「转生成工单」区（wire-workorder-console-action）：仅 in_progress 单渲染。
+
+ * 出单入舰队拉取队列，出单不迁移状态；成功必须展示工单全文（人工推送
+ * 降级）与「未投递」诚实文案——绝不呈现自动化投递成功假象（spec 红线）。
+ */
+function WorkorderSection({
+  demandId,
+  onConflict,
+}: {
+  demandId: number;
+  onConflict: (message: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<AdminWorkorderResult | null>(null);
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      setResult(await exportDemandWorkorder(demandId));
+    } catch (err) {
+      const apiErr = err as { status?: number; detail?: string; message: string };
+      onConflict(apiErr.detail ?? t("admin.demands.workorder.errorDefault"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      data-testid="admin-workorder-section"
+      className="mt-3 rounded-md border border-slate-200 bg-white p-4"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-medium text-slate-800">
+            {t("admin.demands.workorder.title")}
+          </h3>
+          <p className="mt-1 max-w-xl text-[11px] text-slate-500">
+            {t("admin.demands.workorder.hint")}
+          </p>
+        </div>
+        <button
+          type="button"
+          data-testid="admin-workorder-submit"
+          disabled={busy}
+          onClick={() => void submit()}
+          className="rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {busy ? t("admin.common.working") : t("admin.demands.workorder.submit")}
+        </button>
+      </div>
+
+      {result && (
+        <div
+          data-testid="admin-workorder-result"
+          className="mt-3 rounded border border-slate-200 bg-slate-50/60 px-3 py-2.5 text-xs text-slate-600"
+        >
+          <p>
+            <span className="text-slate-500">
+              {t("admin.demands.workorder.pathLabel")}：
+            </span>
+            <span data-testid="admin-workorder-path" className="font-mono">
+              {result.ticket_path}
+            </span>
+          </p>
+          <p className="mt-1" data-testid="admin-workorder-slug">
+            {result.slug_check === "free"
+              ? t("admin.demands.workorder.slugFree")
+              : t("admin.demands.workorder.slugUnverified")}
+          </p>
+          <p
+            data-testid="admin-workorder-undelivered"
+            className="mt-1 text-amber-700"
+          >
+            {t("admin.demands.workorder.undelivered")}
+          </p>
+          <details className="mt-2">
+            <summary className="cursor-pointer text-slate-500">
+              {t("admin.demands.workorder.yamlSummary")}
+            </summary>
+            <pre
+              data-testid="admin-workorder-yaml"
+              className="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded bg-white p-2 font-mono text-[11px] text-slate-700"
+            >
+              {result.ticket_yaml}
+            </pre>
+          </details>
+        </div>
+      )}
     </div>
   );
 }

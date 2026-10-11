@@ -21,6 +21,7 @@ design D6 红线）。
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import datetime, timezone
@@ -81,6 +82,19 @@ class WorkorderAckIn(BaseModel):
 
 class WorkorderNotFound(LookupError):
     """ack 的工单路径对不上任何导出留档——路由层转 404。"""
+
+
+class WorkorderExportError(Exception):
+    """出单被拒（状态门/无源地址/slug 冲突/映射失配）——路由层转 4xx。
+
+    携带 HTTP 状态码与中文文案：内部端点与 admin 控制台端点共用同一
+    service（``export_workorder_service``），拒绝口径完全一致。
+    """
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
 
 
 # ---------------------------------------------------------------- slug 与文件名
@@ -241,6 +255,79 @@ def check_slug_free(slug: str, *, http_client: httpx.Client | None = None) -> Sl
     finally:
         if owns_client:
             client.close()
+
+
+# ---------------------------------------------------------------- 出单 service（端点共用）
+
+
+def export_workorder_service(
+    db: Session, demand: Demand, *, slug_override: str | None = None
+) -> dict:
+    """出单 service：确定性映射 + append-only 留档入队（端点唯一实现）。
+
+    ``/api/v1/demands/{id}/workorder``（内部令牌）与
+    ``/internal/admin/demands/{id}/workorder``（admin 双闸）共用本函数——
+    语义、响应形状、拒绝口径（:class:`WorkorderExportError`）完全一致：
+
+    - 仅 ``in_progress`` 可出单（409 如实回绝，文案照状态机风格）；
+    - 无 source_urls 的存量单 422（生成流只承接带合法源地址的新单）；
+    - slug 三态探测：occupied → 409 转人工；free/unverified 放行
+      （unverified=探测通道不可达如实放行，占用复检在拉取器本地
+      checkout 权威执行）；
+    - 出单 → ``workorder_exported`` 全文+哈希 append-only 留档即入队，
+      同一需求单可重出新工单、历史不改写、状态不迁移；
+    - 响应恒带工单全文供人工推送降级——出单时刻未投递（``delivered``
+      =false），绝不展示自动化投递成功假象。
+    """
+    current = DemandStatus(demand.status)
+    if current is not DemandStatus.in_progress:
+        raise WorkorderExportError(
+            409,
+            f"生成工单只能在 in_progress 状态导出（当前 {current.value}）"
+            "——工单属于处理期（出单不迁移状态）",
+        )
+    source_urls = demand_source_urls(demand)
+    if not source_urls:
+        raise WorkorderExportError(
+            422,
+            f"需求单 {demand.code} 没有 source_urls（存量单无源地址）——"
+            "生成工单必须来自带合法源地址的新单；存量单请人工补源地址"
+            "或线下处理",
+        )
+    try:
+        slug = derive_slug(source_urls[0], override=slug_override)
+    except ValueError as exc:
+        raise WorkorderExportError(422, str(exc)) from exc
+    slug_status = check_slug_free(slug)
+    if slug_status == "occupied":
+        raise WorkorderExportError(
+            409,
+            f"slug {slug} 在 {INDUSTRY_REPO_NAME} 仓内已占用——"
+            "非 greenfield 不走生成流，请转人工处理",
+        )
+    try:
+        ticket_yaml, ticket_path = build_workorder(demand, slug=slug)
+    except ValueError as exc:
+        raise WorkorderExportError(422, str(exc)) from exc
+    sha256 = hashlib.sha256(ticket_yaml.encode("utf-8")).hexdigest()
+    demand.append_pipeline_event(
+        {
+            "type": EVENT_WORKORDER_EXPORTED,
+            "ticket_path": ticket_path,
+            "ticket_yaml": ticket_yaml,
+            "sha256": sha256,
+        }
+    )
+    db.commit()  # 工单不丢：exported 事件落库即入拉取队列
+    db.refresh(demand)
+    return {
+        "ticket_yaml": ticket_yaml,  # 全文恒随响应返回：人工推送降级始终可用
+        "ticket_path": ticket_path,
+        "delivered": False,  # 投递由舰队拉取器 ack 确认——出单时刻未投递
+        "queued_for_pull": True,  # 已入队：等待拉取器（~30min）或人工推送
+        "slug_check": slug_status,  # free=已确证空闲；unverified=探测通道
+        # 不可达如实放行，占用复检在拉取器本地 checkout 权威执行
+    }
 
 
 # ---------------------------------------------------------------- 拉取队列（pending / ack）

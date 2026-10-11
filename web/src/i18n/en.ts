@@ -1247,6 +1247,19 @@ const en: Translation = {
       submit: "Apply transition",
       illegalSuffix: "illegal",
       machineNote: "The client only disables illegal options; the server state machine is the single arbiter (409 shown as-is).",
+      workorder: {
+        title: "Generate workorder",
+        hint: "Produce a health-loop generate workorder and queue it for the fleet puller (~every 30 min); exporting does not change demand status, re-export allowed with history preserved.",
+        submit: "Generate workorder",
+        pathLabel: "Ticket path",
+        slugFree: "Slug confirmed free (target repo probe returned 404).",
+        slugUnverified:
+          "Slug probe unreachable — passed through honestly; occupancy is re-checked authoritatively against the puller's local checkout.",
+        yamlSummary: "Full workorder YAML (manual-push fallback)",
+        undelivered:
+          "Queued but not delivered — awaiting the fleet puller (~30 min) or a manual push.",
+        errorDefault: "Workorder export failed — see the server message above; retry later.",
+      },
     },
     catalog: {
       title: "Catalog governance",

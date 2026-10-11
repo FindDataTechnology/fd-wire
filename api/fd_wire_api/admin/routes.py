@@ -47,6 +47,8 @@ from ..dbcompat import period_expression
 from ..demands import service as demands_service
 from ..demands.db import get_db as get_demands_db
 from ..demands.models import Demand
+from ..demands.orchestration import WorkorderExportError, WorkorderIn
+from ..demands.orchestration import export_workorder_service
 from ..demands.schemas import DemandInternalOut, TransitionIn
 from ..demands.statemachine import DemandStatus, TransitionError
 from ..metering.db import to_utc
@@ -416,6 +418,33 @@ def transition_demand(
     except TransitionError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return DemandInternalOut.model_validate(demand)
+
+
+@router.post("/demands/{demand_id}/workorder", response_model=None)
+def export_demand_workorder(
+    demand_id: int,
+    payload: WorkorderIn | None = None,
+    db: Session = Depends(get_demands_db),
+) -> dict:
+    """「转生成工单」操作员控制台动作（wire-workorder-console-action）。
+
+    与内部端点 ``POST /api/v1/demands/{id}/workorder`` 共用同一 service
+    （``export_workorder_service``）——确定性映射、脱敏红线、三态 slug
+    探测、append-only 留档、出单不迁移状态，语义与拒绝口径完全一致；
+    响应恒带工单全文供人工推送降级（诚实降级红线：出单时刻未投递）。
+    """
+    try:
+        demand = demands_service.get_demand(db, demand_id)
+    except demands_service.DemandNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        return export_workorder_service(
+            db, demand, slug_override=payload.slug if payload is not None else None
+        )
+    except WorkorderExportError as exc:
+        raise HTTPException(
+            status_code=exc.status_code, detail=exc.detail
+        ) from exc
 
 
 # ---------------------------------------------------------------------------

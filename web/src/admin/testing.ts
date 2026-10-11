@@ -6,6 +6,7 @@ import type {
   AdminCustomer,
   AdminDemand,
   AdminPlan,
+  AdminWorkorderResult,
   AggRow,
   CatalogPendingResponse,
   CustomerLocalDataOverview,
@@ -74,6 +75,10 @@ export interface AdminBackendOptions {
   forceStatus?: number;
   /** 强制 transition 端点返回该状态（如 409 冲突回显测试）。 */
   failTransitionStatus?: number;
+  /** 「转生成工单」成功响应覆盖（缺省用 DEFAULT_WORKORDER_RESULT）。 */
+  workorderResult?: AdminWorkorderResult;
+  /** 强制 workorder 端点返回该状态（如 422 无源地址回显测试）。 */
+  failWorkorderStatus?: number;
   customers?: AdminCustomer[];
   demands?: AdminDemand[];
   ledger?: LedgerEntry[];
@@ -82,6 +87,16 @@ export interface AdminBackendOptions {
   /** 客户本地数据只读概览（/internal/datasets/overview 响应体）。 */
   datasetOverviews?: CustomerLocalDataOverview[];
 }
+
+/** 「转生成工单」缺省成功响应（形状对齐 api 仓 export_workorder_service）。 */
+const DEFAULT_WORKORDER_RESULT: AdminWorkorderResult = {
+  ticket_yaml:
+    "kind: generate\nunit: spiders/stats-gov-cn/\ncategory: null\nbrief:\n  source_urls:\n  - https://www.stats.gov.cn/sj/zxfb/\n  expectations: 需要光伏装机相关数据\n  cadence: daily\n  notes: wire 需求单 DE-20261004-02；客户代号 cust-002\ngolden:\n- spiders/stats-gov-cn/golden/\nverify:\n  commands:\n  - python3 scripts/health_verify.py --ticket reports/health-tickets/20261004-wire-DE-20261004-02.yaml\n",
+  ticket_path: "reports/health-tickets/20261004-wire-DE-20261004-02.yaml",
+  delivered: false,
+  queued_for_pull: true,
+  slug_check: "free",
+};
 
 function jsonResponse(body: unknown, status = 200): FakeResponse {
   return { ok: status < 400, status, json: () => Promise.resolve(body) };
@@ -274,6 +289,39 @@ export function installAdminBackend(options: AdminBackendOptions = {}): {
         },
       ];
       return Promise.resolve(jsonResponse(demand));
+    }
+    match = path.match(/^\/internal\/admin\/demands\/(\d+)\/workorder$/);
+    if (match && method === "POST") {
+      const id = Number(match[1]);
+      if (options.failWorkorderStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                `需求单 DE-20261004-0${id} 没有 source_urls（存量单无源地址）` +
+                "——生成工单必须来自带合法源地址的新单",
+            },
+            options.failWorkorderStatus,
+          ),
+        );
+      }
+      const demand = demands.find((d) => d.id === id);
+      if (!demand) {
+        return Promise.resolve(jsonResponse({ detail: `demand ${id} 不存在` }, 404));
+      }
+      if (demand.status !== "in_progress") {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail: `生成工单只能在 in_progress 状态导出（当前 ${demand.status}）`,
+            },
+            409,
+          ),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse(options.workorderResult ?? DEFAULT_WORKORDER_RESULT),
+      );
     }
 
     // -- 目录治理 ------------------------------------------------------------

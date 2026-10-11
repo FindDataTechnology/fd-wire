@@ -132,6 +132,15 @@ export interface DemandTransitionInput {
   reason?: string;
 }
 
+/** 「转生成工单」结果（与内部端点共用同一 service 的响应形状）。 */
+export interface AdminWorkorderResult {
+  ticket_yaml: string;
+  ticket_path: string;
+  delivered: boolean;
+  queued_for_pull: boolean;
+  slug_check: "free" | "unverified";
+}
+
 export interface IndicatorPendingItem {
   indicator_id: string;
   code: string;
@@ -311,6 +320,17 @@ export function transitionDemand(
   return requestJson(`/internal/admin/demands/${demandId}/transition`, {
     method: "POST",
     body: payload,
+  });
+}
+
+/** 「转生成工单」：出单入拉取队列（出单不迁移状态；响应带全文供人工推送降级）。 */
+export function exportDemandWorkorder(
+  demandId: number,
+  body?: { slug?: string },
+): Promise<AdminWorkorderResult> {
+  return requestJson(`/internal/admin/demands/${demandId}/workorder`, {
+    method: "POST",
+    ...(body ? { body } : {}),
   });
 }
 
