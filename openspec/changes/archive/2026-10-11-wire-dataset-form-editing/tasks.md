@@ -31,6 +31,6 @@
 
 ## 3. 收口
 
-- [ ] 3.1 api pytest 全量 + web vitest 全量 + tsc 全绿
-- [ ] 3.2 生产发布（create_all 建表随滚动自动发生，验证 dataset_corrections
+- [x] 3.1 api pytest 全量 + web vitest 全量 + tsc 全绿
+- [x] 3.2 生产发布（create_all 建表随滚动自动发生，验证 dataset_corrections
   表在 PG 存在）与实弹验证（免费档修正+有效视图）
