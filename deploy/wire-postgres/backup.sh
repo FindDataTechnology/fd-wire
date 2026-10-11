@@ -9,8 +9,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-# compose 凭据来自 .env（与实例同源，不在脚本里复制口令）
-POSTGRES_USER="$(docker compose exec -T wire-postgres printenv POSTGRES_USER)"
+# 实器名 wire-postgres（部署主机无 compose 插件——docker exec 等价形态，
+# 与 cheap-3 在役部署版一致）；凭据来自容器 env（与实例同源，不在脚本里复制口令）
+POSTGRES_USER="$(docker exec wire-postgres printenv POSTGRES_USER)"
 POSTGRES_DB="${POSTGRES_DB:-wire_platform}"
 RETENTION_DAYS="${WIRE_PG_BACKUP_RETENTION_DAYS:-14}"
 
@@ -21,12 +22,12 @@ mkdir -p "$OUT_DIR"
 # 库清单 = 平台两库 + 动态发现的全部 wire_cell_% 库（一 cell 一库，
 # wire-cell-pg-provisioning：新 cell 库自动进备份，无需改清单）。
 # 任一库失败即整体失败（备份宁错杀不静默）。
-CELL_DBS="$(docker compose exec -T --no-TTY wire-postgres \
+CELL_DBS="$(docker exec wire-postgres \
     psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc \
     "select datname from pg_database where datname like 'wire_cell_%' order by datname")"
 for db in "$POSTGRES_DB" wire_datasets $CELL_DBS; do
     echo "[$(date -u +%FT%TZ)] backing up ${db} ..."
-    docker compose exec -T --no-TTY wire-postgres \
+    docker exec wire-postgres \
         pg_dump -U "$POSTGRES_USER" --no-owner --no-privileges "$db" \
         | gzip -9 > "${OUT_DIR}/${db}-${STAMP}.sql.gz"
 done

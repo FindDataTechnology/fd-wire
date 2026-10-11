@@ -393,12 +393,13 @@ backup.sh 已改为动态发现 `wire_cell_%` 全部库（`deploy/wire-postgres/
 
 | 项 | 结果 |
 |---|---|
-| 全自动开通时刻（零手工 SQL） | ____ |
-| 隔离四查（自动验证输出） | ____ |
-| OpenBAO 条目写入路径 | ____ |
-| 容器 PG 根 healthy + MCP 快速冒烟 | ____ |
-| 幂等重入（二次 provision ACTIVE no-op） | ____ |
-| 凭据零泄露抽查（audit/state/日志无明文） | ____ |
+| 全自动开通时刻（零手工 SQL） | ✅ 2026-10-12 07:12 CST，`cell_manager provision pgauto001` 一次成功（admin=专用受限角色 wire_cell_manager CREATEDB/CREATEROLE，非超管） |
+| 隔离四查（自动验证输出） | ✅ {owner→本库 t / owner→wire_platform f / 无关角色→cell 库 f / 无关→platform f}，落 audit `storage_isolation` 字段 |
+| OpenBAO 条目写入路径 | ✅ secret/data/wire/cell-db/pgauto001（键=created_at/password/url） |
+| 容器 PG 根 healthy + MCP 快速冒烟 | ✅ sha-12aac2a healthy、日志 db=postgresql+psycopg://***@…/wire_cell_pgauto001；184 工具、摄入 2 行（含中文）、删除如实 |
+| 幂等重入（二次 provision ACTIVE no-op） | ✅ 二次 provision 返回 active 现状，无重复建库/建条目 |
+| 凭据零泄露抽查（audit/state/日志无明文） | ✅ audit+state grep 无连接串/口令模式命中 |
+| backup 动态发现实跑 | ✅ 开通后立即跑 backup.sh，wire_cell_pgauto001 自动入备份（零清单改动） |
 
 ## 8. 边界（后续 change）
 
