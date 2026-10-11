@@ -16,5 +16,6 @@
 ## 3. 集成门与发布
 
 - [x] 3.1 全量 `pytest`（api）+ `vitest run` + `tsc --noEmit`（web）零红
-- [ ] 3.2 发布链：commit → push（scs001/gitee/github）→ CI 绿 → tcr-relay → manifest 滚版 → 生产验证（对 drill 单 DE-20261011-99 重出工单实弹：同 slug 路径、事件追加、拉取器下一轮吸收）
-- [ ] 3.3 `openspec validate wire-workorder-console-action --strict` 零 ERROR 后归档
+- [x] 3.2a commit b6a562a → 三远端推送 → scs001 CI build success
+- [ ] 3.2b tcr-relay → manifest 滚版 → 生产验证（对 drill 单 DE-20261011-99 重出工单实弹）。**阻塞**：ccr 广州 `fd-wire/api` 与 `fd-wire/web` 双满 100 tag（TCR 个人版硬配额；registry v2 删除不回收，唯控制台删除回收——10-06 事故口径）→ 等控制台清理后 relay 补单即可（hkccr 侧余量 25，CI 无碍）
+- [ ] 3.3 `openspec validate wire-workorder-console-action --strict` 零 ERROR 后归档（随 3.2b 一并）
