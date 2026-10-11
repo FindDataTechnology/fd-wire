@@ -161,7 +161,7 @@ const en: Translation = {
     connectorStep2:
       "Download fd-wire-connector for your platform and run the pairing command (pair --token …) on a machine that can reach the local source — the connector key is written only to the local config file (0600);",
     connectorStep3:
-      "Run it with `run`: heartbeat reporting plus full syncs following the cloud-side allowlist and schedule (--once runs a single smoke pass).",
+      "Run it with `run`: heartbeat reporting plus syncs following the cloud-side allowlist and schedule (--once runs a single smoke pass). The default is a full snapshot; per dataset you can switch to incremental watermark mode in its detail page — the first sync takes a baseline, later syncs transfer only rows past the watermark and merge by primary key (source-side deletes are not propagated; reset the watermark to fall back to a full snapshot).",
     residencyTitle: "Keeping it running",
     residencyIntro:
       "The samples below are starting points; keep the config file owned by a dedicated account with 0600 permissions (the connector warns at startup when looser).",
