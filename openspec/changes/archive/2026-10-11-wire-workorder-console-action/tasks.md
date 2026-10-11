@@ -17,5 +17,5 @@
 
 - [x] 3.1 全量 `pytest`（api）+ `vitest run` + `tsc --noEmit`（web）零红
 - [x] 3.2a commit b6a562a → 三远端推送 → scs001 CI build success
-- [ ] 3.2b tcr-relay → manifest 滚版 → 生产验证（对 drill 单 DE-20261011-99 重出工单实弹）。**阻塞**：ccr 广州 `fd-wire/api` 与 `fd-wire/web` 双满 100 tag（TCR 个人版硬配额；registry v2 删除不回收，唯控制台删除回收——10-06 事故口径）→ 等控制台清理后 relay 补单即可（hkccr 侧余量 25，CI 无碍）
-- [ ] 3.3 `openspec validate wire-workorder-console-action --strict` 零 ERROR 后归档（随 3.2b 一并）
+- [x] 3.2b tcr-relay（用户控制台清配额后单补 OK）→ manifest dda8b8c 滚版 → 生产验证全绿：内部端点重出工单 200（drill 单 DE-20261011-99，delivered=false/queued=true/unverified 放行）、admin 端点双闸 401 fail-closed、bundle 含全套新文案、拉取器投递+ack+状态回流 1/1、时间线 append-only 吸收两次导出
+- [x] 3.3 strict 零 ERROR 后归档
