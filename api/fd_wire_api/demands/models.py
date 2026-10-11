@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import JSON, BigInteger, DateTime, Integer, Numeric, String, Text
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -23,6 +23,9 @@ class Demand(Base):
     （description → intent 全文，title 存截断摘要）、联系邮箱
     （contact_email，必填）、公司名（company，选填）、目录锚点
     （indicator code → linked_indicators，选填、服务端原样存储）。
+    wire-demand-generation-orchestration 1.1 起加合规门两入参：
+    数据源地址（source_urls，公开源 URL 列表）、公开数据声明
+    （public_data_asserted，必勾=True）——旧单两列均为 None。
     entities_hint / frequency_expect 保留为旧列（新表单不再写入）。
     """
 
@@ -47,6 +50,12 @@ class Demand(Base):
     frequency_expect: Mapped[str | None] = mapped_column(String(64), nullable=True)
     #: 目录预填的 indicator code 列表（提交时携带的锚点，服务端原样存储）
     linked_indicators: Mapped[list] = mapped_column(JSON, default=list)
+    #: 数据源地址（wire-demand-generation-orchestration 1.1：公开源 URL 列表，
+    #: 服务端硬校验后原样存储；新表单必填，旧单无值=None）
+    source_urls: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    #: 公开数据声明（客户确认所求数据为公开可获取——合规门勾选项；
+    #: 新表单必勾=True，旧单无值=None）
+    public_data_asserted: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     #: 当前状态（DemandStatus 值）
     status: Mapped[str] = mapped_column(
         String(32), default=DemandStatus.submitted.value, index=True

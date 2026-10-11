@@ -270,6 +270,18 @@ const zh = {
     emailInvalid: "邮箱格式不合法（应为 name@domain.tld 形态）。",
     companyLabel: "公司名（选填）",
     companyPlaceholder: "如：上海壹座",
+    // 源地址 + 公开数据声明（wire-demand-generation-orchestration 任务 4.1）。
+    sourceUrlsLabel: "源地址（必填，每行一条）",
+    sourceUrlsPlaceholder: "https://example.com/prices\nhttps://example.org/reports",
+    sourceUrlsHint:
+      "目标数据所在网页地址（http/https，不含内嵌账号密码）；每行一条，空行忽略。",
+    sourceUrlsRequired: "请至少填写一条源地址。",
+    assertTitle: "公开数据声明",
+    assertText: "确认所求数据为公开可获取数据；非公开数据请线下沟通。",
+    assertRequired: "请勾选公开数据声明后再提交。",
+    errorSourceUrlEntry: "第 {{index}} 条源地址不合法（须为 http/https 地址，且不含内嵌账号密码）。",
+    errorSourceUrls: "源地址不合法（须为 http/https 地址，且不含内嵌账号密码）。",
+    errorValidationGeneric: "提交内容未通过服务端校验，请检查后重试。",
     submit: "提交需求单",
     submitting: "提交中…",
     errorTitle: "提交失败，请稍后重试。",
@@ -973,6 +985,18 @@ const zh = {
         in_progress: "处理中",
         delivered: "已交付",
         rejected: "未承接",
+      },
+      // 编排时间线（wire-demand-generation-orchestration 任务 4.2 客户面）：
+      // 阶段中文标签为冻结文案；旧单无 orchestration 字段则整个区块不渲染。
+      orchestration: {
+        title: "生成进度",
+        prLink: "查看 PR",
+        stages: {
+          workorder_submitted: "已进入生成流水线",
+          pr_open: "爬虫已生成·待人工审核",
+          merged: "审核通过·部署点亮",
+          blocked: "生成受阻·运营跟进中",
+        },
       },
     },
     usage: {

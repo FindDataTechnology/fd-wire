@@ -33,6 +33,9 @@ from .demands import admin_router as demands_admin_router
 from .demands import init_db as init_demands_db
 from .demands import pipeline_router as demands_pipeline_router
 from .demands import router as demands_router
+# 工单状态回流（wire-demand-generation-orchestration 任务 3）：轮询公开仓
+# 工单 YAML 真实状态 → pipeline_events 追加事件 + 客户可见时间线
+from .demands.orchestration_sync import start_workorder_sync, stop_workorder_sync
 from .materialization import init_db as init_materialization_db
 from .materialization import router as materialization_router
 from .materialization import (
@@ -89,6 +92,9 @@ async def lifespan(_: FastAPI):
     # 计量入账驱动（sub2api 入账管道）：周期「registry 审计摄取 → 当月结算」。
     # REGISTRY_MONGO_URI / SUB2API_ADMIN_KEY 未配置时对应段自动跳过。
     start_metering_driver()
+    # 工单状态回流（任务 3.1）：tick 缺省 600s；无在途工单静默；
+    # WORKORDER_SYNC_ENABLED=false 可关。
+    start_workorder_sync()
     # 统一刷新调度器（wire-refresh-scheduler）：refresh_schedules 幂等建表
     # 兜底（生产走 alembic 0023）+ tick 循环（due 调度串行执行；
     # FD_WIRE_REFRESH_SCHEDULER_ENABLED=false 可关）。
@@ -115,6 +121,7 @@ async def lifespan(_: FastAPI):
         stop_forwarder_loop()
         stop_refresh_scheduler()
         stop_metering_driver()
+        stop_workorder_sync()
         stop_materialization_scheduler()
         shutdown_catalog()
 

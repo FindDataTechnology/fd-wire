@@ -11,6 +11,9 @@ dependencies = [
     "sqlalchemy>=2.0",
     "alembic>=1.13",
     "httpx>=0.27",
+    # 需求单编排（wire-demand-generation-orchestration 2.1）：health-loop
+    # 生成工单 YAML 序列化（safe_dump 保字段序）。
+    "pyyaml>=6.0",
     # 控制台登录（wire-self-serve-launch 4.2）：Logto ID token 本地校验
     # （JWKS/iss/aud/exp；crypto extra 供 RS256/ES384 验签）
     "pyjwt[crypto]>=2.8",

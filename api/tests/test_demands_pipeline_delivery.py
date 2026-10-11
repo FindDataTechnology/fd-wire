@@ -179,6 +179,9 @@ def submit(client, customer="cust-001") -> dict:
         "contact_email": "buyer@example.com",
         "company": "上海某某咨询",
         "indicator_code": "IND-AUTO-014",
+        # 合规门两入参（wire-demand-generation-orchestration 1.1 起必填）
+        "source_urls": ["https://www.stats.gov.cn/sj/zxfb/"],
+        "public_data_asserted": True,
     }
     resp = client.post(
         "/api/v1/demands", json=payload, headers=CUST if customer == "cust-001" else OTHER
@@ -742,8 +745,10 @@ def test_migration_head_adds_demand_columns(migrated_demands_sqlite):
         "pipeline_events", "delivery_events", "scope_status", "scope_name",
         # wire-ux-consolidation 3.2：意向单联系方式列
         "contact_email", "company",
+        # wire-demand-generation-orchestration 1.1：合规门两列
+        "source_urls", "public_data_asserted",
     } <= columns
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    # 链头唯一且随链推进（wire-source-packs 起链头=0022_pack_subscriptions）
-    assert version == "0023_refresh_schedules"
+    # 链头唯一且随链推进（1.1 起链头=0024_demand_source_urls_public_assertion）
+    assert version == "0024_demand_source_urls_public_assertion"

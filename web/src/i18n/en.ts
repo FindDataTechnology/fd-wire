@@ -284,6 +284,22 @@ const en: Translation = {
     emailInvalid: "That email address doesn't look valid (name@domain.tld).",
     companyLabel: "Company (optional)",
     companyPlaceholder: "e.g. Acme Data",
+    // Source URLs + public data declaration (wire-demand-generation-orchestration 4.1).
+    sourceUrlsLabel: "Source URLs (required, one per line)",
+    sourceUrlsPlaceholder: "https://example.com/prices\nhttps://example.org/reports",
+    sourceUrlsHint:
+      "Web addresses where the data lives (http/https, no embedded credentials); one per line, blank lines ignored.",
+    sourceUrlsRequired: "Please provide at least one source URL.",
+    assertTitle: "Public data declaration",
+    assertText:
+      "I confirm the requested data is publicly accessible; for non-public data, please contact us offline.",
+    assertRequired: "Please confirm the public data declaration before submitting.",
+    errorSourceUrlEntry:
+      "Source URL #{{index}} is invalid (must be an http/https address without embedded credentials).",
+    errorSourceUrls:
+      "Source URLs are invalid (must be http/https addresses without embedded credentials).",
+    errorValidationGeneric:
+      "The submission failed server-side validation — please check and retry.",
     submit: "Submit demand",
     submitting: "Submitting…",
     errorTitle: "Submission failed — please retry in a moment.",
@@ -1023,6 +1039,18 @@ const en: Translation = {
         in_progress: "In progress",
         delivered: "Delivered",
         rejected: "Declined",
+      },
+      // Orchestration timeline (wire-demand-generation-orchestration 4.2,
+      // customer-facing): rendered only when the demand carries the field.
+      orchestration: {
+        title: "Generation progress",
+        prLink: "View PR",
+        stages: {
+          workorder_submitted: "Entered the generation pipeline",
+          pr_open: "Crawler generated · pending human review",
+          merged: "Review passed · deployment live",
+          blocked: "Generation blocked · operations following up",
+        },
       },
     },
     usage: {

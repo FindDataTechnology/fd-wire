@@ -57,16 +57,53 @@ export interface ConversationCreateInput {
   message?: string;
 }
 
+/** FastAPI 422 校验错误 detail 数组条目（wire-demand-generation-orchestration
+ *  冻结契约：非法源地址条目 loc=("body","source_urls",<索引>)、声明缺失
+ *  loc=("body","public_data_asserted")——由 UI 按条目映射本地化文案，
+ *  绝不透传英文 msg 原文照抄）。 */
+export interface ApiDetailItem {
+  type?: string;
+  loc?: Array<string | number>;
+  msg?: string;
+}
+
+/** detail 数组形态收窄：仅取对象条目的 type/loc/msg（其余键忽略）。 */
+function parseDetailItems(raw: unknown[]): ApiDetailItem[] {
+  return raw.flatMap((entry): ApiDetailItem[] => {
+    if (!entry || typeof entry !== "object") return [];
+    const record = entry as Record<string, unknown>;
+    const item: ApiDetailItem = {};
+    if (typeof record.type === "string") item.type = record.type;
+    if (Array.isArray(record.loc)) {
+      const loc = record.loc.filter(
+        (v): v is string | number => typeof v === "string" || typeof v === "number",
+      );
+      if (loc.length > 0) item.loc = loc;
+    }
+    if (typeof record.msg === "string") item.msg = record.msg;
+    return [item];
+  });
+}
+
 export class ConsoleApiError extends Error {
   readonly status: number | undefined;
   /** 后端 error body 的 detail 文案（如 429 限额说明），无则 undefined。 */
   readonly detail: string | undefined;
+  /** 422 校验错误的 detail 数组条目（FastAPI 标准形状；string detail 时
+   *  为 undefined）——按条目供 UI 映射本地化文案。 */
+  readonly detailItems: ApiDetailItem[] | undefined;
 
-  constructor(message: string, status?: number, detail?: string) {
+  constructor(
+    message: string,
+    status?: number,
+    detail?: string,
+    detailItems?: ApiDetailItem[],
+  ) {
     super(message);
     this.name = "ConsoleApiError";
     this.status = status;
     this.detail = detail;
+    this.detailItems = detailItems;
   }
 }
 
@@ -88,14 +125,17 @@ function bearerHeaders(): Record<string, string> {
 async function readResponse(response: Response, url: string): Promise<unknown> {
   if (!response.ok) {
     let detail: string | undefined;
+    let detailItems: ApiDetailItem[] | undefined;
     try {
       const data: unknown = await response.json();
-      if (
-        data &&
-        typeof data === "object" &&
-        typeof (data as { detail?: unknown }).detail === "string"
-      ) {
-        detail = (data as { detail: string }).detail;
+      if (data && typeof data === "object") {
+        const rawDetail = (data as { detail?: unknown }).detail;
+        if (typeof rawDetail === "string") {
+          detail = rawDetail;
+        } else if (Array.isArray(rawDetail)) {
+          // FastAPI 422 校验错误数组：逐条收窄（string detail 语义不变）。
+          detailItems = parseDetailItems(rawDetail);
+        }
       }
     } catch {
       /* 无 JSON body：保留 undefined */
@@ -104,6 +144,7 @@ async function readResponse(response: Response, url: string): Promise<unknown> {
       `console api ${response.status} for ${url}`,
       response.status,
       detail,
+      detailItems,
     );
   }
   if (response.status === 204) return null;
@@ -839,13 +880,23 @@ export function fetchConsoleUsage(): Promise<ConsoleUsage> {
 
 // ── 需求单客户面（wire-ux-consolidation 任务 3.2/4.1/4.3）──────────────
 // 契约：POST/GET /api/v1/demands（Bearer 登录身份，服务端按映射客户隔离，
-// 他企数据不可见）。提交四入参：description（必填）/ contact_email（必填）/
+// 他企数据不可见）。提交六入参：description（必填）/ contact_email（必填）/
+// source_urls（≥1 条 http(s) 公开地址）/ public_data_asserted（必须 true）/
 // company（选填）/ indicator_code（选填目录锚点）；状态三态 + rejected。
+// wire-demand-generation-orchestration：详情响应新增 orchestration 时间线
+// （客户安全子集，见 OrchestrationEntry）；422 校验错误为 FastAPI 标准数组
+// （ConsoleApiError.detailItems），UI 按条目映射本地化文案。
 
-/** 需求单提交入参（后端 DemandCreate：旧表单字段一律不再收）。 */
+/** 需求单提交入参（后端 DemandCreate：旧表单字段一律不再收；
+ *  wire-demand-generation-orchestration 追加两硬校验字段）。 */
 export interface DemandCreateInput {
   description: string;
   contact_email: string;
+  /** 源地址（≥1 条 http(s) 公开地址、不内嵌账密——服务端逐条硬校验，
+   *  422 按索引逐条回显）。 */
+  source_urls: string[];
+  /** 公开数据声明（必须 true 才能提交；缺失/为 false 服务端 422 拒收）。 */
+  public_data_asserted: boolean;
   company?: string;
   indicator_code?: string;
 }
@@ -856,6 +907,15 @@ export interface DemandHistoryEvent {
   at: string;
   by: string;
   note: string | null;
+}
+
+/** 编排时间线条目（需求详情响应的客户安全子集，按时间升序；仅阶段+时间+
+ *  PR 外链，内部字段不出客户面——wire-demand-generation-orchestration）。 */
+export interface OrchestrationEntry {
+  stage: "workorder_submitted" | "pr_open" | "merged" | "blocked";
+  at: string;
+  /** pr_open / merged 阶段带 PR 外链；其余为 null。 */
+  pr_url: string | null;
 }
 
 /** 需求单客户视图（后端 DemandOut 截面：不含任何内部字段）。 */
@@ -871,6 +931,8 @@ export interface CustomerDemand {
   company: string | null;
   status: string;
   status_history: DemandHistoryEvent[];
+  /** 编排进度时间线（新单有、旧单缺省——UI 有则渲染区块，无则不渲染）。 */
+  orchestration?: OrchestrationEntry[];
   rejection_reason: string | null;
   created_at: string;
   updated_at: string;

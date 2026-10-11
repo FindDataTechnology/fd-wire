@@ -5,23 +5,67 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Annotated, Any
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
+from .orchestration_sync import orchestration_customer_view
 from .statemachine import DemandStatus
 
 #: 联系邮箱的最小形态校验（非空 + 单 @ + 两侧各有非空白字符；不追求 RFC 全集）。
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
+def _public_source_url(value: str) -> str:
+    """单条数据源地址的合规门硬校验（wire-demand-generation-orchestration 1.2）。
+
+    - 仅 http:// 或 https://（大小写不敏感）；
+    - 不得内嵌账密（netloc 含 ``@`` 的 user:pass@host 形态即拒——工单面
+      只承接公开数据，凭据形态地址直接挡在提交口）。
+
+    挂在列表元素上校验：第 i 条非法 → 错误 loc 带 (source_urls, i) 索引定位。
+    """
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("数据源地址不能为空")
+    lowered = stripped.lower()
+    if not lowered.startswith(("http://", "https://")):
+        raise ValueError(
+            "数据源地址必须以 http:// 或 https:// 开头（公开网页地址形态）"
+        )
+    try:
+        netloc = urlsplit(stripped).netloc
+    except ValueError:
+        raise ValueError("数据源地址格式不合法") from None
+    if "@" in netloc:
+        raise ValueError(
+            "数据源地址不得内嵌账号密码（user:pass@host 形态）——仅承接公开数据"
+        )
+    return stripped
+
+
+#: 合规门校验后的公开源地址元素类型（错误逐条带索引）。
+SourceUrl = Annotated[str, AfterValidator(_public_source_url)]
+
+
 class DemandCreate(BaseModel):
-    """客户提交意向单（wire-ux-consolidation 任务 3.2：轻量四入参）。
+    """客户提交意向单（wire-ux-consolidation 任务 3.2：轻量四入参；
+    wire-demand-generation-orchestration 1.1 起加合规门两入参）。
 
     - 需求描述（自由文本，必填——按将来对话第一条消息的形态设计）；
     - 联系邮箱（必填，最小形态校验）；
     - 公司名（选填）；
-    - 目录锚点（indicator code，选填；服务端原样存储，用于预填语义）。
+    - 目录锚点（indicator code，选填；服务端原样存储，用于预填语义）；
+    - 数据源地址（≥1 个公开源 URL，必填；服务端硬校验 http(s) 与无内嵌账密）；
+    - 公开数据声明（必勾——所求数据为公开可获取；False/缺失即 422）。
 
     旧表单字段（title/entities_hint/frequency_expect）不再收；旧调用
     携带它们会被忽略（缺必填项按 422 逐字段回显）。
@@ -31,6 +75,8 @@ class DemandCreate(BaseModel):
     contact_email: str = Field(min_length=1, max_length=320)
     company: str | None = Field(default=None, max_length=200)
     indicator_code: str | None = Field(default=None, max_length=128)
+    source_urls: list[SourceUrl] = Field(min_length=1)
+    public_data_asserted: bool
 
     @field_validator("description")
     @classmethod
@@ -56,6 +102,16 @@ class DemandCreate(BaseModel):
         stripped = value.strip()
         return stripped or None
 
+    @field_validator("public_data_asserted")
+    @classmethod
+    def _public_data_asserted_true(cls, value: bool) -> bool:
+        """合规门：声明必须勾选——非公开数据不在代爬服务面，请线下沟通。"""
+        if value is not True:
+            raise ValueError(
+                "必须勾选公开数据声明：仅承接公开可获取数据，非公开数据请线下沟通"
+            )
+        return value
+
 
 class HistoryEvent(BaseModel):
     """时间线条目：{status, at, by, note}。"""
@@ -78,6 +134,18 @@ class DeliveryOut(BaseModel):
     publish_authorized: bool | None = None
 
 
+class OrchestrationEventOut(BaseModel):
+    """编排时间线安全条目（wire-demand-generation-orchestration 3.2）。
+
+    只出阶段名 + 时间 + PR 链接——ticket_path、note、agent 回执全文、
+    重试细节等内部留档字段绝不在此出现。
+    """
+
+    stage: str
+    at: str | None = None
+    pr_url: str | None = None
+
+
 class DemandOut(BaseModel):
     """需求单客户视图（含客户可见时间线/联系方式/拒绝理由/交付视图）。
 
@@ -98,6 +166,10 @@ class DemandOut(BaseModel):
     entities_hint: Any = None
     frequency_expect: str | None = None
     linked_indicators: list[str] = []
+    #: 数据源地址（合规门两入参，新单必返回；旧单=None）
+    source_urls: list[str] | None = None
+    #: 公开数据声明（新单必为 True；旧单=None）
+    public_data_asserted: bool | None = None
     status: str
     status_history: list[HistoryEvent] = []
     evaluation_summary: str | None = None
@@ -107,8 +179,42 @@ class DemandOut(BaseModel):
     quote_valid_until: datetime | None = None
     #: 交付视图（任务 6.6，客户可见）：私有 scope 交付状态 + 授权转公开状态
     delivery: DeliveryOut | None = None
+    #: 编排时间线（任务 3.2，客户可见安全子集）：pipeline_events 中
+    #: workorder_submitted / pr_open / merged / blocked 四态映射为
+    #: ``{stage, at, pr_url?}``；其余事件类型与内部字段绝不进客户面。
+    orchestration: list[OrchestrationEventOut] = []
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_orchestration(cls, data: Any) -> Any:
+        """响应组装点：从 pipeline_events 派生客户面编排安全子集。
+
+        ``Demand.delivery`` 计算属性同款纪律——区别在 delivery 的源字段
+        （scope_status 等）就在 ORM 上，而 orchestration 的源是内部留档
+        pipeline_events 全文（客户面不可直读），故在响应模型入口过滤：
+        ORM 对象 setattr 注入派生视图（不落库），dict 输入补 key，
+        其余形态交缺省 []。
+        """
+        if isinstance(data, dict):
+            if "orchestration" not in data:
+                data = {
+                    **data,
+                    "orchestration": orchestration_customer_view(
+                        data.get("pipeline_events")
+                    ),
+                }
+            return data
+        events = getattr(data, "pipeline_events", None)
+        if events is not None:
+            try:
+                setattr(
+                    data, "orchestration", orchestration_customer_view(events)
+                )
+            except (AttributeError, TypeError):  # pragma: no cover - 防御
+                pass
+        return data
 
 
 class DemandInternalOut(DemandOut):

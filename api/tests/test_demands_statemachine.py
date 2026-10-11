@@ -98,6 +98,9 @@ def submit(client, customer="cust-001", **overrides) -> dict:
         "contact_email": "buyer@example.com",
         "company": "上海某某咨询",
         "indicator_code": "IND-AUTO-014",
+        # 合规门两入参（wire-demand-generation-orchestration 1.1 起必填）
+        "source_urls": ["https://www.stats.gov.cn/sj/zxfb/"],
+        "public_data_asserted": True,
     }
     payload.update(overrides)
     resp = client.post(

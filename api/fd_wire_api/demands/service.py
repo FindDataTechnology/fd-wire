@@ -60,9 +60,11 @@ def _summary_title(description: str) -> str:
 def create_demand(db: Session, *, customer_id: str, payload: DemandCreate) -> Demand:
     """客户提交意向单：初始状态 submitted，时间线首条即提交事件。
 
-    四入参落库：description → intent 全文（title 存截断摘要）、
-    contact_email / company 直落同名列、indicator_code 原样进
-    linked_indicators（目录锚点，预填语义）。
+    四入参 + 合规门两入参落库：description → intent 全文（title 存截断
+    摘要）、contact_email / company 直落同名列、indicator_code 原样进
+    linked_indicators（目录锚点，预填语义）；source_urls（已过服务端
+    硬校验的公开源地址）与 public_data_asserted（公开数据声明，恒为
+    True 才能到这）原样落库。
     """
     demand = Demand(
         code=_next_code(db),
@@ -74,6 +76,8 @@ def create_demand(db: Session, *, customer_id: str, payload: DemandCreate) -> De
         linked_indicators=[payload.indicator_code]
         if payload.indicator_code
         else [],
+        source_urls=list(payload.source_urls),
+        public_data_asserted=payload.public_data_asserted,
         status=DemandStatus.submitted.value,
         status_history=[],
     )

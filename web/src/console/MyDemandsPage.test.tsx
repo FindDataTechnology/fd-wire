@@ -1,8 +1,11 @@
-// 「我的需求」只读列表测试（wire-ux-consolidation 任务 4.3）：
+// 「我的需求」只读列表测试（wire-ux-consolidation 任务 4.3；
+// wire-demand-generation-orchestration 任务 4.2/4.3 追加编排时间线）：
 // - 展示：三态徽章 + rejected「未承接」+ 理由摘要 + 提交时间 + 需求摘要；
 //   无任何迁移操作控件；
 // - 隔离口径：调用层带 Bearer 且不传任何他企参数（跨客户隔离由服务端
 //   /api/v1/demands 列表端点按映射客户保证，本测试 mock 该端点响应）；
+// - 编排时间线：有 orchestration 则渲染阶段标签+PR 外链；旧单缺省字段
+//   （或空数组）不渲染区块；
 // - 空态/加载失败文案自然。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -146,5 +149,139 @@ describe("MyDemandsPage（我的需求 · 只读列表）", () => {
     expect(error.textContent).toContain("需求单加载失败");
     expect(error.textContent).toContain("demands down");
     expect(screen.getByTestId("my-demands-retry")).toBeTruthy();
+  });
+
+  // ── 编排时间线（wire-demand-generation-orchestration 任务 4.2 客户面）──────
+
+  it("编排时间线：按升序渲染各阶段中文标签 + 时间 + PR 外链（pr_open/merged）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installConsoleBackend([], {
+        demands: [
+          demand({
+            id: 7,
+            status: "in_progress",
+            orchestration: [
+              {
+                stage: "workorder_submitted",
+                at: "2026-10-10T09:00:00",
+                pr_url: null,
+              },
+              {
+                stage: "pr_open",
+                at: "2026-10-10T11:30:00",
+                pr_url: "https://github.com/finddata/fd-industry-data/pull/42",
+              },
+            ],
+          }),
+          demand({
+            id: 8,
+            status: "delivered",
+            orchestration: [
+              {
+                stage: "workorder_submitted",
+                at: "2026-10-09T02:00:00",
+                pr_url: null,
+              },
+              {
+                stage: "pr_open",
+                at: "2026-10-09T06:00:00",
+                pr_url: "https://github.com/finddata/fd-industry-data/pull/39",
+              },
+              {
+                stage: "merged",
+                at: "2026-10-09T10:00:00",
+                pr_url: "https://github.com/finddata/fd-industry-data/pull/39",
+              },
+            ],
+          }),
+        ],
+      }).fetchImpl,
+    );
+    render(<MyDemandsPage />);
+
+    const blocks = await screen.findAllByTestId("demand-orchestration");
+    expect(blocks.length).toBe(2);
+    expect(blocks[0]!.textContent).toContain("生成进度");
+
+    // 各阶段中文标签（冻结文案）；workorder_submitted 无外链
+    const stages = screen
+      .getAllByTestId("demand-orchestration-entry")
+      .map((el) => el.getAttribute("data-stage"));
+    expect(stages).toEqual([
+      // 列表按创建时间倒序：id 8 在前
+      "workorder_submitted",
+      "pr_open",
+      "merged",
+      "workorder_submitted",
+      "pr_open",
+    ]);
+    const labels = screen
+      .getAllByTestId("demand-orchestration-stage")
+      .map((el) => el.textContent);
+    expect(labels).toContain("已进入生成流水线");
+    expect(labels).toContain("爬虫已生成·待人工审核");
+    expect(labels).toContain("审核通过·部署点亮");
+
+    // PR 外链：pr_open/merged 渲染、指向服务端下发地址、新窗打开
+    const prLinks = screen.getAllByTestId("demand-orchestration-pr");
+    expect(prLinks.length).toBe(3);
+    expect(prLinks[0]!.getAttribute("href")).toBe(
+      "https://github.com/finddata/fd-industry-data/pull/39",
+    );
+    expect(prLinks[0]!.getAttribute("target")).toBe("_blank");
+    expect(prLinks[2]!.getAttribute("href")).toBe(
+      "https://github.com/finddata/fd-industry-data/pull/42",
+    );
+  });
+
+  it("编排时间线：blocked 阶段呈现「生成受阻·运营跟进中」", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installConsoleBackend([], {
+        demands: [
+          demand({
+            id: 9,
+            status: "in_progress",
+            orchestration: [
+              {
+                stage: "workorder_submitted",
+                at: "2026-10-10T09:00:00",
+                pr_url: null,
+              },
+              { stage: "blocked", at: "2026-10-10T15:00:00", pr_url: null },
+            ],
+          }),
+        ],
+      }).fetchImpl,
+    );
+    render(<MyDemandsPage />);
+
+    await screen.findAllByTestId("demand-orchestration-entry");
+    expect(screen.getAllByTestId("demand-orchestration-stage").map((e) => e.textContent)).toContain(
+      "生成受阻·运营跟进中",
+    );
+    // blocked 无 PR 外链
+    expect(screen.queryByTestId("demand-orchestration-pr")).toBeNull();
+  });
+
+  it("旧单无 orchestration 字段：不渲染生成进度区块（空数组同样不渲染）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installConsoleBackend([], {
+        demands: [
+          // 旧单：响应缺省 orchestration 字段
+          demand({ id: 1, status: "submitted" }),
+          // 边界：字段在但为空数组——同样不渲染
+          demand({ id: 2, status: "in_progress", orchestration: [] }),
+        ],
+      }).fetchImpl,
+    );
+    render(<MyDemandsPage />);
+
+    const items = await screen.findAllByTestId("my-demand-item");
+    expect(items.length).toBe(2);
+    expect(screen.queryByTestId("demand-orchestration")).toBeNull();
+    expect(screen.queryByTestId("demand-orchestration-entry")).toBeNull();
   });
 });

@@ -43,6 +43,9 @@ SUBMIT_PAYLOAD = {
     "contact_email": "pv-research@example.com",
     "company": "某新能源研究院",
     "indicator_code": "IND-PV-001",
+    # 合规门两入参（wire-demand-generation-orchestration 1.1 起必填）
+    "source_urls": ["https://www.nea.gov.cn/"],
+    "public_data_asserted": True,
 }
 
 

@@ -133,6 +133,9 @@ def submit(client, **overrides) -> dict:
     payload = {
         "description": "需要上海市 2024 年以来乘用车月度销量与价格带分布，用于市场分析",
         "contact_email": "buyer@example.com",
+        # 合规门两入参（wire-demand-generation-orchestration 1.1 起必填）
+        "source_urls": ["https://www.stats.gov.cn/sj/zxfb/"],
+        "public_data_asserted": True,
     }
     payload.update(overrides)
     resp = client.post("/api/v1/demands", json=payload, headers=CUST)

@@ -4,15 +4,31 @@
 //   客户保证，前端不加任何过滤参数）。
 // - 呈现：状态徽章（已收到/处理中/已交付；rejected 显示「未承接」+ 理由
 //   摘要）+ 提交时间 + 需求摘要；无任何迁移操作控件——派发是内部面的事。
+// - 编排时间线（wire-demand-generation-orchestration 任务 4.2 客户面）：
+//   demand.orchestration 有则渲染「生成进度」区块（阶段中文标签 + 时间 +
+//   PR 外链），旧单缺省该字段则整个区块不渲染。
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { apiErrorText, fetchMyDemands, type CustomerDemand } from "./api";
+import {
+  apiErrorText,
+  fetchMyDemands,
+  type CustomerDemand,
+  type OrchestrationEntry,
+} from "./api";
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
   submitted: "bg-slate-100 text-slate-700 ring-slate-200",
   in_progress: "bg-amber-50 text-amber-700 ring-amber-200",
   delivered: "bg-emerald-50 text-emerald-700 ring-emerald-200",
   rejected: "bg-rose-50 text-rose-700 ring-rose-200",
+};
+
+/** 编排时间线阶段圆点配色（blocked 红、merged 绿、pr_open 琥珀、入口灰蓝）。 */
+const STAGE_DOT_CLASS: Record<OrchestrationEntry["stage"], string> = {
+  workorder_submitted: "bg-slate-400",
+  pr_open: "bg-amber-500",
+  merged: "bg-emerald-500",
+  blocked: "bg-rose-500",
 };
 
 /** 状态徽章文案键（旧八态名不再出现；未知状态兜底原样展示）。 */
@@ -23,6 +39,16 @@ function statusLabel(
   const key = `console.demands.statuses.${status}`;
   const label = translate(key);
   return label === key ? status : label;
+}
+
+/** 编排阶段文案键（冻结四阶段；未知阶段兜底原样展示）。 */
+function orchestrationStageLabel(
+  translate: (key: string) => string,
+  stage: string,
+): string {
+  const key = `console.demands.orchestration.stages.${stage}`;
+  const label = translate(key);
+  return label === key ? stage : label;
 }
 
 function formatSubmittedAt(iso: string, language: string): string {
@@ -168,6 +194,50 @@ export function MyDemandsPage() {
                     reason: demand.rejection_reason,
                   })}
                 </p>
+              )}
+              {demand.orchestration && demand.orchestration.length > 0 && (
+                <div
+                  data-testid="demand-orchestration"
+                  className="mt-3 rounded-md border border-slate-100 bg-slate-50/70 px-3 py-2"
+                >
+                  <p className="text-xs font-medium text-slate-600">
+                    {t("console.demands.orchestration.title")}
+                  </p>
+                  <ol className="mt-1.5 space-y-1">
+                    {demand.orchestration.map((entry, index) => (
+                      <li
+                        key={index}
+                        data-testid="demand-orchestration-entry"
+                        data-stage={entry.stage}
+                        className="flex flex-wrap items-center gap-2 text-xs text-slate-700"
+                      >
+                        <span
+                          aria-hidden
+                          className={`h-1.5 w-1.5 rounded-full ${
+                            STAGE_DOT_CLASS[entry.stage] ?? "bg-slate-300"
+                          }`}
+                        />
+                        <span data-testid="demand-orchestration-stage">
+                          {orchestrationStageLabel(t, entry.stage)}
+                        </span>
+                        <span className="text-slate-400">
+                          {formatSubmittedAt(entry.at, i18n.language)}
+                        </span>
+                        {entry.pr_url && (
+                          <a
+                            href={entry.pr_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            data-testid="demand-orchestration-pr"
+                            className="text-sky-600 underline hover:text-sky-800"
+                          >
+                            {t("console.demands.orchestration.prLink")}
+                          </a>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
               )}
             </li>
           ))}

@@ -4,6 +4,7 @@
 // 追加 数据集/上传/修正/同步/连接器 路由；wire-self-serve-launch 追加
 // /api/console/{auth/config,session,usage} 路由——纯内存、零网络）。
 import type {
+  ApiDetailItem,
   ArtifactStatus,
   ChatMessage,
   Connector,
@@ -140,9 +141,11 @@ export interface ConsoleBackendOptions {
   pairingTokenTtlSeconds?: number;
   /** 种子需求单（带 customer_id 的仅对同客户可见；wire-ux-consolidation 4.3）。 */
   demands?: CustomerDemand[];
-  /** 强制 POST /api/v1/demands 返回该状态（如 422 校验回显）。 */
+  /** 强制 POST /api/v1/demands 返回该状态（如 422 校验回显）；detail 可为
+   *  字符串或 FastAPI 校验错误数组形状（wire-demand-generation-orchestration
+   *  冻结契约注入）。 */
   failDemandCreateStatus?: number;
-  failDemandCreateDetail?: string;
+  failDemandCreateDetail?: string | ApiDetailItem[];
   /** 连接器下载清单（wire-connector-distribution 3.1）：GET
    *  /api/v1/downloads/connector/manifest.json 的响应体注入（缺省 404——
    *  端点未配置态；含 available=false 条目即「部分 unavailable」态）。 */
@@ -672,6 +675,8 @@ export function installConsoleBackend(
         contact_email?: string;
         company?: string;
         indicator_code?: string;
+        source_urls?: unknown;
+        public_data_asserted?: unknown;
       };
       if (!payload.description || !payload.description.trim()) {
         return Promise.resolve(
@@ -682,6 +687,51 @@ export function installConsoleBackend(
         return Promise.resolve(
           jsonResponse({ detail: "联系邮箱格式不合法（应为 name@domain.tld 形态）" }, 422),
         );
+      }
+      // wire-demand-generation-orchestration 冻结契约镜像：source_urls ≥1 条
+      // http(s) 公开地址（拒内嵌账密）、public_data_asserted 必须 true——
+      // 422 detail 为 FastAPI 标准错误数组（非法条目按索引定位 loc）。
+      const sourceUrls = Array.isArray(payload.source_urls)
+        ? payload.source_urls.filter((u): u is string => typeof u === "string")
+        : [];
+      const detailItems: ApiDetailItem[] = [];
+      if (sourceUrls.length === 0) {
+        detailItems.push({
+          type: "too_short",
+          loc: ["body", "source_urls"],
+          msg: "List should have at least 1 item after validation, not 0",
+        });
+      }
+      sourceUrls.forEach((url, index) => {
+        let parsed: URL | null = null;
+        try {
+          parsed = new URL(url);
+        } catch {
+          parsed = null;
+        }
+        const embeddedCredentials =
+          /^[a-z][a-z0-9+.-]*:\/\/[^/@\s]+:[^/@\s]+@/i.test(url);
+        if (
+          !parsed ||
+          (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+          embeddedCredentials
+        ) {
+          detailItems.push({
+            type: "url_scheme",
+            loc: ["body", "source_urls", index],
+            msg: "Input should be a valid http(s) URL without embedded credentials",
+          });
+        }
+      });
+      if (payload.public_data_asserted !== true) {
+        detailItems.push({
+          type: "greater_than",
+          loc: ["body", "public_data_asserted"],
+          msg: "Input should be true",
+        });
+      }
+      if (detailItems.length > 0) {
+        return Promise.resolve(jsonResponse({ detail: detailItems }, 422));
       }
       const id = nextDemandId++;
       const nowIso = "2026-10-10T08:00:00";

@@ -15,6 +15,14 @@
                                       一律 409（评估字段随旧单保留可查）
 - ``POST /internal/demands/{id}/quote``       旧八态工作流遗留：报价不进三态
                                       状态机，一律 409（quote 字段保留可查）
+- ``POST /api/v1/demands/{id}/workorder``     生成 health-loop 工单入拉取队列
+                                      （操作员/内部身份；仅 in_progress、出单
+                                      不迁移状态；响应带全文供人工推送降级）
+- ``GET  /internal/demands/workorders/pending`` 舰队拉取器取待投递工单
+                                      （每单至多一条最新未 ack 导出、仅
+                                      in_progress 单；design D1 舰队拉取通道）
+- ``POST /internal/demands/workorders/ack``   拉取器落仓自推成功后回 ack
+                                      （幂等：同工单重复 ack 不重复记事件）
 
 另见 admin_routes.py：``GET /internal/demands/{id}``（确认台内部完整视图）；
 pipeline_routes.py：流水线事实 / gate 结果 / 交付 / 授权转公开端点。
@@ -22,6 +30,7 @@ pipeline_routes.py：流水线事实 / gate 结果 / 交付 / 授权转公开端
 
 from __future__ import annotations
 
+import hashlib
 import os
 import secrets
 
@@ -29,8 +38,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from . import delivery as delivery_service
-from . import notifications, service
+from . import notifications, orchestration, service
 from .db import get_db
+from .orchestration import WorkorderAckIn, WorkorderIn, WorkorderNotFound
 from ..console.auth import require_console_customer_id
 from ..delivery.scope_client import ScopeClient, scope_client_dep
 from .schemas import (
@@ -212,3 +222,120 @@ def submit_quote(
     except TransitionError as exc:
         raise _conflict(exc) from exc
     return DemandInternalOut.model_validate(demand)
+
+
+# ------------------------------------------- 生成工单与舰队拉取投递（编排任务 2.2+2.3）
+
+
+@router.post(
+    "/api/v1/demands/{demand_id}/workorder",
+    dependencies=[Depends(_require_internal)],
+)
+def export_workorder(
+    demand_id: int,
+    payload: WorkorderIn | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """生成 health-loop 工单入拉取队列（操作员/内部身份；出单不迁移状态）。
+
+    映射与脱敏红线见 ``demands/orchestration.py``（工单全文不含
+    contact_email、公司名只以客户代号留档）。流程：
+    - 仅 ``in_progress`` 可出单（409 如实回绝，文案照状态机风格）；
+    - 无 source_urls 的存量单 422（生成流只承接带合法源地址的新单）；
+    - slug 仓内已占用 → 409 转人工（非 greenfield 不走生成流）；
+    - 出单 → ``workorder_exported`` 全文+哈希 append-only 留档即入队，
+      由 fd-industry-data 侧拉取工作流拉取-落仓-自推-回 ack（wire 零
+      外部 git 凭据，design D1 舰队拉取通道）；
+    - 响应恒带工单全文供人工推送降级——出单时刻未投递（``delivered``
+      =false），绝不展示自动化投递成功假象。
+    """
+    demand = _demand_or_404(db, demand_id)
+    current = DemandStatus(demand.status)
+    if current is not DemandStatus.in_progress:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"生成工单只能在 in_progress 状态导出（当前 {current.value}）"
+                "——工单属于处理期（出单不迁移状态）"
+            ),
+        )
+    source_urls = orchestration.demand_source_urls(demand)
+    if not source_urls:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"需求单 {demand.code} 没有 source_urls（存量单无源地址）——"
+                "生成工单必须来自带合法源地址的新单；存量单请人工补源地址"
+                "或线下处理"
+            ),
+        )
+    override = payload.slug if payload is not None else None
+    try:
+        slug = orchestration.derive_slug(source_urls[0], override=override)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    if not orchestration.check_slug_free(slug):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"slug {slug} 在 fd-industry-data 仓内已占用——"
+                "非 greenfield 不走生成流，请转人工处理"
+            ),
+        )
+    try:
+        ticket_yaml, ticket_path = orchestration.build_workorder(
+            demand, slug=slug
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    sha256 = hashlib.sha256(ticket_yaml.encode("utf-8")).hexdigest()
+    demand.append_pipeline_event(
+        {
+            "type": "workorder_exported",
+            "ticket_path": ticket_path,
+            "ticket_yaml": ticket_yaml,
+            "sha256": sha256,
+        }
+    )
+    db.commit()  # 工单不丢：exported 事件落库即入拉取队列
+    db.refresh(demand)
+    return {
+        "ticket_yaml": ticket_yaml,  # 全文恒随响应返回：人工推送降级始终可用
+        "ticket_path": ticket_path,
+        "delivered": False,  # 投递由舰队拉取器 ack 确认——出单时刻未投递
+        "queued_for_pull": True,  # 已入队：等待拉取器（~30min）或人工推送
+    }
+
+
+@router.get(
+    "/internal/demands/workorders/pending",
+    dependencies=[Depends(_require_internal)],
+)
+def list_pending_workorders(db: Session = Depends(get_db)) -> dict:
+    """舰队拉取器取待投递工单（fd-industry-data 侧工作流消费）。
+
+    每单至多一条最新未 ack 导出、仅 in_progress 单（tasks 2.3）；载荷带
+    工单全文与 sha256，拉取器按 ticket_path 落仓自推后回 ack。
+    """
+    return {"pending": orchestration.pending_workorders(db)}
+
+
+@router.post(
+    "/internal/demands/workorders/ack",
+    dependencies=[Depends(_require_internal)],
+)
+def ack_workorder(payload: WorkorderAckIn, db: Session = Depends(get_db)) -> dict:
+    """拉取器回 ack：工单已落仓自推——wire 记 ``pipeline_run`` 事件。
+
+    幂等（spec 场景「ack 幂等」）：同工单重复 ack 不重复追加事件，
+    返回既有已 ack 状态（``already_acked=true``）。未知工单路径 404
+    如实回绝。
+    """
+    try:
+        return orchestration.ack_workorder(db, payload.ticket_path)
+    except WorkorderNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

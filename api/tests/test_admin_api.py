@@ -251,6 +251,9 @@ def submit_demand(client: TestClient, customer_id: str, title: str) -> dict:
         json={
             "description": f"需要 {title} 相关数据，用于内部研究",
             "contact_email": f"contact-{customer_id}@example.com",
+            # 合规门两入参（wire-demand-generation-orchestration 1.1 起必填）
+            "source_urls": ["https://www.stats.gov.cn/sj/zxfb/"],
+            "public_data_asserted": True,
         },
         headers=bearer(mint_id_token(f"sub-{customer_id}")),
     )
