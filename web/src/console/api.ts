@@ -491,13 +491,18 @@ export function addCorrection(
   }) as Promise<{ correction_id: number }>;
 }
 
-/** 修正历史（含悬空与已回滚）。 */
-export function fetchCorrections(
+/** 修正历史（含悬空与已回滚）。端点回 ``{corrections: […]}`` 信封
+ * （引擎透传与 api 层本地实现同形）——此处解包；裸数组形态宽容兼容。 */
+export async function fetchCorrections(
   datasetId: string,
 ): Promise<Correction[]> {
-  return requestJson(`${API_BASE}/v1/datasets/${datasetId}/corrections`, {
-    method: "GET",
-  }) as Promise<Correction[]>;
+  const body = await requestJson(
+    `${API_BASE}/v1/datasets/${datasetId}/corrections`,
+    { method: "GET" },
+  );
+  if (Array.isArray(body)) return body as Correction[];
+  const list = (body as { corrections?: unknown }).corrections;
+  return Array.isArray(list) ? (list as Correction[]) : [];
 }
 
 /** 单条回滚（标记失效 + 重建有效表在 api/引擎侧完成）。 */

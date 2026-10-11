@@ -1286,7 +1286,11 @@ export function installConsoleBackend(
         return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
       }
       if (method === "GET") {
-        return Promise.resolve(jsonResponse(corrections.get(dataset.id) ?? []));
+        // 真实 API 回 {corrections:[…]} 信封（与生产同形——曾因假后端回
+        // 裸数组掩盖客户端解包缺失，生产白屏，E2E 抓出后修正）。
+        return Promise.resolve(
+          jsonResponse({ corrections: corrections.get(dataset.id) ?? [] }),
+        );
       }
       if (method === "POST") {
         const payload = (calls[calls.length - 1]!.body ?? {}) as CorrectionInput;
