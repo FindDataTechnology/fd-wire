@@ -50,23 +50,29 @@ NOT持有任何外部仓 git 凭据。拉取器未部署时控制台MUST展示�
 
 ### Requirement: 状态回流 SHALL 只写真实进度
 
-系统MUST以同步任务轮询目标仓工单状态（公开 raw 通道），把工单状态迁移
-映射为 pipeline_events 追加事件与客户可见时间线条目（已投生成/待人工
-审核/审核通过点亮/受阻跟进），PR 链接留档；拉取失败静默重试，MUST NOT
-在无真实来源时写入任何进度条目；外部契约失配（拉取 404）MUST留痕
-workorder_lost 转人工，不猜状态。
+工单状态MUST经舰队推送回流：拉取器从 tracked 清单取在途工单路径、读
+其本地 checkout 的工单文件全文、回推 wire（内部端点），wire 解析映射为
+pipeline_events 追加事件与客户可见时间线条目（已投生成/待人工审核/
+审核通过点亮/受阻跟进），PR 链接留档；回推幂等（重复推送零追加）。
+wire 侧MUST NOT在无真实来源时写入任何进度条目；YAML 不可解析MUST 400
+如实回绝。轮询式回流（wire 主动拉公开 raw）仅作出站可达环境下的兜底，
+MUST可用环境变量关闭（fd-prod 海外出站被挡，生产默认关）。
 
 #### Scenario: PR 开启回流
-- **WHEN** 工单状态迁移为 pr_open
-- **THEN** pipeline_events 记 pipeline_run（含 PR 链接），客户时间线出现待审核条目
+- **WHEN** 拉取器回推的工单文件含 pr_url 非空的生命周期条目
+- **THEN** pipeline_events 记 pr_open 事件（含 PR 链接），客户时间线出现待审核条目
 
-#### Scenario: 拉取失败不写进度
-- **WHEN** 原始状态文件暂时不可达
-- **THEN** 本轮跳过不写任何事件，下轮重试
+#### Scenario: 回推幂等
+- **WHEN** 同一工单文件被重复回推且状态未变
+- **THEN** 零追加事件（幂等去重）
 
-#### Scenario: 契约失配转人工
-- **WHEN** 工单文件从目标仓消失或格式不可解析
-- **THEN** 留痕 workorder_lost 事件并停止该单自动回流，等人工处置
+#### Scenario: 坏载荷如实回绝
+- **WHEN** 回推内容不是可解析的工单 YAML
+- **THEN** 400 回绝并带原因，不写入任何进度
+
+#### Scenario: 生产零出站
+- **WHEN** 部署环境无法访问公开 raw 通道（如 fd-prod 海外出站被挡）
+- **THEN** 状态回流不受影响（推送式），轮询兜底经环境变量关闭
 
 ### Requirement: 客户进度 SHALL 安全子集可见
 

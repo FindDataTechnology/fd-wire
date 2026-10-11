@@ -41,6 +41,11 @@ spec:
             - name: http
               containerPort: 8000
           env:
+            # 轮询式工单状态回流兜底：fd-prod 到 raw.githubusercontent.com
+            # 被海外出站挡死（2026-10-11 实测），生产走拉取器推送式回流，
+            # 轮询关闭（出站可达环境可开）。
+            - name: WORKORDER_SYNC_ENABLED
+              value: "false"
             # wire 账本数据库（平台库，外部实例；非本 pod 卷）
             - name: DATABASE_URL
               valueFrom:

@@ -60,9 +60,6 @@ SLUG_MAX_LEN = 40
 VALID_CADENCES = frozenset({"daily", "hourly", "weekly"})
 DEFAULT_CADENCE = "daily"
 
-#: slug 探测超时（秒）。
-SLUG_PROBE_TIMEOUT = 10.0
-
 #: pipeline_events 事件类型（与 pipeline.py 的常量口径一致）。
 EVENT_WORKORDER_EXPORTED = "workorder_exported"
 EVENT_PIPELINE_RUN = "pipeline_run"
@@ -210,15 +207,24 @@ def build_workorder(demand: Demand, *, slug: str | None = None) -> tuple[str, st
 
 # ---------------------------------------------------------------- slug 冲突探测
 
+#: slug 探测超时（秒）。
+SLUG_PROBE_TIMEOUT = 10.0
 
-def check_slug_free(slug: str, *, http_client: httpx.Client | None = None) -> bool:
-    """探测 slug 在 fd-industry-data 仓是否空闲（公开 raw 通道）。
+#: 探测三态：free=确证空闲（404）/ occupied=确证占用（200 等 2xx/3xx）/
+#: unverified=通道不可达（网络错/5xx）。fd-prod 到 raw.githubusercontent.com
+#: 被海外出站挡死（2026-10-11 生产实测 60s 网络不可达），fail-closed 会
+#: 误伤全部出单——unverified 如实放行，占用复检由舰队拉取器在本地
+#: checkout 权威执行（scripts/wire_demands_pull.py）。
+SlugStatus = str
 
-    ``spiders/<slug>/manifest.yaml`` 404=空闲；200（及其它任何状态、网络
-    异常）一律按占用处理——宁可拒不可撞（fail-closed）。
+
+def check_slug_free(slug: str, *, http_client: httpx.Client | None = None) -> SlugStatus:
+    """探测 slug 在 fd-industry-data 仓的占用态（公开 raw 通道）。
+
+    非法 slug（不合 SLUG_PATTERN）按 occupied 拒（防 URL 注入）。
     """
     if not SLUG_PATTERN.fullmatch(slug or ""):
-        return False  # 非法 slug 不进 URL（防注入），按占用拒
+        return "occupied"
     url = SLUG_PROBE_URL.format(slug=slug)
     owns_client = http_client is None
     client = http_client or httpx.Client(timeout=SLUG_PROBE_TIMEOUT)
@@ -226,8 +232,12 @@ def check_slug_free(slug: str, *, http_client: httpx.Client | None = None) -> bo
         try:
             resp = client.get(url)
         except httpx.HTTPError:
-            return False
-        return resp.status_code == 404
+            return "unverified"
+        if resp.status_code == 404:
+            return "free"
+        if resp.status_code >= 500:
+            return "unverified"
+        return "occupied"
     finally:
         if owns_client:
             client.close()
@@ -365,3 +375,84 @@ def _demand_for_ticket(db: Session, ticket_path: str) -> Demand | None:
             ):
                 return demand
     return None
+
+
+# ---------------------------------------------------------------- 推送式状态回流（tracked / status）
+
+
+def tracked_workorders(db: Session) -> list[str]:
+    """在途工单路径清单：in_progress 单的最新导出（含已 ack——状态演化
+    发生在投递之后），拉取器据此从其本地 checkout 读文件回推状态。
+
+    wire 出站到 raw.githubusercontent.com 在 fd-prod 被海外出站挡死
+    （2026-10-11 实测），状态回流因此改为**舰队推送式**：拉取器有网，
+    它读本地文件 POST 给 wire，wire 零出站。B 节的轮询循环保留为
+    有出站能力环境下的兜底（生产默认关）。
+    """
+    stmt = (
+        select(Demand)
+        .where(Demand.status == DemandStatus.in_progress.value)
+        .order_by(Demand.id)
+    )
+    tracked: list[str] = []
+    for demand in db.scalars(stmt):
+        events = list(demand.pipeline_events or [])
+        if any(e.get("type") == "workorder_lost" for e in events):
+            continue  # 契约失配停扫：等人工处置
+        export_idx = _latest_export_index(events)
+        if export_idx is None:
+            continue
+        path = events[export_idx].get("ticket_path")
+        if path:
+            tracked.append(path)
+    return tracked
+
+
+def ingest_ticket_status(db: Session, ticket_path: str, content: str) -> dict:
+    """拉取器回推的工单文件全文 → 解析 → 映射事件幂等落库。
+
+    - 路径形态非法/无导出留档 → :class:`WorkorderNotFound`（404）；
+    - YAML 解析失败 → :class:`ValueError`（400 如实回绝，拉取器留日志）；
+    - 幂等：映射事件按 (type, ticket_path) 与既有 pipeline_events 去重，
+      重复推送零追加（拉取器每 30min 全量回推，这是常态路径）。
+    """
+    from . import orchestration_sync  # 局部导入避免加载期环
+
+    normalized = (ticket_path or "").strip()
+    if not TICKET_PATH_RE.fullmatch(normalized):
+        raise WorkorderNotFound(
+            f"工单路径 {ticket_path!r} 形态不合契约"
+            f"（{TICKETS_DIR}/<YYYYMMDD>-wire-<code>.yaml）"
+        )
+    demand = _demand_for_ticket(db, normalized)
+    if demand is None:
+        raise WorkorderNotFound(
+            f"工单 {ticket_path!r} 没有任何导出留档（未知工单）"
+        )
+    try:
+        ticket = yaml.safe_load(content or "")
+    except yaml.YAMLError as exc:
+        raise ValueError(f"工单 YAML 解析失败：{exc}") from exc
+    if not isinstance(ticket, dict):
+        raise ValueError("工单 YAML 顶层不是映射（契约失配，如实回绝）")
+    mapped = orchestration_sync.map_ticket_to_events(ticket)
+    events = list(demand.pipeline_events or [])
+    seen = {
+        (e.get("type"), e.get("ticket_path")) for e in events
+    }
+    appended = 0
+    for ev in mapped:
+        ev = {**ev, "ticket_path": normalized}
+        if (ev.get("type"), normalized) in seen:
+            continue
+        demand.append_pipeline_event(ev)
+        seen.add((ev.get("type"), normalized))
+        appended += 1
+    if appended:
+        db.commit()
+        db.refresh(demand)
+    return {
+        "demand_id": demand.id,
+        "ticket_path": normalized,
+        "events_appended": appended,
+    }

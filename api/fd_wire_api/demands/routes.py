@@ -35,6 +35,7 @@ import os
 import secrets
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from . import delivery as delivery_service
@@ -276,7 +277,8 @@ def export_workorder(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
-    if not orchestration.check_slug_free(slug):
+    slug_status = orchestration.check_slug_free(slug)
+    if slug_status == "occupied":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -308,6 +310,8 @@ def export_workorder(
         "ticket_path": ticket_path,
         "delivered": False,  # 投递由舰队拉取器 ack 确认——出单时刻未投递
         "queued_for_pull": True,  # 已入队：等待拉取器（~30min）或人工推送
+        "slug_check": slug_status,  # free=已确证空闲；unverified=探测通道
+        # 不可达如实放行，占用复检在拉取器本地 checkout 权威执行
     }
 
 
@@ -339,3 +343,45 @@ def ack_workorder(payload: WorkorderAckIn, db: Session = Depends(get_db)) -> dic
         return orchestration.ack_workorder(db, payload.ticket_path)
     except WorkorderNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get(
+    "/internal/demands/workorders/tracked",
+    dependencies=[Depends(_require_internal)],
+)
+def list_tracked_workorders(db: Session = Depends(get_db)) -> dict:
+    """在途工单路径清单（含已 ack——状态演化发生在投递之后）。
+
+    拉取器据此从其本地 checkout 读工单文件，回推状态（推送式回流：
+    fd-prod 海外出站挡死 raw 通道，wire 零出站）。
+    """
+    return {"tracked": orchestration.tracked_workorders(db)}
+
+
+class WorkorderStatusIn(BaseModel):
+    """状态回推请求体：拉取器本地读到的工单文件全文。"""
+
+    ticket_path: str = Field(min_length=1, max_length=256)
+    content: str = Field(min_length=1, max_length=65536)
+
+
+@router.post(
+    "/internal/demands/workorders/status",
+    dependencies=[Depends(_require_internal)],
+)
+def push_workorder_status(
+    payload: WorkorderStatusIn, db: Session = Depends(get_db)
+) -> dict:
+    """拉取器回推工单状态：文件全文 → 解析 → 幂等映射落 pipeline_events。
+
+    YAML 不可解析 400 如实回绝（拉取器留日志人工看）；未知路径 404。
+    客户可见时间线由响应模型派生（安全子集），此处只落事实。
+    """
+    try:
+        return orchestration.ingest_ticket_status(
+            db, payload.ticket_path, payload.content
+        )
+    except WorkorderNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

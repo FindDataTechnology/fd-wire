@@ -42,12 +42,16 @@ evaluation 的 compliance_flags 已有本地初筛种子（legal-domain-review�
 | — | `verify.commands` | health_verify 标准命令 |
 | — | `kind: generate`、`category: null` | 契约要求 |
 
-## D4 状态回流与客户可见性
+## D4 状态回流与客户可见性（生产实测校正：推送式）
 
-fd-industry-data 是公开镜像仓 → 工单状态文件可直接 raw.githubusercontent
-拉取（免凭据、免 API 限额敏感度）。同步循环（lifespan task，tick 缺省
-600s，未启用编排即静默不跑）拉工单 YAML 的 `status` 字段与
-last-run.json；状态→事件映射：
+2026-10-11 生产实测：fd-prod 到 raw.githubusercontent.com 被海外出站挡死
+（60s 网络不可达）——slug 探测的 fail-closed 会误伤全部出单，拉取式回流
+也不可用。定案**推送式**：拉取器（有网）从 `GET /internal/demands/
+workorders/tracked` 取在途工单路径，读本地 checkout 工单文件全文，
+`POST /internal/demands/workorders/status` 回推；wire 解析映射（幂等）。
+slug 探测降级三态（free/occupied/unverified）：不可达如实放行，占用
+复检在拉取器本地 checkout 权威执行。B 节轮询循环保留为出站可达环境
+兜底，生产 env `WORKORDER_SYNC_ENABLED=false` 关闭。状态→事件映射：
 
 | 工单 status | pipeline_event | 客户时间线 |
 |---|---|---|

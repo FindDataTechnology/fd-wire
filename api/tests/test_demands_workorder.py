@@ -103,7 +103,7 @@ def harness(tmp_path, monkeypatch):
 @pytest.fixture()
 def slug_free(monkeypatch):
     """端点用 slug 探测默认放行（真探测走 raw 网络通道，单测另行覆盖）。"""
-    monkeypatch.setattr(orchestration, "check_slug_free", lambda slug, **kw: True)
+    monkeypatch.setattr(orchestration, "check_slug_free", lambda slug, **kw: "free")
 
 
 @pytest.fixture()
@@ -284,17 +284,19 @@ def test_check_slug_free_raw_probe_outcomes():
         finally:
             client_.close()
 
-    # 404 = 空闲；200 / 5xx / 网络异常一律按占用（宁可拒不可撞）
-    assert probe(lambda req: httpx.Response(404, text="missing")) is True
-    assert probe(lambda req: httpx.Response(200, text="manifest")) is False
-    assert probe(lambda req: httpx.Response(503, text="down")) is False
+    # 三态契约：404=free / 200 等 2xx=occupied / 5xx 与网络错=unverified
+    # （fd-prod 海外出站挡死 raw 通道——fail-closed 会误伤全部出单，
+    # 占用复检在舰队拉取器本地 checkout 权威执行）
+    assert probe(lambda req: httpx.Response(404, text="missing")) == "free"
+    assert probe(lambda req: httpx.Response(200, text="manifest")) == "occupied"
+    assert probe(lambda req: httpx.Response(503, text="down")) == "unverified"
 
     def unreachable(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused")
 
-    assert probe(unreachable) is False
+    assert probe(unreachable) == "unverified"
     # 非法 slug（路径注入形态）本地即拒，不进 URL
-    assert check_slug_free("foo/bar", http_client=httpx.Client()) is False
+    assert check_slug_free("foo/bar", http_client=httpx.Client()) == "occupied"
 
 
 # ------------------------------------------------- 端点：状态门与身份门
@@ -348,7 +350,7 @@ def test_workorder_legacy_demand_without_source_urls_422(harness, slug_free):
 
 
 def test_workorder_slug_conflict_rejected(harness, monkeypatch):
-    monkeypatch.setattr(orchestration, "check_slug_free", lambda slug, **kw: False)
+    monkeypatch.setattr(orchestration, "check_slug_free", lambda slug, **kw: "occupied")
     did, _ = at_in_progress(harness.client)
     resp = workorder(harness.client, did)
     assert resp.status_code == 409, resp.text
