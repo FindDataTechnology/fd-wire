@@ -206,17 +206,32 @@ def test_build_workorder_deterministic_with_stable_field_order():
     demand = make_demand()
     yaml1, path1 = build_workorder(demand)
     yaml2, path2 = build_workorder(demand)
-    assert yaml1 == yaml2  # 同输入两次字节级一致 → 哈希一致
-    assert hashlib.sha256(yaml1.encode()).hexdigest() == hashlib.sha256(yaml2.encode()).hexdigest()
+    # 出单时刻如实入单：两次调用仅 created_at 漂移，其余字节级一致
+    d1, d2 = yaml.safe_load(yaml1), yaml.safe_load(yaml2)
+    d1.pop("created_at"), d2.pop("created_at")
+    assert d1 == d2
+    assert d1["ticket_id"] == d2["ticket_id"]  # 同日稳定
     assert path1 == path2
 
-    # 字段序稳定（health-loop 契约冻结形态）
+    # 字段序稳定（舰队 new_ticket canonical + health-loop 契约形态）
     assert top_level_keys(yaml1) == [
-        "kind", "unit", "category", "brief", "golden", "verify",
+        "ticket_id", "source", "unit", "kind", "created_at", "category",
+        "brief", "golden", "verify", "evidence", "lifecycle",
     ]
     data = yaml.safe_load(yaml1)
-    assert list(data) == ["kind", "unit", "category", "brief", "golden", "verify"]
+    assert list(data) == [
+        "ticket_id", "source", "unit", "kind", "created_at", "category",
+        "brief", "golden", "verify", "evidence", "lifecycle",
+    ]
     assert list(data["brief"]) == ["source_urls", "expectations", "cadence", "notes"]
+
+    # 舰队 validate_ticket 必填七字段契约（wire-workorder-ticket-conformance）
+    for field in ("ticket_id", "source", "unit", "created_at", "evidence", "verify", "lifecycle"):
+        assert field in data and data[field] is not None and data[field] != ""
+    assert data["ticket_id"] == path1.split("/")[-1][: -len(".yaml")]
+    assert data["source"] == "wire"
+    assert data["lifecycle"] == []
+    assert isinstance(data["evidence"], dict) and isinstance(data["verify"]["commands"], list)
 
     # 映射断言（design D3 表）
     assert data["kind"] == "generate"
@@ -237,6 +252,20 @@ def test_build_workorder_deterministic_with_stable_field_order():
         f"reports/health-tickets/{datetime.now(timezone.utc):%Y%m%d}"
         "-wire-DE-20261011-07.yaml"
     )
+
+
+def test_build_workorder_evidence_redaction():
+    """evidence 脱敏：只留需求单编码+客户代号+源地址+声明，绝无邮箱/公司名。"""
+    demand = make_demand()
+    yaml_text, _ = build_workorder(demand)
+    evidence = yaml.safe_load(yaml_text)["evidence"]
+    assert evidence["demand_code"] == demand.code
+    assert evidence["customer_code"] == demand.customer_id[:8]
+    assert evidence["source_urls"] == [VALID_SOURCES[0]]
+    assert evidence["public_data_asserted"] is bool(demand.public_data_asserted)
+    raw = yaml.safe_dump(evidence, allow_unicode=True)
+    assert "buyer@example.com" not in raw
+    assert "上海某某咨询" not in raw
 
 
 @pytest.mark.parametrize(

@@ -148,12 +148,15 @@ def demand_source_urls(demand: Demand) -> list[str]:
 
 
 def build_workorder(demand: Demand, *, slug: str | None = None) -> tuple[str, str]:
-    """把需求单映射成 health-loop 生成工单 YAML（design D3 冻结契约）。
+    """把需求单映射成 health-loop 生成工单 YAML（design D3 冻结契约 + 舰队 schema 合规）。
 
-    返回 ``(yaml 文本, tickets 相对路径)``。纯函数：同一需求单同日两次
-    调用字节级一致（yaml ``sort_keys=False`` 保字段序、entities_hint
-    序列化固定排序）。脱敏红线在映射内保证：``contact_email`` 与公司名
-    绝不入单（notes 只留需求单编码 + 客户代号）。
+    返回 ``(yaml 文本, tickets 相对路径)``。字段集满足舰队
+    ``validate_ticket`` 必填七字段（wire-workorder-ticket-conformance）：
+    ``ticket_id``=文件名主干（同日稳定），``source="wire"``，``created_at``
+    按每次出单时刻如实记录（同日重复出单仅 created_at 漂移；无跨次
+    字节相等消费者，sha256 随每次出单在时间线留痕）。脱敏红线在映射内
+    保证：``contact_email`` 与公司名绝不入单（notes/evidence 只留需求单
+    编码 + 客户代号）。
     """
     source_urls = demand_source_urls(demand)
     if not source_urls:
@@ -193,8 +196,11 @@ def build_workorder(demand: Demand, *, slug: str | None = None) -> tuple[str, st
         notes_segments.append(f"frequency 未映射：{frequency_raw}")
 
     ticket = {
-        "kind": "generate",
+        "ticket_id": filename[: -len(".yaml")],
+        "source": "wire",
         "unit": f"spiders/{unit_slug}/",
+        "kind": "generate",
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "category": None,
         "brief": {
             "source_urls": source_urls,
@@ -208,6 +214,20 @@ def build_workorder(demand: Demand, *, slug: str | None = None) -> tuple[str, st
                 f"python3 scripts/health_verify.py --ticket {ticket_path}"
             ]
         },
+        # evidence：舰队 generate 单惯例形状 + wire 侧脱敏事实（绝不含
+        # contact_email/公司名——与 notes 同一红线）。
+        "evidence": {
+            "window": None,
+            "failing_runs": [],
+            "last_success": None,
+            "demand_code": demand.code,
+            "customer_code": customer_code(demand),
+            "source_urls": source_urls,
+            "public_data_asserted": bool(demand.public_data_asserted),
+            "notes": "wire 需求单生成单（demand-orchestration）：客户需求经"
+            "合规门后出单，按 brief 从零建立单元并交付 golden 样本",
+        },
+        "lifecycle": [],
     }
     yaml_text = yaml.safe_dump(
         ticket,
