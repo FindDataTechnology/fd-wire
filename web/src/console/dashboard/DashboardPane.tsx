@@ -10,6 +10,9 @@
 // spec 解析）；mode=ai（或缺省）维持既有版本号提示。
 // wire-refresh-scheduler 任务 4.1：查看态底部加「定时刷新」小节（间隔预设
 // 6h/24h/7d）；archived 目标的调度行由调度器自动清理，不再提供管理入口。
+// wire-dashboard-export 任务 1.2：查看态工具区加「导出 CSV」——整板单文件
+// 客户端本地合成（快照在 spec 里，零请求零新端点）；archived 只读也可导
+// （纯读不落库）；分享页/渲染器本体零导出入口（公开只读红线）。
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -22,6 +25,7 @@ import {
   type DashboardRefreshResult,
 } from "../api";
 import { parseDashboardSpec } from "./spec";
+import { boardToCsv } from "../csv";
 import { DashboardRenderer } from "./DashboardRenderer";
 import { DashboardEditor } from "./DashboardEditor";
 import {
@@ -123,6 +127,30 @@ export function DashboardPane({
   const parsed = parseDashboardSpec(detail.spec);
   const locked = detail.status === "archived";
 
+  // 整板导出（wire-dashboard-export）：板名取 spec 内层标题（宽容解析缺省
+  // 回退产物标题；legacy 无内层标题也回退产物标题）。
+  const boardTitle =
+    parsed.kind === "v1" && parsed.title ? parsed.title : detail.title;
+
+  /** 整板 CSV 导出：当前 spec 的面板快照本地合成（boardToCsv，BOM 已在
+   * 内容里，MIME 只标 charset）→ blob 经 createObjectURL + a 标签触发下载
+   * 后即回收；文件名非法字符清洗（/ \ : 等 → _）。零请求零新端点。 */
+  const exportCsv = () => {
+    const csv = boardToCsv(
+      boardTitle,
+      parsed.kind === "v1" ? parsed.panels : null,
+    );
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = `${boardTitle.replace(/[\\/:*?"<>|]/g, "_").trim() || `artifact-${artifactId}`}.csv`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
+  };
+
   // 刷新响应呈现（wire-dashboard-query-contract 任务 2.3）：契约路径
   // （mode=contract 且带 panels）按面板统计 + 失败原因列表（标题按当前
   // spec 的面板 id 解析，缺省回退 id 本身）；ai 路径（或缺省/兼容旧响应）
@@ -177,6 +205,14 @@ export function DashboardPane({
                     : t("console.dashboard.refresh.button")}
                 </button>
               )}
+              <button
+                type="button"
+                data-testid="dashboard-export-csv"
+                onClick={exportCsv}
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
+              >
+                {t("console.dashboard.exportCsv")}
+              </button>
               <button
                 type="button"
                 data-testid="dashboard-edit"

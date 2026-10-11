@@ -695,3 +695,113 @@ describe("契约刷新响应呈现（wire-dashboard-query-contract 任务 2.3/2.
     });
   });
 });
+
+// ── 整板 CSV 导出（wire-dashboard-export 任务 1.2/1.3）──────────────────────
+// 查看态工具区「导出 CSV」：快照本地合成整板单文件（BOM + 逐面板 section，
+// 零请求——不触任何后端调用）经 createObjectURL 下载并回收；文件名 = 板标题
+// （spec 内层优先、legacy 回退产物标题）清洗非法字符；archived 只读也可导
+// （纯读不落库）；编辑态无导出入口。
+describe("整板 CSV 导出（wire-dashboard-export 任务 1.2/1.3）", () => {
+  /** 桩化 blob 下载（createObjectURL/revokeObjectURL）并捕获下载 a 标签。 */
+  function stubDownload() {
+    const createObjectURL = vi.fn((_blob: Blob) => "blob:csv");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      Object.assign(URL, { createObjectURL, revokeObjectURL }),
+    );
+    const createElement = vi.spyOn(document, "createElement");
+    return {
+      createObjectURL,
+      revokeObjectURL,
+      anchor: () =>
+        createElement.mock.results
+          .map((result) => result.value as HTMLElement)
+          .find((el) => el.tagName === "A") as HTMLAnchorElement | undefined,
+    };
+  }
+
+  /** 打开指定产物 id 的看板查看态（复用 install() 四产物种子）。 */
+  async function openView(id: number) {
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+    fireEvent.click(within(rowOf(id)).getByTestId("artifact-dashboard-view"));
+    await screen.findByTestId("dashboard-pane");
+  }
+
+  it("v1 看板：点击导出 → 零请求本地合成 BOM 整板 CSV，blob 触发下载并回收；文件名 = spec 标题.csv", async () => {
+    const download = stubDownload();
+    const backend = install();
+    await openView(31);
+    // 等查看态附带请求（调度列表 GET）全部落地后再快照计数，避免竞态。
+    await waitFor(() => {
+      expect(
+        backend.calls.some((c) => c.url.pathname === "/api/v1/refresh-schedules"),
+      ).toBe(true);
+    });
+    const callsBefore = backend.calls.length;
+
+    fireEvent.click(screen.getByTestId("dashboard-export-csv"));
+    await waitFor(() =>
+      expect(download.createObjectURL).toHaveBeenCalledTimes(1),
+    );
+    // 零请求：导出全在客户端（快照在 spec 里），无任何后端调用增量
+    expect(backend.calls.length).toBe(callsBefore);
+    // blob 内容：BOM + 逐面板 section（注释行 + 快照表 + 空行分隔）
+    const blob = download.createObjectURL.mock.calls[0]![0]!;
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.type).toBe("text/csv;charset=utf-8");
+    const text = await blob.text();
+    expect(text.charCodeAt(0)).toBe(0xfeff); // UTF-8 BOM
+    expect(text).toContain("# CPI 同比（kpi）\r\nvalue\r\n2.1");
+    expect(text).toContain("# PMI 走势（line）\r\n月份,PMI\r\n7月,49.4\r\n8月,49.1");
+    expect(text).toContain("# 月度明细（table）");
+    expect(text).toContain("\r\n\r\n"); // 空行分隔
+    // a 标签下载即回收
+    const anchor = download.anchor();
+    expect(anchor?.getAttribute("href")).toBe("blob:csv");
+    expect(anchor?.download).toBe("宏观仪表盘.csv");
+    expect(download.revokeObjectURL).toHaveBeenCalledWith("blob:csv");
+  });
+
+  it("legacy 看板：板名回退产物标题，文件名非法字符清洗（/ \\ : → _），内容仅标题行（空板如实不报错）", async () => {
+    const download = stubDownload();
+    const backend = installConsoleBackend([]);
+    backend.addLifecycleArtifact({
+      id: 36,
+      kind: "dashboard",
+      title: "Q3/汇报:看板",
+      spec: { title: "Q3/汇报:看板", spec: { indicators: ["CN_CPI_YOY"] } },
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    await openView(36);
+
+    fireEvent.click(screen.getByTestId("dashboard-export-csv"));
+    await waitFor(() =>
+      expect(download.createObjectURL).toHaveBeenCalledTimes(1),
+    );
+    const blob = download.createObjectURL.mock.calls[0]![0]!;
+    expect(await blob.text()).toBe("\uFEFF# Q3/汇报:看板"); // 内容标题原样
+    expect(download.anchor()?.download).toBe("Q3_汇报_看板.csv"); // 文件名清洗
+  });
+
+  it("archived 只读也可导出（纯读不落库）；编辑态无导出入口", async () => {
+    const download = stubDownload();
+    install();
+    await openView(34);
+
+    // archived：刷新入口隐藏，导出入口仍在且可用
+    expect(screen.queryByTestId("dashboard-refresh")).toBeNull();
+    fireEvent.click(screen.getByTestId("dashboard-export-csv"));
+    await waitFor(() =>
+      expect(download.createObjectURL).toHaveBeenCalledTimes(1),
+    );
+    expect(download.anchor()?.download).toBe("宏观仪表盘.csv");
+
+    // 编辑态：工具区整体收起，无导出入口
+    await openView(31);
+    fireEvent.click(screen.getByTestId("dashboard-edit"));
+    await screen.findByTestId("dashboard-editor");
+    expect(screen.queryByTestId("dashboard-export-csv")).toBeNull();
+  });
+});

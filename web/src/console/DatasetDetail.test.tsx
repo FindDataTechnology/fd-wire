@@ -5,6 +5,9 @@
 // （mock 端点同契约）。编辑器纯逻辑（editQueue 队列归约/顺序保存）单测见文末。
 // CSV 导出测试（wire-dataset-export 任务 2.2/2.3）：Bearer 下载触发、blob 下载
 // 流程（createObjectURL 桩）、截断提示、失败如实、下载中防重复。
+// 重派生与定时重派生测试（wire-pipeline-actions 任务 1.2/1.3）：POST /refresh
+// （Bearer+cascade 参数）与级联结果呈现、完成后详情刷新、cron 登记/更新/
+// 态呈现/删除、失败如实、api 档与上传集无入口。
 // fetch 为本文件内置契约假后端（零网络，不改 testing.ts——DatasetProvenance 手法）。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -23,11 +26,13 @@ import {
   saveEditQueue,
   type EditQueueItem,
 } from "./editQueue";
+import { formatServerDate } from "./util";
 import type {
   Correction,
   CorrectionInput,
   Dataset,
   DatasetColumn,
+  DatasetRefreshCascadeEntry,
   ProvenanceOverview,
   ProvenanceStatus,
 } from "./api";
@@ -39,6 +44,8 @@ const KEY = "ds_key_1";
 const ROWS_PATH = "/api/v1/datasets/ds-1/rows";
 const CORRECTIONS_PATH = "/api/v1/datasets/ds-1/corrections";
 const EXPORT_PATH = "/api/v1/datasets/ds-1/export";
+const REFRESH_PATH = "/api/v1/datasets/ds-1/refresh";
+const SCHEDULE_PATH = "/api/v1/datasets/ds-1/schedule";
 
 const COLUMNS: DatasetColumn[] = [
   { name: "id", type: "INTEGER" },
@@ -133,6 +140,25 @@ function install(options: {
   exportTruncated?: boolean;
   /** 导出请求悬挂至该 promise 完成（防重复点击测试）。 */
   holdExport?: Promise<void>;
+  /** 重派生级联结果注入（wire-pipeline-actions；缺省空级联）。 */
+  cascade?: DatasetRefreshCascadeEntry[];
+  /** 强制 POST /datasets/{id}/refresh 返回该状态（失败如实测试）。 */
+  failRefreshStatus?: number;
+  failRefreshDetail?: string;
+  /** 重派生请求悬挂至该 promise 完成（进行中禁用防重复测试）。 */
+  holdRefresh?: Promise<void>;
+  /** 定时重派生登记种子（GET/PUT/DELETE 内存维护；不传即未登记）。 */
+  scheduleSeed?: {
+    cron: string;
+    enabled?: boolean;
+    last_run_at?: string | null;
+    last_status?: string | null;
+    last_error?: string | null;
+    last_rows?: number | null;
+  };
+  /** 强制 PUT /datasets/{id}/schedule 返回该状态（非法 cron 等测试）。 */
+  failSchedulePutStatus?: number;
+  failSchedulePutDetail?: string;
 }) {
   const dataset = options.dataset ?? makeDataset();
   let rows = (options.rows ?? [
@@ -146,6 +172,24 @@ function install(options: {
   const calls: FetchCall[] = [];
   let nextCorrectionId = 1;
   let correctionPostCount = 0;
+  // 定时重派生登记内存态（唯一行 per 数据集——对齐 api materialization 调度行）。
+  let schedule: {
+    cron: string;
+    enabled: boolean;
+    last_run_at: string | null;
+    last_status: string | null;
+    last_error: string | null;
+    last_rows: number | null;
+  } | null = options.scheduleSeed
+    ? {
+        cron: options.scheduleSeed.cron,
+        enabled: options.scheduleSeed.enabled ?? true,
+        last_run_at: options.scheduleSeed.last_run_at ?? null,
+        last_status: options.scheduleSeed.last_status ?? null,
+        last_error: options.scheduleSeed.last_error ?? null,
+        last_rows: options.scheduleSeed.last_rows ?? null,
+      }
+    : null;
 
   const fetchImpl = ((_input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(_input), "http://console.test");
@@ -235,6 +279,74 @@ function install(options: {
     if (path === "/api/v1/provenance/overview") {
       return jsonResponse(makeOverview());
     }
+    // ── 重派生（wire-pipeline-actions 1.2 契约）：POST /refresh?cascade=——
+    //    本体推进行数/更新时间（详情刷新断言），级联按注入返回。──
+    if (path === REFRESH_PATH && method === "POST") {
+      if (options.holdRefresh) {
+        return options.holdRefresh.then(() =>
+          jsonResponse({ ...dataset, cascade: [] }),
+        ) as unknown as Response;
+      }
+      if (options.failRefreshStatus) {
+        return jsonResponse(
+          {
+            detail:
+              options.failRefreshDetail ?? `refresh ${options.failRefreshStatus}`,
+          },
+          options.failRefreshStatus,
+        );
+      }
+      const cascadeOn = url.searchParams.get("cascade") !== "false";
+      dataset.row_count += 10;
+      dataset.updated_at = "2026-10-11T10:30:00";
+      return jsonResponse({
+        ...dataset,
+        cascade: cascadeOn ? (options.cascade ?? []) : [],
+      });
+    }
+    // ── 定时重派生（wire-pipeline-actions 1.2 契约）：GET/PUT/DELETE
+    //    /schedule——唯一登记行内存维护；PUT 五字段轻校验（对齐 parse_cron）。──
+    if (path === SCHEDULE_PATH && method === "GET") {
+      if (!schedule) {
+        return jsonResponse({ dataset_id: "ds-1", cron: null, enabled: false });
+      }
+      return jsonResponse({ dataset_id: "ds-1", ...schedule });
+    }
+    if (path === SCHEDULE_PATH && method === "PUT") {
+      if (options.failSchedulePutStatus) {
+        return jsonResponse(
+          {
+            detail:
+              options.failSchedulePutDetail ??
+              `schedule ${options.failSchedulePutStatus}`,
+          },
+          options.failSchedulePutStatus,
+        );
+      }
+      const payload = (calls[calls.length - 1]!.body ?? {}) as { cron?: string };
+      const fields = (payload.cron ?? "").trim().split(/\s+/);
+      if (!payload.cron || fields.length !== 5) {
+        return jsonResponse(
+          { detail: "cron 须为五字段表达式（分 时 日 月 周）" },
+          400,
+        );
+      }
+      schedule = schedule
+        ? { ...schedule, cron: payload.cron, enabled: true }
+        : {
+            cron: payload.cron,
+            enabled: true,
+            last_run_at: null,
+            last_status: null,
+            last_error: null,
+            last_rows: null,
+          };
+      return jsonResponse({ dataset_id: "ds-1", ...schedule });
+    }
+    if (path === SCHEDULE_PATH && method === "DELETE") {
+      schedule = null;
+      return jsonResponse({ dataset_id: "ds-1", removed: true });
+    }
     return jsonResponse({ detail: "not found" }, 404);
   }) as unknown as typeof fetch;
   vi.stubGlobal("fetch", fetchImpl);
@@ -242,6 +354,7 @@ function install(options: {
     calls,
     getRows: () => rows,
     getCorrections: () => corrections,
+    getSchedule: () => schedule,
   };
 }
 
@@ -673,6 +786,298 @@ describe("DatasetDetail 导出 CSV（wire-dataset-export 任务 2.2/2.3）", () 
     );
     expect(callsOf(backend.calls, "GET", EXPORT_PATH).length).toBe(1);
     await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+  });
+});
+
+describe("DatasetDetail 重派生（wire-pipeline-actions 任务 1.2/1.3）", () => {
+  it("点击重派生：POST /refresh 带 Bearer 与 cascade=true（默认勾选）；取消勾选后 cascade=false 且无级联列表", async () => {
+    const backend = install({
+      dataset: makeDataset({ source_kind: "derived" }),
+      cascade: [],
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("rederive-section");
+
+    // 级联默认勾选
+    expect(
+      (screen.getByTestId("rederive-cascade") as HTMLInputElement).checked,
+    ).toBe(true);
+    fireEvent.click(screen.getByTestId("rederive-submit"));
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "POST", REFRESH_PATH).length).toBe(1),
+    );
+    let call = callsOf(backend.calls, "POST", REFRESH_PATH)[0]!;
+    expect(call.headers["authorization"]).toMatch(/^Bearer /);
+    expect(call.url.searchParams.get("cascade")).toBe("true");
+
+    // 取消勾选 → cascade=false；关闭级联：空级联注记（无级联列表）
+    fireEvent.click(screen.getByTestId("rederive-cascade"));
+    fireEvent.click(screen.getByTestId("rederive-submit"));
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "POST", REFRESH_PATH).length).toBe(2),
+    );
+    call = callsOf(backend.calls, "POST", REFRESH_PATH)[1]!;
+    expect(call.url.searchParams.get("cascade")).toBe("false");
+    expect(
+      (await screen.findByTestId("rederive-cascade-empty")).textContent,
+    ).toContain("无级联结果");
+    expect(screen.queryByTestId("rederive-cascade-row")).toBeNull();
+  });
+
+  it("级联结果如实呈现（ok/failed 混合 + 失败原因与深度），完成后详情与预览刷新、按钮复位", async () => {
+    const backend = install({
+      dataset: makeDataset({ source_kind: "derived" }),
+      cascade: [
+        { dataset_id: "ds-2", name: "华东月度汇总", depth: 1, status: "ok", error: null },
+        {
+          dataset_id: "ds-3",
+          name: "毛利明细",
+          depth: 2,
+          status: "failed",
+          error: "上游列缺失：price",
+        },
+      ],
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("rederive-section");
+    const detailGetsBefore = callsOf(backend.calls, "GET", "/api/v1/datasets/ds-1").length;
+    const rowsGetsBefore = callsOf(backend.calls, "GET", ROWS_PATH).length;
+
+    fireEvent.click(screen.getByTestId("rederive-submit"));
+    const entries = await screen.findAllByTestId("rederive-cascade-row");
+    expect(entries.map((el) => el.getAttribute("data-status"))).toEqual([
+      "ok",
+      "failed",
+    ]);
+    expect(entries[0]!.textContent).toContain("华东月度汇总");
+    expect(entries[0]!.textContent).toContain("第 1 级");
+    expect(entries[1]!.textContent).toContain("毛利明细");
+    expect(entries[1]!.getAttribute("data-depth")).toBe("2");
+    expect(
+      screen.getByTestId("rederive-cascade-error").textContent,
+    ).toContain("上游列缺失：price");
+
+    // 完成后刷新：详情字段（行数/更新时间）与预览行重拉
+    await waitFor(() =>
+      expect(
+        callsOf(backend.calls, "GET", "/api/v1/datasets/ds-1").length,
+      ).toBeGreaterThan(detailGetsBefore),
+    );
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "GET", ROWS_PATH).length).toBeGreaterThan(
+        rowsGetsBefore,
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("rederive-submit").hasAttribute("disabled")).toBe(
+        false,
+      ),
+    );
+  });
+
+  it("重派生中禁用防重复：悬挂期间二次点击不再发请求；失败如实呈现 detail 且按钮复位", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const backend = install({
+      dataset: makeDataset({ source_kind: "derived" }),
+      holdRefresh: held,
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    const submit = await screen.findByTestId("rederive-submit");
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "POST", REFRESH_PATH).length).toBe(1),
+    );
+    // 悬挂期间按钮禁用（文案切换「重派生中…」）；再点不发第二次请求
+    await waitFor(() => expect(submit.hasAttribute("disabled")).toBe(true));
+    expect(submit.textContent).toContain("重派生中");
+    fireEvent.click(submit);
+    expect(callsOf(backend.calls, "POST", REFRESH_PATH).length).toBe(1);
+    release();
+    await waitFor(() =>
+      expect(submit.hasAttribute("disabled")).toBe(false),
+    );
+  });
+
+  it("重派生失败如实：500 的后端 detail 原样展示，无级联结果", async () => {
+    install({
+      dataset: makeDataset({ source_kind: "derived" }),
+      failRefreshStatus: 500,
+      failRefreshDetail: "引擎暂不可用",
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+
+    fireEvent.click(await screen.findByTestId("rederive-submit"));
+    expect(
+      (await screen.findByTestId("rederive-error")).textContent,
+    ).toContain("引擎暂不可用");
+    expect(screen.queryByTestId("rederive-cascade-row")).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByTestId("rederive-submit").hasAttribute("disabled")).toBe(
+        false,
+      ),
+    );
+  });
+});
+
+describe("DatasetDetail 定时重派生（wire-pipeline-actions 任务 1.2/1.3）", () => {
+  it("cron 登记 → 登记态呈现 → 更新 cron → 删除登记回未登记（PUT/DELETE 带 Bearer）", async () => {
+    const backend = install({
+      dataset: makeDataset({ source_kind: "derived" }),
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+
+    // 未登记（GET cron=null）：登记面，保存按钮文案=登记
+    const save = await screen.findByTestId("rederive-schedule-save");
+    expect(save.textContent).toContain("登记定时重派生");
+    expect(screen.queryByTestId("rederive-schedule-row")).toBeNull();
+
+    fireEvent.change(screen.getByTestId("rederive-cron-input"), {
+      target: { value: "*/5 * * * *" },
+    });
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "PUT", SCHEDULE_PATH).length).toBe(1),
+    );
+    const put = callsOf(backend.calls, "PUT", SCHEDULE_PATH)[0]!;
+    expect(put.headers["authorization"]).toMatch(/^Bearer /);
+    expect(put.body).toEqual({ cron: "*/5 * * * *" });
+
+    // 登记态（PUT 响应内存落库）：cron + 已登记徽标 + 尚未运行
+    await screen.findByTestId("rederive-schedule-row");
+    expect(screen.getByTestId("rederive-schedule-cron").textContent).toBe(
+      "*/5 * * * *",
+    );
+    expect(
+      screen.getByTestId("rederive-schedule-enabled").getAttribute("data-enabled"),
+    ).toBe("true");
+    expect(screen.getByTestId("rederive-schedule-last-run").textContent).toContain(
+      "尚未运行",
+    );
+
+    // 更新：改 cron 再保存（按钮文案切换「更新 cron」）
+    expect(screen.getByTestId("rederive-schedule-save").textContent).toContain(
+      "更新 cron",
+    );
+    fireEvent.change(screen.getByTestId("rederive-cron-input"), {
+      target: { value: "0 * * * *" },
+    });
+    fireEvent.click(screen.getByTestId("rederive-schedule-save"));
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "PUT", SCHEDULE_PATH).length).toBe(2),
+    );
+    expect(callsOf(backend.calls, "PUT", SCHEDULE_PATH)[1]!.body).toEqual({
+      cron: "0 * * * *",
+    });
+    expect(
+      (await screen.findByTestId("rederive-schedule-cron")).textContent,
+    ).toBe("0 * * * *");
+
+    // 删除：DELETE → 回未登记态（登记面复现、输入清空）
+    fireEvent.click(screen.getByTestId("rederive-schedule-delete"));
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "DELETE", SCHEDULE_PATH).length).toBe(1),
+    );
+    const del = callsOf(backend.calls, "DELETE", SCHEDULE_PATH)[0]!;
+    expect(del.headers["authorization"]).toMatch(/^Bearer /);
+    await waitFor(() =>
+      expect(screen.queryByTestId("rederive-schedule-row")).toBeNull(),
+    );
+    expect(screen.getByTestId("rederive-schedule-save").textContent).toContain(
+      "登记定时重派生",
+    );
+    expect(
+      (screen.getByTestId("rederive-cron-input") as HTMLInputElement).value,
+    ).toBe("");
+  });
+
+  it("已登记态如实呈现：cron/enabled/最近运行（本地化）/上次结果/错误/行数 + UTC 诚实注记", async () => {
+    install({
+      dataset: makeDataset({ source_kind: "derived" }),
+      scheduleSeed: {
+        cron: "*/15 * * * *",
+        enabled: true,
+        last_run_at: "2026-10-11T08:30:00",
+        last_status: "partial_failure",
+        last_error: "子链毛利明细失败：上游列缺失",
+        last_rows: 4200,
+      },
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+
+    await screen.findByTestId("rederive-schedule-row");
+    expect(screen.getByTestId("rederive-schedule-cron").textContent).toBe(
+      "*/15 * * * *",
+    );
+    expect(
+      screen.getByTestId("rederive-schedule-enabled").textContent,
+    ).toContain("已登记");
+    expect(
+      screen.getByTestId("rederive-schedule-last-run").textContent,
+    ).toContain(formatServerDate("2026-10-11T08:30:00"));
+    expect(
+      screen.getByTestId("rederive-schedule-last-status").textContent,
+    ).toContain("partial_failure");
+    expect(
+      screen.getByTestId("rederive-schedule-last-error").textContent,
+    ).toContain("上游列缺失");
+    expect(
+      screen.getByTestId("rederive-schedule-last-rows").textContent,
+    ).toContain("4200");
+    // naive UTC 诚实注记（v1 口径：客户时区换算属登记侧）
+    expect(
+      screen.getByTestId("rederive-schedule-utc-note").textContent,
+    ).toContain("协调世界时");
+  });
+
+  it("登记失败如实：非法 cron 的 400 detail 原样展示，不进入登记态，按钮复位", async () => {
+    install({ dataset: makeDataset({ source_kind: "derived" }) });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("rederive-schedule-save");
+
+    fireEvent.change(screen.getByTestId("rederive-cron-input"), {
+      target: { value: "bad" },
+    });
+    fireEvent.click(screen.getByTestId("rederive-schedule-save"));
+    expect(
+      (await screen.findByTestId("rederive-schedule-error")).textContent,
+    ).toContain("五字段");
+    expect(screen.queryByTestId("rederive-schedule-row")).toBeNull();
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("rederive-schedule-save").hasAttribute("disabled"),
+      ).toBe(false),
+    );
+  });
+});
+
+describe("DatasetDetail 重派生入口门禁（wire-pipeline-actions 任务 1.3）", () => {
+  it("api 档（免费档）与上传来源数据集：两节均不渲染、零 refresh/schedule 请求", async () => {
+    for (const dataset of [
+      makeDataset({
+        source_kind: "derived",
+        storage_tier: "api",
+      } as Partial<Dataset>),
+      makeDataset({ source_kind: "upload" }),
+    ]) {
+      cleanup();
+      vi.unstubAllGlobals();
+      const backend = install({ dataset });
+      render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+      await screen.findByTestId("preview-grid");
+
+      expect(screen.queryByTestId("rederive-section")).toBeNull();
+      expect(screen.queryByTestId("rederive-schedule-section")).toBeNull();
+      expect(
+        backend.calls.filter(
+          (call) =>
+            call.url.pathname === REFRESH_PATH ||
+            call.url.pathname === SCHEDULE_PATH,
+        ),
+      ).toEqual([]);
+    }
   });
 });
 

@@ -425,6 +425,10 @@ const en: Translation = {
       loading: "Loading the dashboard…",
       loadError: "Failed to load the dashboard.",
       lockedBadge: "Archived · read-only",
+      // Whole-board CSV export (wire-dashboard-export): the view-mode toolbar
+      // button — snapshots compose into one local file, zero requests; the
+      // share view has no such entry.
+      exportCsv: "Export CSV",
       snapshotNote: "Snapshot data — live refresh coming later",
       emptyPanels: "No panels yet — add one to start.",
       noData: "No data",
@@ -878,6 +882,44 @@ const en: Translation = {
         exporting: "Exporting…",
         exportError: "Failed to export",
         exportTruncated: "Export truncated to the first 10,000 rows.",
+        // Re-derivation + scheduled re-derivation (wire-pipeline-actions task
+        // 1.2): derived + cell tier only — per-level cascade results, honest
+        // cron registration state, and an explicit UTC note.
+        rederive: {
+          title: "Re-derive",
+          hint: "Recompute this dataset from the current effective state of its sources per the archived spec (joins re-pull indicators = re-metered); cascade refreshes every derived child in turn — a single failed hop does not block the rest.",
+          cascadeLabel: "Cascade to derived children",
+          submit: "Re-derive",
+          submitting: "Re-deriving…",
+          error: "Re-derivation failed",
+          ok: "OK",
+          failed: "Failed",
+          depth: "Level {{depth}}",
+          cascadeEmpty: "No cascade results (cascade disabled, or no derived children).",
+          schedule: {
+            title: "Scheduled re-derivation",
+            hint: "Re-derive this dataset automatically on a cron schedule (five-field expression, e.g. */5 * * * * for every 5 minutes).",
+            utcNote: "The cron expression is evaluated in Coordinated Universal Time (UTC) — convert your local time when registering.",
+            cronLabel: "cron expression",
+            cronPlaceholder: "*/5 * * * *",
+            save: "Register schedule",
+            update: "Update cron",
+            saving: "Saving…",
+            opError: "Scheduled re-derivation operation failed",
+            loadError: "Failed to load schedule registration",
+            retry: "Retry",
+            loading: "Loading schedule registration…",
+            registered: "Registered",
+            disabled: "Disabled",
+            lastRunLabel: "Last run",
+            never: "Not run yet",
+            lastStatusLabel: "Last result",
+            lastErrorLabel: "Last error",
+            lastRowsLabel: "Last rows {{count}}",
+            delete: "Remove registration",
+            deleting: "Removing…",
+          },
+        },
         provenance: {
           title: "Provenance",
           hint: "Append-only hash-chain ledger of this dataset's events — immutable once recorded; anchored epochs can be verified offline with the evidence package.",

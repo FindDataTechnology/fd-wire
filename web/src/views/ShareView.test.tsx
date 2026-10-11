@@ -119,6 +119,9 @@ describe("ShareView（公开分享页三态 + noindex 红线）", () => {
     expect(screen.getByTestId("share-dashboard-title").textContent).toBe(
       "宏观仪表盘",
     );
+    // 导出红线（wire-dashboard-export）：分享页零导出入口（渲染器不携带
+    // 导出 UI，导出只在控制台查看态 DashboardPane 工具区）
+    expect(screen.queryByTestId("dashboard-export-csv")).toBeNull();
 
     // 品牌顶栏：双语锁定 + 产品首页链接
     expectShareBrand();

@@ -9,6 +9,10 @@
 // 详情页底部出现（间隔预设 1h/6h/24h，创建/暂停恢复/删除/状态展示）。
 // CSV 导出（wire-dataset-export 任务 2.2）：头部「导出 CSV」按钮——blob 下载
 // + 截断（前 10,000 行）与失败如实呈现。
+// 重派生与定时重派生（wire-pipeline-actions 任务 1.2）：仅 derived + cell 档
+// 显示两节——「重派生」（级联开关默认开+逐级结果呈现+完成后详情刷新）与
+// 「定时重派生」（五字段 cron 登记/更新/态呈现/删除+naive UTC 诚实注记）；
+// api 档（免费档）与上传集不渲染入口（端点侧 403/400 闸兜底）。
 // 契约：openspec/changes/wire-customer-local-data/reports/interfaces.md §3.3/§4、
 // openspec/changes/wire-provenance-ledger /api/v1/provenance/*。
 import { useCallback, useEffect, useState } from "react";
@@ -17,11 +21,17 @@ import {
   addCorrection,
   apiErrorText,
   deleteDataset,
+  deleteDatasetSchedule,
   exportDatasetCsv,
   fetchCorrections,
   fetchDataset,
   fetchDatasetRows,
+  getDatasetSchedule,
+  putDatasetSchedule,
   queryDataset,
+  refreshDataset,
+  type DatasetRefreshCascadeEntry,
+  type DatasetSchedule,
   type QueryFilterOp,
   fetchEvidencePackage,
   fetchProvenanceEvents,
@@ -165,6 +175,13 @@ export function DatasetDetail({
     setPreviewVersion((version) => version + 1);
     void loadCorrections();
   }, [loadCorrections]);
+
+  /** 重派生完成后：详情字段（行数/更新时间）与预览行同步刷新（同款回调：
+   *  loadDataset + 预览 version 递增——与同步恢复后的刷新口径一致）。 */
+  const afterRederive = useCallback(() => {
+    void loadDataset();
+    setPreviewVersion((version) => version + 1);
+  }, [loadDataset]);
 
   const revert = useCallback(
     async (correctionId: number) => {
@@ -407,6 +424,19 @@ export function DatasetDetail({
           intervals={DATASET_SCHEDULE_INTERVALS}
         />
       )}
+      {/* 重派生与定时重派生（wire-pipeline-actions 1.2）：仅 derived + cell 档
+          ——storage_tier 容错读取（响应缺省视为 cell，与 api 侧 DatasetOut 默认
+          同口径）；api 档（免费档）与上传/连接器来源一律不渲染入口。 */}
+      {dataset.source_kind === "derived" &&
+        (dataset as { storage_tier?: string }).storage_tier !== "api" && (
+          <>
+            <RederiveSection
+              datasetId={dataset.id}
+              onRefreshed={afterRederive}
+            />
+            <RederiveScheduleSection datasetId={dataset.id} />
+          </>
+        )}
     </div>
   );
 }
@@ -1511,6 +1541,377 @@ function DanglingPanel({
             </li>
           ))}
         </ul>
+      )}
+    </section>
+  );
+}
+// ── 重派生 + 定时重派生（wire-pipeline-actions 任务 1.2）──────────────────
+
+/** 手动重派生小节：级联开关（默认开）+ 逐级结果列表（名称/深度/ok/failed
+ *  +失败原因）+ 完成后回调刷新详情（onRefreshed）。 */
+function RederiveSection({
+  datasetId,
+  onRefreshed,
+}: {
+  datasetId: string;
+  onRefreshed: () => void;
+}) {
+  const { t } = useTranslation();
+  const [cascade, setCascade] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<DatasetRefreshCascadeEntry[] | null>(
+    null,
+  );
+
+  const run = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setError(null);
+    setResults(null);
+    try {
+      const payload = await refreshDataset(datasetId, cascade);
+      setResults(payload.cascade ?? []);
+      // 本体已刷新：详情字段（行数/更新时间）与预览行同步重拉。
+      onRefreshed();
+    } catch (err) {
+      // 服务端 detail（api 档 403 / 非 derived 400 等口径）如实呈现。
+      setError(apiErrorText(err, t("console.datasets.detail.rederive.error")));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  return (
+    <section data-testid="rederive-section" className="mt-6">
+      <h2 className="text-base font-semibold">
+        {t("console.datasets.detail.rederive.title")}
+      </h2>
+      <p className="mt-1 max-w-2xl text-xs text-slate-500">
+        {t("console.datasets.detail.rederive.hint")}
+      </p>
+
+      {error && (
+        <p data-testid="rederive-error" className="mt-2 text-xs text-red-600">
+          {error}
+        </p>
+      )}
+
+      <div
+        data-testid="rederive-controls"
+        className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs"
+      >
+        <label className="flex items-center gap-1.5 text-slate-700">
+          <input
+            type="checkbox"
+            data-testid="rederive-cascade"
+            checked={cascade}
+            disabled={refreshing}
+            onChange={(e) => setCascade(e.target.checked)}
+          />
+          {t("console.datasets.detail.rederive.cascadeLabel")}
+        </label>
+        <button
+          type="button"
+          data-testid="rederive-submit"
+          disabled={refreshing}
+          onClick={() => void run()}
+          className="ml-auto rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+        >
+          {refreshing
+            ? t("console.datasets.detail.rederive.submitting")
+            : t("console.datasets.detail.rederive.submit")}
+        </button>
+      </div>
+
+      {results != null && results.length > 0 && (
+        <ul data-testid="rederive-cascade" className="mt-2 space-y-1.5">
+          {results.map((entry) => (
+            <li
+              key={entry.dataset_id}
+              data-testid="rederive-cascade-row"
+              data-status={entry.status}
+              data-depth={entry.depth}
+              className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-slate-200 bg-white px-3 py-2 text-xs"
+            >
+              <span
+                data-testid="rederive-cascade-status"
+                data-status={entry.status}
+                className={`rounded px-1.5 py-0.5 text-[11px] ${
+                  entry.status === "ok"
+                    ? "bg-emerald-50 text-emerald-700"
+                    : "bg-red-50 text-red-700"
+                }`}
+              >
+                {entry.status === "ok"
+                  ? t("console.datasets.detail.rederive.ok")
+                  : t("console.datasets.detail.rederive.failed")}
+              </span>
+              <span className="text-slate-700">{entry.name}</span>
+              <span className="text-[11px] text-slate-400">
+                {t("console.datasets.detail.rederive.depth", {
+                  depth: entry.depth,
+                })}
+              </span>
+              {entry.error && (
+                <span
+                  data-testid="rederive-cascade-error"
+                  className="font-mono text-[11px] text-red-500"
+                >
+                  {entry.error}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {results != null && results.length === 0 && (
+        <p
+          data-testid="rederive-cascade-empty"
+          className="mt-2 text-xs text-slate-400"
+        >
+          {t("console.datasets.detail.rederive.cascadeEmpty")}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** 定时重派生小节：五字段 cron 登记/更新 + 已登记态呈现（cron/enabled/
+ *  last_run_at 本地化/last_status/last_error/last_rows）+ 删除；naive UTC
+ *  口径诚实注记（客户时区换算属登记侧 v1 约定）。 */
+function RederiveScheduleSection({ datasetId }: { datasetId: string }) {
+  const { t } = useTranslation();
+  // undefined = 加载中；null = 未登记（登记面）；对象 = 已登记态。
+  const [schedule, setSchedule] = useState<DatasetSchedule | null | undefined>(
+    undefined,
+  );
+  const [loadError, setLoadError] = useState(false);
+  const [cron, setCron] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [opError, setOpError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoadError(false);
+    try {
+      const next = await getDatasetSchedule(datasetId);
+      setSchedule(next);
+      setCron(next.cron ?? "");
+    } catch {
+      setSchedule(undefined);
+      setLoadError(true);
+    }
+  }, [datasetId]);
+
+  useEffect(() => {
+    setSchedule(undefined);
+    void load();
+  }, [load]);
+
+  const registered = schedule != null && schedule.cron != null;
+
+  const save = async () => {
+    if (saving || cron.trim() === "") return;
+    setSaving(true);
+    setOpError(null);
+    try {
+      const next = await putDatasetSchedule(datasetId, cron.trim());
+      setSchedule(next);
+      setCron(next.cron ?? cron.trim());
+    } catch (err) {
+      // 服务端 detail（cron 非法/档位闸等）如实呈现。
+      setOpError(
+        apiErrorText(err, t("console.datasets.detail.rederive.schedule.opError")),
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    setOpError(null);
+    try {
+      await deleteDatasetSchedule(datasetId);
+      // 删除后回到未登记态（登记面复现）。
+      setSchedule(null);
+      setCron("");
+    } catch (err) {
+      setOpError(
+        apiErrorText(err, t("console.datasets.detail.rederive.schedule.opError")),
+      );
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <section data-testid="rederive-schedule-section" className="mt-6">
+      <h2 className="text-base font-semibold">
+        {t("console.datasets.detail.rederive.schedule.title")}
+      </h2>
+      <p className="mt-1 max-w-2xl text-xs text-slate-500">
+        {t("console.datasets.detail.rederive.schedule.hint")}
+      </p>
+      {/* naive UTC 诚实注记（v1 口径：客户时区换算属登记侧）。 */}
+      <p
+        data-testid="rederive-schedule-utc-note"
+        className="mt-1 text-xs text-amber-700"
+      >
+        {t("console.datasets.detail.rederive.schedule.utcNote")}
+      </p>
+
+      {opError && (
+        <p
+          data-testid="rederive-schedule-error"
+          className="mt-2 text-xs text-red-600"
+        >
+          {opError}
+        </p>
+      )}
+
+      {loadError && (
+        <div data-testid="rederive-schedule-load-error" className="mt-2">
+          <p className="text-xs text-red-600">
+            {t("console.datasets.detail.rederive.schedule.loadError")}
+          </p>
+          <button
+            type="button"
+            data-testid="rederive-schedule-retry"
+            onClick={() => void load()}
+            className="mt-1 rounded border border-red-300 px-2 py-0.5 text-xs text-red-700 hover:bg-red-100"
+          >
+            {t("console.datasets.detail.rederive.schedule.retry")}
+          </button>
+        </div>
+      )}
+
+      {schedule === undefined && !loadError && (
+        <p
+          data-testid="rederive-schedule-loading"
+          className="mt-2 text-xs text-slate-400"
+        >
+          {t("console.datasets.detail.rederive.schedule.loading")}
+        </p>
+      )}
+
+      {schedule !== undefined && !loadError && (
+        <div
+          data-testid="rederive-schedule-form"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs"
+        >
+          <label className="flex items-center gap-1.5 text-slate-600">
+            <span className="text-slate-500">
+              {t("console.datasets.detail.rederive.schedule.cronLabel")}
+            </span>
+            <input
+              data-testid="rederive-cron-input"
+              value={cron}
+              onChange={(e) => setCron(e.target.value)}
+              placeholder={t(
+                "console.datasets.detail.rederive.schedule.cronPlaceholder",
+              )}
+              className="w-40 rounded border border-slate-300 px-2 py-1 font-mono text-xs"
+            />
+          </label>
+          <button
+            type="button"
+            data-testid="rederive-schedule-save"
+            disabled={saving || cron.trim() === ""}
+            onClick={() => void save()}
+            className="rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            {saving
+              ? t("console.datasets.detail.rederive.schedule.saving")
+              : registered
+                ? t("console.datasets.detail.rederive.schedule.update")
+                : t("console.datasets.detail.rederive.schedule.save")}
+          </button>
+        </div>
+      )}
+
+      {registered && schedule != null && (
+        <div
+          data-testid="rederive-schedule-row"
+          data-enabled={schedule.enabled ? "true" : "false"}
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-slate-200 bg-white px-3 py-2 text-xs"
+        >
+          <span
+            data-testid="rederive-schedule-enabled"
+            data-enabled={schedule.enabled ? "true" : "false"}
+            className={`rounded px-1.5 py-0.5 text-[11px] ${
+              schedule.enabled
+                ? "bg-emerald-50 text-emerald-700"
+                : "bg-slate-100 text-slate-600"
+            }`}
+          >
+            {schedule.enabled
+              ? t("console.datasets.detail.rederive.schedule.registered")
+              : t("console.datasets.detail.rederive.schedule.disabled")}
+          </span>
+          <span
+            data-testid="rederive-schedule-cron"
+            className="font-mono text-[11px] text-slate-700"
+          >
+            {schedule.cron}
+          </span>
+          <span data-testid="rederive-schedule-last-run" className="text-slate-600">
+            <span className="text-slate-400">
+              {t("console.datasets.detail.rederive.schedule.lastRunLabel")}：
+            </span>
+            {schedule.last_run_at
+              ? formatServerDate(schedule.last_run_at)
+              : t("console.datasets.detail.rederive.schedule.never")}
+          </span>
+          {schedule.last_status != null && (
+            <span
+              data-testid="rederive-schedule-last-status"
+              data-status={schedule.last_status}
+              className={`rounded px-1.5 py-0.5 text-[11px] ${
+                schedule.last_status === "success"
+                  ? "bg-emerald-50 text-emerald-700"
+                  : /^(failed|partial_failure|quota)/.test(schedule.last_status)
+                    ? "bg-red-50 text-red-700"
+                    : "bg-slate-100 text-slate-600"
+              }`}
+            >
+              {t("console.datasets.detail.rederive.schedule.lastStatusLabel")}：
+              {schedule.last_status}
+            </span>
+          )}
+          {schedule.last_rows != null && (
+            <span
+              data-testid="rederive-schedule-last-rows"
+              className="text-slate-600"
+            >
+              {t("console.datasets.detail.rederive.schedule.lastRowsLabel", {
+                count: schedule.last_rows,
+              })}
+            </span>
+          )}
+          {schedule.last_error && (
+            <span
+              data-testid="rederive-schedule-last-error"
+              title={t("console.datasets.detail.rederive.schedule.lastErrorLabel")}
+              className="font-mono text-[11px] text-red-500"
+            >
+              {schedule.last_error}
+            </span>
+          )}
+          <button
+            type="button"
+            data-testid="rederive-schedule-delete"
+            disabled={deleting}
+            onClick={() => void remove()}
+            className="ml-auto rounded border border-rose-200 px-2 py-0.5 text-[11px] text-rose-600 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {deleting
+              ? t("console.datasets.detail.rederive.schedule.deleting")
+              : t("console.datasets.detail.rederive.schedule.delete")}
+          </button>
+        </div>
       )}
     </section>
   );

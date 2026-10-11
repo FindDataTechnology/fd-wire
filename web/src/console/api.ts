@@ -1468,3 +1468,89 @@ export function getPipelineGraph(): Promise<PipelineGraph> {
     method: "GET",
   }) as Promise<PipelineGraph>;
 }
+
+// ── 重派生与定时重派生（wire-pipeline-actions 任务 1.1 web 面）──────────────
+// 契约（api 仓 data_plane/data_routes.py，端点早已接受 console Bearer 会话）：
+// - POST /api/v1/datasets/{id}/refresh?cascade=true|false（默认 true）：响应 =
+//   DatasetOut 数据集字段 + cascade: [{dataset_id,name,depth,status,error}]——
+//   本体刷新 + 级联刷新派生子链（单环失败隔离，失败级带原因如实呈现）；
+//   仅 derived + cell 档（api 档 403 / 非 derived 400，detail 原样呈现）。
+// - PUT /api/v1/datasets/{id}/schedule body {cron}（五字段 cron，naive UTC——
+//   客户时区由登记侧换算的 v1 口径）→ 登记态；
+// - GET 同路径 → {dataset_id, cron|null, enabled, last_run_at|null,
+//   last_status|null, last_error|null, last_rows|null}（无登记时仅
+//   dataset_id/cron=null/enabled=false）；
+// - DELETE 同路径 → {dataset_id, removed: true}（幂等）。
+
+/** 级联刷新逐级结果（refresh 响应的 cascade 项——单环失败隔离）。 */
+export interface DatasetRefreshCascadeEntry {
+  dataset_id: string;
+  name: string;
+  /** 拓扑深度（直接子级 = 1，逐级 +1）。 */
+  depth: number;
+  status: "ok" | "failed";
+  /** failed 级的失败原因（服务端口径，如实呈现）。 */
+  error: string | null;
+}
+
+/** 重派生响应：数据集字段（DatasetOut 形状）+ 级联各级结果摘要。 */
+export interface DatasetRefreshResult extends Dataset {
+  cascade: DatasetRefreshCascadeEntry[];
+}
+
+/** 定时重派生登记态（GET/PUT /datasets/{id}/schedule 响应；last_* 仅
+ *  已登记且有运行后出现——按可选字段容错读取）。 */
+export interface DatasetSchedule {
+  dataset_id: string;
+  /** 五字段 cron（naive UTC）；无登记为 null。 */
+  cron: string | null;
+  enabled: boolean;
+  last_run_at?: string | null;
+  /** 运行状态（success / partial_failure / failed / quota_exhausted…，原样呈现）。 */
+  last_status?: string | null;
+  last_error?: string | null;
+  last_rows?: number | null;
+}
+
+/** 重派生：按存档 spec 对源当前有效态重算（默认级联派生子链）。 */
+export function refreshDataset(
+  datasetId: string,
+  cascade = true,
+): Promise<DatasetRefreshResult> {
+  return requestJson(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/refresh?cascade=${cascade}`,
+    { method: "POST" },
+  ) as Promise<DatasetRefreshResult>;
+}
+
+/** 查看定时重派生登记态（无登记：cron=null / enabled=false）。 */
+export function getDatasetSchedule(
+  datasetId: string,
+): Promise<DatasetSchedule> {
+  return requestJson(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/schedule`,
+    { method: "GET" },
+  ) as Promise<DatasetSchedule>;
+}
+
+/** 登记/更新定时重派生（五字段 cron，naive UTC——时区换算属登记侧）。 */
+export function putDatasetSchedule(
+  datasetId: string,
+  cron: string,
+): Promise<DatasetSchedule> {
+  return requestJsonAnyMethod(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/schedule`,
+    "PUT",
+    { body: { cron } },
+  ) as Promise<DatasetSchedule>;
+}
+
+/** 删除定时重派生登记（幂等；删除后回到未登记态）。 */
+export function deleteDatasetSchedule(
+  datasetId: string,
+): Promise<{ dataset_id: string; removed: boolean }> {
+  return requestJson(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/schedule`,
+    { method: "DELETE" },
+  ) as Promise<{ dataset_id: string; removed: boolean }>;
+}
