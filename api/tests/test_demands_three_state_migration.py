@@ -211,12 +211,12 @@ def test_active_stock_and_new_columns(migrated_stock):
 
 def test_chain_head_follows_migration_chain(migrated_stock):
     """链头随迁移链推进（wire-demand-generation-orchestration 1.1 起 =
-    0024_demand_source_urls_public_assertion）。"""
+    0024_demand_source_public）。"""
     db_url, _ = migrated_stock
     engine = create_engine(db_url)
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    assert version == "0024_demand_source_urls_public_assertion"
+    assert version == "0024_demand_source_public"
     engine.dispose()
 
 

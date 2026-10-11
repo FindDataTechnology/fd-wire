@@ -182,7 +182,7 @@ def test_chain_head_is_provenance_foundation(migrated_sqlite) -> None:
         version = conn.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
         ).scalar()
-    assert version == "0024_demand_source_urls_public_assertion"
+    assert version == "0024_demand_source_public"
     engine.dispose()
 
 
