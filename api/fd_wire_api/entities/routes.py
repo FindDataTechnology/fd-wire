@@ -151,17 +151,22 @@ def _entity_out(entity: Entity, datasets_db: Session) -> EntityOut:
 # ------------------------------------------------------------------ 端点
 
 
-@router.get("", response_model=list[EntityOut])
+@router.get("")
 def list_entities(
     customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_entities_db),
     datasets_db: Session = Depends(get_datasets_db),
-) -> list[EntityOut]:
-    """本企业实体列表（创建序；数据集摘要经 datasets 库会话）。"""
-    return [
-        _entity_out(entity, datasets_db)
-        for entity in service.list_entities(db, customer_id=customer_id)
-    ]
+) -> dict:
+    """本企业实体列表（创建序；数据集摘要经 datasets 库会话）。
+
+    信封 {entities:[…]}——照 corrections/datasets 列表既定惯例（web 客户端
+    与假后端同款形状）。"""
+    return {
+        "entities": [
+            _entity_out(entity, datasets_db).model_dump(mode="json")
+            for entity in service.list_entities(db, customer_id=customer_id)
+        ]
+    }
 
 
 @router.get("/graph", response_model=GraphOut)

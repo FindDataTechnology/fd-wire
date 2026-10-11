@@ -280,7 +280,7 @@ def test_entity_create_and_list_with_dataset_summary(client, db_session) -> None
         "storage_tier": "api",
     }
 
-    listed = client.get("/api/v1/entities", headers=CUST).json()
+    listed = client.get("/api/v1/entities", headers=CUST).json()["entities"]
     assert len(listed) == 1
     assert listed[0]["id"] == entity["id"]
     assert listed[0]["dataset"]["key"] == "orders"
@@ -332,7 +332,7 @@ def test_entity_validation_matrix_422_zero_half_write(client, db_session) -> Non
         assert resp.status_code == 422, payload
         assert needle in resp.json()["detail"], payload
     # 零半写
-    assert client.get("/api/v1/entities", headers=CUST).json() == []
+    assert client.get("/api/v1/entities", headers=CUST).json() == {"entities": []}
 
 
 def test_entity_dataset_other_customer_422_uniform(client, db_session) -> None:
@@ -341,7 +341,7 @@ def test_entity_dataset_other_customer_422_uniform(client, db_session) -> None:
     resp = create_entity(client, dataset_id=other_dataset)
     assert resp.status_code == 422
     assert resp.json()["detail"] == f"数据集 {other_dataset} 不存在"
-    assert client.get("/api/v1/entities", headers=CUST).json() == []
+    assert client.get("/api/v1/entities", headers=CUST).json() == {"entities": []}
 
 
 def test_entity_uniqueness_conflicts_409(client, db_session) -> None:
@@ -366,7 +366,7 @@ def test_entity_uniqueness_conflicts_409(client, db_session) -> None:
     detail = dup_binding.json()["detail"]
     assert "已绑定" in detail and "订单" in detail
     # 失败零半写：仍只有一个实体
-    assert len(client.get("/api/v1/entities", headers=CUST).json()) == 1
+    assert len(client.get("/api/v1/entities", headers=CUST).json()["entities"]) == 1
 
 
 def test_entity_update_revalidation_and_zero_half_write(client, db_session) -> None:
@@ -404,7 +404,7 @@ def test_entity_update_revalidation_and_zero_half_write(client, db_session) -> N
     )
     assert bad.status_code == 422
     assert "nope" in bad.json()["detail"]
-    current = client.get("/api/v1/entities", headers=CUST).json()
+    current = client.get("/api/v1/entities", headers=CUST).json()["entities"]
     mine = [e for e in current if e["id"] == entity["id"]][0]
     assert mine["name"] == "订单事实"
     assert mine["pk_columns"] == ["order_id", "customer_id"]
@@ -643,11 +643,11 @@ def test_customer_isolation_404_no_leak(client, db_session) -> None:
 
     # 双向互不可见：他企只见自己的实体，本企只见自己的
     assert [
-        e["name"] for e in client.get("/api/v1/entities", headers=OTHER).json()
+        e["name"] for e in client.get("/api/v1/entities", headers=OTHER).json()["entities"]
     ] == ["机密"]
     assert {n["name"] for n in client.get("/api/v1/entities/graph", headers=OTHER).json()["nodes"]} == {"机密"}
     assert [
-        e["name"] for e in client.get("/api/v1/entities", headers=CUST).json()
+        e["name"] for e in client.get("/api/v1/entities", headers=CUST).json()["entities"]
     ] == ["订单"]
     assert {n["name"] for n in client.get("/api/v1/entities/graph", headers=CUST).json()["nodes"]} == {"订单"}
 
@@ -678,7 +678,7 @@ def test_customer_isolation_404_no_leak(client, db_session) -> None:
         == 404
     )
     # 本企实体安然无恙
-    assert len(client.get("/api/v1/entities", headers=CUST).json()) == 1
+    assert len(client.get("/api/v1/entities", headers=CUST).json()["entities"]) == 1
 
 
 # ------------------------------------------------------------- 图谱形状
@@ -849,5 +849,5 @@ def test_free_tier_full_flow_zero_engine_calls(client, db_session, engine_fake) 
     )
     client.delete(f"/api/v1/entities/{seeded['customer']['id']}", headers=CUST)
     client.delete(f"/api/v1/entities/{seeded['order']['id']}", headers=CUST)
-    assert client.get("/api/v1/entities", headers=CUST).json() == []
+    assert client.get("/api/v1/entities", headers=CUST).json() == {"entities": []}
     assert engine_fake.calls == []
