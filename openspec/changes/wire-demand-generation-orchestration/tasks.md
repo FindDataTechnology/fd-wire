@@ -1,0 +1,54 @@
+# Tasks: wire-demand-generation-orchestration
+
+## 1. api — 合规门与表单强化
+
+- [ ] 1.1 demands/schemas.py：DemandCreate 增 source_urls（list[str]，≥1）与
+      public_data_asserted（bool，必须 True）；models.py Demand 增两列
+      （source_urls JSON、public_data_asserted Boolean）+ Alembic 迁移 0024。
+- [ ] 1.2 服务端硬校验：http(s) only、拒内嵌账密（user:pass@）、声明缺失 422；
+      逐条错误指明非法地址（对齐 spec 场景）。
+- [ ] 1.3 测试：三条硬拒路径 + 合法提交落库 + 存量单（无源地址）读路径
+      不回归（None 语义=旧单）。
+
+## 2. api — 工单生成与投递
+
+- [ ] 2.1 demands/orchestration.py：工单映射纯函数（design D3 表）+
+      slug 派生与冲突检测；contact_email 不入单、company 脱敏代号。
+- [ ] 2.2 POST /api/v1/demands/{id}/workorder（operator/internal 身份）：
+      出单 → pipeline_events 留档 workorder_exported（全文+哈希）→
+      凭据已配置时经 WorkorderSink.git 推送（路径白名单硬编码）→
+      pipeline_run 事件；未配置 → 响应带工单全文 + manual_delivery=true。
+- [ ] 2.3 推送实现：SSH key 从 env（INDUSTRY_GIT_SSH_KEY）写临时文件 →
+      git clone --depth 1 --filter+blob:none 单分支 → 添加单文件 →
+      commit（wire-orchestrator）→ push；冲突/失败如实抛、可重试。
+- [ ] 2.4 测试：映射确定性（快照）、slug 冲突拒、脱敏断言、凭据缺省
+      降级、白名单路径外拒绝（monkeypatch sink）。
+
+## 3. api — 状态回流与可见性
+
+- [ ] 3.1 同步循环（metering driver 同构 lifespan task）：轮询已投递工单
+      raw 状态（github raw 公开通道，缺省 600s；无在途工单即静默）；
+      状态映射表 design D4；事件 append-only；workorder_lost 留痕停扫。
+- [ ] 3.2 需求单客户响应组装：时间线安全子集（阶段+PR 链接+时间），
+      内部字段不出客户面（Demand.delivery 同款纪律）。
+- [ ] 3.3 测试：映射各态、拉取失败零写入、失配转人工、安全子集断言
+      （客户响应不含 agent 回执全文）。
+
+## 4. web — 表单与进度面
+
+- [ ] 4.1 需求表单：源地址多行输入（≥1）+ 公开数据声明勾选（i18n zh/en），
+      服务端错误逐条呈现。
+- [ ] 4.2 需求详情：编排时间线（阶段化条目+PR 外链）；操作员面工单
+      查看/复制/重试推送入口（凭据未配置时显示人工推送指引）。
+- [ ] 4.3 vitest：表单校验/时间线渲染/降级面。
+
+## 5. 集成与发布
+
+- [ ] 5.1 全量 api pytest + web vitest + tsc 零红。
+- [ ] 5.2 迁移 0024 上生产 PG（alembic upgrade head）。
+- [ ] 5.3 生产凭据：fd-wire-env 增 INDUSTRY_GIT_SSH_KEY（fd-industry-data
+      单仓 deploy key write——gh repo deploy-key add 一次性配置，另记运营
+      手册）；未配=导出人工模式照常可用。
+- [ ] 5.4 生产冒烟：真单出单→（凭据就绪则）真投递→raw 回流事件→时间线
+      客户面；未配凭据走降级面冒烟。
+- [ ] 5.5 归档（validate --strict 零 error 后）。
