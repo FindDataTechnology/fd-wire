@@ -441,7 +441,8 @@ const en: Translation = {
       // button — snapshots compose into one local file, zero requests; the
       // share view has no such entry.
       exportCsv: "Export CSV",
-      snapshotNote: "Snapshot data — live refresh coming later",
+      snapshotNote:
+        "Snapshot data — Refresh re-fetches per panel bindings and saves a new version.",
       emptyPanels: "No panels yet — add one to start.",
       noData: "No data",
       badPanel: "Panel #{{index}} could not be rendered: ",

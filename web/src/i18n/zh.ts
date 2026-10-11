@@ -419,7 +419,8 @@ const zh = {
       // 整板 CSV 导出（wire-dashboard-export）：查看态工具区按钮——快照本地
       // 合成单文件下载，零请求零新端点；分享页无此入口。
       exportCsv: "导出 CSV",
-      snapshotNote: "快照数据，实时刷新后续开通",
+      // 快照口径小字：刷新已上线（契约路径确定性重取），不再承诺「后续开通」。
+      snapshotNote: "快照数据——「刷新数据」按面板绑定重取，生成新版本。",
       emptyPanels: "还没有面板——添加一个开始。",
       noData: "无数据",
       badPanel: "面板 #{{index}} 无法渲染：",
