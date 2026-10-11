@@ -18,7 +18,7 @@ _Avoid_: 网关混称（网关是 token 网关）、API（泛指）
 _Avoid_: API key 泛称（平台侧基础设施键另说）、token（易与 LLM token 混）
 
 **需求单（demand ticket）**:
-客户提出的数据需求工单，八态状态机全程客户可见：已提交→评估中→已报价→待确认→构建中→交付验收→已交付/已拒绝（拒绝必附理由留档）。
+客户提出的数据需求工单，三态状态机全程客户可见：已提交（submitted）→处理中（in_progress）→已交付（delivered），另已拒绝（rejected）终态必附理由留档。
 _Avoid_: 工单泛称运维工单、订单（那是计费语境词）
 
 **双凭据计量归属（dual-credential attribution）**:
