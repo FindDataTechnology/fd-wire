@@ -333,3 +333,114 @@ def test_non_mcp_audit_streams_skipped(metering_client: TestClient) -> None:
     assert body["anomalies"] == 0
     assert db_row_count("metering_records") == 1
     assert db_row_count("metering_anomalies") == 0
+
+
+# ---------------------------------------------------------------------------
+# 竞态吸收：并发同键由唯一约束兜底（on_conflict_do_nothing，不炸批）
+# ---------------------------------------------------------------------------
+
+
+def _record_values(request_id: str) -> dict:
+    from datetime import datetime, timezone
+
+    from fd_wire_api.metering.db import utc_now
+
+    ts = datetime(2026, 10, 1, 10, 0, tzinfo=timezone.utc)
+    return {
+        "event_timestamp": ts,
+        "request_id": request_id,
+        "caller": "alice@customer.com",
+        "caller_principal": "alice@customer.com",
+        "credential_track": "customer",
+        "server_name": "business-mcp",
+        "server_path": "/servers/business-mcp",
+        "tool_name": "read_range",
+        "rows_returned": 10,
+        "source": "yizuo",
+        "created_at": utc_now(),
+    }
+
+
+def test_concurrent_same_key_record_absorbed(metering_client: TestClient) -> None:
+    """竞态形状：预检不见、INSERT 撞并发同键 → 约束吸收计重复，不抛异常。
+
+    同事务内连续两次执行同一落库语句等价于「预检窗口内并发事务已提交」
+    的数据库侧结局：第二次 INSERT 命中唯一约束，被 ON CONFLICT DO
+    NOTHING 原子吸收（rowcount=0），事务不回滚、行数不增。
+    """
+    from fd_wire_api.metering.ingest import _insert_on_conflict_do_nothing
+
+    values = _record_values("race-1")
+    with get_session() as session:
+        first = _insert_on_conflict_do_nothing(
+            session, MeteringRecord, values, index_elements=["request_id", "server_name"]
+        )
+        second = _insert_on_conflict_do_nothing(
+            session, MeteringRecord, values, index_elements=["request_id", "server_name"]
+        )
+        session.commit()
+    assert first == 1
+    assert second == 0
+    assert db_row_count("metering_records") == 1
+
+
+def test_concurrent_same_key_anomaly_absorbed(metering_client: TestClient) -> None:
+    """异常留痕同语义：uq_anomaly_request_reason 三键竞态吸收。"""
+    import json as json_mod
+    from datetime import datetime, timezone
+
+    from fd_wire_api.metering.db import utc_now
+    from fd_wire_api.metering.ingest import _insert_on_conflict_do_nothing
+
+    values = {
+        "reason": "missing_rows_returned",
+        "request_id": "race-bad",
+        "server_name": "business-mcp",
+        "tool_name": "read_range",
+        "caller": "alice@customer.com",
+        "credential_track": "customer",
+        "detail": json_mod.dumps({"where": "response"}, ensure_ascii=False),
+        "event_timestamp": datetime(2026, 10, 1, 10, 0, tzinfo=timezone.utc),
+        "created_at": utc_now(),
+    }
+    with get_session() as session:
+        first = _insert_on_conflict_do_nothing(
+            session,
+            MeteringAnomaly,
+            values,
+            index_elements=["request_id", "server_name", "reason"],
+        )
+        second = _insert_on_conflict_do_nothing(
+            session,
+            MeteringAnomaly,
+            values,
+            index_elements=["request_id", "server_name", "reason"],
+        )
+        session.commit()
+    assert first == 1
+    assert second == 0
+    assert db_row_count("metering_anomalies") == 1
+
+
+def test_on_conflict_clause_compiles_for_both_dialects() -> None:
+    """生产 PG 与测试 SQLite 双方言都编译出 ON CONFLICT DO NOTHING。"""
+    from sqlalchemy.dialects import postgresql, sqlite
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    pg_sql = str(
+        pg_insert(MeteringRecord)
+        .values(request_id="r", server_name="s")
+        .on_conflict_do_nothing(index_elements=["request_id", "server_name"])
+        .compile(dialect=postgresql.dialect())
+    )
+    assert "ON CONFLICT (request_id, server_name) DO NOTHING" in pg_sql
+
+    lite_sql = str(
+        sqlite_insert(MeteringAnomaly)
+        .values(reason="r", request_id="q", server_name="s")
+        .on_conflict_do_nothing(index_elements=["request_id", "server_name", "reason"])
+        .compile(dialect=sqlite.dialect())
+    )
+    assert "ON CONFLICT" in lite_sql
+    assert "DO NOTHING" in lite_sql

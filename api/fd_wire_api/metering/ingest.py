@@ -3,6 +3,10 @@
 幂等语义：``request_id + server_name`` 已存在（或同批次内重复）即跳过，
 不产生第二条计量记录；异常留痕以 ``request_id + server_name + reason``
 幂等。批量结束一次性提交。
+
+竞态安全：预检（SELECT）与落库（INSERT）之间存在事务间隙，并发摄取
+同键事件时唯一约束兜底——落库语句为 ``ON CONFLICT DO NOTHING``（PG 与
+SQLite 双方言同 API），冲突被原子吸收并计为重复，绝不炸批回滚。
 """
 
 from __future__ import annotations
@@ -44,6 +48,27 @@ class IngestResult:
             "anomaly_duplicates": self.anomaly_duplicates,
             "skipped": self.skipped,
         }
+
+
+def _insert_on_conflict_do_nothing(
+    db: Session,
+    model: type,
+    values: dict[str, Any],
+    index_elements: list[str],
+) -> int:
+    """按方言构造 INSERT ... ON CONFLICT DO NOTHING 并执行，返回 rowcount。
+
+    rowcount 为 1 表示插入成功，0 表示唯一约束吸收了并发同键（PG 与
+    SQLite 的 on_conflict_do_nothing 同 API；本服务只跑这两种方言）。
+    """
+    bind = db.get_bind()
+    if bind.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as dialect_insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert as dialect_insert
+    stmt = dialect_insert(model).values(**values)
+    stmt = stmt.on_conflict_do_nothing(index_elements=index_elements)
+    return db.execute(stmt).rowcount
 
 
 def ingest_events(db: Session, events: Iterable[dict[str, Any]]) -> IngestResult:
@@ -88,23 +113,29 @@ def _ingest_record(
         result.duplicates += 1
         seen.add(key)
         return
-    db.add(
-        MeteringRecord(
-            event_timestamp=record.event_timestamp,
-            request_id=record.request_id,
-            caller=record.caller,
-            caller_principal=record.caller_principal,
-            credential_track=record.credential_track,
-            server_name=record.server_name,
-            server_path=record.server_path,
-            tool_name=record.tool_name,
-            rows_returned=record.rows_returned,
-            source=record.source,
-            created_at=now,
-        )
+    inserted = _insert_on_conflict_do_nothing(
+        db,
+        MeteringRecord,
+        {
+            "event_timestamp": record.event_timestamp,
+            "request_id": record.request_id,
+            "caller": record.caller,
+            "caller_principal": record.caller_principal,
+            "credential_track": record.credential_track,
+            "server_name": record.server_name,
+            "server_path": record.server_path,
+            "tool_name": record.tool_name,
+            "rows_returned": record.rows_returned,
+            "source": record.source,
+            "created_at": now,
+        },
+        index_elements=["request_id", "server_name"],
     )
     seen.add(key)
-    result.accepted += 1
+    if inserted:
+        result.accepted += 1
+    else:  # 预检未见但并发事务已提交同键：约束吸收，计重复
+        result.duplicates += 1
 
 
 def _ingest_anomaly(
@@ -134,7 +165,30 @@ def _ingest_anomaly(
             result.anomaly_duplicates += 1
             seen.add(key)
             return
-    db.add(
+    if anomaly.request_id and anomaly.server_name:
+        inserted = _insert_on_conflict_do_nothing(
+            db,
+            MeteringAnomaly,
+            {
+                "reason": anomaly.reason,
+                "request_id": anomaly.request_id,
+                "server_name": anomaly.server_name,
+                "tool_name": anomaly.tool_name,
+                "caller": anomaly.caller,
+                "credential_track": anomaly.credential_track,
+                "detail": json.dumps(anomaly.detail, ensure_ascii=False, default=str),
+                "event_timestamp": anomaly.event_timestamp,
+                "created_at": now,
+            },
+            index_elements=["request_id", "server_name", "reason"],
+        )
+        seen.add(key)
+        if inserted:
+            result.anomalies += 1
+        else:  # 竞态吸收：并发事务已留痕同键异常
+            result.anomaly_duplicates += 1
+        return
+    db.add(  # 无仲裁键（NULL 互不相等）：本就不去重，维持直插
         MeteringAnomaly(
             reason=anomaly.reason,
             request_id=anomaly.request_id,
