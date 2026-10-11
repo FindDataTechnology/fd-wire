@@ -123,8 +123,13 @@ def chat(
     llm: LlmClient,
     tool_executor: ToolExecutor,
     settings: AiSettings,
+    system_extra: str | None = None,
 ) -> list[AIMessage]:
-    """一条用户消息驱动一轮构建循环（用户消息 + 循环产出全部落库）。"""
+    """一条用户消息驱动一轮构建循环（用户消息 + 循环产出全部落库）。
+
+    ``system_extra``：实体图谱块（wire-entity-layer）——空图谱传 None，
+    system prompt 与固定文案逐字一致（零漂移）。
+    """
     user_message = append_message(
         db, conversation_id=conversation.id, role=MessageRole.user, content=content
     )
@@ -134,5 +139,6 @@ def chat(
         llm=llm,
         tool_executor=tool_executor,
         max_turns=settings.ai_max_turns,
+        system_extra=system_extra,
     )
     return [user_message, *loop_messages]

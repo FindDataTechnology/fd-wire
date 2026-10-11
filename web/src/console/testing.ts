@@ -160,6 +160,19 @@ export interface ConsoleBackendOptions {
   failPacksStatus?: number;
   /** 强制订阅/退订端点返回该状态（如 401 会话失效态）。 */
   failPackSubscribeStatus?: number;
+  /** 种子实体（wire-entity-layer 3.x）：datasetId 引用种子数据集；pkColumns
+   *  校验只在创建端点做（种子信任）。 */
+  entities?: FakeEntitySeed[];
+  /** 种子实体关系（fromEntityId/toEntityId 引用种子实体 id）。 */
+  entityRelationships?: FakeEntityRelationshipSeed[];
+  /** 强制 GET /api/v1/entities 与 /api/v1/entities/graph 返回该状态。 */
+  failEntitiesStatus?: number;
+  /** 强制 POST /api/v1/entities 返回该状态（如 422 逐条回显注入）。 */
+  failEntityCreateStatus?: number;
+  failEntityCreateDetail?: string | ApiDetailItem[];
+  /** 强制 POST /api/v1/entities/{id}/relationships 返回该状态。 */
+  failEntityRelationshipCreateStatus?: number;
+  failEntityRelationshipCreateDetail?: string | ApiDetailItem[];
   /** 种子定时刷新调度（wire-refresh-scheduler 4.1；带 customer_id 的仅同客户可见）。 */
   refreshSchedules?: Array<RefreshSchedule & { customer_id?: string }>;
   /** 强制 POST /api/v1/refresh-schedules 返回该状态（创建失败态）。 */
@@ -190,6 +203,51 @@ export type FakePackSeed = {
   indicators: PackIndicator[];
 };
 
+/** 实体种子（wire-entity-layer）：datasetId 引用种子数据集。 */
+export type FakeEntitySeed = {
+  id: number;
+  name: string;
+  datasetId: string;
+  pkColumns: string[];
+  description?: string | null;
+  /** 带.customer_id 的仅同客户可见（跨企业 404 不泄露）。 */
+  customer_id?: string;
+};
+
+/** 实体关系种子：fromEntityId/toEntityId 引用实体 id。 */
+export type FakeEntityRelationshipSeed = {
+  id: number;
+  fromEntityId: number;
+  fromColumn: string;
+  toEntityId: number;
+  toColumn: string;
+  kind: "n:1" | "1:1";
+  label?: string | null;
+  customer_id?: string;
+};
+
+/** 实体假后端行（getEntities 断言面）。 */
+export type FakeEntityRow = {
+  id: number;
+  customer_id?: string;
+  name: string;
+  datasetId: string;
+  pkColumns: string[];
+  description: string | null;
+};
+
+/** 关系假后端行（getEntityRelationships 断言面）。 */
+export type FakeEntityRelationshipRow = {
+  id: number;
+  customer_id?: string;
+  fromEntityId: number;
+  fromColumn: string;
+  toEntityId: number;
+  toColumn: string;
+  kind: "n:1" | "1:1";
+  label: string | null;
+};
+
 /** 安装假后端为 global fetch；返回调用记录与状态注入接口。 */
 export function installConsoleBackend(
   conversations: Conversation[],
@@ -217,6 +275,8 @@ export function installConsoleBackend(
   getDatasets: () => Dataset[];
   getCorrections: (datasetId: string) => Correction[];
   getPackSubscriptions: (customerId?: string) => string[];
+  getEntities: () => FakeEntityRow[];
+  getEntityRelationships: () => FakeEntityRelationshipRow[];
 } {
   const store = new Map<number, StoredConversation>();
   let nextConversationId = 1;
@@ -278,6 +338,38 @@ export function installConsoleBackend(
   const packSubscriptions = new Map<string, string[]>();
   if (options.packSubscriptions?.length) {
     packSubscriptions.set("demo-customer", [...options.packSubscriptions]);
+  }
+
+  // ── 实体语义层假后端状态（wire-entity-layer）：信封形状逐端点对齐生产
+  //    契约（GET 列表 {entities:[…]}、graph {nodes,edges}、创建/关系建为裸
+  //    项 201——教训：假后端形状漂移会掩盖客户端解包缺失）。──
+  const entitiesStore = new Map<number, FakeEntityRow>();
+  let nextEntityId = 1;
+  for (const seed of options.entities ?? []) {
+    entitiesStore.set(seed.id, {
+      id: seed.id,
+      customer_id: seed.customer_id,
+      name: seed.name,
+      datasetId: seed.datasetId,
+      pkColumns: [...seed.pkColumns],
+      description: seed.description ?? null,
+    });
+    nextEntityId = Math.max(nextEntityId, seed.id + 1);
+  }
+  const entityRelationshipsStore = new Map<number, FakeEntityRelationshipRow>();
+  let nextEntityRelationshipId = 1;
+  for (const seed of options.entityRelationships ?? []) {
+    entityRelationshipsStore.set(seed.id, {
+      id: seed.id,
+      customer_id: seed.customer_id,
+      fromEntityId: seed.fromEntityId,
+      fromColumn: seed.fromColumn,
+      toEntityId: seed.toEntityId,
+      toColumn: seed.toColumn,
+      kind: seed.kind,
+      label: seed.label ?? null,
+    });
+    nextEntityRelationshipId = Math.max(nextEntityRelationshipId, seed.id + 1);
   }
 
   // ── 定时刷新调度假后端状态（wire-refresh-scheduler 4.1）：带 customer_id
@@ -773,6 +865,425 @@ export function installConsoleBackend(
         ? undefined
         : dataset;
     };
+
+    // ── 实体语义层（wire-entity-layer 3.1/3.2）：六端点语义对齐 api 仓
+    //    entities 路由——GET 列表 {entities} 信封、POST 201 裸实体项、PUT、
+    //    DELETE 级联（回带 deleted_relationships）、关系建删、graph
+    //    {nodes,edges}；校验矩阵：422 逐条（FastAPI 数组形状）、409 重名/
+    //    重复绑定/四元组重复、404 失存或他企不泄露；目标列 ∈ 目标主键纪律。 ──
+    const ownEntity = (id: number): FakeEntityRow | undefined => {
+      const row = entitiesStore.get(id);
+      if (!row) return undefined;
+      return row.customer_id && row.customer_id !== customerId
+        ? undefined
+        : row;
+    };
+    const ownEntityRows = (): FakeEntityRow[] =>
+      [...entitiesStore.values()].filter(
+        (row) => !row.customer_id || row.customer_id === customerId,
+      );
+    const ownEntityRelationshipRows = (): FakeEntityRelationshipRow[] =>
+      [...entityRelationshipsStore.values()].filter(
+        (row) => !row.customer_id || row.customer_id === customerId,
+      );
+    /** 实体项信封（snake_case + dataset 摘要；storage_tier 容错读取）。 */
+    const entityOut = (row: FakeEntityRow): unknown => {
+      const dataset = datasets.get(row.datasetId);
+      return {
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        pk_columns: row.pkColumns,
+        dataset: dataset
+          ? {
+              id: dataset.id,
+              key: dataset.key,
+              name: dataset.name,
+              row_count: dataset.row_count,
+              storage_tier: (dataset as DatasetWithTier).storage_tier ?? null,
+            }
+          : {
+              id: row.datasetId,
+              key: row.datasetId,
+              name: row.datasetId,
+              row_count: 0,
+              storage_tier: null,
+            },
+      };
+    };
+    const relationshipOut = (row: FakeEntityRelationshipRow): unknown => ({
+      id: row.id,
+      from_entity_id: row.fromEntityId,
+      from_column: row.fromColumn,
+      to_entity_id: row.toEntityId,
+      to_column: row.toColumn,
+      kind: row.kind,
+      label: row.label,
+    });
+
+    if (path === "/api/v1/entities" && method === "GET") {
+      if (options.failEntitiesStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `entities ${options.failEntitiesStatus}` },
+            options.failEntitiesStatus,
+          ),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse({ entities: ownEntityRows().map(entityOut) }),
+      );
+    }
+    if (path === "/api/v1/entities" && method === "POST") {
+      if (options.failEntityCreateStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failEntityCreateDetail ??
+                `entity create ${options.failEntityCreateStatus}`,
+            },
+            options.failEntityCreateStatus,
+          ),
+        );
+      }
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        name?: string;
+        dataset_id?: string;
+        pk_columns?: unknown;
+        description?: string;
+      };
+      const name = typeof payload.name === "string" ? payload.name.trim() : "";
+      const detailItems: ApiDetailItem[] = [];
+      if (!name) {
+        detailItems.push({
+          type: "string_too_short",
+          loc: ["body", "name"],
+          msg: "业务名不能为空（或全为空白字符）",
+        });
+      } else if (name.length > 100) {
+        detailItems.push({
+          type: "too_long",
+          loc: ["body", "name"],
+          msg: "业务名长度不能超过 100 字符",
+        });
+      }
+      const dataset = payload.dataset_id
+        ? ownDataset(payload.dataset_id)
+        : undefined;
+      if (!dataset) {
+        // 失存/他企数据集一律 404——不泄露存在性（隔离纪律）。
+        return Promise.resolve(
+          jsonResponse({ detail: "数据集不存在或不属于本企业" }, 404),
+        );
+      }
+      const pkColumns = Array.isArray(payload.pk_columns)
+        ? payload.pk_columns.filter((c): c is string => typeof c === "string")
+        : [];
+      if (pkColumns.length === 0) {
+        detailItems.push({
+          type: "too_short",
+          loc: ["body", "pk_columns"],
+          msg: "主键列至少需要一列",
+        });
+      }
+      const duplicated = [
+        ...new Set(pkColumns.filter((c, i) => pkColumns.indexOf(c) !== i)),
+      ];
+      if (duplicated.length > 0) {
+        detailItems.push({
+          type: "value_error",
+          loc: ["body", "pk_columns"],
+          msg: `主键列重复：${duplicated.join("、")}`,
+        });
+      }
+      const unknownColumns = pkColumns.filter(
+        (c) => !dataset.columns.some((col) => col.name === c),
+      );
+      if (unknownColumns.length > 0) {
+        detailItems.push({
+          type: "value_error",
+          loc: ["body", "pk_columns"],
+          msg: `主键列不在数据集「${dataset.name}」的列清单中：${unknownColumns.join("、")}`,
+        });
+      }
+      if (detailItems.length > 0) {
+        return Promise.resolve(jsonResponse({ detail: detailItems }, 422));
+      }
+      if (ownEntityRows().some((row) => row.name === name)) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `业务名「${name}」已存在——实体名在本企业内唯一` },
+            409,
+          ),
+        );
+      }
+      if (ownEntityRows().some((row) => row.datasetId === dataset.id)) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail: `数据集「${dataset.name}」已绑定实体——每数据集至多一个实体声明`,
+            },
+            409,
+          ),
+        );
+      }
+      const created: FakeEntityRow = {
+        id: nextEntityId++,
+        customer_id: customerId,
+        name,
+        datasetId: dataset.id,
+        pkColumns,
+        description: payload.description?.trim() || null,
+      };
+      entitiesStore.set(created.id, created);
+      return Promise.resolve(jsonResponse(entityOut(created), 201));
+    }
+    // graph 先于 /{id} 路由匹配（"graph" 非数字不冲突，防御性先判）。
+    if (path === "/api/v1/entities/graph" && method === "GET") {
+      if (options.failEntitiesStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `entities ${options.failEntitiesStatus}` },
+            options.failEntitiesStatus,
+          ),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse({
+          nodes: ownEntityRows().map(entityOut),
+          edges: ownEntityRelationshipRows().map(relationshipOut),
+        }),
+      );
+    }
+    // 注意：下方使用局部 const 匹配变量（`match` 在更晚处 let 声明——
+    // 提前赋值会触发 TDZ ReferenceError）。
+    const entityRelDeleteMatch = path.match(
+      /^\/api\/v1\/entities\/(\d+)\/relationships\/(\d+)$/,
+    );
+    if (entityRelDeleteMatch && method === "DELETE") {
+      const entity = ownEntity(Number(entityRelDeleteMatch[1]));
+      const rel = entityRelationshipsStore.get(Number(entityRelDeleteMatch[2]));
+      if (
+        !entity ||
+        !rel ||
+        (rel.customer_id && rel.customer_id !== customerId) ||
+        (rel.fromEntityId !== entity.id && rel.toEntityId !== entity.id)
+      ) {
+        // rel 不存在 / 他企 / 不以该实体为端点：一律 404。
+        return Promise.resolve(
+          jsonResponse({ detail: "relationship not found" }, 404),
+        );
+      }
+      entityRelationshipsStore.delete(rel.id);
+      return Promise.resolve(jsonResponse({ deleted: true }));
+    }
+    const entityRelMatch = path.match(
+      /^\/api\/v1\/entities\/(\d+)\/relationships$/,
+    );
+    if (entityRelMatch && method === "POST") {
+      if (options.failEntityRelationshipCreateStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failEntityRelationshipCreateDetail ??
+                `relationship create ${options.failEntityRelationshipCreateStatus}`,
+            },
+            options.failEntityRelationshipCreateStatus,
+          ),
+        );
+      }
+      const entity = ownEntity(Number(entityRelMatch[1]));
+      if (!entity) {
+        return Promise.resolve(
+          jsonResponse({ detail: "entity not found" }, 404),
+        );
+      }
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        to_entity_id?: number;
+        from_column?: string;
+        to_column?: string;
+        kind?: string;
+        label?: string;
+      };
+      const target =
+        payload.to_entity_id != null ? ownEntity(payload.to_entity_id) : undefined;
+      if (target == null) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail: [
+                {
+                  type: "value_error",
+                  loc: ["body", "to_entity_id"],
+                  msg: "目标实体不存在或不属于本企业",
+                },
+              ],
+            },
+            422,
+          ),
+        );
+      }
+      const sourceDataset = datasets.get(entity.datasetId);
+      const relDetail: ApiDetailItem[] = [];
+      if (
+        !payload.from_column ||
+        !sourceDataset?.columns.some((c) => c.name === payload.from_column)
+      ) {
+        relDetail.push({
+          type: "value_error",
+          loc: ["body", "from_column"],
+          msg: `源列不在实体「${entity.name}」数据集的列清单中`,
+        });
+      }
+      if (!payload.to_column || !target.pkColumns.includes(payload.to_column)) {
+        relDetail.push({
+          type: "value_error",
+          loc: ["body", "to_column"],
+          msg: "关系目标必须是目标实体的主键列",
+        });
+      }
+      if (payload.kind !== "n:1" && payload.kind !== "1:1") {
+        relDetail.push({
+          type: "enum",
+          loc: ["body", "kind"],
+          msg: "kind 只能是 n:1 或 1:1",
+        });
+      }
+      if (relDetail.length > 0) {
+        return Promise.resolve(jsonResponse({ detail: relDetail }, 422));
+      }
+      if (
+        ownEntityRelationshipRows().some(
+          (r) =>
+            r.fromEntityId === entity.id &&
+            r.fromColumn === payload.from_column &&
+            r.toEntityId === target.id &&
+            r.toColumn === payload.to_column,
+        )
+      ) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: "该关系已存在（源实体/源列/目标实体/目标列四元组唯一）" },
+            409,
+          ),
+        );
+      }
+      const created: FakeEntityRelationshipRow = {
+        id: nextEntityRelationshipId++,
+        customer_id: customerId,
+        fromEntityId: entity.id,
+        fromColumn: payload.from_column!,
+        toEntityId: target.id,
+        toColumn: payload.to_column!,
+        kind: payload.kind as FakeEntityRelationshipRow["kind"],
+        label: payload.label?.trim() || null,
+      };
+      entityRelationshipsStore.set(created.id, created);
+      return Promise.resolve(jsonResponse(relationshipOut(created), 201));
+    }
+    const entityMatch = path.match(/^\/api\/v1\/entities\/(\d+)$/);
+    if (entityMatch) {
+      const entity = ownEntity(Number(entityMatch[1]));
+      if (!entity) {
+        return Promise.resolve(
+          jsonResponse({ detail: "entity not found" }, 404),
+        );
+      }
+      if (method === "PUT") {
+        const payload = (calls[calls.length - 1]!.body ?? {}) as {
+          name?: string;
+          pk_columns?: unknown;
+          description?: string | null;
+        };
+        const putDetail: ApiDetailItem[] = [];
+        let nextName = entity.name;
+        if (payload.name !== undefined) {
+          const trimmed =
+            typeof payload.name === "string" ? payload.name.trim() : "";
+          if (!trimmed) {
+            putDetail.push({
+              type: "string_too_short",
+              loc: ["body", "name"],
+              msg: "业务名不能为空（或全为空白字符）",
+            });
+          } else if (trimmed.length > 100) {
+            putDetail.push({
+              type: "too_long",
+              loc: ["body", "name"],
+              msg: "业务名长度不能超过 100 字符",
+            });
+          } else {
+            nextName = trimmed;
+          }
+        }
+        let nextPk = entity.pkColumns;
+        if (payload.pk_columns !== undefined) {
+          const cols = Array.isArray(payload.pk_columns)
+            ? payload.pk_columns.filter(
+                (c): c is string => typeof c === "string",
+              )
+            : [];
+          if (cols.length === 0) {
+            putDetail.push({
+              type: "too_short",
+              loc: ["body", "pk_columns"],
+              msg: "主键列至少需要一列",
+            });
+          }
+          const dataset = datasets.get(entity.datasetId);
+          const unknown = cols.filter(
+            (c) => !dataset?.columns.some((col) => col.name === c),
+          );
+          if (unknown.length > 0) {
+            putDetail.push({
+              type: "value_error",
+              loc: ["body", "pk_columns"],
+              msg: `主键列不在数据集列清单中：${unknown.join("、")}`,
+            });
+          }
+          nextPk = cols;
+        }
+        if (putDetail.length > 0) {
+          return Promise.resolve(jsonResponse({ detail: putDetail }, 422));
+        }
+        if (
+          nextName !== entity.name &&
+          ownEntityRows().some((row) => row.id !== entity.id && row.name === nextName)
+        ) {
+          return Promise.resolve(
+            jsonResponse(
+              { detail: `业务名「${nextName}」已存在——实体名在本企业内唯一` },
+              409,
+            ),
+          );
+        }
+        entity.name = nextName;
+        entity.pkColumns = nextPk;
+        if (payload.description !== undefined) {
+          entity.description =
+            payload.description == null || !String(payload.description).trim()
+              ? null
+              : String(payload.description).trim();
+        }
+        return Promise.resolve(jsonResponse(entityOut(entity)));
+      }
+      if (method === "DELETE") {
+        // 级联：先删以该实体为端点的关系（数量如实回带），再删实体。
+        const incident = ownEntityRelationshipRows().filter(
+          (r) => r.fromEntityId === entity.id || r.toEntityId === entity.id,
+        );
+        for (const rel of incident) entityRelationshipsStore.delete(rel.id);
+        entitiesStore.delete(entity.id);
+        return Promise.resolve(
+          jsonResponse({
+            deleted: true,
+            deleted_relationships: incident.length,
+          }),
+        );
+      }
+    }
 
     if (path === "/api/v1/ai/conversations" && method === "POST") {
       if (options.failCreateStatus) {
@@ -1774,6 +2285,10 @@ export function installConsoleBackend(
     getCorrections: (datasetId: string) => corrections.get(datasetId) ?? [],
     getPackSubscriptions: (customerId = "demo-customer") =>
       [...(packSubscriptions.get(customerId) ?? [])],
+    getEntities: (): FakeEntityRow[] =>
+      [...entitiesStore.values()].map((row) => ({ ...row })),
+    getEntityRelationships: (): FakeEntityRelationshipRow[] =>
+      [...entityRelationshipsStore.values()].map((row) => ({ ...row })),
   };
 }
 

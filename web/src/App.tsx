@@ -49,6 +49,7 @@ function parseConsoleTab(segment: string | undefined): ConsoleTab {
     segment === "chat" ||
     segment === "artifacts" ||
     segment === "datasets" ||
+    segment === "entities" ||
     segment === "packs" ||
     segment === "demands" ||
     segment === "usage" ||

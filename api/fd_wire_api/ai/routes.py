@@ -19,6 +19,9 @@ from sqlalchemy.orm import Session
 from . import service
 from .db import get_db
 from ..console.auth import require_console_customer_id
+from ..datasets.db import get_db as get_datasets_db
+from ..entities.db import get_db as get_entities_db
+from ..entities.service import entity_graph_prompt_block
 from .executor import CellMcpExecutor
 from .llm import TokenGatewayLlmClient
 from .protocols import LlmClient, ToolExecutor
@@ -73,10 +76,16 @@ def create_conversation(
     payload: ConversationCreate,
     customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
+    entities_db: Session = Depends(get_entities_db),
+    datasets_db: Session = Depends(get_datasets_db),
     llm: LlmClient = Depends(get_llm_client),
     tool_executor: ToolExecutor = Depends(get_tool_executor),
 ) -> ConversationDetailOut:
-    """新开对话（先过每日限额护栏）；带 message 即当场跑一轮构建循环。"""
+    """新开对话（先过每日限额护栏）；带 message 即当场跑一轮构建循环。
+
+    实体图谱注入（wire-entity-layer）：跑循环前经 entities（元数据库）+
+    datasets 双库会话组装图谱紧凑块——空图谱得 None，system prompt 与
+    固定文案逐字一致（零漂移）。"""
     settings = get_settings()
     try:
         service.ensure_daily_limit(db, customer_id, settings)
@@ -91,6 +100,9 @@ def create_conversation(
             llm=llm,
             tool_executor=tool_executor,
             settings=settings,
+            system_extra=entity_graph_prompt_block(
+                entities_db, datasets_db, customer_id
+            ),
         )
     _release(llm)
     _release(tool_executor)
@@ -132,10 +144,15 @@ def append_and_run(
     payload: ChatIn,
     customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
+    entities_db: Session = Depends(get_entities_db),
+    datasets_db: Session = Depends(get_datasets_db),
     llm: LlmClient = Depends(get_llm_client),
     tool_executor: ToolExecutor = Depends(get_tool_executor),
 ) -> list[MessageOut]:
-    """追加用户消息并驱动一轮构建循环（返回本轮落库的消息序列）。"""
+    """追加用户消息并驱动一轮构建循环（返回本轮落库的消息序列）。
+
+    实体图谱注入同 create_conversation（空图谱 None = 零漂移）。
+    """
     conversation = _conversation_or_404(db, conversation_id, customer_id)
     settings = get_settings()
     appended = service.chat(
@@ -145,6 +162,9 @@ def append_and_run(
         llm=llm,
         tool_executor=tool_executor,
         settings=settings,
+        system_extra=entity_graph_prompt_block(
+            entities_db, datasets_db, customer_id
+        ),
     )
     _release(llm)
     _release(tool_executor)

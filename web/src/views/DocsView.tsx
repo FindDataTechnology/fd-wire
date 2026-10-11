@@ -38,6 +38,15 @@ const FORM_STEPS = [
   "docs.forms.step5",
 ] as const;
 
+/** 实体语义层步骤（wire-entity-layer 任务 3.3）：声明实体→建关系→AI 构建带
+ *  图谱语义→v1 边界如实说明（物化 join 非目标）。 */
+const ENTITY_STEPS = [
+  "docs.entities.step1",
+  "docs.entities.step2",
+  "docs.entities.step3",
+  "docs.entities.step4",
+] as const;
+
 /** 常驻配置样例（deploy/README.md「连接器」段的客户面提炼；字面配置不进 i18n）。 */
 const SYSTEMD_SAMPLE = `[Unit]
 Description=fd-wire connector (outbound only)
@@ -392,6 +401,33 @@ export function DocsView() {
           className="inline-block text-sm text-slate-600 underline hover:text-slate-900"
         >
           {t("docs.forms.consoleLink")}
+        </a>
+      </section>
+
+      {/* 六b、实体（wire-entity-layer 任务 3.3）：轻量实体语义层教程——声明
+          实体→建关系→AI 构建自动带图谱语义（举例说明 prompt 效果）→当前
+          边界如实说明（v0 不做数据集间自动 join 物化，v1 规划中）。 */}
+      <section data-testid="docs-entities" className="space-y-4">
+        <h2 className="text-xl font-semibold">{t("docs.entities.title")}</h2>
+        <p className="max-w-3xl text-sm text-slate-500">
+          {t("docs.entities.intro")}
+        </p>
+        <div className="rounded-lg border border-slate-200 p-5">
+          <h3 className="font-medium">{t("docs.entities.stepsTitle")}</h3>
+          <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-sm text-slate-500">
+            {ENTITY_STEPS.map((key, i) => (
+              <li key={key} data-testid={`docs-entity-step-${i + 1}`}>
+                {t(key)}
+              </li>
+            ))}
+          </ol>
+        </div>
+        <a
+          href="#/console/entities"
+          data-testid="docs-entities-console-link"
+          className="inline-block text-sm text-slate-600 underline hover:text-slate-900"
+        >
+          {t("docs.entities.consoleLink")}
         </a>
       </section>
 

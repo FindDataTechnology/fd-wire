@@ -24,6 +24,7 @@ import {
 import { ChatPage } from "../console/ChatPage";
 import { ArtifactsPage } from "../console/ArtifactsPage";
 import { DatasetsPage } from "../console/DatasetsPage";
+import { EntitiesPage } from "../console/EntitiesPage";
 import { PacksPage } from "../console/PacksPage";
 import { MyDemandsPage } from "../console/MyDemandsPage";
 import { UsagePage } from "../console/UsagePage";
@@ -301,6 +302,7 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
       {tab === "datasets" && (
         <DatasetsPage planCode={customer?.plan_code ?? ""} />
       )}
+      {tab === "entities" && <EntitiesPage />}
       {tab === "packs" && <PacksPage />}
       {tab === "demands" && <MyDemandsPage />}
       {tab === "usage" && <UsagePage />}

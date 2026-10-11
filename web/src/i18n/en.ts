@@ -205,6 +205,24 @@ const en: Translation = {
       "Collect and roll back: all submissions settle in the dataset's correction history (attributable to the console or the specific shared form) and can be reverted one by one; the customer source is never touched.",
     consoleLink: "Open Console → Artifacts →",
   },
+  entities: {
+    // Entity semantic layer tutorial (wire-entity-layer task 3.3): declare →
+    // relate → AI build with the graph → the v1 boundary stated as it is
+    // (keyed like docs.forms steps).
+    title: "Entities: business semantics for your data",
+    intro:
+      "Promote “tables” to “entities”: declare business objects (business name + dataset + primary-key columns) and link them with relationships (pointing at the target entity's primary key), and AI build conversations automatically carry your entity graph — the AI knows “Order.customer_id is Customer.id”, so it picks columns, explains connections and uses indicator joins with your semantics. Declaring is pure metadata, available on the free plan.",
+    stepsTitle: "Four steps into the semantic layer",
+    step1:
+      "Declare an entity: Console → Entities → Declare entity — pick one of your datasets, check the primary-key columns and give it a business name (e.g. “Customer”, “Order”); at most one entity per dataset;",
+    step2:
+      "Add relationships: expand “Relationships” on an entity card and declare a directed link source column →(n:1 / 1:1) target entity.target primary-key column (e.g. Order.customer_id →(n:1) Customer.id) — the target column can only be one of the target entity's primary keys;",
+    step3:
+      "Build with the graph: head to “AI Build” and start a conversation — e.g. ask “order amount by the customer's city”: the AI's system context now includes the entity graph, so it joins the customer table via customer_id to get the city instead of treating column names as noise;",
+    step4:
+      "Current boundary (stated as it is): v0 is a declared semantic layer — the graph feeds the AI context and the console graph view; automatic dataset-to-dataset join materialization is not built yet (a linked dataset is planned for v1 and needs new engine tooling); column drift does not rewrite declarations — it surfaces at use time.",
+    consoleLink: "Open Console → Entities →",
+  },
   demands: {
       title: "Demand workflow",
       // Three-state machine (wire-ux-consolidation task 3.5): submitted →
@@ -344,6 +362,7 @@ const en: Translation = {
       chat: "AI Build",
       artifacts: "Artifacts",
       datasets: "My data",
+      entities: "Entities",
       packs: "Packs",
       demands: "Demands",
       usage: "Usage",
@@ -1285,6 +1304,88 @@ const en: Translation = {
         pageOf: "Page {{page}} of {{pages}} · {{total}} items",
         prev: "Previous",
         next: "Next",
+      },
+    },
+    // Entities (wire-entity-layer tasks 3.1/3.2): the lightweight entity
+    // semantic layer — declarations, relationships and a mini SVG graph;
+    // pure metadata with zero engine calls, available on the free plan.
+    entities: {
+      title: "Entities",
+      subtitle:
+        "Declare business objects as first-class metadata — an entity = business name + dataset + primary-key columns; relationships point at the target entity's primary key. The graph feeds the AI builder's context so it works with your business semantics (available on the free plan).",
+      loading: "Loading entities…",
+      errorTitle: "Failed to load entities",
+      retry: "Retry",
+      empty: "No entities declared yet",
+      emptyHint:
+        "Start with “Declare entity”: pick a dataset, check primary-key columns, give it a business name.",
+      createOpen: "Declare entity",
+      create: {
+        title: "Declare entity",
+        datasetLabel: "Bound dataset (at most one entity per dataset)",
+        datasetPlaceholder: "Choose a dataset",
+        noDatasets:
+          "No datasets to choose from — upload or sync one under “My data” first.",
+        pkLabel:
+          "Primary-key columns (check at least one; must be among the dataset's columns)",
+        pkEmpty: "Choose a dataset first — primary keys come from its columns.",
+        nameLabel: "Business name (unique within your company)",
+        namePlaceholder: "e.g. Customer / Order / Employee",
+        descLabel: "Description (optional)",
+        descPlaceholder: "One line about this business object",
+        submit: "Create",
+        creating: "Creating…",
+        cancel: "Cancel",
+        datasetRequired: "Choose a dataset first.",
+        pkRequired: "Check at least one primary-key column.",
+        nameRequired: "Enter a business name.",
+        failed: "Creation failed — try again shortly.",
+      },
+      card: {
+        delete: "Delete",
+        deleteTitle: "Delete entity",
+        deleteWarning:
+          "Deleting entity “{{name}}” also deletes its {{count}} relationship(s) (every relationship it takes part in); the graph updates accordingly.",
+        deleteWarningZero:
+          "Delete entity “{{name}}”? It currently has no relationships.",
+        deleteConfirm: "Delete",
+        deleting: "Deleting…",
+        cancel: "Cancel",
+        deleteFailed: "Delete failed — try again shortly.",
+      },
+      relationships: {
+        toggle: "Relationships ({{count}})",
+        title: "Relationships",
+        empty: "No relationships for this entity yet.",
+        addTitle: "Add relationship",
+        targetLabel: "Target entity",
+        targetPlaceholder: "Choose a target entity",
+        fromColumnLabel: "Source column (this entity's dataset column)",
+        fromColumnPlaceholder: "Choose a source column",
+        toColumnLabel: "Target column (target entity's primary keys only)",
+        toColumnPlaceholder: "Choose a target column",
+        kindLabel: "Cardinality",
+        labelLabel: "Label (optional)",
+        labelPlaceholder: "e.g. placing customer",
+        submit: "Add",
+        adding: "Adding…",
+        targetRequired: "Choose a target entity.",
+        fromRequired: "Choose a source column.",
+        toRequired: "Choose a target column.",
+        failed: "Failed to add the relationship — try again shortly.",
+        removeFailed: "Failed to delete the relationship — try again shortly.",
+        disciplineNote:
+          "Relationships point at identity: the target column can only be one of the target entity's primary-key columns (e.g. Order.customer_id →(n:1) Customer.id).",
+        kinds: {
+          nTo1: "n:1 · many-to-one",
+          oneToOne: "1:1 · one-to-one",
+        },
+      },
+      graph: {
+        title: "Entity graph",
+        subtitle:
+          "Nodes = entities, edges = relationships (with kind labels); click a node to jump to its card. This graph is the same source the AI builder's context draws from.",
+        empty: "The graph is empty — declare entities to see them here.",
       },
     },
   },

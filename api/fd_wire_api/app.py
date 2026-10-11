@@ -29,6 +29,10 @@ from .packs import init_db as init_packs_db
 from .packs import router as packs_router
 # 管线图（wire-transform-pipeline-view）：本企业数据集派生图（console 身份）
 from .pipeline import router as pipeline_router
+# 实体语义层（wire-entity-layer）：/api/v1/entities 全端点（实体+关系声明+
+# 图谱；图谱紧凑块注入 AI 构建上下文见 ai/routes）
+from .entities import init_db as init_entities_db
+from .entities import router as entities_router
 from .demands import admin_router as demands_admin_router
 from .demands import init_db as init_demands_db
 from .demands import pipeline_router as demands_pipeline_router
@@ -113,6 +117,9 @@ async def lifespan(_: FastAPI):
     # 源包订阅（wire-source-packs）：pack_subscriptions 幂等建表兜底
     # （生产走 alembic 0022；指标切片实时查目录镜像，无自身快照表）。
     init_packs_db()
+    # 实体语义层（wire-entity-layer）：entities / entity_relationships
+    # 幂等建表兜底（生产走 alembic 0026；零引擎调用——纯元数据声明层）。
+    init_entities_db()
     try:
         yield
     finally:
@@ -191,6 +198,9 @@ app.include_router(schedules_router)
 # 源包订阅（wire-source-packs）：公开包列表/详情（实时目录切片）+ 登录
 # 订阅/退订/我的订阅（pack_subscriptions 走元数据库，alembic 0022）
 app.include_router(packs_router)
+# 实体语义层（wire-entity-layer）：实体/关系声明 + 同源图谱（console 身份；
+# 免费档全功能——零引擎调用的元数据层，AI 上下文注入走 ai/routes）
+app.include_router(entities_router)
 # 溯源账本（wire-provenance-ledger 任务组 2）：客户面概览/时间线/状态/调档
 # （Bearer 身份，4.5）+ 内部 ingest 入账端点（X-Provenance-Token）
 app.include_router(provenance_router)

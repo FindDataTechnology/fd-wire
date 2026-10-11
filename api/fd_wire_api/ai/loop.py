@@ -82,10 +82,18 @@ def _assistant_wire(assistant: LlmAssistantMessage) -> dict:
     return entry
 
 
-def _wire_history(db: Session, conversation_id: int) -> list[dict]:
+def _wire_history(
+    db: Session, conversation_id: int, system_extra: str | None = None
+) -> list[dict]:
     """历史消息 → OpenAI wire 形态：tool_trace 还原为 assistant.tool_calls +
     tool 结果对（满足兼容面对「tool 消息须紧跟带 tool_calls 的 assistant」
-    的次序要求）。"""
+    的次序要求）。
+
+    ``system_extra``（wire-entity-layer）：实体图谱紧凑块，非空时在固定
+    文案后追加（换行分隔）；None/空 → system 文本与固定文案**逐字节一致**
+    （零漂移，有测试断言）。组装方为 ai/routes（经
+    ``entities.service.entity_graph_prompt_block`` 取块）。
+    """
     rows = list(
         db.scalars(
             select(AIMessage)
@@ -93,7 +101,10 @@ def _wire_history(db: Session, conversation_id: int) -> list[dict]:
             .order_by(AIMessage.id)
         ).all()
     )
-    wire: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    system_content = SYSTEM_PROMPT
+    if system_extra:
+        system_content = f"{SYSTEM_PROMPT}\n{system_extra}"
+    wire: list[dict] = [{"role": "system", "content": system_content}]
     i = 0
     while i < len(rows):
         row = rows[i]
@@ -201,10 +212,12 @@ def run_build_loop(
     llm: LlmClient,
     tool_executor: ToolExecutor,
     max_turns: int,
+    system_extra: str | None = None,
 ) -> list[AIMessage]:
     """跑一轮构建循环，返回本次追加的全部消息（含首条 user）。
 
-    调用方须已把用户消息落库（``chat`` 一并处理）。
+    调用方须已把用户消息落库（``chat`` 一并处理）。``system_extra`` 见
+    ``_wire_history``（图谱块注入；缺省 None = 固定文案零漂移）。
     """
     appended: list[AIMessage] = []
 
@@ -223,7 +236,7 @@ def run_build_loop(
         emit(MessageRole.assistant, CELL_NOT_PROVISIONED_MESSAGE)
         return appended
 
-    wire = _wire_history(db, conversation.id)
+    wire = _wire_history(db, conversation.id, system_extra)
     for _ in range(max_turns):
         try:
             assistant = llm.complete(wire, TOOL_SCHEMAS)

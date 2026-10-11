@@ -192,6 +192,23 @@ const zh = {
       "收集与回滚：全部提交沉淀在数据集的修正历史（可归因到控制台或具体分享表单），逐条可回滚，客户源数据不受任何影响。",
     consoleLink: "前往控制台「产物」→",
   },
+  entities: {
+    // 实体语义层客户教程（wire-entity-layer 任务 3.3）：声明实体→建关系→
+    // AI 构建自动带图谱语义→v1 边界如实说明（照 docs.forms 的步骤 key 组织）。
+    title: "实体：给数据加上业务语义",
+    intro:
+      "把「表」升为「实体」：声明业务对象（业务名 + 数据集 + 主键列）并互链关系（指向目标实体主键）后，AI 构建对话会自动带上你的实体图谱——AI 知道「订单.customer_id 就是客户.id」这类业务语义，选列、解释连接、用指标 join 都更准。声明与关系均为纯元数据操作，免费档可用。",
+    stepsTitle: "四步入语义层",
+    step1:
+      "声明实体：控制台「实体 → 声明实体」，选一个本企业数据集、勾选主键列、起业务名（如「客户」「订单」）——每数据集至多一个实体；",
+    step2:
+      "建关系：在实体卡展开「关系」，添加 源列 →(n:1 / 1:1) 目标实体.目标主键列 的有向声明（如 订单.customer_id →(n:1) 客户.id）——目标列只能选目标实体的主键列；",
+    step3:
+      "AI 带图谱构建：声明完成后直接去「AI 构建」发起对话——例如提问「按客户所在城市统计订单金额」，AI 的系统上下文已含实体图谱，会正确经 customer_id 关联客户取城市，而不是把列名当噪声；",
+    step4:
+      "当前边界（如实说明）：v0 是声明语义层——图谱进 AI 上下文与控制台图谱页，尚不做数据集间自动 join 物化（linked dataset 在 v1 规划中，需引擎新工具）；列结构漂移不自动改写声明，由使用时校验暴露。",
+    consoleLink: "前往控制台「实体」→",
+  },
   demands: {
       title: "需求单流程",
       // 三态机（wire-ux-consolidation 任务 3.5）：submitted → in_progress →
@@ -324,6 +341,7 @@ const zh = {
       chat: "AI 构建",
       artifacts: "产物",
       datasets: "我的数据",
+      entities: "实体",
       packs: "源包",
       demands: "需求单",
       usage: "用量",
@@ -1220,6 +1238,83 @@ const zh = {
         pageOf: "第 {{page}} / {{pages}} 页 · 共 {{total}} 项",
         prev: "上一页",
         next: "下一页",
+      },
+    },
+    // 实体（wire-entity-layer 任务 3.1/3.2）：轻量实体语义层管理面——实体
+    // 声明 / 关系管理 / SVG 小图谱；纯元数据操作零引擎调用，免费档可用。
+    entities: {
+      title: "实体",
+      subtitle:
+        "把业务对象声明为客户域一等元数据——实体 = 业务名 + 数据集 + 主键列；关系指向目标实体主键。图谱会注入 AI 构建上下文，让 AI 带业务语义用数（免费档可用）。",
+      loading: "实体加载中…",
+      errorTitle: "实体加载失败",
+      retry: "重试",
+      empty: "尚未声明实体",
+      emptyHint: "点击「声明实体」开始：选一个数据集、勾主键列、起业务名。",
+      createOpen: "声明实体",
+      create: {
+        title: "声明实体",
+        datasetLabel: "绑定数据集（每数据集至多一个实体）",
+        datasetPlaceholder: "选择数据集",
+        noDatasets: "暂无数据集可选——先到「我的数据」上传或同步一个。",
+        pkLabel: "主键列（至少勾选一列，须属于该数据集的列）",
+        pkEmpty: "先选择数据集——主键列来自该数据集的列清单。",
+        nameLabel: "业务名（本企业内唯一）",
+        namePlaceholder: "如：客户 / 订单 / 员工",
+        descLabel: "描述（可选）",
+        descPlaceholder: "一句话说明这个业务对象",
+        submit: "创建",
+        creating: "创建中…",
+        cancel: "取消",
+        datasetRequired: "请先选择数据集。",
+        pkRequired: "请至少勾选一个主键列。",
+        nameRequired: "请输入业务名。",
+        failed: "创建失败，请稍后重试。",
+      },
+      card: {
+        delete: "删除",
+        deleteTitle: "删除实体",
+        deleteWarning:
+          "删除实体「{{name}}」将一并删除它的 {{count}} 条关系（含其为端点的全部关系），图谱同步消失。",
+        deleteWarningZero: "删除实体「{{name}}」？该实体当前没有任何关系。",
+        deleteConfirm: "确认删除",
+        deleting: "删除中…",
+        cancel: "取消",
+        deleteFailed: "删除失败，请稍后重试。",
+      },
+      relationships: {
+        toggle: "关系（{{count}}）",
+        title: "关系",
+        empty: "该实体尚无关系。",
+        addTitle: "添加关系",
+        targetLabel: "目标实体",
+        targetPlaceholder: "选择目标实体",
+        fromColumnLabel: "源列（本实体数据集的列）",
+        fromColumnPlaceholder: "选择源列",
+        toColumnLabel: "目标列（仅目标实体主键列）",
+        toColumnPlaceholder: "选择目标列",
+        kindLabel: "基数",
+        labelLabel: "标注（可选）",
+        labelPlaceholder: "如：下单客户",
+        submit: "添加",
+        adding: "添加中…",
+        targetRequired: "请选择目标实体。",
+        fromRequired: "请选择源列。",
+        toRequired: "请选择目标列。",
+        failed: "添加关系失败，请稍后重试。",
+        removeFailed: "删除关系失败，请稍后重试。",
+        disciplineNote:
+          "关系指向身份：目标列只能选目标实体的主键列（如 订单.customer_id →(n:1) 客户.id）。",
+        kinds: {
+          nTo1: "n:1 · 多对一",
+          oneToOne: "1:1 · 一对一",
+        },
+      },
+      graph: {
+        title: "实体图谱",
+        subtitle:
+          "节点 = 实体、边 = 关系（带 kind 标注）；点击节点定位到对应实体卡。此图谱与 AI 构建上下文同源。",
+        empty: "图谱为空——声明实体后在此呈现。",
       },
     },
   },

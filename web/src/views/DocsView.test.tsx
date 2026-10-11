@@ -160,6 +160,42 @@ describe("DocsView（文档三节 · 如实呈现）", () => {
     i18n.changeLanguage("zh");
   });
 
+  // 实体教程（wire-entity-layer 任务 3.3）：声明→关系→AI 带图谱→v1 边界
+  // 如实说明 + 控制台互链 + 双语。
+  it("「实体」章节：四步（声明/关系/AI 带图谱/边界如实）+ 控制台互链", () => {
+    render(<DocsView />);
+
+    const section = screen.getByTestId("docs-entities");
+    expect(section.textContent).toContain("实体：给数据加上业务语义");
+    for (let i = 1; i <= 4; i += 1) {
+      expect(screen.getByTestId(`docs-entity-step-${i}`)).toBeTruthy();
+    }
+    expect(section.textContent).toContain("声明实体");
+    expect(section.textContent).toContain("目标列只能选目标实体的主键列");
+    expect(section.textContent).toContain("实体图谱");
+    // prompt 效果举例在场。
+    expect(section.textContent).toContain("按客户所在城市统计订单金额");
+    // v1 边界如实：不做数据集间自动 join 物化。
+    expect(section.textContent).toContain("当前边界");
+    expect(section.textContent).toContain("不做数据集间自动 join 物化");
+    const link = screen.getByTestId("docs-entities-console-link");
+    expect(link.getAttribute("href")).toBe("#/console/entities");
+    expect(link.textContent).toContain("实体");
+  });
+
+  it("实体章节英文同步（docs.entities 双语键齐备）", () => {
+    i18n.changeLanguage("en");
+    render(<DocsView />);
+
+    const section = screen.getByTestId("docs-entities");
+    expect(section.textContent).toContain(
+      "Entities: business semantics for your data",
+    );
+    expect(section.textContent).toContain("Four steps into the semantic layer");
+    expect(section.textContent).toContain("Current boundary");
+    i18n.changeLanguage("zh");
+  });
+
   it("路由：#/docs 解析为 docs（未登录可访问）", () => {
     expect(parseHash("#/docs")).toEqual({ name: "docs" });
   });

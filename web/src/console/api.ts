@@ -1786,3 +1786,166 @@ export function deleteDatasetSchedule(
     { method: "DELETE" },
   ) as Promise<{ dataset_id: string; removed: boolean }>;
 }
+
+// ── 实体语义层（wire-entity-layer 任务 3.1 web 面）──────────────────────
+// 契约（api 仓 entities 路由，Bearer 登录身份，跨客户一律 404 不泄露）：
+// - GET  /api/v1/entities → {entities:[实体项]}（信封形状冻结）；
+// - POST /api/v1/entities body {name,dataset_id,pk_columns,description?}
+//   → 201 实体项（裸项，非信封）；
+// - PUT  /api/v1/entities/{id} body 同创建（整量替换，重校验）
+//   → 200 实体项；
+// - DELETE /api/v1/entities/{id} → {deleted:true, deleted_relationships:N}
+//   （级联删两端关系，数量如实回带）；
+// - POST /api/v1/entities/{id}/relationships body
+//   {to_entity_id,from_column,to_column,kind,label?} → 201 关系项
+//   （toColumn 必须 ∈ 目标实体主键——关系指向身份的纪律，服务端裁决）；
+// - DELETE /api/v1/entities/{id}/relationships/{rel_id} → {deleted:true}
+//   （rel 必须以该实体为端点）；
+// - GET  /api/v1/entities/graph → {nodes:[实体项], edges:[关系项]}——
+//   控制台图谱页与 AI 上下文注入的唯一同源；空图谱空数组（200）。
+// 错误口径：404 detail 如实（失存/他企）、409 冲突（重名/重复绑定/四元组
+// 重复）、422 逐条（FastAPI 标准数组 → ConsoleApiError.detailItems）。
+
+/** 实体绑定的数据集摘要（列表/图谱节点携带；列清单不在摘要内——列真相在
+ *  Dataset.columns_json，声明时校验、之后漂移不追改）。 */
+export interface EntityDatasetSummary {
+  id: string;
+  key: string;
+  name: string;
+  row_count: number;
+  /** api（免费档轻量存储）/ cell（引擎物化）；未下发给 null。 */
+  storage_tier: string | null;
+}
+
+/** 实体项（列表条目与图谱节点同形）。 */
+export interface EntityItem {
+  id: number;
+  /** 业务名（客户内唯一）。 */
+  name: string;
+  description: string | null;
+  /** 主键列（非空、⊆ 绑定数据集列快照）。 */
+  pk_columns: string[];
+  dataset: EntityDatasetSummary;
+}
+
+/** 关系基数枚举（v0 两值）。 */
+export const ENTITY_RELATIONSHIP_KINDS = ["n:1", "1:1"] as const;
+
+export type EntityRelationshipKind = (typeof ENTITY_RELATIONSHIP_KINDS)[number];
+
+/** 关系项（图谱边同形）：源实体列 → 目标实体主键列。 */
+export interface EntityRelationship {
+  id: number;
+  from_entity_id: number;
+  from_column: string;
+  to_entity_id: number;
+  to_column: string;
+  kind: EntityRelationshipKind;
+  label: string | null;
+}
+
+/** 实体图谱（控制台页与 AI 注入同源；空 = 空数组而非 404）。 */
+export interface EntityGraph {
+  nodes: EntityItem[];
+  edges: EntityRelationship[];
+}
+
+/** 创建实体入参（TS 侧 camelCase；请求边界翻译为 api 惯例 snake_case）。 */
+export interface EntityCreateInput {
+  name: string;
+  datasetId: string;
+  pkColumns: string[];
+  description?: string;
+}
+
+/** 本企业实体列表（解包 {entities:[…]} 信封；裸数组宽容兼容）。 */
+export async function fetchEntities(): Promise<EntityItem[]> {
+  const body = await requestJson(`${API_BASE}/v1/entities`, {
+    method: "GET",
+  });
+  if (Array.isArray(body)) return body as EntityItem[];
+  const list = (body as { entities?: unknown }).entities;
+  return Array.isArray(list) ? (list as EntityItem[]) : [];
+}
+
+/** 声明实体（201 实体项；409 重名/重复绑定、422 列级逐条）。 */
+export function createEntity(payload: EntityCreateInput): Promise<EntityItem> {
+  return requestJson(`${API_BASE}/v1/entities`, {
+    method: "POST",
+    body: {
+      name: payload.name,
+      dataset_id: payload.datasetId,
+      pk_columns: payload.pkColumns,
+      description: payload.description,
+    },
+  }) as Promise<EntityItem>;
+}
+
+/** 改实体（整量替换——api 侧 PUT 与创建同模型：name/dataset_id/pk_columns/
+ *  description 全量重走校验链）。 */
+export function updateEntity(
+  id: number,
+  payload: EntityCreateInput,
+): Promise<EntityItem> {
+  return requestJsonAnyMethod(`${API_BASE}/v1/entities/${id}`, "PUT", {
+    body: {
+      name: payload.name,
+      dataset_id: payload.datasetId,
+      pk_columns: payload.pkColumns,
+      description: payload.description,
+    },
+  }) as Promise<EntityItem>;
+}
+
+/** 删除实体（级联删两端关系；响应回带级联数量）。 */
+export function deleteEntity(
+  id: number,
+): Promise<{ deleted: boolean; deleted_relationships: number }> {
+  return requestJson(`${API_BASE}/v1/entities/${id}`, {
+    method: "DELETE",
+  }) as Promise<{ deleted: boolean; deleted_relationships: number }>;
+}
+
+/** 关系创建入参（toColumn 须 ∈ 目标实体主键——纪律）。 */
+export interface EntityRelationshipInput {
+  toEntityId: number;
+  fromColumn: string;
+  toColumn: string;
+  kind: EntityRelationshipKind;
+  label?: string;
+}
+
+/** 声明关系（源实体列 → 目标实体主键列；201 关系项）。 */
+export function createEntityRelationship(
+  entityId: number,
+  payload: EntityRelationshipInput,
+): Promise<EntityRelationship> {
+  return requestJson(`${API_BASE}/v1/entities/${entityId}/relationships`, {
+    method: "POST",
+    body: {
+      to_entity_id: payload.toEntityId,
+      from_column: payload.fromColumn,
+      to_column: payload.toColumn,
+      kind: payload.kind,
+      label: payload.label,
+    },
+  }) as Promise<EntityRelationship>;
+}
+
+/** 删除关系（rel 必须以 entityId 为端点；{deleted:true}）。 */
+export function deleteEntityRelationship(
+  entityId: number,
+  relationshipId: number,
+): Promise<{ deleted: boolean }> {
+  return requestJson(
+    `${API_BASE}/v1/entities/${entityId}/relationships/${relationshipId}`,
+    { method: "DELETE" },
+  ) as Promise<{ deleted: boolean }>;
+}
+
+/** 实体图谱（nodes=实体项、edges=关系项；空图谱空数组）。 */
+export function fetchEntityGraph(): Promise<EntityGraph> {
+  return requestJson(`${API_BASE}/v1/entities/graph`, {
+    method: "GET",
+  }) as Promise<EntityGraph>;
+}
