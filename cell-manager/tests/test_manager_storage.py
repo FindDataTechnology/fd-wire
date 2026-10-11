@@ -300,3 +300,39 @@ class TestConfigValidation:
     def test_port_must_be_numeric(self, home):
         with pytest.raises(ConfigError, match="CELL_PG_URL_PORT"):
             CellManagerConfig.from_env(env=pg_env(home, CELL_PG_URL_PORT="five-thousand"))
+
+
+class TestStorageQuota:
+    """wire-cell-storage-quota：CELL_PG_QUOTA_MB 下发（引擎侧裁决生效面）。"""
+
+    def test_quota_env_injected_when_configured(self, home, clock, pg_storage):
+        from cell_manager.drivers.fake import FakeDriver
+        from tests.conftest import FakeRegistryClient
+
+        config = CellManagerConfig.from_env(env=pg_env(home, CELL_PG_QUOTA_MB="512"))
+        manager = CellManager(
+            driver=FakeDriver(), registry=FakeRegistryClient(), config=config, clock=clock
+        )
+        manager.provision("acme")
+        info = manager._driver.inspect("fd-wire-cell-acme")
+        assert info.env["FD_CELL_STORAGE_QUOTA_MB"] == "512"
+
+    def test_quota_env_absent_when_not_configured(self, pg_manager, pg_storage):
+        pg_manager.provision("acme")
+        info = pg_manager._driver.inspect("fd-wire-cell-acme")
+        assert "FD_CELL_STORAGE_QUOTA_MB" not in info.env
+
+    def test_quota_config_rejects_non_positive_and_non_integer(self, home):
+        import pytest as _pytest
+        from cell_manager.errors import ConfigError
+
+        with _pytest.raises(ConfigError):
+            CellManagerConfig.from_env(env=pg_env(home, CELL_PG_QUOTA_MB="0"))
+        with _pytest.raises(ConfigError):
+            CellManagerConfig.from_env(env=pg_env(home, CELL_PG_QUOTA_MB="abc"))
+        with _pytest.raises(ConfigError):
+            CellManagerConfig.from_env(env=pg_env(home, CELL_PG_QUOTA_MB="-5"))
+        # 合法值与缺省
+        cfg = CellManagerConfig.from_env(env=pg_env(home, CELL_PG_QUOTA_MB="128"))
+        assert cfg.pg_quota_mb == 128
+        assert CellManagerConfig.from_env(env=pg_env(home)).pg_quota_mb is None

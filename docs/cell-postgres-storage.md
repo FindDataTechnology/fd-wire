@@ -401,6 +401,32 @@ backup.sh 已改为动态发现 `wire_cell_%` 全部库（`deploy/wire-postgres/
 | 凭据零泄露抽查（audit/state/日志无明文） | ✅ audit+state grep 无连接串/口令模式命中 |
 | backup 动态发现实跑 | ✅ 开通后立即跑 backup.sh，wire_cell_pgauto001 自动入备份（零清单改动） |
 
+### 7.6 存储配额（wire-cell-storage-quota，2026-10-12）
+
+PG 数据根的**第二道闸**（第一道仍是行数上限 `CUSTOMER_DATASET_MAX_ROWS`
+默认 50 万行——两闸叠加，互不替代）：
+
+```sh
+# cheap-1 /opt/cell-manager/env.sh（可选）
+export CELL_PG_QUOTA_MB=512      # provision 时注入容器 env
+# 引擎侧等价 env（手工重建场景直接设）：
+#   FD_CELL_STORAGE_QUOTA_MB=512
+```
+
+- **生效面**：仅 PG 数据根；全部增量写入路径（全量快照提交/增量合并/
+  批量写/派生/指标连接/link/刷新重物化）在事务头检查
+  `pg_database_size(current_database())`，超限**整批拒绝**（旧数据完整
+  保留），错误含用量/上限数值与「超过上限」。
+- **计量口径**：`pg_database_size` = 全库实际磁盘占用（含索引；WAL 不
+  计——WAL 在 pg_wal 目录）。空库基线约 8MB，配额别低于该值。
+- **变更流程**：改 `CELL_PG_QUOTA_MB` 后须**重建容器**（env 语义：docker
+  rm -f → run --env-file，照 §4.2 配方），运行中容器不会热感知。
+- **观测**：配额启用时 `customer_dataset_overview` 回
+  `storage_quota_bytes` / `storage_used_bytes`。
+- **定价待办（产品决策）**：免费/付费档配额数字与行数上限的重估（红线②
+  的「重估」指把 50 万行保护替换为配额杠杆的**商业决策**）未决——机制
+  已备，定数字后只需改 env。
+
 ## 8. 边界（后续 change）
 
 - **存量客户 cell 逐户搬迁编排**——v2 起新 cell 自动 PG；存量 sqlite cell
@@ -408,3 +434,4 @@ backup.sh 已改为动态发现 `wire_cell_%` 全部库（`deploy/wire-postgres/
 - **50 万行上限转 `pg_database_size` 商业配额杠杆并重估数字**——引擎行上限
   逻辑原样保留，重估留后续 change。
 - OpenBAO auto-unseal / 高可用（registry 栈既有课题）。
+- 配额数字与行数上限的商业重估（机制已备，待产品拍板数字）。

@@ -178,6 +178,11 @@ class CellManager:
                     f"{self._config.registry_url.rstrip('/')}"
                     "/fd-find-data-business-mcp/mcp"
                 )
+            # 存储配额（wire-cell-storage-quota）：注入引擎 env，PG 根下超限
+            # 整批拒绝；sqlite 根不生效。两画像注入行为一致（引擎侧裁决），
+            # 变更配额需重建容器（env 语义）。
+            if self._config.pg_quota_mb:
+                env["FD_CELL_STORAGE_QUOTA_MB"] = str(self._config.pg_quota_mb)
 
             # 创建→启动→等就绪→注册，整体原子：任何一步失败即回滚
             # （删容器+删刚建的空卷+删本次新建的 PG 角色/库），不留孤儿。

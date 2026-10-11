@@ -227,6 +227,11 @@ class CellManagerConfig:
     openbao_token: str = ""
     #: 凭据逻辑路径前缀（CELL_OPENBAO_PATH_PREFIX；默认 wire/cell-db）
     openbao_path_prefix: str = "wire/cell-db"
+    #: cell 存储配额 MB（CELL_PG_QUOTA_MB；可选正整数。注入容器 env
+    #: FD_CELL_STORAGE_QUOTA_MB，引擎 PG 根侧整批拒绝超限写入；sqlite 根
+    #: 不生效。变更配额需重建容器——env 语义，文档见
+    #: docs/cell-postgres-storage.md「存储配额」）
+    pg_quota_mb: int | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "CellManagerConfig":
@@ -282,6 +287,19 @@ class CellManagerConfig:
         openbao_path_prefix = (
             e.get("CELL_OPENBAO_PATH_PREFIX", "").strip() or "wire/cell-db"
         )
+        raw_quota = e.get("CELL_PG_QUOTA_MB", "").strip()
+        pg_quota_mb: int | None = None
+        if raw_quota:
+            try:
+                pg_quota_mb = int(raw_quota)
+            except ValueError as exc:
+                raise ConfigError(
+                    f"CELL_PG_QUOTA_MB must be a positive integer, got {raw_quota!r}"
+                ) from exc
+            if pg_quota_mb <= 0:
+                raise ConfigError(
+                    f"CELL_PG_QUOTA_MB must be a positive integer, got {raw_quota!r}"
+                )
         if pg_url_port and not pg_url_port.isdigit():
             raise ConfigError(
                 f"CELL_PG_URL_PORT must be a port number, got {pg_url_port!r}"
@@ -330,6 +348,7 @@ class CellManagerConfig:
             openbao_addr=openbao_addr,
             openbao_token=openbao_token,
             openbao_path_prefix=openbao_path_prefix,
+            pg_quota_mb=pg_quota_mb,
         )
 
     # ---- 派生命名（隔离保证：每 cell 独立卷目录 + 独立容器名 + 独立条目路径） ----
