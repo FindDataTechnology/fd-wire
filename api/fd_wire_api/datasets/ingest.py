@@ -63,6 +63,8 @@ TOOL_DERIVE = "customer_dataset_derive"
 TOOL_JOIN_INDICATORS = "customer_dataset_join_indicators"
 TOOL_DERIVE_REFRESH = "customer_dataset_derive_refresh"
 TOOL_LINEAGE = "customer_dataset_lineage"
+#: 数据集间连接（wire-entity-link：LEFT JOIN 语义物化，血缘 kind="link"）
+TOOL_LINK = "customer_dataset_link"
 
 
 class EngineToolClient:

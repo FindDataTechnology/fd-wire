@@ -220,7 +220,15 @@ const en: Translation = {
     step3:
       "Build with the graph: head to “AI Build” and start a conversation — e.g. ask “order amount by the customer's city”: the AI's system context now includes the entity graph, so it joins the customer table via customer_id to get the city instead of treating column names as noise;",
     step4:
-      "Current boundary (stated as it is): v0 is a declared semantic layer — the graph feeds the AI context and the console graph view; automatic dataset-to-dataset join materialization is not built yet (a linked dataset is planned for v1 and needs new engine tooling); column drift does not rewrite declarations — it surfaces at use time.",
+      "Current boundary (stated as it is): declaring entities and graph injection work on the free plan; link materialization is a cell-tier capability (see “Materialize a link” below); multi-relationship joins and cross-chain auto-materialization are out of scope for v1 (chain by declaring an entity on the joined result and linking again); column drift does not rewrite declarations — it surfaces at use time.",
+    // Materialize-link subsection (wire-entity-link task 3.3): relationship
+    // materialization ships in v1 — two steps (preconditions, then LEFT JOIN
+    // semantics / collision prefix / free-tier 403 / old-cell window, as-is).
+    materializeTitle: "Materialize a link: turn a relationship into a queryable joined dataset",
+    materializeStep1:
+      "Preconditions: both datasets are engine-materialized (cell tier) and the relationship is declared — expand “Relationships” on an entity card and click “Materialize link” on the row to create the joined dataset per the declaration (the action does not appear when either end is a free-tier api dataset; the server answers a 403 tier gate as-is);",
+    materializeStep2:
+      "The join is LEFT JOIN semantics: all left rows are kept and unmatched right columns are NULL (never neighbor values); a right column colliding with a left one gets a right_ prefix; the result is registered as a derived dataset in “My data” and can be derived and re-materialized further. If the target cell has not rolled the new engine image yet, you get an honest “tool not found” error — it works once the cell is rolled.",
     consoleLink: "Open Console → Entities →",
   },
   demands: {
@@ -1380,6 +1388,18 @@ const en: Translation = {
           nTo1: "n:1 · many-to-one",
           oneToOne: "1:1 · one-to-one",
         },
+      },
+      // Materialize link (wire-entity-link task 3.2): the relationship-row
+      // action — one-click LEFT JOIN into a linked dataset (rendered only
+      // when both ends are cell tier; the 403 tier gate backs it up).
+      materialize: {
+        action: "Materialize link",
+        working: "Materializing…",
+        done:
+          "Linked dataset “{{name}}” created — all left rows kept, unmatched right columns are NULL.",
+        view: "View",
+        failed: "Failed to materialize the link — try again shortly.",
+        hint: "Join the two datasets per this relationship into a new derived dataset (LEFT JOIN: all left rows kept, unmatched right columns NULL; colliding right columns get a right_ prefix).",
       },
       graph: {
         title: "Entity graph",

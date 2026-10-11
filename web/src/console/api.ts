@@ -1801,10 +1801,15 @@ export function deleteDatasetSchedule(
 //   （toColumn 必须 ∈ 目标实体主键——关系指向身份的纪律，服务端裁决）；
 // - DELETE /api/v1/entities/{id}/relationships/{rel_id} → {deleted:true}
 //   （rel 必须以该实体为端点）；
+// - POST /api/v1/entities/{id}/relationships/{rel_id}/materialize body
+//   {name?}（可空）→ 201 DatasetOut（既有数据集项形状：source_kind=
+//   "derived"、storage_tier="cell"）——LEFT JOIN 语义一键物化（wire-entity-
+//   link）；两端数据集均须 cell 档（任一免费档 403 档位闸如实）；
 // - GET  /api/v1/entities/graph → {nodes:[实体项], edges:[关系项]}——
 //   控制台图谱页与 AI 上下文注入的唯一同源；空图谱空数组（200）。
 // 错误口径：404 detail 如实（失存/他企）、409 冲突（重名/重复绑定/四元组
-// 重复）、422 逐条（FastAPI 标准数组 → ConsoleApiError.detailItems）。
+// 重复）、422 逐条（FastAPI 标准数组 → ConsoleApiError.detailItems）、
+// 物化另有 403 档位闸 / 502 引擎不可达或旧 cell 无 link 工具（detail 如实）。
 
 /** 实体绑定的数据集摘要（列表/图谱节点携带；列清单不在摘要内——列真相在
  *  Dataset.columns_json，声明时校验、之后漂移不追改）。 */
@@ -1941,6 +1946,27 @@ export function deleteEntityRelationship(
     `${API_BASE}/v1/entities/${entityId}/relationships/${relationshipId}`,
     { method: "DELETE" },
   ) as Promise<{ deleted: boolean }>;
+}
+
+/** 物化关系（wire-entity-link）：按声明把两端 cell 数据集 LEFT JOIN 成新
+ *  派生数据集——name 仅非空携带（TS 侧直传，无 camelCase 字段需翻译；
+ *  缺省让服务端取「{左实体名}×{右实体名} 连接」）。
+ *  201 回 DatasetOut（source_kind="derived"、storage_tier="cell"、撞名右列
+ *  带 right_ 前缀）；404 关系或数据集失存、403 任一端免费档、422 列漂移
+ *  逐条、502 引擎/旧 cell 无 link 工具（detail 如实）。 */
+export function materializeEntityRelationship(
+  entityId: number,
+  relationshipId: number,
+  name?: string,
+): Promise<Dataset> {
+  return requestJson(
+    `${API_BASE}/v1/entities/${entityId}/relationships/${relationshipId}/materialize`,
+    {
+      method: "POST",
+      // name 仅非空携带（空体 {} 也走 JSON——端点 body 可空）。
+      body: name ? { name } : {},
+    },
+  ) as Promise<Dataset>;
 }
 
 /** 实体图谱（nodes=实体项、edges=关系项；空图谱空数组）。 */

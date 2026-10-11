@@ -5,8 +5,10 @@
 // - 创建表单：数据集下拉（本企业列表，显示行数）→ 主键列勾选（该集
 //   columns 多选，至少一列）→ 业务名 → 描述；422 逐条 / 409 / 404 如实呈现；
 // - 关系管理：每实体卡展开——关系行（from_column →(kind) 目标名.to_column
-//   + 删除）与添加表单：目标实体下拉=其他实体、源列=本集列、**目标列下拉=
-//   目标实体主键列（关系指向身份的纪律）**、kind n:1/1:1、label 可选；
+//   + 删除 + 「物化连接」[wire-entity-link：仅两端数据集均 cell 档渲染——
+//   LEFT JOIN 一键生成连接数据集，成功提示新数据集名并可跳「我的数据」] 与
+//   添加表单：目标实体下拉=其他实体、源列=本集列、**目标列下拉=目标实体
+//   主键列（关系指向身份的纪律）**、kind n:1/1:1、label 可选；
 // - SVG 小图谱：节点=实体（圆角矩形含业务名）、边=关系（线 + kind 小标注），
 //   环形布局 v0 轻实现，节点点击滚动到对应实体卡；空态如实文案。
 // 关系行数据源 = 图谱边（图谱是控制台页与 AI 上下文注入的唯一同源）；
@@ -25,6 +27,7 @@ import {
   fetchDatasets,
   fetchEntities,
   fetchEntityGraph,
+  materializeEntityRelationship,
   type Dataset,
   type EntityGraph,
   type EntityItem,
@@ -648,6 +651,11 @@ function RelationshipPanel({
     () => new Map(entities.map((e) => [e.id, e.name])),
     [entities],
   );
+  // 图谱边两端实体反查（nodes=entities 同源）：物化按钮的档位双闸数据源。
+  const entityById = useMemo(
+    () => new Map(entities.map((e) => [e.id, e])),
+    [entities],
+  );
   const ownColumns = useMemo(() => {
     const dataset = datasets.find((d) => d.id === entity.dataset.id);
     return dataset ? dataset.columns.map((c) => c.name) : [];
@@ -662,6 +670,41 @@ function RelationshipPanel({
   const [adding, setAdding] = useState(false);
   const [errors, setErrors] = useState<string[] | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  // 物化连接状态（wire-entity-link 3.1）：单飞行中关系、成功信息、失败逐条。
+  const [materializingRelId, setMaterializingRelId] = useState<number | null>(
+    null,
+  );
+  const [materializeDone, setMaterializeDone] = useState<{ name: string } | null>(
+    null,
+  );
+  const [materializeErrors, setMaterializeErrors] = useState<string[] | null>(
+    null,
+  );
+
+  /** 物化动作可见性：两端实体数据集摘要的 storage_tier 均 "cell"
+   *  （免费档 api 数据集不出现该动作——服务端另有 403 档位闸兜底）。 */
+  const canMaterialize = (rel: EntityRelationship): boolean =>
+    entityById.get(rel.from_entity_id)?.dataset.storage_tier === "cell" &&
+    entityById.get(rel.to_entity_id)?.dataset.storage_tier === "cell";
+
+  const materialize = async (relId: number) => {
+    if (materializingRelId != null) return;
+    setMaterializingRelId(relId);
+    setMaterializeErrors(null);
+    setMaterializeDone(null);
+    try {
+      const dataset = await materializeEntityRelationship(entity.id, relId);
+      setMaterializeDone({ name: dataset.name });
+      // 成功后重载：新连接数据集入「我的数据」（实体/图谱态刷新）。
+      onChanged();
+    } catch (err) {
+      setMaterializeErrors(
+        entityErrorLines(err, t("console.entities.materialize.failed")),
+      );
+    } finally {
+      setMaterializingRelId(null);
+    }
+  };
 
   // 目标实体下拉 = 其他实体（spec 场景：仅本企业其他实体）。
   const targetOptions = entities.filter((e) => e.id !== entity.id);
@@ -755,15 +798,69 @@ function RelationshipPanel({
                   {rel.label}
                 </span>
               )}
-              <button
-                type="button"
-                data-testid="entity-relationship-delete"
-                data-rel-id={rel.id}
-                onClick={() => void remove(rel.id)}
-                className="ml-auto rounded border border-rose-300 bg-white px-1.5 py-0.5 text-[11px] text-rose-700 hover:bg-rose-50"
-              >
-                {t("console.entities.card.delete")}
-              </button>
+              <div className="ml-auto flex flex-wrap gap-1.5">
+                {/* 物化连接（wire-entity-link）：双 cell 档才渲染——LEFT JOIN
+                    语义一键生成连接数据集，成功内联提示 + 跳「我的数据」。 */}
+                {canMaterialize(rel) && (
+                  <button
+                    type="button"
+                    data-testid="entity-relationship-materialize"
+                    data-rel-id={rel.id}
+                    disabled={materializingRelId != null}
+                    title={t("console.entities.materialize.hint")}
+                    onClick={() => void materialize(rel.id)}
+                    className="rounded border border-indigo-300 bg-white px-1.5 py-0.5 text-[11px] text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {materializingRelId === rel.id
+                      ? t("console.entities.materialize.working")
+                      : t("console.entities.materialize.action")}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  data-testid="entity-relationship-delete"
+                  data-rel-id={rel.id}
+                  onClick={() => void remove(rel.id)}
+                  className="rounded border border-rose-300 bg-white px-1.5 py-0.5 text-[11px] text-rose-700 hover:bg-rose-50"
+                >
+                  {t("console.entities.card.delete")}
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* 物化成功：新数据集名 + 「查看」跳我的数据（数据集列表已含连接子集）。 */}
+      {materializeDone && (
+        <div
+          data-testid="entity-relationship-materialize-done"
+          className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-emerald-200 bg-emerald-50/60 px-3 py-2"
+        >
+          <span className="text-[11px] text-emerald-800">
+            {t("console.entities.materialize.done", {
+              name: materializeDone.name,
+            })}
+          </span>
+          <a
+            href="#/console/datasets"
+            data-testid="entity-relationship-materialize-view"
+            className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 text-[11px] text-emerald-700 hover:bg-emerald-100"
+          >
+            {t("console.entities.materialize.view")}
+          </a>
+        </div>
+      )}
+
+      {/* 物化失败：detail 逐条 / 字符串如实（403 档位闸 / 422 列漂移 / 502 旧 cell）。 */}
+      {materializeErrors && materializeErrors.length > 0 && (
+        <ul
+          data-testid="entity-relationship-materialize-errors"
+          className="mt-2 space-y-0.5"
+        >
+          {materializeErrors.map((line, i) => (
+            <li key={i} className="text-[11px] text-red-600">
+              {line}
             </li>
           ))}
         </ul>

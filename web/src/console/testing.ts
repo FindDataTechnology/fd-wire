@@ -173,6 +173,11 @@ export interface ConsoleBackendOptions {
   /** 强制 POST /api/v1/entities/{id}/relationships 返回该状态。 */
   failEntityRelationshipCreateStatus?: number;
   failEntityRelationshipCreateDetail?: string | ApiDetailItem[];
+  /** 强制 POST /api/v1/entities/{id}/relationships/{rel_id}/materialize
+   *  返回该状态（wire-entity-link：403 档位闸 / 422 列漂移逐条 / 502 旧
+   *  cell 无 link 工具等注入）。 */
+  failEntityMaterializeStatus?: number;
+  failEntityMaterializeDetail?: string | ApiDetailItem[];
   /** 种子定时刷新调度（wire-refresh-scheduler 4.1；带 customer_id 的仅同客户可见）。 */
   refreshSchedules?: Array<RefreshSchedule & { customer_id?: string }>;
   /** 强制 POST /api/v1/refresh-schedules 返回该状态（创建失败态）。 */
@@ -866,10 +871,11 @@ export function installConsoleBackend(
         : dataset;
     };
 
-    // ── 实体语义层（wire-entity-layer 3.1/3.2）：六端点语义对齐 api 仓
-    //    entities 路由——GET 列表 {entities} 信封、POST 201 裸实体项、PUT、
-    //    DELETE 级联（回带 deleted_relationships）、关系建删、graph
-    //    {nodes,edges}；校验矩阵：422 逐条（FastAPI 数组形状）、409 重名/
+    // ── 实体语义层（wire-entity-layer 3.1/3.2 + wire-entity-link 3.2）：
+    //    七端点语义对齐 api 仓 entities 路由——GET 列表 {entities} 信封、
+    //    POST 201 裸实体项、PUT、DELETE 级联（回带 deleted_relationships）、
+    //    关系建删、关系物化（201 DatasetOut / 403 档位闸 / 422 列漂移）、
+    //    graph {nodes,edges}；校验矩阵：422 逐条（FastAPI 数组形状）、409 重名/
     //    重复绑定/四元组重复、404 失存或他企不泄露；目标列 ∈ 目标主键纪律。 ──
     const ownEntity = (id: number): FakeEntityRow | undefined => {
       const row = entitiesStore.get(id);
@@ -1055,6 +1061,134 @@ export function installConsoleBackend(
           edges: ownEntityRelationshipRows().map(relationshipOut),
         }),
       );
+    }
+    // 物化连接（wire-entity-link 3.2）：第七端点——POST /entities/{id}/
+    //    relationships/{rel_id}/materialize → 201 DatasetOut（source_kind=
+    //    "derived"、storage_tier="cell"、右列撞名 right_ 前缀、行数=左集）；
+    //    错误矩阵：404 关系/实体/数据集失存、403 双 cell 档位闸、422 列漂移
+    //    逐条指名（FastAPI 数组形状）。
+    const entityRelMaterializeMatch = path.match(
+      /^\/api\/v1\/entities\/(\d+)\/relationships\/(\d+)\/materialize$/,
+    );
+    if (entityRelMaterializeMatch && method === "POST") {
+      if (options.failEntityMaterializeStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failEntityMaterializeDetail ??
+                `entity materialize ${options.failEntityMaterializeStatus}`,
+            },
+            options.failEntityMaterializeStatus,
+          ),
+        );
+      }
+      const entity = ownEntity(Number(entityRelMaterializeMatch[1]));
+      const rel = entityRelationshipsStore.get(
+        Number(entityRelMaterializeMatch[2]),
+      );
+      if (
+        !entity ||
+        !rel ||
+        (rel.customer_id && rel.customer_id !== customerId) ||
+        (rel.fromEntityId !== entity.id && rel.toEntityId !== entity.id)
+      ) {
+        // 关系失存 / 他企 / 不以路径实体为端点：一律 404（不泄露）。
+        return Promise.resolve(
+          jsonResponse({ detail: "relationship not found" }, 404),
+        );
+      }
+      const fromEntity = ownEntity(rel.fromEntityId);
+      const toEntity = ownEntity(rel.toEntityId);
+      const leftDataset = fromEntity
+        ? datasets.get(fromEntity.datasetId)
+        : undefined;
+      const rightDataset = toEntity
+        ? datasets.get(toEntity.datasetId)
+        : undefined;
+      if (!fromEntity || !toEntity || !leftDataset || !rightDataset) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: "relationship dataset not found" },
+            404,
+          ),
+        );
+      }
+      // 档位双闸：任一端非 cell 档 → 403（PLAN_TIER_REQUIRED 语义如实）。
+      if (
+        (leftDataset as DatasetWithTier).storage_tier !== "cell" ||
+        (rightDataset as DatasetWithTier).storage_tier !== "cell"
+      ) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                "物化连接需要两端数据集均为 cell 档（引擎物化存储）——当前套餐档位不足（PLAN_TIER_REQUIRED）",
+            },
+            403,
+          ),
+        );
+      }
+      // 列漂移防线（声明时已校验；此处防窗口）：422 逐条指名。
+      const drift: ApiDetailItem[] = [];
+      if (!leftDataset.columns.some((c) => c.name === rel.fromColumn)) {
+        drift.push({
+          type: "value_error",
+          loc: ["relationship", "from_column"],
+          msg: `源列 ${rel.fromColumn} 不在数据集「${leftDataset.name}」的当前列清单中（声明后列漂移）`,
+        });
+      }
+      if (!rightDataset.columns.some((c) => c.name === rel.toColumn)) {
+        drift.push({
+          type: "value_error",
+          loc: ["relationship", "to_column"],
+          msg: `目标列 ${rel.toColumn} 不在数据集「${rightDataset.name}」的当前列清单中（声明后列漂移）`,
+        });
+      }
+      if (drift.length > 0) {
+        return Promise.resolve(jsonResponse({ detail: drift }, 422));
+      }
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        name?: string;
+      };
+      const linkName =
+        (typeof payload.name === "string" ? payload.name.trim() : "") ||
+        `${fromEntity.name}×${toEntity.name} 连接`;
+      // 连接列计划（引擎 LEFT JOIN 语义）：左列全保留 + 右列撞名 right_ 前缀。
+      const leftNames = new Set(leftDataset.columns.map((c) => c.name));
+      const joinedColumns: DatasetColumn[] = [
+        ...leftDataset.columns,
+        ...rightDataset.columns.map((c) => ({
+          name: leftNames.has(c.name) ? `right_${c.name}` : c.name,
+          type: c.type,
+        })),
+      ];
+      const nowIso = "2026-10-05T12:00:00";
+      const linkId = `ds-${nextDatasetSeq++}`;
+      const linked: Dataset = {
+        id: linkId,
+        key: `ds_${linkId.replace(/-/g, "_")}`,
+        name: linkName,
+        source_kind: "derived",
+        connector_id: null,
+        source_ref: leftDataset.key,
+        columns: joinedColumns,
+        row_count: leftDataset.row_count,
+        size_bytes: leftDataset.size_bytes + rightDataset.size_bytes,
+        sync_cron: null,
+        sync_status: "ok",
+        paused_reason: null,
+        sync_mode: "snapshot",
+        watermark_column: null,
+        watermark_value: null,
+        created_at: nowIso,
+        updated_at: nowIso,
+        customer_id: customerId,
+      };
+      // 连接子集必为 cell 档（引擎物化存储）。
+      (linked as DatasetWithTier).storage_tier = "cell";
+      datasets.set(linkId, linked);
+      return Promise.resolve(jsonResponse(linked, 201));
     }
     // 注意：下方使用局部 const 匹配变量（`match` 在更晚处 let 声明——
     // 提前赋值会触发 TDZ ReferenceError）。

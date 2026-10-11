@@ -352,6 +352,66 @@ def list_relationships(db: Session, *, customer_id: str) -> list[EntityRelations
     return list(db.scalars(stmt).all())
 
 
+# ------------------------------------------------------------------ 关系物化解析
+
+
+def resolve_relationship_materialization(
+    db: Session,
+    datasets_db: Session,
+    *,
+    customer_id: str,
+    entity_id: int,
+    rel_id: int,
+) -> tuple[EntityRelationship, Entity, Entity, Dataset, Dataset]:
+    """物化解析（design D2，wire-entity-link）：
+
+    - 关系存在、属本企业、且以 ``entity_id`` 实体为端点（端点参数只是定位
+      入口——**以关系的 from 实体为左、to 实体为右**）→ 否则 EntityNotFound；
+    - 两侧实体的 dataset 行（datasets 库会话）存在且属本企业 → 否则
+      EntityNotFound（失存/drift 如实 404）；
+    - from_column ∈ 左集列快照、to_column ∈ 右集列快照（声明时校验过，
+      此处防漂移窗口）→ 否则 InvalidEntity（指名列名）。
+
+    档位闸（403）与配额（429）是 HTTP 语义，留在路由层。
+    """
+    rel = db.get(EntityRelationship, rel_id)
+    if (
+        rel is None
+        or rel.customer_id != customer_id
+        or (rel.from_entity_id != entity_id and rel.to_entity_id != entity_id)
+    ):
+        raise EntityNotFound(f"关系 {rel_id} 不存在")
+    left_entity = db.get(Entity, rel.from_entity_id)
+    right_entity = db.get(Entity, rel.to_entity_id)
+    if left_entity is None or right_entity is None:  # pragma: no cover - 级联删除保证
+        raise EntityNotFound(f"关系 {rel_id} 不存在")
+    left_dataset = _owned_dataset_or_none(
+        datasets_db, left_entity.dataset_id, customer_id
+    )
+    if left_dataset is None:
+        raise EntityNotFound(
+            f"实体「{left_entity.name}」绑定的数据集 {left_entity.dataset_id} 不存在"
+        )
+    right_dataset = _owned_dataset_or_none(
+        datasets_db, right_entity.dataset_id, customer_id
+    )
+    if right_dataset is None:
+        raise EntityNotFound(
+            f"实体「{right_entity.name}」绑定的数据集 {right_entity.dataset_id} 不存在"
+        )
+    if rel.from_column not in _dataset_column_names(left_dataset):
+        raise InvalidEntity(
+            f"关系源列 {rel.from_column} 已不在实体「{left_entity.name}」的数据集 "
+            f"{left_dataset.id} 当前列中（列漂移）——请更新或删除该关系后重试"
+        )
+    if rel.to_column not in _dataset_column_names(right_dataset):
+        raise InvalidEntity(
+            f"关系目标列 {rel.to_column} 已不在实体「{right_entity.name}」的数据集 "
+            f"{right_dataset.id} 当前列中（列漂移）——请更新或删除该关系后重试"
+        )
+    return rel, left_entity, right_entity, left_dataset, right_dataset
+
+
 # ------------------------------------------------------------------ 图谱
 
 
@@ -485,5 +545,6 @@ __all__ = [
     "get_owned_entity",
     "list_entities",
     "list_relationships",
+    "resolve_relationship_materialization",
     "update_entity",
 ]

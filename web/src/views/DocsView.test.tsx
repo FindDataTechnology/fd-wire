@@ -161,8 +161,8 @@ describe("DocsView（文档三节 · 如实呈现）", () => {
   });
 
   // 实体教程（wire-entity-layer 任务 3.3）：声明→关系→AI 带图谱→v1 边界
-  // 如实说明 + 控制台互链 + 双语。
-  it("「实体」章节：四步（声明/关系/AI 带图谱/边界如实）+ 控制台互链", () => {
+  // 如实说明 + 物化连接小节（wire-entity-link 任务 3.3）+ 控制台互链 + 双语。
+  it("「实体」章节：四步（声明/关系/AI 带图谱/边界如实）+ 物化连接小节 + 控制台互链", () => {
     render(<DocsView />);
 
     const section = screen.getByTestId("docs-entities");
@@ -175,9 +175,24 @@ describe("DocsView（文档三节 · 如实呈现）", () => {
     expect(section.textContent).toContain("实体图谱");
     // prompt 效果举例在场。
     expect(section.textContent).toContain("按客户所在城市统计订单金额");
-    // v1 边界如实：不做数据集间自动 join 物化。
+    // v1 边界如实：物化为 cell 档能力，多关系组合 join 不在 v1。
     expect(section.textContent).toContain("当前边界");
-    expect(section.textContent).toContain("不做数据集间自动 join 物化");
+    expect(section.textContent).toContain("物化连接是 cell 档能力");
+    expect(section.textContent).toContain("多关系组合 join");
+    // 物化连接小节：两步（前置 + LEFT JOIN 语义/撞名前缀/免费档 403/旧 cell）。
+    const materialize = screen.getByTestId("docs-entity-materialize");
+    expect(materialize.textContent).toContain(
+      "物化连接：把关系变成可查的连接数据集",
+    );
+    for (let i = 1; i <= 2; i += 1) {
+      expect(
+        screen.getByTestId(`docs-entity-materialize-step-${i}`),
+      ).toBeTruthy();
+    }
+    expect(materialize.textContent).toContain("LEFT JOIN");
+    expect(materialize.textContent).toContain("right_");
+    expect(materialize.textContent).toContain("403");
+    expect(materialize.textContent).toContain("工具不存在");
     const link = screen.getByTestId("docs-entities-console-link");
     expect(link.getAttribute("href")).toBe("#/console/entities");
     expect(link.textContent).toContain("实体");
@@ -193,6 +208,12 @@ describe("DocsView（文档三节 · 如实呈现）", () => {
     );
     expect(section.textContent).toContain("Four steps into the semantic layer");
     expect(section.textContent).toContain("Current boundary");
+    // 物化连接小节双语。
+    const materialize = screen.getByTestId("docs-entity-materialize");
+    expect(materialize.textContent).toContain("Materialize a link");
+    expect(materialize.textContent).toContain("LEFT JOIN");
+    expect(materialize.textContent).toContain("right_");
+    expect(materialize.textContent).toContain("403");
     i18n.changeLanguage("zh");
   });
 

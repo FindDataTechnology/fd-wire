@@ -8,8 +8,11 @@
 //   实体主键列**；添加/删除关系；服务端 422 纪律文案逐条呈现；
 // - 删除级联：确认文案带关系数（0 条换零关系口径）；删除后级联关系消失；
 // - SVG 小图谱：节点/边（data-from/to/kind）出现、节点点击滚动定位、空态；
+// - 关系物化（wire-entity-link 任务 3.4）：按钮双 cell 闸条件渲染、成功流
+//   （空体 {} 载荷 + 新数据集名内联提示 + 「查看」跳我的数据）、422 逐条 /
+//   403 单行如实、假后端信封（201 DatasetOut derived/cell/撞名 right_ 前缀）；
 // - 假后端信封对齐：GET {entities}、graph {nodes,edges}、POST 201 裸实体项
-//   （snake_case）、关系建删响应形状——逐端点锁死生产信封（本仓教训）。
+//   （snake_case）、关系建删与物化响应形状——逐端点锁死生产信封（本仓教训）。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "../i18n";
@@ -75,6 +78,32 @@ const ordersDataset = makeDataset({
     { name: "amount", type: "REAL" },
   ],
   row_count: 9_800,
+});
+
+// cell 档变体（wire-entity-link 任务 3.4）：两端均 cell 时物化按钮才渲染。
+const cellCustomersDataset = makeDataset({
+  id: "ds-1",
+  key: "customers",
+  name: "客户表",
+  columns: [
+    { name: "id", type: "INTEGER" },
+    { name: "name", type: "TEXT" },
+    { name: "city", type: "TEXT" },
+  ],
+  row_count: 1_200,
+  storage_tier: "cell",
+});
+const cellOrdersDataset = makeDataset({
+  id: "ds-2",
+  key: "orders",
+  name: "订单表",
+  columns: [
+    { name: "order_id", type: "INTEGER" },
+    { name: "customer_id", type: "INTEGER" },
+    { name: "amount", type: "REAL" },
+  ],
+  row_count: 9_800,
+  storage_tier: "cell",
 });
 
 function seedEntities(): FakeEntitySeed[] {
@@ -620,6 +649,165 @@ describe("EntitiesPage 关系管理（表单纪律 + 添加/删除）", () => {
   });
 });
 
+describe("EntitiesPage 关系物化（wire-entity-link：双 cell 闸 + 成功/失败流）", () => {
+  it("条件渲染：两端数据集均 cell 档时关系行出现「物化连接」", async () => {
+    const backend = installConsoleBackend([], {
+      datasets: [cellCustomersDataset, cellOrdersDataset],
+      entities: seedEntities(),
+      entityRelationships: seedRelationships(),
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<EntitiesPage />);
+    await screen.findAllByTestId("entity-card");
+
+    // 展开订单（id=2，关系 from 端）的关系面板。
+    fireEvent.click(elementOf("entity-toggle-relationships", 2));
+    const button = await screen.findByTestId("entity-relationship-materialize");
+    expect(button.getAttribute("data-rel-id")).toBe("11");
+    expect(button.textContent).toContain("物化连接");
+    // to 端（客户）面板同渲染（关系行是端点对称的）。
+    fireEvent.click(elementOf("entity-toggle-relationships", 1));
+    expect(
+      (await screen.findByTestId("entity-relationship-materialize")).getAttribute(
+        "data-rel-id",
+      ),
+    ).toBe("11");
+  });
+
+  it("条件渲染：任一端为 api 档（免费档）即不渲染——两端面板均无按钮", async () => {
+    // 客户表 api 档（免费轻量存储）、订单表 cell 档。
+    const backend = installConsoleBackend([], {
+      datasets: [customersDataset, cellOrdersDataset],
+      entities: seedEntities(),
+      entityRelationships: seedRelationships(),
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<EntitiesPage />);
+    await screen.findAllByTestId("entity-card");
+
+    for (const entityId of [1, 2]) {
+      fireEvent.click(elementOf("entity-toggle-relationships", entityId));
+      await screen.findByTestId("entity-relationship-row");
+      expect(
+        screen.queryByTestId("entity-relationship-materialize"),
+      ).toBeNull();
+    }
+  });
+
+  it("成功流：点击 → POST 物化（空体 {}）→ 内联成功带新数据集名 + 「查看」跳我的数据", async () => {
+    const backend = installConsoleBackend([], {
+      datasets: [cellCustomersDataset, cellOrdersDataset],
+      entities: seedEntities(),
+      entityRelationships: seedRelationships(),
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<EntitiesPage />);
+    await screen.findAllByTestId("entity-card");
+
+    fireEvent.click(elementOf("entity-toggle-relationships", 2));
+    fireEvent.click(
+      await screen.findByTestId("entity-relationship-materialize"),
+    );
+
+    // 载荷冻结契约：POST 空体 {}（name 仅非空携带，v1 面板无名字输入）。
+    const call = await waitFor(() => {
+      const found = backend.calls.find(
+        (c) =>
+          c.url.pathname ===
+            "/api/v1/entities/2/relationships/11/materialize" &&
+          c.method === "POST",
+      );
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    expect(call.body).toEqual({});
+    expect(call.headers["authorization"]).toMatch(/^Bearer /);
+
+    // 成功内联提示：缺省名「{左实体名}×{右实体名} 连接」+ 查看链接。
+    const done = await screen.findByTestId(
+      "entity-relationship-materialize-done",
+    );
+    expect(done.textContent).toContain("订单×客户 连接");
+    const view = screen.getByTestId("entity-relationship-materialize-view");
+    expect(view.getAttribute("href")).toBe("#/console/datasets");
+    expect(view.textContent).toContain("查看");
+    // 假后端：连接子集已落「我的数据」（derived + cell）。
+    const linked = backend
+      .getDatasets()
+      .find((d) => d.name === "订单×客户 连接");
+    expect(linked?.source_kind).toBe("derived");
+  });
+
+  it("失败逐条：422 列漂移 detail 数组每条 msg 各占一行", async () => {
+    const backend = installConsoleBackend([], {
+      datasets: [cellCustomersDataset, cellOrdersDataset],
+      entities: seedEntities(),
+      entityRelationships: seedRelationships(),
+      failEntityMaterializeStatus: 422,
+      failEntityMaterializeDetail: [
+        {
+          type: "value_error",
+          loc: ["relationship", "from_column"],
+          msg: "源列 customer_id 不在数据集「订单表」的当前列清单中（声明后列漂移）",
+        },
+        {
+          type: "value_error",
+          loc: ["relationship", "to_column"],
+          msg: "目标列 id 不在数据集「客户表」的当前列清单中（声明后列漂移）",
+        },
+      ],
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<EntitiesPage />);
+    await screen.findAllByTestId("entity-card");
+
+    fireEvent.click(elementOf("entity-toggle-relationships", 2));
+    fireEvent.click(
+      await screen.findByTestId("entity-relationship-materialize"),
+    );
+
+    const errors = await screen.findByTestId(
+      "entity-relationship-materialize-errors",
+    );
+    const lines = [...errors.querySelectorAll("li")].map((li) => li.textContent);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("源列 customer_id 不在数据集「订单表」");
+    expect(lines[1]).toContain("目标列 id 不在数据集「客户表」");
+    // 失败零半写：无成功提示、假后端数据集数不变。
+    expect(
+      screen.queryByTestId("entity-relationship-materialize-done"),
+    ).toBeNull();
+    expect(
+      backend.getDatasets().some((d) => d.name === "订单×客户 连接"),
+    ).toBe(false);
+  });
+
+  it("失败单行：403 档位闸 string detail 如实呈现", async () => {
+    const backend = installConsoleBackend([], {
+      datasets: [cellCustomersDataset, cellOrdersDataset],
+      entities: seedEntities(),
+      entityRelationships: seedRelationships(),
+      failEntityMaterializeStatus: 403,
+      failEntityMaterializeDetail:
+        "物化连接需要两端数据集均为 cell 档（引擎物化存储）——当前套餐档位不足（PLAN_TIER_REQUIRED）",
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<EntitiesPage />);
+    await screen.findAllByTestId("entity-card");
+
+    fireEvent.click(elementOf("entity-toggle-relationships", 2));
+    fireEvent.click(
+      await screen.findByTestId("entity-relationship-materialize"),
+    );
+
+    const errors = await screen.findByTestId(
+      "entity-relationship-materialize-errors",
+    );
+    expect([...errors.querySelectorAll("li")]).toHaveLength(1);
+    expect(errors.textContent).toContain("PLAN_TIER_REQUIRED");
+  });
+});
+
 describe("EntitiesPage 删除实体（级联关系确认文案）", () => {
   it("有关系：确认文案带级联数，确认后实体与关系一并消失", async () => {
     const backend = installConsoleBackend([], {
@@ -894,6 +1082,137 @@ describe("假后端信封对齐（逐端点锁死生产形状）", () => {
     expect(rel["to_entity_id"]).toBe(1);
     expect(rel["kind"]).toBe("1:1");
     expect(rel["label"]).toBeNull();
+  });
+
+  it("POST 物化 → 201 DatasetOut（derived/cell/缺省名/撞名 right_ 前缀/行数=左集）", async () => {
+    // 右集（客户表）带 amount 列与左集（订单表）撞名 → right_amount。
+    const cellCustomersWithCollision = makeDataset({
+      id: "ds-1",
+      key: "customers",
+      name: "客户表",
+      columns: [
+        { name: "id", type: "INTEGER" },
+        { name: "name", type: "TEXT" },
+        { name: "amount", type: "REAL" },
+      ],
+      row_count: 1_200,
+      storage_tier: "cell",
+    });
+    const backend = installConsoleBackend([], {
+      datasets: [cellCustomersWithCollision, cellOrdersDataset],
+      entities: seedEntities(),
+      entityRelationships: seedRelationships(),
+    });
+    // 缺省名（空 body）：「{左实体名}×{右实体名} 连接」。
+    const res = await backend.fetchImpl(
+      "/api/v1/entities/2/relationships/11/materialize",
+      {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      },
+    );
+    expect(res.status).toBe(201);
+    const body = (await bodyOf(res)) as Record<string, unknown>;
+    // DatasetOut 既有数据集项形状 + 物化语义字段。
+    expect(body["source_kind"]).toBe("derived");
+    expect(body["storage_tier"]).toBe("cell");
+    expect(body["name"]).toBe("订单×客户 连接");
+    expect(body["source_ref"]).toBe("orders");
+    expect(body["row_count"]).toBe(9_800);
+    expect(typeof body["id"]).toBe("string");
+    expect(typeof body["key"]).toBe("string");
+    const columns = (
+      body["columns"] as Array<{ name: string; type: string }>
+    ).map((c) => c.name);
+    // 列计划：左列全保留 + 右列撞名 right_ 前缀、未撞名保留原名。
+    expect(columns).toEqual([
+      "order_id",
+      "customer_id",
+      "amount",
+      "id",
+      "name",
+      "right_amount",
+    ]);
+    expect(backend.getDatasets().some((d) => d.name === "订单×客户 连接")).toBe(
+      true,
+    );
+
+    // 指定 name → 如实采用（201 第二条关系走自定义名）。
+    const named = await backend.fetchImpl(
+      "/api/v1/entities/1/relationships/11/materialize",
+      {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "客户宽表" }),
+      },
+    );
+    expect(named.status).toBe(201);
+    expect(((await bodyOf(named)) as Record<string, unknown>)["name"]).toBe(
+      "客户宽表",
+    );
+  });
+
+  it("POST 物化：任一端 api 档 → 403 档位闸；关系/实体失存 → 404；列漂移 → 422 逐条", async () => {
+    // 客户表 api 档（免费轻量存储）。
+    const backend = installConsoleBackend([], {
+      datasets: [customersDataset, cellOrdersDataset],
+      entities: seedEntities(),
+      entityRelationships: seedRelationships(),
+    });
+    const tierGate = await backend.fetchImpl(
+      "/api/v1/entities/2/relationships/11/materialize",
+      {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      },
+    );
+    expect(tierGate.status).toBe(403);
+    expect(
+      JSON.stringify(await bodyOf(tierGate)),
+    ).toContain("cell");
+
+    // 关系不以路径实体为端点（实体 9 失存）→ 404 不泄露。
+    const notFound = await backend.fetchImpl(
+      "/api/v1/entities/9/relationships/11/materialize",
+      {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      },
+    );
+    expect(notFound.status).toBe(404);
+
+    // 列漂移（种子信任：四元组列不在当前列快照）→ 422 逐条指名。
+    const drifted = installConsoleBackend([], {
+      datasets: [cellCustomersDataset, cellOrdersDataset],
+      entities: seedEntities(),
+      entityRelationships: [
+        {
+          id: 12,
+          fromEntityId: 2,
+          fromColumn: "ghost_col",
+          toEntityId: 1,
+          toColumn: "ghost_pk",
+          kind: "n:1",
+        },
+      ],
+    });
+    const driftRes = await drifted.fetchImpl(
+      "/api/v1/entities/2/relationships/12/materialize",
+      {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      },
+    );
+    expect(driftRes.status).toBe(422);
+    const driftBody = (await bodyOf(driftRes)) as { detail: unknown };
+    expect(JSON.stringify(driftBody.detail)).toContain("ghost_col");
+    expect(JSON.stringify(driftBody.detail)).toContain("ghost_pk");
+    // 零半写：漂移拒绝后不落数据集。
+    expect(drifted.getDatasets()).toHaveLength(2);
   });
 
   it("重复业务名 / 重复绑定数据集 → 409", async () => {

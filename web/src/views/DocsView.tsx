@@ -47,6 +47,13 @@ const ENTITY_STEPS = [
   "docs.entities.step4",
 ] as const;
 
+/** 物化连接小节步骤（wire-entity-link 任务 3.3）：双 cell 前置→LEFT JOIN
+ *  语义 / 撞名 right_ 前缀 / 免费档 403 / 旧 cell 滚动窗口如实。 */
+const ENTITY_MATERIALIZE_STEPS = [
+  "docs.entities.materializeStep1",
+  "docs.entities.materializeStep2",
+] as const;
+
 /** 常驻配置样例（deploy/README.md「连接器」段的客户面提炼；字面配置不进 i18n）。 */
 const SYSTEMD_SAMPLE = `[Unit]
 Description=fd-wire connector (outbound only)
@@ -406,7 +413,8 @@ export function DocsView() {
 
       {/* 六b、实体（wire-entity-layer 任务 3.3）：轻量实体语义层教程——声明
           实体→建关系→AI 构建自动带图谱语义（举例说明 prompt 效果）→当前
-          边界如实说明（v0 不做数据集间自动 join 物化，v1 规划中）。 */}
+          边界如实说明。物化连接小节（wire-entity-link 任务 3.3）：v1 上线
+          关系物化（LEFT JOIN / 撞名 right_ 前缀 / 免费 403 / 旧 cell 窗口）。 */}
       <section data-testid="docs-entities" className="space-y-4">
         <h2 className="text-xl font-semibold">{t("docs.entities.title")}</h2>
         <p className="max-w-3xl text-sm text-slate-500">
@@ -417,6 +425,19 @@ export function DocsView() {
           <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-sm text-slate-500">
             {ENTITY_STEPS.map((key, i) => (
               <li key={key} data-testid={`docs-entity-step-${i + 1}`}>
+                {t(key)}
+              </li>
+            ))}
+          </ol>
+        </div>
+        <div
+          data-testid="docs-entity-materialize"
+          className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-5"
+        >
+          <h3 className="font-medium">{t("docs.entities.materializeTitle")}</h3>
+          <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-sm text-slate-500">
+            {ENTITY_MATERIALIZE_STEPS.map((key, i) => (
+              <li key={key} data-testid={`docs-entity-materialize-step-${i + 1}`}>
                 {t(key)}
               </li>
             ))}
