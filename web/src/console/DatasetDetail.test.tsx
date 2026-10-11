@@ -3,6 +3,8 @@
 // 顺序逐条提交与失败隔离（成功条目生效、失败带行上下文+服务端原因、不重试）、
 // 未保存离开确认与放弃清队、保存成功后刷新预览与修正历史、cell/api 两档同 UI
 // （mock 端点同契约）。编辑器纯逻辑（editQueue 队列归约/顺序保存）单测见文末。
+// CSV 导出测试（wire-dataset-export 任务 2.2/2.3）：Bearer 下载触发、blob 下载
+// 流程（createObjectURL 桩）、截断提示、失败如实、下载中防重复。
 // fetch 为本文件内置契约假后端（零网络，不改 testing.ts——DatasetProvenance 手法）。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -36,6 +38,7 @@ const NOW = "2026-10-05T10:00:00";
 const KEY = "ds_key_1";
 const ROWS_PATH = "/api/v1/datasets/ds-1/rows";
 const CORRECTIONS_PATH = "/api/v1/datasets/ds-1/corrections";
+const EXPORT_PATH = "/api/v1/datasets/ds-1/export";
 
 const COLUMNS: DatasetColumn[] = [
   { name: "id", type: "INTEGER" },
@@ -85,6 +88,7 @@ function makeOverview(): ProvenanceOverview {
 type FetchCall = {
   method: string;
   url: URL;
+  headers: Record<string, string>;
   body?: unknown;
 };
 
@@ -97,6 +101,24 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as unknown as Response;
 }
 
+/** CSV 导出响应（wire-dataset-export 契约：text/csv + BOM、
+ * Content-Disposition 文件名、可选 X-Export-Truncated: true）。 */
+function csvResponse(options: { truncated?: boolean } = {}): Response {
+  const headers = new Headers({
+    "content-type": "text/csv; charset=utf-8",
+    "content-disposition": `attachment; filename="${KEY}.csv"`,
+  });
+  if (options.truncated) headers.set("x-export-truncated", "true");
+  return {
+    ok: true,
+    status: 200,
+    json: () => Promise.reject(new Error("csv body")),
+    blob: () =>
+      Promise.resolve(new Blob(["\uFEFFid,amount\n1,10\n"], { type: "text/csv" })),
+    headers,
+  } as unknown as Response;
+}
+
 /** 契约假后端：数据集详情常规路由 + 修正三件套（POST 落层并应用，语义对齐
  * testing.ts）+ 可注入第 N 条 POST 失败（失败隔离测试）。 */
 function install(options: {
@@ -104,6 +126,13 @@ function install(options: {
   rows?: Array<Record<string, unknown>>;
   correctionsSeed?: Correction[];
   failNthCorrectionPost?: { nth: number; status: number; detail: string };
+  /** 导出端点强制失败（如 500 带原因）。 */
+  failExportStatus?: number;
+  failExportDetail?: string;
+  /** 导出响应带 X-Export-Truncated: true。 */
+  exportTruncated?: boolean;
+  /** 导出请求悬挂至该 promise 完成（防重复点击测试）。 */
+  holdExport?: Promise<void>;
 }) {
   const dataset = options.dataset ?? makeDataset();
   let rows = (options.rows ?? [
@@ -121,9 +150,16 @@ function install(options: {
   const fetchImpl = ((_input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(_input), "http://console.test");
     const method = (init?.method ?? "GET").toUpperCase();
+    const headers: Record<string, string> = {};
+    if (init?.headers) {
+      new Headers(init.headers as HeadersInit).forEach((v, k) => {
+        headers[k.toLowerCase()] = v;
+      });
+    }
     calls.push({
       method,
       url,
+      headers,
       body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
     });
 
@@ -175,6 +211,20 @@ function install(options: {
         rows = [...rows, { ...payload.values, __row_id: `ins:${id}` }];
       }
       return jsonResponse({ correction_id: id }, 201);
+    }
+    if (path === EXPORT_PATH && method === "GET") {
+      if (options.holdExport) {
+        return options.holdExport.then(() =>
+          csvResponse({ truncated: options.exportTruncated }),
+        ) as unknown as Response;
+      }
+      if (options.failExportStatus) {
+        return jsonResponse(
+          { detail: options.failExportDetail ?? `export ${options.failExportStatus}` },
+          options.failExportStatus,
+        );
+      }
+      return csvResponse({ truncated: options.exportTruncated });
     }
     if (path === `/api/v1/provenance/datasets/${KEY}/status`) {
       return jsonResponse(makeStatus());
@@ -242,6 +292,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   localStorage.clear();
   sessionStorage.clear();
@@ -522,6 +573,106 @@ describe("DatasetDetail 行内编辑器：cell/api 两档同 UI（任务 2.2）"
         value: "7",
       });
     }
+  });
+});
+
+describe("DatasetDetail 导出 CSV（wire-dataset-export 任务 2.2/2.3）", () => {
+  /** 桩化 blob 下载（createObjectURL/revokeObjectURL）并捕获下载 a 标签。 */
+  function stubDownload() {
+    const createObjectURL = vi.fn((_blob: Blob) => "blob:csv");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      Object.assign(URL, { createObjectURL, revokeObjectURL }),
+    );
+    const createElement = vi.spyOn(document, "createElement");
+    return {
+      createObjectURL,
+      revokeObjectURL,
+      anchor: () =>
+        createElement.mock.results
+          .map((result) => result.value as HTMLElement)
+          .find((el) => el.tagName === "A") as HTMLAnchorElement | undefined,
+    };
+  }
+
+  it("点击「导出 CSV」：带 Bearer 请求 export 端点，blob 经 createObjectURL 触发下载并回收；文件名取 Content-Disposition", async () => {
+    const download = stubDownload();
+    const backend = install({});
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+
+    fireEvent.click(await screen.findByTestId("detail-export-csv"));
+    await waitFor(() =>
+      expect(download.createObjectURL).toHaveBeenCalledTimes(1),
+    );
+    const call = callsOf(backend.calls, "GET", EXPORT_PATH)[0]!;
+    expect(call.url.pathname).toBe(EXPORT_PATH);
+    expect(call.headers["authorization"]).toMatch(/^Bearer /);
+    expect(call.headers["accept"]).toBe("text/csv");
+    // blob（BOM CSV 全文）交给浏览器下载，object URL 即时回收
+    expect(download.createObjectURL.mock.calls[0]![0]).toBeInstanceOf(Blob);
+    const anchor = download.anchor();
+    expect(anchor?.getAttribute("href")).toBe("blob:csv");
+    expect(anchor?.download).toBe(`${KEY}.csv`);
+    expect(download.revokeObjectURL).toHaveBeenCalledWith("blob:csv");
+    // 成功且无截断头：零截断提示、零错误
+    expect(screen.queryByTestId("export-csv-truncated")).toBeNull();
+    expect(screen.queryByTestId("export-csv-error")).toBeNull();
+  });
+
+  it("X-Export-Truncated: true → 呈现「已截断至前 10,000 行」提示", async () => {
+    const download = stubDownload();
+    install({ exportTruncated: true });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+
+    fireEvent.click(await screen.findByTestId("detail-export-csv"));
+    await waitFor(() =>
+      expect(download.createObjectURL).toHaveBeenCalledTimes(1),
+    );
+    expect(screen.getByTestId("export-csv-truncated").textContent).toContain(
+      "已截断至前 10,000 行",
+    );
+    expect(screen.queryByTestId("export-csv-error")).toBeNull();
+  });
+
+  it("失败如实呈现：500 的后端 detail 原样展示，按钮复位可重试", async () => {
+    install({ failExportStatus: 500, failExportDetail: "导出暂时不可用" });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+
+    const button = await screen.findByTestId("detail-export-csv");
+    fireEvent.click(button);
+    const error = await screen.findByTestId("export-csv-error");
+    expect(error.textContent).toContain("导出暂时不可用");
+    expect(screen.queryByTestId("export-csv-truncated")).toBeNull();
+    await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+  });
+
+  it("下载中禁用防重复：悬挂期间二次点击不再发请求，完成后恰 1 次", async () => {
+    const download = stubDownload();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const backend = install({ holdExport: held });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+
+    const button = await screen.findByTestId("detail-export-csv");
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "GET", EXPORT_PATH).length).toBe(1),
+    );
+    // 悬挂期间按钮禁用（文案切换「导出中…」）；再点不发第二次请求
+    await waitFor(() => expect(button.hasAttribute("disabled")).toBe(true));
+    expect(button.textContent).toContain("导出中");
+    fireEvent.click(button);
+    expect(callsOf(backend.calls, "GET", EXPORT_PATH).length).toBe(1);
+
+    release();
+    await waitFor(() =>
+      expect(download.createObjectURL).toHaveBeenCalledTimes(1),
+    );
+    expect(callsOf(backend.calls, "GET", EXPORT_PATH).length).toBe(1);
+    await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
   });
 });
 

@@ -447,12 +447,54 @@ const zh = {
           "指标卡与图表的数据口径不同（指标卡只取首值），转换后面板呈现方式将改变——确定转换吗？",
         sourceLabel: "来源",
         sourcePlaceholder: "指标 code / 数据集名（刷新依赖此标注取数）",
-        // 查询契约徽标（wire-dashboard-query-contract）：带 query 的面板只读
-        // 展示绑定数据集（刷新按此契约取数；v0 不做表单编辑）。
+        // 查询契约徽标（wire-dashboard-query-contract）：绑定表单段头部徽标
+        //（wire-panel-query-binding 起随表单段呈现，见下方 queryForm 组）。
         queryBadge: "已绑定查询",
         queryDataset: "数据集 {{id}}",
-        queryReadonlyHint:
-          "该面板绑定了数据集查询（刷新按此契约取数）；本版暂不支持表单编辑。",
+        // 绑定查询表单段（wire-panel-query-binding 任务 2.1）：数据集选择/
+        // 列勾选/过滤/排序/limit 与试取/解绑文案；422/404/400 由服务端
+        // detail 如实呈现（apiErrorText）。
+        queryForm: {
+          sectionLabel: "绑定查询",
+          unbound: "未绑定",
+          bind: "绑定",
+          unbind: "解绑",
+          boundHint: "该面板绑定了数据集查询，刷新将按此契约确定性取数。",
+          datasetLabel: "数据集",
+          datasetPlaceholder: "选择数据集…",
+          datasetOption: "{{name}}（{{tier}} · {{rows}} 行）",
+          datasetOptionPlain: "{{name}}（{{rows}} 行）",
+          missingDatasetOption: "{{id}}（不在列表中——可能已删除）",
+          loadingDatasets: "数据集加载中…",
+          datasetsLoadFailed: "数据集列表加载失败，请稍后重试。",
+          columnsLabel: "投影列",
+          columnsHint: "按数据集列序；不勾 = 全列",
+          filtersLabel: "过滤",
+          addFilter: "加过滤",
+          sortLabel: "排序",
+          addSort: "加排序",
+          dirAsc: "升序",
+          dirDesc: "降序",
+          removeRow: "移除",
+          op: {
+            eq: "等于",
+            in: "属于（逗号分隔多值）",
+            gt: "大于",
+            gte: "大于等于",
+            lt: "小于",
+            lte: "小于等于",
+            contains: "包含",
+            startswith: "前缀匹配",
+          },
+          limitLabel: "行数上限（1..1000）",
+          tryButton: "试取数据",
+          trying: "试取中…",
+          previewOk: "已试取 {{rows}} 行写入预览快照（未保存）。",
+          tryFailed: "试取失败，请稍后重试。",
+          needDataset: "请先选择数据集再试取。",
+          kpiHint:
+            "指标卡约定：排序选时间列 + 降序、行数上限填 1、投影只勾值列——刷新后快照首值即指标值。",
+        },
         xNameLabel: "x 轴名",
         yNameLabel: "y 轴名",
         unsavedCount: "{{n}} 处未保存",
@@ -790,6 +832,11 @@ const zh = {
         deleteConfirm: "确认删除",
         deleting: "删除中…",
         deleteError: "删除失败",
+        // CSV 导出（wire-dataset-export 任务 2.2）：下载中禁用、截断如实提示。
+        exportCsv: "导出 CSV",
+        exporting: "导出中…",
+        exportError: "导出失败",
+        exportTruncated: "导出已截断至前 10,000 行。",
         provenance: {
           title: "溯源",
           hint: "本数据集事件的追加式哈希链账本——入账后不可篡改；锚定区间可凭证据包离线独立核验。",

@@ -3,7 +3,9 @@
 // 表单编辑、实时预览复用渲染器、保存走 PUT（信封口径断言 + 新版本号提示）、
 // 未保存离开 confirm、归档 409 如实呈现。
 // wire-dashboard-query-contract 任务 2.2/2.4：带 query 的面板显示「已绑定
-// 查询」徽标 + dataset_id（只读）；无 query 不显示；编辑（复制等）+保存
+// 查询」徽标 + dataset_id；无 query 显示「未绑定」。wire-panel-query-binding
+// 任务 2.1 起徽标升级为「绑定查询」表单段（表单交互/试取/解绑见
+// DashboardEditorQueryBinding.test.tsx）；本文件保底：编辑（复制等）+保存
 // 不抹 query。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -508,7 +510,7 @@ describe("DashboardEditor 查询契约徽标（wire-dashboard-query-contract 任
     ],
   };
 
-  it("带 query 的面板显示「已绑定查询」徽标 + dataset_id（只读文本）；无 query 不显示", () => {
+  it("带 query 的面板初始即开绑定表单（徽标 + dataset_id 回填）；无 query 显示「未绑定」入口", async () => {
     install();
     render(
       <DashboardEditor artifactId={21} initial={WITH_QUERY} onSaved={vi.fn()} onExit={vi.fn()} />,
@@ -518,11 +520,18 @@ describe("DashboardEditor 查询契约徽标（wire-dashboard-query-contract 任
     const badge = within(q1).getByTestId("editor-panel-query");
     expect(badge.textContent).toContain("已绑定查询");
     expect(badge.textContent).toContain("ds_coal_price"); // dataset_id 如实展示
-    // 无输入控件：query 只读（v0 不做表单编辑）——徽标区无 input
-    expect(badge.querySelectorAll("input")).toHaveLength(0);
+    // wire-panel-query-binding：已绑定面板表单展开（数据集下拉回填原值）
+    await waitFor(() => {
+      expect(
+        (within(q1).getByTestId("editor-query-dataset") as HTMLSelectElement).value,
+      ).toBe("ds_coal_price");
+    });
 
-    // 对照面板：无 query → 无徽标区
-    expect(within(editorPanel("n1")).queryByTestId("editor-panel-query")).toBeNull();
+    // 对照面板：无 query → 「未绑定」入口（无徽标、无表单控件）
+    const n1 = editorPanel("n1");
+    expect(within(n1).queryByTestId("editor-panel-query")).toBeNull();
+    expect(within(n1).getByTestId("editor-query-unbound").textContent).toBe("未绑定");
+    expect(within(n1).queryByTestId("editor-query-dataset")).toBeNull();
   });
 
   it("编辑不抹 query：复制带 query 的面板 → 保存 PUT 里两份面板 query 原样落盘", async () => {

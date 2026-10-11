@@ -17,6 +17,10 @@
                                                （wire-dashboard-query-contract），
                                                否则 AI 无头轮按面板 source 取数
                                                → 新版本落盘）
+- ``POST /api/v1/artifacts/query-preview``      契约试取（wire-panel-query-binding：
+                                               面板 query 同形入参 → 同一执行
+                                               路径出试取快照，所见即所刷；
+                                               不落任何版本）
 - ``POST /api/v1/artifacts/from-draft``        会话草稿导入为 draft 产物
 
 版本行只读——没有任何改写历史版本的端点（append-only 由路由面保证）。
@@ -35,8 +39,14 @@ from ..ai.protocols import LlmClient, ToolExecutor
 from ..ai.routes import get_llm_client, get_tool_executor
 from ..ai.settings import get_settings
 from ..console.auth import require_console_customer_id
+from ..datasets import api_store
 from ..datasets.db import get_db as get_datasets_db
-from ..datasets.ingest import EngineClientFactory, get_engine_client_factory
+from ..datasets.ingest import (
+    EngineCallError,
+    EngineClientFactory,
+    EngineUnavailable,
+    get_engine_client_factory,
+)
 from . import query_contract, refresh, service
 from .models import ArtifactStatus
 from .schemas import (
@@ -47,6 +57,7 @@ from .schemas import (
     ArtifactUpdateIn,
     ArtifactVersionDetailOut,
     ArtifactVersionOut,
+    QueryPreviewOut,
     artifact_detail,
     version_detail,
 )
@@ -315,3 +326,53 @@ def refresh_artifact(
         mode=mode,
         panels=panels,
     )
+
+
+@router.post("/api/v1/artifacts/query-preview", response_model=QueryPreviewOut)
+def query_preview(
+    payload: dict,
+    customer_id: str = Depends(require_console_customer_id),
+    datasets_db: Session = Depends(get_datasets_db),
+    engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
+) -> QueryPreviewOut:
+    """契约试取（wire-panel-query-binding）：入参 = 面板 query 同形
+    （dataset_id 必填；filters/sort/limit/columns 可选），经**同一解析**
+    （parse_panel_query）与**同一执行路径**（契约刷新的 _query_dataset +
+    _build_snapshot——免费档本地零引擎、cell 档引擎 query）返回试取快照
+    ——试取与刷新同代码路径，**试取所见即刷新所得**（杜绝两套口径）。
+
+    语义边界：query 非法 422 带原因（试取是人机调试面，必须把非法处如实
+    递回，不像刷新路径宽容丢弃）；数据集跨客户/不存在 404（_dataset_or_404
+    穿透，不泄露存在性）；执行/快照失败（列不存在、引擎拒绝、免费窄面
+    LocalQueryError）400 带原因；试取不读不写产物与版本（保存仍走显式
+    保存），故不依赖 ai 库会话——只需 datasets 库会话（档位登记与本地行）。
+    """
+    query = query_contract.parse_panel_query(payload)
+    if query is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "查询契约非法：dataset_id 必须是非空字符串；filters ≤50 项且每项 "
+                "column 非空、op ∈ {eq,in,gt,gte,lt,lte,contains,startswith}；"
+                "sort ≤10 项且 dir ∈ {asc,desc}；limit 为整数（夹取 1..1000）；"
+                "columns 为非空字符串数组（去重保序）"
+            ),
+        )
+    try:
+        result = query_contract._query_dataset(
+            datasets_db,
+            dataset_id=query["dataset_id"],
+            customer_id=customer_id,
+            query=query,
+            engine_factory=engine_factory,
+        )
+    except api_store.LocalQueryError as exc:  # 免费窄面拒绝（列/算子/值）
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (EngineUnavailable, EngineCallError) as exc:  # cell 未开通/引擎拒绝
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(result, dict) and result.get("error"):
+        raise HTTPException(status_code=400, detail=f"引擎拒绝: {result['error']}")
+    snapshot, error = query_contract._build_snapshot(query, result)
+    if error is not None:  # 形状/投影列不存在等快照失败
+        raise HTTPException(status_code=400, detail=error)
+    return QueryPreviewOut(snapshot=snapshot, query=query)

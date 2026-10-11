@@ -84,6 +84,17 @@ class ArtifactRefreshOut(BaseModel):
     panels: list[PanelRefreshResult] | None = None
 
 
+class QueryPreviewOut(BaseModel):
+    """契约试取结果（wire-panel-query-binding）：试取快照 + 归一后 query。
+
+    snapshot 与契约刷新写回面板的快照同构（``{columns, rows}``）——试取与
+    刷新走同一执行路径，试取所见即刷新所得。
+    """
+
+    snapshot: dict[str, Any]
+    query: dict[str, Any]
+
+
 def artifact_detail(artifact: Artifact, spec: dict) -> ArtifactDetailOut:
     """ORM + 当前 spec → 详情视图（spec 来自版本表最新行）。"""
     return ArtifactDetailOut(

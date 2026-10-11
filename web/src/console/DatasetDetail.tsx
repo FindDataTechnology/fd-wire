@@ -7,6 +7,8 @@
 // 倒序事件时间线（before_seq 加载更早）、证据包下载。
 // 定时刷新小节（wire-refresh-scheduler 任务 4.1）：仅 derived 来源数据集在
 // 详情页底部出现（间隔预设 1h/6h/24h，创建/暂停恢复/删除/状态展示）。
+// CSV 导出（wire-dataset-export 任务 2.2）：头部「导出 CSV」按钮——blob 下载
+// + 截断（前 10,000 行）与失败如实呈现。
 // 契约：openspec/changes/wire-customer-local-data/reports/interfaces.md §3.3/§4、
 // openspec/changes/wire-provenance-ledger /api/v1/provenance/*。
 import { useCallback, useEffect, useState } from "react";
@@ -15,6 +17,7 @@ import {
   addCorrection,
   apiErrorText,
   deleteDataset,
+  exportDatasetCsv,
   fetchCorrections,
   fetchDataset,
   fetchDatasetRows,
@@ -111,6 +114,11 @@ export function DatasetDetail({
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // CSV 导出（wire-dataset-export 任务 2.2）：下载中禁用防重复；
+  // truncated=服务端 X-Export-Truncated（截断至前 10,000 行）如实提示。
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportTruncated, setExportTruncated] = useState(false);
 
   const loadDataset = useCallback(async () => {
     setError(false);
@@ -178,6 +186,31 @@ export function DatasetDetail({
       setDeleteError(apiErrorText(err, t("console.datasets.detail.deleteError")));
     } finally {
       setDeleting(false);
+    }
+  };
+
+  /** 导出 CSV：blob 经 URL.createObjectURL + a 标签触发下载后即回收；
+   *  失败如实呈现（apiErrorText 取后端 detail），成功且截断时标注。 */
+  const exportCsv = async () => {
+    if (exporting) return;
+    setExporting(true);
+    setExportError(null);
+    setExportTruncated(false);
+    try {
+      const { blob, filename, truncated } = await exportDatasetCsv(datasetId);
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+      setExportTruncated(truncated);
+    } catch (err) {
+      setExportError(apiErrorText(err, t("console.datasets.detail.exportError")));
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -261,17 +294,42 @@ export function DatasetDetail({
         </span>
         <button
           type="button"
+          data-testid="detail-export-csv"
+          disabled={exporting}
+          onClick={() => void exportCsv()}
+          className="ml-auto rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {exporting
+            ? t("console.datasets.detail.exporting")
+            : t("console.datasets.detail.exportCsv")}
+        </button>
+        <button
+          type="button"
           data-testid="detail-delete"
           onClick={() => {
             setDeleteError(null);
             setDeleteDialogOpen(true);
           }}
-          className="ml-auto rounded border border-rose-300 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50"
+          className="rounded border border-rose-300 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50"
         >
           {t("console.datasets.detail.deleteDataset")}
         </button>
       </div>
       <p className="mt-1 font-mono text-[11px] text-slate-400">{dataset.key}</p>
+
+      {exportError && (
+        <p data-testid="export-csv-error" className="mt-2 text-xs text-red-600">
+          {exportError}
+        </p>
+      )}
+      {exportTruncated && (
+        <p
+          data-testid="export-csv-truncated"
+          className="mt-2 text-xs text-amber-700"
+        >
+          {t("console.datasets.detail.exportTruncated")}
+        </p>
+      )}
 
       {deleteDialogOpen && (
         <div

@@ -8,6 +8,8 @@
 //   文案，如 429 的每日限额说明），由 UI 原样呈现、绝不静默吞掉。
 import { API_BASE } from "../catalog/api";
 import { loadSession } from "./auth";
+// 纯类型引用（契约试取入参 = 面板 query 同形）：spec.ts 零依赖，无环。
+import type { DashboardPanelQuery } from "./dashboard/spec";
 
 export type MessageRole = "user" | "assistant" | "tool_trace";
 
@@ -409,6 +411,73 @@ export function fetchDatasetRows(
     `${API_BASE}/v1/datasets/${datasetId}/rows?page=${page}&page_size=${pageSize}`,
     { method: "GET" },
   ) as Promise<DatasetRows>;
+}
+
+// ── 数据集 CSV 导出（wire-dataset-export 任务 2.2）────────────────────
+// 契约：GET /api/v1/datasets/{id}/export（Bearer 登录身份，跨客户 404）——
+// 响应 text/csv 全文（UTF-8 带 BOM，Excel 直开）；Content-Disposition
+// 文件名 = <数据集 key>.csv；行数超 10,000 时头 X-Export-Truncated: true。
+
+/** CSV 导出结果：blob 交给调用方触发下载；truncated=已截断至前 10,000 行。 */
+export interface DatasetCsvExport {
+  blob: Blob;
+  filename: string;
+  truncated: boolean;
+}
+
+/** 导出数据集有效视图为 CSV（非 JSON 端点——带鉴权头 fetch 后转 blob，
+ *  文件名取响应 Content-Disposition，缺省按 <datasetId>.csv 兜底命名；
+ *  错误语义与 requestJson 完全一致：ConsoleApiError 带 status/detail）。 */
+export async function exportDatasetCsv(
+  datasetId: string,
+): Promise<DatasetCsvExport> {
+  const url = `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/export`;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "text/csv",
+        ...bearerHeaders(),
+      },
+    });
+  } catch (err) {
+    if (err instanceof ConsoleApiError) throw err;
+    throw new ConsoleApiError(
+      `network error fetching ${url}: ${(err as Error).message}`,
+    );
+  }
+  if (!response.ok) {
+    let detail: string | undefined;
+    try {
+      const data: unknown = await response.json();
+      if (
+        data &&
+        typeof data === "object" &&
+        typeof (data as { detail?: unknown }).detail === "string"
+      ) {
+        detail = (data as { detail: string }).detail;
+      }
+    } catch {
+      /* 无 JSON body：保留 undefined */
+    }
+    throw new ConsoleApiError(
+      `console api ${response.status} for ${url}`,
+      response.status,
+      detail,
+    );
+  }
+  const disposition = response.headers?.get?.("content-disposition") ?? "";
+  const match = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  const filename = match?.[1] ?? `${datasetId}.csv`;
+  const truncated =
+    (response.headers?.get?.("x-export-truncated") ?? "").toLowerCase() ===
+    "true";
+  try {
+    return { blob: await response.blob(), filename, truncated };
+  } catch (err) {
+    throw new ConsoleApiError(`invalid body from ${url}: ${(err as Error).message}`);
+  }
 }
 
 /** 写修正层（改值/删行/加行）；不回写客户源。 */
@@ -1247,6 +1316,37 @@ export function refreshDashboard(id: number): Promise<DashboardRefreshResult> {
     `${API_BASE}/v1/artifacts/${id}/refresh`,
     "POST",
   ) as Promise<DashboardRefreshResult>;
+}
+
+// ── 契约试取（wire-panel-query-binding 任务 2.1 web 面）────────────────────
+// 契约（api 仓 artifacts/routes.py，proposal 冻结形状）：
+// POST /api/v1/artifacts/query-preview（Bearer 登录身份）——入参 = 面板 query
+// 同形（dataset_id/filters/sort/limit/columns，DashboardPanelQuery）；复用
+// 契约刷新同一执行路径（parse_panel_query → _query_dataset → _build_snapshot），
+// 返回 {snapshot:{columns,rows}, query:{归一后}}——所见即所刷（试取与刷新
+// 同一条代码路径，杜绝两口径）。错误：422=入参非法（parse 拒收）；
+// 404=数据集不存在/他企；400=查询执行失败（引擎拒绝/列不存在，detail 带
+// 原因）——一律 ConsoleApiError 带 detail，UI 如实呈现。
+
+/** 契约试取响应：snapshot 与面板快照同形（列序=投影列序）；query 为服务端
+ *  归一后契约（limit 缺省补 100、columns 空为 null 等，前端写回前再过
+ *  normalizePanelQuery）。 */
+export interface QueryPreviewResult {
+  snapshot: {
+    columns: string[];
+    rows: Array<Array<string | number | null>>;
+  };
+  query: Record<string, unknown>;
+}
+
+/** 试取面板契约查询（不落库——结果只进编辑器本地预览快照）。 */
+export function queryPreview(
+  payload: DashboardPanelQuery,
+): Promise<QueryPreviewResult> {
+  return requestJson(`${API_BASE}/v1/artifacts/query-preview`, {
+    method: "POST",
+    body: payload,
+  }) as Promise<QueryPreviewResult>;
 }
 
 // ── 定时刷新调度（wire-refresh-scheduler 任务 4.1 web 面）──────────────────

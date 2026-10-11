@@ -7,14 +7,23 @@
 //   按 type 展开（kpi=单位/副标题，line/bar=x/y 轴名）；未保存变更计数
 //   （draft 与已保存基线按面板深比较的差异数）。
 // wire-dashboard-query-contract 任务 2.2：带 query 的面板在详情区显示
-//   「已绑定查询」徽标 + dataset_id（只读——刷新契约，v0 不做表单编辑）；
-//   增删/移序/复制/互转/保存一律保留 query 不抹掉（helpers 结构化拷贝天然
-//   覆盖，spec.test 断言）。
+//   「已绑定查询」徽标 + dataset_id；增删/移序/复制/互转/保存一律保留 query
+//   不抹掉（helpers 结构化拷贝天然覆盖，spec.test 断言）。
+// wire-panel-query-binding 任务 2.1：徽标升级为「绑定查询」表单段
+//   （PanelQueryBinding）——数据集选择/列勾选/过滤/排序/limit + 试取数据
+//   （queryPreview → snapshot 写进本地编辑态面板）+ 解绑 + 已有 query 回填；
+//   数据集列表编辑器层懒加载一次共享。
 // 编辑态实时预览复用 DashboardRenderer；保存走既有 PUT（saveArtifactSpec，
-// version 递增由服务端）；未保存离开 confirm 提示（含 beforeunload 兜底）。
-import { useEffect, useMemo, useState } from "react";
+//   version 递增由服务端）；未保存离开 confirm 提示（含 beforeunload 兜底）。
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { apiErrorText, saveArtifactSpec, type ArtifactDetail } from "../api";
+import {
+  apiErrorText,
+  fetchDatasets,
+  saveArtifactSpec,
+  type ArtifactDetail,
+  type Dataset,
+} from "../api";
 import {
   DASHBOARD_PANEL_SPANS,
   DASHBOARD_PANEL_TYPES,
@@ -29,6 +38,7 @@ import {
   type DashboardSpecV1,
 } from "./spec";
 import { DashboardRenderer } from "./DashboardRenderer";
+import { PanelQueryBinding } from "./PanelQueryBinding";
 
 /** 表单输入 → 契约格子值：空 → null；完整数字样式 → number；其余（含
  *  输入中的 "3." 等未完成态）原样字符串——不打断受控输入。 */
@@ -60,6 +70,32 @@ export function DashboardEditor({
   const [saving, setSaving] = useState(false);
   const [savedVersion, setSavedVersion] = useState<number | null>(null);
   const [serverError, setServerError] = useState<string | null>(null);
+
+  // 「绑定查询」表单的数据集列表：编辑器层懒加载一次（首个表单段打开时），
+  // 全部面板共享；失败如实呈现（可随再次打开重试）。
+  const [datasets, setDatasets] = useState<Dataset[] | null>(null);
+  const [datasetsLoading, setDatasetsLoading] = useState(false);
+  const [datasetsError, setDatasetsError] = useState<string | null>(null);
+  const datasetsStartedRef = useRef(false);
+  const ensureDatasets = useCallback(() => {
+    if (datasetsStartedRef.current) return;
+    datasetsStartedRef.current = true;
+    setDatasetsLoading(true);
+    setDatasetsError(null);
+    fetchDatasets()
+      .then((list) => setDatasets(list))
+      .catch((err) => {
+        // 失败允许重试：复位启动标记，再次打开表单段即重新拉取。
+        datasetsStartedRef.current = false;
+        setDatasetsError(
+          apiErrorText(
+            err,
+            t("console.dashboard.editor.queryForm.datasetsLoadFailed"),
+          ),
+        );
+      })
+      .finally(() => setDatasetsLoading(false));
+  }, [t]);
 
   const dirty = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(baseline),
@@ -451,27 +487,18 @@ export function DashboardEditor({
                     className="w-56 rounded border border-slate-300 px-2 py-1 font-mono text-xs"
                   />
                 </div>
-                {/* 查询契约徽标（wire-dashboard-query-contract 任务 2.2）：带
-                    query 的面板只读展示绑定数据集——刷新按此契约取数，v0 不做
-                    表单编辑（编辑动作不抹 query，由 helpers 深拷贝/展开保证）。 */}
-                {panel.query && (
-                  <div
-                    className="mt-2 flex flex-wrap items-center gap-2"
-                    data-testid="editor-panel-query"
-                  >
-                    <span
-                      title={t("console.dashboard.editor.queryReadonlyHint")}
-                      className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] text-sky-700"
-                    >
-                      {t("console.dashboard.editor.queryBadge")}
-                    </span>
-                    <span className="font-mono text-[11px] text-slate-500">
-                      {t("console.dashboard.editor.queryDataset", {
-                        id: panel.query.dataset_id,
-                      })}
-                    </span>
-                  </div>
-                )}
+                {/* 绑定查询段（wire-panel-query-binding 任务 2.1）：未绑定 →
+                    「未绑定」+「绑定」入口；已绑定回填原值展开表单（试取/解绑
+                    见 PanelQueryBinding；query 随面板字段走既有保存链）。 */}
+                <PanelQueryBinding
+                  key={panel.id}
+                  panel={panel}
+                  datasets={datasets}
+                  datasetsLoading={datasetsLoading}
+                  datasetsError={datasetsError}
+                  onEnsureDatasets={ensureDatasets}
+                  onPatchPanel={patchPanel}
+                />
                 {panel.type === "kpi" && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <label className="text-[11px] text-slate-400">

@@ -467,13 +467,57 @@ const en: Translation = {
           "KPI cards and charts use different data calibers (a KPI card shows only the first value) — converting changes how this panel is presented. Convert anyway?",
         sourceLabel: "Source",
         sourcePlaceholder: "Indicator code / dataset name (refresh relies on this annotation)",
-        // Query contract badge (wire-dashboard-query-contract): panels with a
-        // bound query show the dataset read-only (refresh executes the
-        // contract; form editing is not available in v0).
+        // Query contract badge (wire-dashboard-query-contract): the badge in
+        // the binding-form header (rendered inside the form section since
+        // wire-panel-query-binding — see the queryForm group below).
         queryBadge: "Query bound",
         queryDataset: "Dataset {{id}}",
-        queryReadonlyHint:
-          "This panel is bound to a dataset query (refresh executes it); form editing is not available yet.",
+        // Binding form section (wire-panel-query-binding task 2.1): dataset
+        // picker / column checkboxes / filters / sort / limit plus preview and
+        // unbind copy; 422/404/400 surface the server detail verbatim
+        // (apiErrorText).
+        queryForm: {
+          sectionLabel: "Bind query",
+          unbound: "Not bound",
+          bind: "Bind",
+          unbind: "Unbind",
+          boundHint:
+            "This panel is bound to a dataset query; refresh executes this contract deterministically.",
+          datasetLabel: "Dataset",
+          datasetPlaceholder: "Select a dataset…",
+          datasetOption: "{{name}} ({{tier}} · {{rows}} rows)",
+          datasetOptionPlain: "{{name}} ({{rows}} rows)",
+          missingDatasetOption: "{{id}} (not in the list — possibly deleted)",
+          loadingDatasets: "Loading datasets…",
+          datasetsLoadFailed: "Failed to load the dataset list, please retry later.",
+          columnsLabel: "Columns",
+          columnsHint: "dataset order; unchecked = all columns",
+          filtersLabel: "Filters",
+          addFilter: "Add filter",
+          sortLabel: "Sort",
+          addSort: "Add sort",
+          dirAsc: "Ascending",
+          dirDesc: "Descending",
+          removeRow: "Remove",
+          op: {
+            eq: "equals",
+            in: "in (comma-separated values)",
+            gt: "greater than",
+            gte: "greater than or equal",
+            lt: "less than",
+            lte: "less than or equal",
+            contains: "contains",
+            startswith: "starts with",
+          },
+          limitLabel: "Row limit (1..1000)",
+          tryButton: "Preview data",
+          trying: "Previewing…",
+          previewOk: "Previewed {{rows}} row(s) into the local snapshot (not saved).",
+          tryFailed: "Preview failed, please retry later.",
+          needDataset: "Select a dataset before previewing.",
+          kpiHint:
+            "KPI convention: sort by the period column descending, set the row limit to 1, and project only the value column — the first snapshot value becomes the KPI after refresh.",
+        },
         xNameLabel: "X axis name",
         yNameLabel: "Y axis name",
         unsavedCount: "{{n}} unsaved change(s)",
@@ -828,6 +872,12 @@ const en: Translation = {
         deleteConfirm: "Confirm delete",
         deleting: "Deleting…",
         deleteError: "Failed to delete",
+        // CSV export (wire-dataset-export task 2.2): disabled while downloading,
+        // truncation reported honestly.
+        exportCsv: "Export CSV",
+        exporting: "Exporting…",
+        exportError: "Failed to export",
+        exportTruncated: "Export truncated to the first 10,000 rows.",
         provenance: {
           title: "Provenance",
           hint: "Append-only hash-chain ledger of this dataset's events — immutable once recorded; anchored epochs can be verified offline with the evidence package.",

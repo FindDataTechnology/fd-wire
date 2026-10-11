@@ -10,6 +10,9 @@
 - 行预览（cell 层透传引擎 ``preview``；api 层本地执行）、修正三件套
   （cell 层透传引擎覆盖层；api 层走本地修正层——wire-dataset-form-editing，
   基行永不改写）、同步历史、漂移恢复 ``resume``
+- CSV 导出 ``GET /api/v1/datasets/{id}/export``（wire-dataset-export）：
+  api 层本地有效视图全量；cell 层引擎 query 分页循环（1000/页 × 10 页
+  上限），触顶 ``X-Export-Truncated`` 如实标注；UTF-8 带 BOM
 - 连接器管理：配对令牌签发、列表（心跳推导状态）、改名、吊销
 - 配额：``GET /api/v1/datasets/quota``（免费档真实数字；付费档 max=null）
 
@@ -23,6 +26,7 @@ from __future__ import annotations
 import os
 import secrets
 from pathlib import Path
+from typing import Any
 
 from fastapi import (
     APIRouter,
@@ -34,7 +38,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -54,6 +58,7 @@ from .ingest import (
     TOOL_INGEST_CHUNK,
     TOOL_INGEST_COMMIT,
     TOOL_PREVIEW,
+    TOOL_QUERY,
     get_engine_client_factory,
 )
 from .models import Connector, ConnectorKey, ConnectorPairingToken, Dataset, DatasetSync, Upload
@@ -876,6 +881,128 @@ def revert_correction(
     except (EngineUnavailable, EngineCallError) as exc:
         raise _ensure_engine_ok(exc) from exc
     return {"reverted": bool(result.get("reverted", True))}
+
+
+# ------------------------------------------------------------- CSV 导出（wire-dataset-export）
+
+#: cell 档导出的引擎分页参数：每页 1000 行 × 最多 10 页 = 总量上限 10,000 行
+_EXPORT_PAGE_LIMIT = 1000
+_EXPORT_MAX_PAGES = 10
+
+
+def _csv_field(value: Any) -> str:
+    """单值 → RFC4180 字段：空值→空串、数值/bool 原样 str()；含逗号/引号/
+    换行（CR/LF）的字段以双引号包裹且内部引号翻倍。"""
+    if value is None:
+        return ""
+    text = str(value)
+    if any(ch in text for ch in (",", '"', "\n", "\r")):
+        return '"' + text.replace('"', '""') + '"'
+    return text
+
+
+def _rows_to_csv(names: list[str], rows: list[dict]) -> str:
+    """列名表头 + 数据行 → CSV 文本（行尾 CRLF，RFC4180）；BOM 由调用方
+    前置（只加一次，紧贴表头首字符）。"""
+    lines = [",".join(_csv_field(name) for name in names)]
+    for row in rows:
+        lines.append(",".join(_csv_field(row.get(name)) for name in names))
+    return "\r\n".join(lines) + "\r\n"
+
+
+def _export_cell_rows(
+    dataset: Dataset, customer_id: str, engine_factory: EngineClientFactory
+) -> tuple[list[str], list[dict], bool]:
+    """cell 档导出取数：引擎 query 分页循环（1000 行/页，最多 10 页）。
+
+    返回 (列名, 行列表, 是否触顶)：任一页短页即数据见底（未触顶）；10 页
+    全满页即**仍可能有更多行**（引擎不承诺 total 精确，短页探测是唯一可靠
+    的见底信号）——由端点加 ``X-Export-Truncated: true`` 如实标注，绝不
+    静默丢行、不谎报全量。引擎不可达/信封错误一律 502 fail-closed。
+    """
+    client = engine_factory(customer_id)
+    names: list[str] = []
+    rows: list[dict] = []
+    for page in range(_EXPORT_MAX_PAGES):
+        try:
+            result = client.call(
+                TOOL_QUERY,
+                {
+                    "dataset_key": dataset.key,
+                    "filters": [],
+                    "sort": [],
+                    "limit": _EXPORT_PAGE_LIMIT,
+                    "offset": page * _EXPORT_PAGE_LIMIT,
+                },
+            )
+        except (EngineUnavailable, EngineCallError) as exc:
+            raise _ensure_engine_ok(exc) from exc
+        if not isinstance(result, dict) or result.get("error"):
+            rejected = result.get("error") if isinstance(result, dict) else result
+            raise engine_failure(EngineCallError(f"引擎拒绝: {rejected}"))
+        if not names:  # 列序以首页响应列卡为准（后续页同集同序）
+            cards = result.get("columns")
+            if not isinstance(cards, list):
+                raise engine_failure(
+                    EngineCallError(f"引擎返回缺少 columns 列卡数组: {result!r}")
+                )
+            for card in cards:
+                if not isinstance(card, dict) or not isinstance(card.get("name"), str):
+                    raise engine_failure(EngineCallError(f"引擎返回列卡形态异常: {card!r}"))
+            names = [card["name"] for card in cards]
+        page_rows = result.get("rows")
+        if not isinstance(page_rows, list):
+            raise engine_failure(EngineCallError(f"引擎返回缺少 rows 行数组: {result!r}"))
+        for row in page_rows:  # 行形态异常 fail-closed（绝不静默丢行）
+            if not isinstance(row, dict):
+                raise engine_failure(EngineCallError(f"引擎返回行形态异常: {row!r}"))
+        rows.extend(page_rows)
+        if len(page_rows) < _EXPORT_PAGE_LIMIT:
+            return names, rows, False
+    return names, rows, True
+
+
+@router.get("/api/v1/datasets/{dataset_id}/export")
+def export_dataset_csv(
+    dataset_id: str,
+    customer_id: str = Depends(require_console_customer_id),
+    db: Session = Depends(get_db),
+    engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
+) -> Response:
+    """导出数据集有效视图 CSV（wire-dataset-export）。
+
+    与预览/查询同有效视图口径（含修正）：api 档（免费档）走本地
+    ``_effective_rows`` 全量导出——行数天然在免费档单集上限内，无截断；
+    cell 档走引擎 query 分页循环（1000 行/页 × 最多 10 页），**总量上限
+    10,000 行**：第 10 页仍满页即可能还有更多行，响应头
+    ``X-Export-Truncated: true`` 如实标注（客户端据此提示「已截断至前
+    10,000 行」），不静默丢行、不谎报全量。
+
+    CSV 约定：UTF-8 带 BOM（Excel 直开）；表头=列名行；值按 RFC4180 转义
+    （含逗号/引号/换行 → 双引号包裹与内部引号翻倍；空值→空串；数值/bool
+    原样 str）；行尾 CRLF。``Content-Disposition`` 文件名 = 数据集 key.csv；
+    跨客户/不存在一律 404（不泄露存在性）。行数有界（api 档免费上限 /
+    cell 档 10k 闸），一次性响应即可，无需流式。
+    """
+    dataset = _dataset_or_404(db, dataset_id, customer_id)
+    truncated = False
+    if getattr(dataset, "storage_tier", service.TIER_CELL) == service.TIER_API:
+        # 免费档本地全量（含修正的有效视图；``__row_id`` 是预览用合成锚，
+        # 不属于数据列，导出按列注册表投影自然剔除）。
+        stats = api_store.schema_of(db, dataset_id=dataset.id)
+        names = [column["name"] for column in stats["columns"]]
+        rows = api_store._effective_rows(db, dataset.id)
+    else:
+        names, rows, truncated = _export_cell_rows(dataset, customer_id, engine_factory)
+    csv_text = "\ufeff" + _rows_to_csv(names, rows)
+    headers = {"Content-Disposition": f'attachment; filename="{dataset.key}.csv"'}
+    if truncated:
+        headers["X-Export-Truncated"] = "true"
+    return Response(
+        content=csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers=headers,
+    )
 
 
 # ------------------------------------------------------------- 同步历史 / 恢复
