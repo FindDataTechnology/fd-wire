@@ -40,6 +40,23 @@
     CELL_PLATFORM_CREDENTIAL     平台轨凭据单值（全部 cell 共用），
                                   provision 时注入容器 WIRE_PLATFORM_KEY；
                                   未配置则不注入（同上，生产必须配置）
+    CELL_STORAGE                 cell 数据根画像：sqlite | postgres（默认
+                                  sqlite=行为零变化）。postgres=一 cell 一库，
+                                  自动建库+发凭据（wire-cell-pg-provisioning）
+    CELL_PG_ADMIN_URL            postgres 画像管理连接（SQLAlchemy 形态
+                                  postgresql+psycopg://…；仅 DDL/探测用，
+                                  永不读业务数据——红线见
+                                  docs/cell-postgres-storage.md §2）
+    CELL_PG_URL_HOST/PORT        cell 容器视角的 PG 地址（拼
+                                  DAAS_DATABASE_URL 用，与管理地址可以不同）
+    CELL_OPENBAO_ADDR/TOKEN      OpenBAO（cheap-1 mcp-openbao）KV v2 地址与
+                                  专用 token（policy wire-cell-db 仅允许
+                                  secret/data/wire/cell-db/*）
+    CELL_OPENBAO_PATH_PREFIX     凭据逻辑路径前缀（默认 wire/cell-db）
+
+    storage=postgres 时 CELL_PG_ADMIN_URL / CELL_PG_URL_HOST / CELL_PG_URL_PORT /
+    CELL_OPENBAO_ADDR / CELL_OPENBAO_TOKEN **全部必需**（fail-closed，缺哪个
+    点名哪个）；另需 ``pip install 'cell-manager[postgres]'``（psycopg）。
 """
 
 from __future__ import annotations
@@ -198,6 +215,18 @@ class CellManagerConfig:
     #: 窗口：注册即触发安全扫描与健康探针，打未就绪 cell 会被判不可达并
     #: 自动禁用（2026-10-07 生产实证）；cell 镜像 HEALTHCHECK start-period 25s。
     readiness_timeout_seconds: float = 120.0
+    #: cell 数据根画像（CELL_STORAGE：sqlite|postgres；sqlite=行为零变化）
+    storage: str = "sqlite"
+    #: postgres 画像管理连接（CELL_PG_ADMIN_URL；仅 DDL/探测，永不读业务数据）
+    pg_admin_url: str = ""
+    #: cell 容器视角的 PG 地址（CELL_PG_URL_HOST / CELL_PG_URL_PORT）
+    pg_url_host: str = ""
+    pg_url_port: str = ""
+    #: OpenBAO KV v2 地址与专用 token（CELL_OPENBAO_ADDR / CELL_OPENBAO_TOKEN）
+    openbao_addr: str = ""
+    openbao_token: str = ""
+    #: 凭据逻辑路径前缀（CELL_OPENBAO_PATH_PREFIX；默认 wire/cell-db）
+    openbao_path_prefix: str = "wire/cell-db"
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "CellManagerConfig":
@@ -238,6 +267,43 @@ class CellManagerConfig:
             raise ConfigError(
                 f"CELL_READINESS_TIMEOUT must be > 0, got {readiness_timeout}"
             )
+        # cell 数据根画像（wire-cell-pg-provisioning）：sqlite=零变化；
+        # postgres=一 cell 一库 + OpenBAO 凭据托管，五项 env fail-closed 必需。
+        storage = e.get("CELL_STORAGE", "sqlite").strip().lower()
+        if storage not in ("sqlite", "postgres"):
+            raise ConfigError(
+                f"CELL_STORAGE must be 'sqlite' or 'postgres', got {storage!r}"
+            )
+        pg_admin_url = e.get("CELL_PG_ADMIN_URL", "").strip()
+        pg_url_host = e.get("CELL_PG_URL_HOST", "").strip()
+        pg_url_port = e.get("CELL_PG_URL_PORT", "").strip()
+        openbao_addr = e.get("CELL_OPENBAO_ADDR", "").strip()
+        openbao_token = e.get("CELL_OPENBAO_TOKEN", "").strip()
+        openbao_path_prefix = (
+            e.get("CELL_OPENBAO_PATH_PREFIX", "").strip() or "wire/cell-db"
+        )
+        if pg_url_port and not pg_url_port.isdigit():
+            raise ConfigError(
+                f"CELL_PG_URL_PORT must be a port number, got {pg_url_port!r}"
+            )
+        if storage == "postgres":
+            missing = [
+                name
+                for name, value in (
+                    ("CELL_PG_ADMIN_URL", pg_admin_url),
+                    ("CELL_PG_URL_HOST", pg_url_host),
+                    ("CELL_PG_URL_PORT", pg_url_port),
+                    ("CELL_OPENBAO_ADDR", openbao_addr),
+                    ("CELL_OPENBAO_TOKEN", openbao_token),
+                )
+                if not value
+            ]
+            if missing:
+                raise ConfigError(
+                    "CELL_STORAGE=postgres requires "
+                    + ", ".join(missing)
+                    + " to be set (fail-closed；sqlite 画像不受影响)"
+                )
         return cls(
             home=home,
             data_root=data_root,
@@ -257,6 +323,13 @@ class CellManagerConfig:
             preflight_map_path=e.get("CELL_PREFLIGHT_MAP_PATH", "").strip(),
             platform_credential=platform_credential,
             readiness_timeout_seconds=readiness_timeout,
+            storage=storage,
+            pg_admin_url=pg_admin_url,
+            pg_url_host=pg_url_host,
+            pg_url_port=pg_url_port,
+            openbao_addr=openbao_addr,
+            openbao_token=openbao_token,
+            openbao_path_prefix=openbao_path_prefix,
         )
 
     # ---- 派生命名（隔离保证：每 cell 独立卷目录 + 独立容器名 + 独立条目路径） ----

@@ -340,11 +340,70 @@ sqlite 卷在确认稳定前不清不删。
 | 冒烟结论 | ✅ healthy；entrypoint 日志 db=postgresql+psycopg://…/wire_cell_drillcust001；184 工具含 link；16 步实弹 0 FAIL（建集/摄取/类型强制/修正四环/写批/query+agg/link NULL 语义/派生/刷新/血缘/删除如实 404）；cell_event_wal 93 条、ingest 审计 51 条留档 |
 | 回退演练结论 | ✅ 迁移后 sqlite 卷 md5 不变（8ad6e0ff…）；切回基线 env 重建→sqlite 根 healthy、旧元数据在（datasets_meta=2）；再切回 PG 终态 healthy。快照语义确认：PG 侧 16 步数据不随回退带回（符合预期，非双向同步） |
 
-## 7. v1 边界（本文不做，均为后续 change）
+## 7. 自动开通（v2 · cell-manager，2026-10-12 wire-cell-pg-provisioning）
 
-- **cell-manager 自动「建库 + 发凭据」**（含凭据入 OpenBAO 动态下发）——
-  §3 的三条命令届时并入 provision 流程，本文只给手工配方。
-- **存量客户 cell 逐户搬迁编排**——v1 只搬 drill 试点（零客户价值租户），
-  验证「带着既有数据搬 + 回退保底」全流程；存量客户一律不动。
-- **50 万行上限转 `pg_database_size` 商业配额杠杆并重估数字**——v1 期间
-  引擎行上限逻辑原样保留，重估留后续 change。
+v1 的 §3 手工六步已并入 cell-manager provision 流程：`CELL_STORAGE=postgres`
+时全自动（建属主角色+建库+REVOKE+隔离四查+口令生成+**凭据入 OpenBAO**+env
+注入），幂等重入，失败零半写。**§3 从此只是原理参考与人肉兜底**，日常开通
+走本节。
+
+### 7.1 配置（cheap-1 /opt/cell-manager/env.sh 增量）
+
+```sh
+CELL_STORAGE=postgres                                   # 缺省 sqlite=行为不变
+CELL_PG_ADMIN_URL='postgresql+psycopg://<超管>:<密码>@100.64.0.12:5433/wire_platform'
+CELL_PG_URL_HOST=100.64.0.12                            # cell 容器视角地址
+CELL_PG_URL_PORT=5433
+CELL_OPENBAO_ADDR=http://100.64.0.11:8200               # cheap-1 mcp-openbao
+CELL_OPENBAO_TOKEN=<见 /root/wire-cell-openbao.token>   # 0600，勿入 git/会话
+```
+
+依赖：`pip install 'cell-manager[postgres]'`（仅 postgres 画像需要 psycopg；
+sqlite 画像零变化）。
+
+### 7.2 OpenBAO 运维前提（重要）
+
+- 实例=cheap-1 `mcp-openbao`（registry 栈成员，file backend）。**封印是
+  密封态特性**：重启后保持封印，需人工解封（钥+root token 在
+  /root/openbao-init-*.json，compose 注释即配方）。**封印期间 postgres
+  画像 provision 会 fail-closed 报「先解封」**——这是设计，不是故障。
+- cell-manager 专用 token：policy `wire-cell-db` 仅允许
+  `secret/data/wire/cell-db/*` 与 metadata（越路径拒），10 年可再生，落
+  /root/wire-cell-openbao.token（0600）。铸造配方（root token 从 init json
+  取，全程服务器侧）：
+  ```sh
+  curl -X PUT -H "X-Vault-Token: $RT" -d '{"policy":"path "secret/data/wire/cell-db/*" { capabilities = ["create","read","update","delete","list"] } path "secret/metadata/wire/cell-db/*" { capabilities = ["read","delete","list"] }"}' http://127.0.0.1:8200/v1/sys/policies/acl/wire-cell-db
+  curl -X POST -H "X-Vault-Token: $RT" -d '{"policies":["wire-cell-db"],"ttl":"87600h","renewable":true}' http://127.0.0.1:8200/v1/auth/token/create
+  ```
+
+### 7.3 生命周期语义（与卷对齐）
+
+| 动作 | PG 库/角色 | 卷 |
+|---|---|---|
+| provision（幂等重入） | 已在则验 ACL+复用 OpenBAO 凭据；条目缺失→轮换口令自愈 | 建空卷 |
+| deprovision（退租保留期） | **保留**（审计/恢复） | 保留 |
+| purge（保留期满） | **删库+删角色**（DROP DATABASE WITH (FORCE)） | 删除 |
+
+### 7.4 备份自动覆盖
+
+backup.sh 已改为动态发现 `wire_cell_%` 全部库（`deploy/wire-postgres/backup.sh`），
+新 cell 库**自动**进每日备份——建库后无需改任何清单（v1 的硬编码清单债已根除）。
+
+### 7.5 试点记录锚点（pgauto001，做完即填）
+
+| 项 | 结果 |
+|---|---|
+| 全自动开通时刻（零手工 SQL） | ____ |
+| 隔离四查（自动验证输出） | ____ |
+| OpenBAO 条目写入路径 | ____ |
+| 容器 PG 根 healthy + MCP 快速冒烟 | ____ |
+| 幂等重入（二次 provision ACTIVE no-op） | ____ |
+| 凭据零泄露抽查（audit/state/日志无明文） | ____ |
+
+## 8. 边界（后续 change）
+
+- **存量客户 cell 逐户搬迁编排**——v2 起新 cell 自动 PG；存量 sqlite cell
+  （含手动迁移的 drill）按 §4/§5 手工配方低峰逐户，编排留后续。
+- **50 万行上限转 `pg_database_size` 商业配额杠杆并重估数字**——引擎行上限
+  逻辑原样保留，重估留后续 change。
+- OpenBAO auto-unseal / 高可用（registry 栈既有课题）。

@@ -31,9 +31,11 @@ from cell_manager.config import CellManagerConfig, validate_customer_id
 from cell_manager.db import init_volume
 from cell_manager.drivers.base import BindMount, ContainerDriver, ContainerSpec
 from cell_manager.errors import CellManagerError, InvalidCellStateError, UnknownCellError
+from cell_manager.openbao import OpenbaoClient
 from cell_manager.provenance import ProvenanceForwarder
 from cell_manager.registry.base import RegistryClient, ServerEntry
 from cell_manager.state import ACTIVE, PAUSED, RETENTION, StateStore
+from cell_manager.storage_pg import PostgresStorage
 
 #: 容器内数据卷挂载点（DAAS_DATABASE_URL 指向其下 daas.db）
 CONTAINER_DATA_DIR = "/data"
@@ -102,6 +104,18 @@ class CellManager:
         #: 生命周期事件 → 平台溯源账本（wire-provenance-ledger 任务 4.2）。
         #: env 未配置 CELL_PROVENANCE_URL 时为 None（纯 JSONL 审计）。
         self._provenance = provenance_forwarder
+        #: PG 数据根画像（wire-cell-pg-provisioning）：CELL_STORAGE=postgres 时
+        #: 自动建库+发凭据（一 cell 一库，凭据入 OpenBAO）；sqlite 画像恒 None，
+        #: 所有 postgres 分支零触达、行为与现状完全一致。
+        self._storage: PostgresStorage | None = None
+        if config.storage == "postgres":
+            self._storage = PostgresStorage(
+                admin_url=config.pg_admin_url,
+                url_host=config.pg_url_host,
+                url_port=config.pg_url_port,
+                openbao=OpenbaoClient(config.openbao_addr, config.openbao_token),
+                path_prefix=config.openbao_path_prefix,
+            )
 
     # ==================== 生命周期操作（均落审计） ====================
 
@@ -165,18 +179,22 @@ class CellManager:
                     "/fd-find-data-business-mcp/mcp"
                 )
 
-            spec = ContainerSpec(
-                name=container_name,
-                image=self._config.image,
-                env=env,
-                network=self._config.network,
-                binds=(BindMount(host_path=str(db_path.parent), container_path=CONTAINER_DATA_DIR),),
-            )
             # 创建→启动→等就绪→注册，整体原子：任何一步失败即回滚
-            # （删容器+删刚建的空卷），不留孤儿。
+            # （删容器+删刚建的空卷+删本次新建的 PG 角色/库），不留孤儿。
             # 等就绪是注册的硬前置：registry 注册即触发安全扫描与健康探针，
             # 打未就绪 cell 会被判不可达并自动禁用（2026-10-07 生产实证）。
+            # PG 画像的建库放在同一原子圈内：DAAS_DATABASE_URL 从 sqlite 缺省
+            # 覆盖为 wire_cell_<id> 的 PostgreSQL URL（wire-cell-pg-provisioning）。
             try:
+                if self._storage is not None:
+                    env["DAAS_DATABASE_URL"] = self._storage.provision(customer_id)
+                spec = ContainerSpec(
+                    name=container_name,
+                    image=self._config.image,
+                    env=env,
+                    network=self._config.network,
+                    binds=(BindMount(host_path=str(db_path.parent), container_path=CONTAINER_DATA_DIR),),
+                )
                 self._driver.create(spec)
                 self._driver.start(container_name)
                 self._driver.wait_ready(
@@ -199,6 +217,13 @@ class CellManager:
                         self._driver.remove(container_name, force=True)
                 except Exception:  # noqa: BLE001 —— 回滚尽力，原异常优先
                     pass
+                # PG 画像：只删本次 provision 新建的角色/库（尽力而为，
+                # 原异常优先；半建的既有资产——如 v1 手工角色——不动）
+                if self._storage is not None:
+                    try:
+                        self._storage.teardown_created(customer_id)
+                    except Exception:  # noqa: BLE001 —— 回滚尽力，原异常优先
+                        pass
                 shutil.rmtree(volume_dir, ignore_errors=True)
                 raise
             now = utc_now_iso()
@@ -209,19 +234,38 @@ class CellManager:
                 "volume_path": str(volume_dir),
                 "registry_path": registry_path,
                 "image": self._config.image,
+                # 数据根画像（sqlite 旧记录读侧用 record.get("storage","sqlite")）
+                "storage": self._config.storage,
                 "created_at": now,
                 "updated_at": now,
                 "purge_at": None,
             }
             self._state.put(record)
-            return self._record_status(record), {
+            detail = {
                 "db_path": str(db_path),
                 "target_url": self._config.target_url(customer_id),
                 # 凭据注入留痕（只记 env 名，不落凭据明文）
                 "injected_credential_env": [
-                    key for key in ("WIRE_CUSTOMER_KEY", "WIRE_PLATFORM_KEY") if key in spec.env
+                    key
+                    for key in ("WIRE_CUSTOMER_KEY", "WIRE_PLATFORM_KEY")
+                    if key in spec.env
                 ],
             }
+            if self._storage is not None:
+                # PG 画像留痕：库名 / 托管路径 / 注入的凭据 env 名——
+                # 只有名字，绝无口令与 URL 明文
+                detail.update(
+                    storage="postgres",
+                    database=f"wire_cell_{customer_id}",
+                    openbao_path=self._storage.secret_path(customer_id),
+                )
+                detail["injected_credential_env"].append("DAAS_DATABASE_URL")
+                # 隔离四查的自动验证输出（docs §7.5 试点锚点要可观测；
+                # 布尔真值与 skip 注记，无任何凭据）
+                report = self._storage.report(customer_id)
+                if report.get("isolation_checks"):
+                    detail["storage_isolation"] = report["isolation_checks"]
+            return self._record_status(record), detail
 
         return self._run("provision", customer_id, _do)
 
@@ -275,7 +319,8 @@ class CellManager:
         return self._run("cancel_deprovision", customer_id, _do)
 
     def purge(self, customer_id: str) -> CellStatus:
-        """清除（不可逆）：删容器 + 删卷 + 摘 registry 条目 + 删授权 scope + 删簿记；审计留档。"""
+        """清除（不可逆）：删容器 + 删卷 +（PG 画像）删 wire_cell_<id> 库/角色 +
+        摘 registry 条目 + 删授权 scope + 删簿记；审计留档。"""
 
         def _do() -> tuple[CellStatus, dict[str, Any]]:
             record = self._require(customer_id, expect=RETENTION, action="purge")
@@ -285,6 +330,11 @@ class CellManager:
                 self._driver.remove(container_name, force=True)
             if volume_path.exists():
                 shutil.rmtree(volume_path)
+            # PG 画像：与删卷同批清 wire_cell_<id> 库+角色（幂等、失败抛出，
+            # 不静默半删——容器/卷已清、库角色残留时 purge 可整段重跑）。
+            # deprovision 不动库（保留期语义，见方法 docstring 与 docs §7.3）。
+            if record.get("storage") == "postgres" and self._storage is not None:
+                self._storage.destroy(customer_id)
             unregistered = self._registry.unregister(record["registry_path"])
             # 授权束回收兜底（正常路径 deprovision 阶段已删；此处幂等再删一次，
             # 防中途 cancel 后直奔 purge 的绕行）。

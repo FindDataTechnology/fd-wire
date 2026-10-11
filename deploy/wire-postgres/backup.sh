@@ -18,9 +18,13 @@ STAMP="$(date -u +%Y%m%d-%H%M%S)"
 OUT_DIR="backups"
 mkdir -p "$OUT_DIR"
 
-# 两库逐库 pg_dump（custom 格式外的纯 SQL 便于人工审阅 + gzip）；
+# 库清单 = 平台两库 + 动态发现的全部 wire_cell_% 库（一 cell 一库，
+# wire-cell-pg-provisioning：新 cell 库自动进备份，无需改清单）。
 # 任一库失败即整体失败（备份宁错杀不静默）。
-for db in "$POSTGRES_DB" wire_datasets; do
+CELL_DBS="$(docker compose exec -T --no-TTY wire-postgres \
+    psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc \
+    "select datname from pg_database where datname like 'wire_cell_%' order by datname")"
+for db in "$POSTGRES_DB" wire_datasets $CELL_DBS; do
     echo "[$(date -u +%FT%TZ)] backing up ${db} ..."
     docker compose exec -T --no-TTY wire-postgres \
         pg_dump -U "$POSTGRES_USER" --no-owner --no-privileges "$db" \

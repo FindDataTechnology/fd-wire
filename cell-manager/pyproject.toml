@@ -8,6 +8,9 @@ dependencies = []
 
 [project.optional-dependencies]
 docker = ["docker>=7.0"]
+# cell 数据根 PG 画像（wire-cell-pg-provisioning）：CELL_STORAGE=postgres 时
+# storage_pg 需要 psycopg；sqlite 画像零依赖不变。
+postgres = ["psycopg[binary]>=3.1"]
 dev = ["pytest>=8.2"]
 
 [build-system]
