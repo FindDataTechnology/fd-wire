@@ -66,6 +66,11 @@ A/B/C）与个人侧（C 端信息工作台，方向 D）——同一个供给�
   - **cell 数据根层**（真工程）：每客户 SQLite 卷 → per-cell `cell_<key>` database
     （一卷一库，隔离语义原样保留且更硬）；经 DAAS_PROFILE 存储画像发 postgres URL，
     謙面同源不分叉；cell-manager 增加"建库+发凭据"步骤（凭据入 OpenBAO）。
+    **v1 已上产（2026-10-12，wire-cell-postgres-storage）**：引擎可选 PG 数据根
+    （双方言矩阵 sqlite/PG 双绿，sqlite 默认字节不变）+ 一 cell 一库属主凭据纪律
+    （库级 ACL，平台角色无 CONNECT）+ drillcust001 试点搬迁与回退演练实弹通过；
+    剩余=cell-manager 自动建库发凭据（OpenBAO）、存量逐户编排、pg_database_size
+    配额重估。
 - 三条 spec 红线：①凭据纪律重述「永不直读」——cell 库属主凭据只归该 cell 引擎，
   平台管理角色策略禁读业务数据；②50 万行上限从"保护 SQLite"转为商业配额杠杆
   （`pg_database_size` 计量）并重估数字；③存量 cell 低峰逐户搬、卷保底可回退。

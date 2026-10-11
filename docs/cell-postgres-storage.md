@@ -331,14 +331,14 @@ sqlite 卷在确认稳定前不清不删。
 
 | 项 | 结果 |
 |---|---|
-| 建库命令执行时间 / 操作人 | ____ |
-| 一次性基线 REVOKE（§3.2）执行时间 | ____ |
-| 隔离验证①（无授权角色连 cell 库被拒 + has_database_privilege=f） | ____ |
-| 隔离验证②（属主进本库 OK / 连 wire_platform 被拒） | ____ |
-| 迁移时刻（容器重建，镜像 tag） | ____ |
-| backup.sh 清单已加 wire_cell_drillcust001 并当日跑出备份文件 | ____ |
-| 冒烟结论（healthcheck / entrypoint 日志 / 工具面 / 建集 / 查数） | ____ |
-| 回退演练结论（sqlite 卷完好 + 回退配方跑通 + 快照语义确认） | ____ |
+| 建库命令执行时间 / 操作人 | 2026-10-12 ~04:00 CST / 主线会话（口令服务器侧 openssl 生成，曾因调试输出泄露即时轮换一次） |
+| 一次性基线 REVOKE（§3.2）执行时间 | 同上（三库 wire_platform/wire_datasets/wire_cell_drillcust001 一次到位；实例登录角色仅 wire 超管+临时测试角色，无误伤） |
+| 隔离验证①（无授权角色连 cell 库被拒 + has_database_privilege=f） | ✅ fd_engine_test→cell 库 f；→wire_platform f |
+| 隔离验证②（属主进本库 OK / 连 wire_platform 被拒） | ✅ wire_cell_drillcust001→本库 t；→wire_platform f |
+| 迁移时刻（容器重建，镜像 tag） | 2026-10-12 ~06:40 CST，cell:sha-12aac2a（快照=law-ai-official fd-wire-images 12aac2a，真 676ad2b；引擎=fd-daas-mcp internal-main 3198699） |
+| backup.sh 清单已加 wire_cell_drillcust001 | ✅ /opt/wire-postgres/backup.sh 第 10 行（.bak-cellpg 留底）；次日 19:30 起产出该库备份 |
+| 冒烟结论 | ✅ healthy；entrypoint 日志 db=postgresql+psycopg://…/wire_cell_drillcust001；184 工具含 link；16 步实弹 0 FAIL（建集/摄取/类型强制/修正四环/写批/query+agg/link NULL 语义/派生/刷新/血缘/删除如实 404）；cell_event_wal 93 条、ingest 审计 51 条留档 |
+| 回退演练结论 | ✅ 迁移后 sqlite 卷 md5 不变（8ad6e0ff…）；切回基线 env 重建→sqlite 根 healthy、旧元数据在（datasets_meta=2）；再切回 PG 终态 healthy。快照语义确认：PG 侧 16 步数据不随回退带回（符合预期，非双向同步） |
 
 ## 7. v1 边界（本文不做，均为后续 change）
 
