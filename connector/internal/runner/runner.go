@@ -1,5 +1,7 @@
-// Package runner 编排单次全量快照同步：begin → chunk(≤2000 行) → commit，
+// Package runner 编排单次同步：begin → chunk(≤2000 行) → commit，
 // 任一环节失败即 abort（契约 §5）。行哈希不在连接器计算（引擎 ingest 时统一算）。
+// 数据集配了增量模式时改走适配器增量读取（只拉水位之后的行），并在 commit
+// 上报本轮最大水位；引擎侧 merge 语义由服务端负责，begin 请求不变。
 package runner
 
 import (
@@ -36,7 +38,8 @@ type Result struct {
 	CommitRows int // 引擎侧提交行数（commit 响应）
 }
 
-// Sync 执行一次全量同步。任何错误都会尽力 abort 服务端中间态后返回。
+// Sync 执行一次同步（全量或增量，由云端 sync_mode 决定）。任何错误都会
+// 尽力 abort 服务端中间态后返回。
 func (r *Runner) Sync(ctx context.Context, ds client.DatasetConfig) (result Result, err error) {
 	if r.Client == nil {
 		return result, errors.New("runner 缺少 api 客户端")
@@ -84,7 +87,7 @@ func (r *Runner) Sync(ctx context.Context, ds client.DatasetConfig) (result Resu
 		batchSize = client.MaxChunkRows
 	}
 	index := 0
-	snapshotErr := adapter.Snapshot(ctx, func(rows []adapters.Row) error {
+	pushBatch := func(rows []adapters.Row) error {
 		for start := 0; start < len(rows); start += batchSize {
 			end := start + batchSize
 			if end > len(rows) {
@@ -98,17 +101,63 @@ func (r *Runner) Sync(ctx context.Context, ds client.DatasetConfig) (result Resu
 			result.Chunks++
 		}
 		return nil
-	})
-	result.Rows = index
-	if snapshotErr != nil {
-		return result, snapshotErr
 	}
-	commit, err := r.Client.SyncCommit(ctx, syncID)
+
+	// 增量判定：数据集配了 incremental + 水位列，且适配器实现了增量读取。
+	inc := ds.SyncMode == "incremental" && ds.WatermarkColumn != ""
+	reader, canIncremental := adapter.(adapters.IncrementalReader)
+	var tracker *watermarkTracker
+	tracked := func(fn adapters.SnapshotFunc) adapters.SnapshotFunc {
+		return func(rows []adapters.Row) error {
+			tracker.Observe(rows)
+			return fn(rows)
+		}
+	}
+
+	var readErr error
+	switch {
+	case inc && canIncremental && ds.WatermarkValue != "":
+		// a. 增量窗口拉取：只读水位之后的行，同时追踪新水位。
+		tracker = newWatermarkTracker(ds.WatermarkColumn)
+		r.logf("数据集 %s：增量拉取 %s > %s", ds.Key, ds.WatermarkColumn, ds.WatermarkValue)
+		readErr = reader.Incremental(ctx, ds.WatermarkColumn, ds.WatermarkValue, tracked(pushBatch))
+	case inc && canIncremental:
+		// b. 首同步建基线：云端尚无水位，全量拉一遍并记录最大水位。
+		tracker = newWatermarkTracker(ds.WatermarkColumn)
+		r.logf("数据集 %s：增量模式首同步（云端无水位），全量建基线", ds.Key)
+		readErr = adapter.Snapshot(ctx, tracked(pushBatch))
+	case inc:
+		// c. 源不支持增量读取（如文件源）：回退全量快照，同步照常成功；
+		//    不上报新水位（云端水位不动）。
+		r.logf("数据集 %s：源 %s 不支持增量读取，回退全量快照（云端水位保持不变）", ds.Key, ds.Source)
+		readErr = adapter.Snapshot(ctx, pushBatch)
+	default:
+		// d. 全量模式：完全现状。
+		readErr = adapter.Snapshot(ctx, pushBatch)
+	}
+	result.Rows = index
+	if readErr != nil {
+		return result, readErr
+	}
+
+	commitReq := client.SyncCommitRequest{}
+	if tracker != nil {
+		commitReq.WatermarkValue = tracker.Value() // 零行/全 NULL → nil，云端水位不动
+	}
+	commit, err := r.Client.SyncCommit(ctx, syncID, commitReq)
 	if err != nil {
 		return result, err
 	}
 	committed = true
 	result.CommitRows = commit.Rows
+	if inc {
+		if commitReq.WatermarkValue != nil {
+			r.logf("数据集 %s：同步完成，推送 %d 行 / %d 块，水位更新至 %s", ds.Key, result.Rows, result.Chunks, *commitReq.WatermarkValue)
+		} else {
+			r.logf("数据集 %s：同步完成，推送 %d 行 / %d 块，无新水位（云端水位不动）", ds.Key, result.Rows, result.Chunks)
+		}
+		return result, nil
+	}
 	r.logf("数据集 %s：同步完成，推送 %d 行 / %d 块", ds.Key, result.Rows, result.Chunks)
 	return result, nil
 }

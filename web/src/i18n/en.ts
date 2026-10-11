@@ -911,6 +911,37 @@ const en: Translation = {
         exporting: "Exporting…",
         exportError: "Failed to export",
         exportTruncated: "Export truncated to the first 10,000 rows.",
+        // Incremental sync settings (wire-incremental-sync): connector-source
+        // datasets only — mode switch (incremental requires a watermark column),
+        // current watermark state, reset watermark (next sync rebuilds in full),
+        // and an honest merge-semantics note (source deletes do not propagate).
+        syncSettings: {
+          title: "Incremental sync",
+          modeLabel: "Sync mode",
+          modes: {
+            snapshot: "Full snapshot",
+            incremental: "Incremental (watermark)",
+          },
+          watermarkLabel: "Watermark column",
+          watermarkPlaceholder: "Pick a column…",
+          notSynced: "Not synced yet (first run takes a full baseline)",
+          statusModeLabel: "Mode",
+          statusColumnLabel: "Watermark column",
+          statusValueLabel: "Current watermark",
+          statusNone: "—",
+          save: "Save",
+          saving: "Saving…",
+          error: "Failed to save sync settings",
+          reset: "Reset watermark",
+          resetting: "Resetting…",
+          resetTitle: "Reset the watermark?",
+          resetWarning:
+            "The next sync will rebuild with a full snapshot (incremental merge is abandoned).",
+          resetConfirm: "Confirm reset",
+          resetCancel: "Cancel",
+          honestyNote:
+            "Incremental sync merges by primary key; rows deleted at the source are not removed. Reset the watermark to rebuild with a full snapshot.",
+        },
         // Re-derivation + scheduled re-derivation (wire-pipeline-actions task
         // 1.2): derived + cell tier only — per-level cascade results, honest
         // cron registration state, and an explicit UTC note.

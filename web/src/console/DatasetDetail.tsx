@@ -7,6 +7,9 @@
 // 倒序事件时间线（before_seq 加载更早）、证据包下载。
 // 定时刷新小节（wire-refresh-scheduler 任务 4.1）：仅 derived 来源数据集在
 // 详情页底部出现（间隔预设 1h/6h/24h，创建/暂停恢复/删除/状态展示）。
+// 增量同步设置卡片（wire-incremental-sync）：仅连接器来源数据集——模式
+// 切换（全量快照 / 增量水位，增量必须配水位列）+ 当前水位状态 + 重置水位
+// （二次确认：下次同步全量重建）+ 合并口径诚实注记；PATCH sync-settings。
 // CSV 导出（wire-dataset-export 任务 2.2）：头部「导出 CSV」按钮——blob 下载
 // + 截断（前 10,000 行）与失败如实呈现。
 // 重派生与定时重派生（wire-pipeline-actions 任务 1.2）：仅 derived + cell 档
@@ -42,10 +45,12 @@ import {
   resumeDataset,
   revertCorrection,
   updateProvenanceTier,
+  updateSyncSettings,
   type Correction,
   type CorrectionInput,
   type Dataset,
   type DatasetRows,
+  type DatasetSyncMode,
   type ProvenanceEvent,
   type ProvenanceOverview,
   type ProvenanceStatus,
@@ -413,6 +418,14 @@ export function DatasetDetail({
           setPreviewVersion((version) => version + 1);
         }}
       />
+      {/* 增量同步设置（wire-incremental-sync）：仅连接器来源——模式切换/
+          水位列/重置水位；其他来源一律不渲染（端点侧 422 闸兜底）。 */}
+      {dataset.source_kind === "connector" && (
+        <SyncSettingsSection
+          dataset={dataset}
+          onChanged={() => void loadDataset()}
+        />
+      )}
       <DanglingPanel corrections={corrections} revert={revert} />
       <ProvenancePanel datasetKey={dataset.key} />
       {/* 定时刷新小节（wire-refresh-scheduler 4.1）：仅 derived 来源数据集——
@@ -1433,6 +1446,267 @@ function SyncsPanel({
               className="rounded border border-slate-300 bg-white px-3 py-1 text-xs text-slate-600"
             >
               {t("console.datasets.detail.resumeCancel")}
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ── 增量同步设置（wire-incremental-sync）──────────────────────────────
+
+/** 增量同步卡片（仅连接器来源，渲染门禁在 DatasetDetail）：模式切换——
+ * 全量快照（snapshot）/ 增量水位（incremental，必须配水位列，下拉选项 =
+ * 数据集列清单）；当前状态——模式 / 水位列 / 水位值（字符串原样、长值截断
+ * +title 全文，未同步注记首次基线）；重置水位——二次确认（下次同步全量
+ * 重建）后 PATCH {reset_watermark: true}，只清水位值；诚实口径小字——增量
+ * 按主键合并、源端删除不传播。保存/重置失败（含 422）如实呈现后端 detail，
+ * 不崩卡片；成功后 onChanged 重拉详情（手动 fetch 模式，与页内其余小节同款）。 */
+function SyncSettingsSection({
+  dataset,
+  onChanged,
+}: {
+  dataset: Dataset;
+  onChanged: () => void;
+}) {
+  const { t } = useTranslation();
+  // 响应缺省容错：sync_mode 不带按 snapshot（旧后端与全量口径一致）。
+  const currentMode: DatasetSyncMode = dataset.sync_mode ?? "snapshot";
+  const [mode, setMode] = useState<DatasetSyncMode>(currentMode);
+  const [watermarkColumn, setWatermarkColumn] = useState(
+    dataset.watermark_column ?? "",
+  );
+  const [saving, setSaving] = useState(false);
+  const [opError, setOpError] = useState<string | null>(null);
+  const [resetConfirm, setResetConfirm] = useState(false);
+  const [resetting, setResetting] = useState(false);
+
+  // 详情重拉后（保存/重置成功、外部刷新）把本地草稿同步回服务端态。
+  useEffect(() => {
+    setMode(dataset.sync_mode ?? "snapshot");
+    setWatermarkColumn(dataset.watermark_column ?? "");
+  }, [dataset.id, dataset.sync_mode, dataset.watermark_column]);
+
+  // 客户端闸：增量未选水位列 → 保存禁用（服务端 422「增量必须配水位列」兜底）。
+  const incrementalWithoutColumn =
+    mode === "incremental" && watermarkColumn === "";
+
+  const save = async () => {
+    if (saving || resetting || incrementalWithoutColumn) return;
+    setSaving(true);
+    setOpError(null);
+    try {
+      await updateSyncSettings(
+        dataset.id,
+        mode === "incremental"
+          ? { sync_mode: "incremental", watermark_column: watermarkColumn }
+          : // 切回 snapshot：水位字段由服务端清空，客户端只发模式。
+            { sync_mode: "snapshot" },
+      );
+      onChanged();
+    } catch (err) {
+      setOpError(
+        apiErrorText(err, t("console.datasets.detail.syncSettings.error")),
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reset = async () => {
+    if (resetting) return;
+    setResetting(true);
+    setOpError(null);
+    try {
+      await updateSyncSettings(dataset.id, { reset_watermark: true });
+      setResetConfirm(false);
+      onChanged();
+    } catch (err) {
+      setOpError(
+        apiErrorText(err, t("console.datasets.detail.syncSettings.error")),
+      );
+    } finally {
+      setResetting(false);
+    }
+  };
+
+  const watermarkValue = dataset.watermark_value ?? null;
+
+  return (
+    <section data-testid="sync-settings-section" className="mt-6">
+      <h2 className="text-base font-semibold">
+        {t("console.datasets.detail.syncSettings.title")}
+      </h2>
+      {/* 合并口径诚实注记：增量按主键合并、源端删除不传播、重置回全量。 */}
+      <p
+        data-testid="sync-honesty-note"
+        className="mt-1 max-w-2xl text-xs text-slate-500"
+      >
+        {t("console.datasets.detail.syncSettings.honestyNote")}
+      </p>
+
+      {opError && (
+        <p data-testid="sync-settings-error" className="mt-2 text-xs text-red-600">
+          {opError}
+        </p>
+      )}
+
+      {/* 当前状态：模式 / 水位列 / 水位值（原样字符串，长值截断 + title；
+          未同步注记「首次将建立基线」）。 */}
+      <div
+        data-testid="sync-settings-status"
+        className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
+      >
+        <span
+          data-testid="sync-status-mode"
+          data-mode={currentMode}
+          className="text-slate-600"
+        >
+          <span className="text-slate-400">
+            {t("console.datasets.detail.syncSettings.statusModeLabel")}：
+          </span>
+          {t(`console.datasets.detail.syncSettings.modes.${currentMode}`)}
+        </span>
+        <span
+          data-testid="sync-status-column"
+          data-column={dataset.watermark_column ?? ""}
+          className="font-mono text-[11px] text-slate-700"
+        >
+          <span className="font-sans text-slate-400">
+            {t("console.datasets.detail.syncSettings.statusColumnLabel")}：
+          </span>
+          {dataset.watermark_column ??
+            t("console.datasets.detail.syncSettings.statusNone")}
+        </span>
+        <span data-testid="sync-status-value" className="text-slate-600">
+          <span className="text-slate-400">
+            {t("console.datasets.detail.syncSettings.statusValueLabel")}：
+          </span>
+          {watermarkValue == null ? (
+            currentMode === "incremental" ? (
+              <span data-testid="sync-not-synced" className="text-slate-400">
+                {t("console.datasets.detail.syncSettings.notSynced")}
+              </span>
+            ) : (
+              t("console.datasets.detail.syncSettings.statusNone")
+            )
+          ) : (
+            <span
+              data-testid="sync-status-value-text"
+              title={watermarkValue}
+              className="font-mono text-[11px] text-slate-700"
+            >
+              {truncate(watermarkValue, 32)}
+            </span>
+          )}
+        </span>
+        {/* 重置水位：增量已建立基线（水位值非空）才有意义；二次确认后 PATCH。 */}
+        {currentMode === "incremental" && watermarkValue != null && (
+          <button
+            type="button"
+            data-testid="sync-reset-button"
+            disabled={resetting || saving}
+            onClick={() => setResetConfirm(true)}
+            className="ml-auto rounded border border-slate-300 px-2 py-1 text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {resetting
+              ? t("console.datasets.detail.syncSettings.resetting")
+              : t("console.datasets.detail.syncSettings.reset")}
+          </button>
+        )}
+      </div>
+
+      {/* 编辑面：模式切换 + 水位列选择（增量时出现，选项 = 数据集列清单）。 */}
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs">
+        <label className="flex items-center gap-1.5 text-slate-600">
+          <span className="text-slate-500">
+            {t("console.datasets.detail.syncSettings.modeLabel")}
+          </span>
+          <select
+            data-testid="sync-mode-select"
+            data-mode={mode}
+            value={mode}
+            disabled={saving || resetting}
+            onChange={(e) => setMode(e.target.value as DatasetSyncMode)}
+            className="rounded border border-slate-300 px-1.5 py-1 text-xs"
+          >
+            <option value="snapshot">
+              {t("console.datasets.detail.syncSettings.modes.snapshot")}
+            </option>
+            <option value="incremental">
+              {t("console.datasets.detail.syncSettings.modes.incremental")}
+            </option>
+          </select>
+        </label>
+        {mode === "incremental" && (
+          <label className="flex items-center gap-1.5 text-slate-600">
+            <span className="text-slate-500">
+              {t("console.datasets.detail.syncSettings.watermarkLabel")}
+            </span>
+            <select
+              data-testid="watermark-column-select"
+              value={watermarkColumn}
+              disabled={saving || resetting}
+              onChange={(e) => setWatermarkColumn(e.target.value)}
+              className="rounded border border-slate-300 px-1.5 py-1 font-mono text-xs"
+            >
+              <option value="">
+                {t("console.datasets.detail.syncSettings.watermarkPlaceholder")}
+              </option>
+              {dataset.columns.map((column) => (
+                <option key={column.name} value={column.name}>
+                  {column.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <button
+          type="button"
+          data-testid="sync-settings-save"
+          disabled={saving || resetting || incrementalWithoutColumn}
+          onClick={() => void save()}
+          className="ml-auto rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+        >
+          {saving
+            ? t("console.datasets.detail.syncSettings.saving")
+            : t("console.datasets.detail.syncSettings.save")}
+        </button>
+      </div>
+
+      {resetConfirm && (
+        <div
+          data-testid="sync-reset-dialog"
+          role="dialog"
+          className="mt-3 rounded-lg border border-amber-300 bg-amber-50/60 p-4"
+        >
+          <h3 className="text-sm font-semibold text-amber-800">
+            {t("console.datasets.detail.syncSettings.resetTitle")}
+          </h3>
+          <p data-testid="sync-reset-warning" className="mt-1 text-xs text-slate-600">
+            {t("console.datasets.detail.syncSettings.resetWarning")}
+          </p>
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              data-testid="sync-reset-confirm"
+              disabled={resetting}
+              onClick={() => void reset()}
+              className="rounded bg-amber-600 px-3 py-1 text-xs text-white hover:bg-amber-700 disabled:bg-amber-300"
+            >
+              {resetting
+                ? t("console.datasets.detail.syncSettings.resetting")
+                : t("console.datasets.detail.syncSettings.resetConfirm")}
+            </button>
+            <button
+              type="button"
+              data-testid="sync-reset-cancel"
+              disabled={resetting}
+              onClick={() => setResetConfirm(false)}
+              className="rounded border border-slate-300 bg-white px-3 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {t("console.datasets.detail.syncSettings.resetCancel")}
             </button>
           </div>
         </div>

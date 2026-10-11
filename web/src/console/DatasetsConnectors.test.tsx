@@ -9,7 +9,15 @@ import "../i18n";
 import i18n from "../i18n";
 import { ConnectorsSection } from "./DatasetsConnectors";
 import { installConsoleBackend, seedConsoleSession } from "./testing";
-import type { Connector, ConnectorManifest } from "./api";
+import {
+  createDataset,
+  fetchDataset,
+  updateSyncSettings,
+  type Connector,
+  type Dataset,
+  type DatasetColumn,
+  type ConnectorManifest,
+} from "./api";
 
 const NOW = "2026-10-05T10:00:00";
 
@@ -198,7 +206,123 @@ describe("状态列表「最新版本」对照（任务 3.2/3.3）", () => {
     const latest = await screen.findByTestId("connector-latest");
     expect(latest.textContent).toContain("—");
     expect(
-      screen.queryByTestId("connector-upgrade-hint"),
+      screen.queryByTestId("connector-upgrade-hint")!,
     ).toBeNull();
+  });
+});
+
+// ── 增量同步设置契约镜像（wire-incremental-sync）──────────────────────
+// testing.ts 假后端逐端点对齐生产响应形状：数据集详情响应带 sync_mode /
+// watermark_column / watermark_value 三字段（wire-incremental-sync 契约），
+// PATCH /sync-settings 校验语义（非连接器 422、水位列 ∈ 列清单、增量必须
+// 配水位列、切回 snapshot 清水位字段、reset_watermark 只清水位值）。
+describe("增量同步设置假后端契约（wire-incremental-sync）", () => {
+  const SYNC_COLUMNS: DatasetColumn[] = [
+    { name: "id", type: "INTEGER" },
+    { name: "updated_at", type: "TEXT" },
+  ];
+
+  function makeSyncDataset(partial: Partial<Dataset> = {}): Dataset {
+    return {
+      id: "ds-9",
+      key: "ds_9",
+      name: "ERP 订单",
+      source_kind: "connector",
+      connector_id: "cn-1",
+      source_name: "erp_db",
+      source_ref: "public.orders",
+      columns: SYNC_COLUMNS,
+      row_count: 100,
+      size_bytes: 4096,
+      sync_cron: null,
+      sync_status: "ok",
+      paused_reason: null,
+      sync_mode: "snapshot",
+      watermark_column: null,
+      watermark_value: null,
+      created_at: NOW,
+      updated_at: NOW,
+      customer_id: "demo-customer",
+      ...partial,
+    };
+  }
+
+  it("新建数据集带三字段缺省（snapshot / null / null）——假后端数据集类型对齐详情响应", async () => {
+    install({
+      connectors: [makeConnector({ id: "cn-1", name: "erp" })],
+    });
+    const created = await createDataset({
+      name: "ERP 订单",
+      source: {
+        kind: "connector",
+        connector_id: "cn-1",
+        source_name: "erp_db",
+        source_ref: "public.orders",
+        schedule_cron: null,
+      },
+    });
+    expect(created.sync_mode).toBe("snapshot");
+    expect(created.watermark_column).toBeNull();
+    expect(created.watermark_value).toBeNull();
+  });
+
+  it("PATCH 校验语义：增量必须配水位列 422、水位列 ∉ 列清单 422；合法增量生效且详情刷新同口径", async () => {
+    install({ datasets: [makeSyncDataset()] });
+
+    // 增量未配水位列 → 422
+    await expect(
+      updateSyncSettings("ds-9", { sync_mode: "incremental" }),
+    ).rejects.toMatchObject({ status: 422 });
+    // 水位列不在列清单 → 422
+    await expect(
+      updateSyncSettings("ds-9", {
+        sync_mode: "incremental",
+        watermark_column: "nosuch",
+      }),
+    ).rejects.toMatchObject({ status: 422 });
+
+    // 合法增量 → 更新后数据集；详情刷新（fetchDataset）同口径
+    const incremental = await updateSyncSettings("ds-9", {
+      sync_mode: "incremental",
+      watermark_column: "updated_at",
+    });
+    expect(incremental.sync_mode).toBe("incremental");
+    expect(incremental.watermark_column).toBe("updated_at");
+    const detail = await fetchDataset("ds-9");
+    expect(detail.sync_mode).toBe("incremental");
+    expect(detail.watermark_column).toBe("updated_at");
+  });
+
+  it("切回 snapshot 清水位字段；reset_watermark 只清水位值（模式与水位列保持）", async () => {
+    install({
+      datasets: [
+        makeSyncDataset({
+          sync_mode: "incremental",
+          watermark_column: "updated_at",
+          watermark_value: "2026-10-11T08:30:00",
+        }),
+      ],
+    });
+
+    // reset_watermark：只清水位值
+    const reset = await updateSyncSettings("ds-9", { reset_watermark: true });
+    expect(reset.sync_mode).toBe("incremental");
+    expect(reset.watermark_column).toBe("updated_at");
+    expect(reset.watermark_value).toBeNull();
+
+    // 切回 snapshot：水位列与水位值都清空
+    const back = await updateSyncSettings("ds-9", { sync_mode: "snapshot" });
+    expect(back.sync_mode).toBe("snapshot");
+    expect(back.watermark_column).toBeNull();
+    expect(back.watermark_value).toBeNull();
+  });
+
+  it("非连接器数据集 PATCH → 422（端点侧闸兜底）", async () => {
+    install({
+      datasets: [makeSyncDataset({ id: "ds-8", key: "ds_8", source_kind: "upload" })],
+    });
+    await expect(
+      updateSyncSettings("ds-8", { sync_mode: "incremental", watermark_column: "id" }),
+    ).rejects.toMatchObject({ status: 422 });
   });
 });

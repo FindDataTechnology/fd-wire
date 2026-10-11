@@ -175,6 +175,10 @@ export interface ConsoleBackendOptions {
    *  返回该状态（如 422 校验回显）。 */
   failArtifactCreateStatus?: number;
   failArtifactCreateDetail?: string;
+  /** 强制 PATCH /api/v1/datasets/{id}/sync-settings 返回该状态
+   *  （wire-incremental-sync：422 校验回显等失败态）。 */
+  failSyncSettingsStatus?: number;
+  failSyncSettingsDetail?: string;
 }
 
 /** 源包种子（wire-source-packs）：假后端按 indicators 分页切片出详情。 */
@@ -1134,6 +1138,10 @@ export function installConsoleBackend(
         sync_cron: source.schedule_cron ?? null,
         sync_status: "ok",
         paused_reason: null,
+        // wire-incremental-sync：新建集缺省全量快照（三字段随详情响应下发）。
+        sync_mode: "snapshot",
+        watermark_column: null,
+        watermark_value: null,
         created_at: nowIso,
         updated_at: nowIso,
         customer_id: customerId,
@@ -1401,6 +1409,76 @@ export function installConsoleBackend(
         return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
       }
       return Promise.resolve(jsonResponse(syncs.get(dataset.id) ?? []));
+    }
+
+    // ── 增量同步设置（wire-incremental-sync 契约镜像）：PATCH
+    //    /api/v1/datasets/{id}/sync-settings——非连接器 422、水位列必须 ∈
+    //    列清单、增量必须配水位列、切回 snapshot 清水位字段、reset_watermark
+    //    只清水位值；返回更新后数据集（详情刷新同口径）。──
+    match = path.match(/^\/api\/v1\/datasets\/([^/]+)\/sync-settings$/);
+    if (match && method === "PATCH") {
+      const dataset = ownDataset(match[1]);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      if (options.failSyncSettingsStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failSyncSettingsDetail ??
+                `sync settings ${options.failSyncSettingsStatus}`,
+            },
+            options.failSyncSettingsStatus,
+          ),
+        );
+      }
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        sync_mode?: string;
+        watermark_column?: string;
+        reset_watermark?: boolean;
+      };
+      if (dataset.source_kind !== "connector") {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: "仅连接器（connector）来源数据集支持增量同步设置" },
+            422,
+          ),
+        );
+      }
+      if (payload.reset_watermark === true) {
+        dataset.watermark_value = null;
+        dataset.updated_at = "2026-10-11T09:00:00";
+        return Promise.resolve(jsonResponse(dataset));
+      }
+      const nextMode = payload.sync_mode ?? dataset.sync_mode ?? "snapshot";
+      if (nextMode === "incremental") {
+        const column = payload.watermark_column ?? dataset.watermark_column ?? "";
+        if (!column) {
+          return Promise.resolve(
+            jsonResponse(
+              { detail: "增量模式必须配置水位列（watermark_column）" },
+              422,
+            ),
+          );
+        }
+        if (!dataset.columns.some((c) => c.name === column)) {
+          return Promise.resolve(
+            jsonResponse(
+              { detail: `水位列 ${column} 不在数据集列清单中` },
+              422,
+            ),
+          );
+        }
+        dataset.sync_mode = "incremental";
+        dataset.watermark_column = column;
+      } else {
+        dataset.sync_mode = "snapshot";
+        dataset.watermark_column = null;
+        dataset.watermark_value = null;
+      }
+      dataset.updated_at = "2026-10-11T09:00:00";
+      return Promise.resolve(jsonResponse(dataset));
     }
 
     match = path.match(/^\/api\/v1\/datasets\/([^/]+)\/resume$/);

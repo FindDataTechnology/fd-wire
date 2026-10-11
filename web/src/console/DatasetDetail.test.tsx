@@ -8,6 +8,9 @@
 // 重派生与定时重派生测试（wire-pipeline-actions 任务 1.2/1.3）：POST /refresh
 // （Bearer+cascade 参数）与级联结果呈现、完成后详情刷新、cron 登记/更新/
 // 态呈现/删除、失败如实、api 档与上传集无入口。
+// 增量同步设置测试（wire-incremental-sync）：连接器门禁（其他来源不渲染）、
+// 切增量+选水位列保存的 PATCH 载荷、未选水位列保存禁用、重置水位二次确认
+// （{reset_watermark: true}）、422 detail 如实、长水位值截断+title、双语文案。
 // fetch 为本文件内置契约假后端（零网络，不改 testing.ts——DatasetProvenance 手法）。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -46,6 +49,7 @@ const CORRECTIONS_PATH = "/api/v1/datasets/ds-1/corrections";
 const EXPORT_PATH = "/api/v1/datasets/ds-1/export";
 const REFRESH_PATH = "/api/v1/datasets/ds-1/refresh";
 const SCHEDULE_PATH = "/api/v1/datasets/ds-1/schedule";
+const SYNC_SETTINGS_PATH = "/api/v1/datasets/ds-1/sync-settings";
 
 const COLUMNS: DatasetColumn[] = [
   { name: "id", type: "INTEGER" },
@@ -66,11 +70,31 @@ function makeDataset(partial: Partial<Dataset> = {}): Dataset {
     sync_cron: null,
     sync_status: "ok",
     paused_reason: null,
+    // wire-incremental-sync：详情响应三字段（缺省全量快照、无水位）。
+    sync_mode: "snapshot",
+    watermark_column: null,
+    watermark_value: null,
     created_at: NOW,
     updated_at: NOW,
     customer_id: CUSTOMER,
     ...partial,
   };
+}
+
+/** 连接器来源测试集（增量同步卡片门禁用；水位列候选含 updated_at）。 */
+const CONNECTOR_COLUMNS: DatasetColumn[] = [
+  ...COLUMNS,
+  { name: "updated_at", type: "TEXT" },
+];
+
+function makeConnectorDataset(partial: Partial<Dataset> = {}): Dataset {
+  return makeDataset({
+    source_kind: "connector",
+    connector_id: "cn-1",
+    source_ref: "erp_db",
+    columns: CONNECTOR_COLUMNS,
+    ...partial,
+  });
 }
 
 function makeStatus(): ProvenanceStatus {
@@ -159,6 +183,9 @@ function install(options: {
   /** 强制 PUT /datasets/{id}/schedule 返回该状态（非法 cron 等测试）。 */
   failSchedulePutStatus?: number;
   failSchedulePutDetail?: string;
+  /** 强制 PATCH /datasets/{id}/sync-settings 返回该状态（422 回显测试）。 */
+  failSyncSettingsStatus?: number;
+  failSyncSettingsDetail?: string;
 }) {
   const dataset = options.dataset ?? makeDataset();
   let rows = (options.rows ?? [
@@ -346,6 +373,60 @@ function install(options: {
     if (path === SCHEDULE_PATH && method === "DELETE") {
       schedule = null;
       return jsonResponse({ dataset_id: "ds-1", removed: true });
+    }
+    // ── 增量同步设置（wire-incremental-sync 契约镜像）：PATCH
+    //    /sync-settings——非连接器 422、水位列必须 ∈ 列清单、增量必须配
+    //    水位列、切回 snapshot 清水位字段、reset_watermark 只清水位值；
+    //    成功返回更新后数据集（详情刷新断言）。──
+    if (path === SYNC_SETTINGS_PATH && method === "PATCH") {
+      if (options.failSyncSettingsStatus) {
+        return jsonResponse(
+          {
+            detail:
+              options.failSyncSettingsDetail ??
+              `sync settings ${options.failSyncSettingsStatus}`,
+          },
+          options.failSyncSettingsStatus,
+        );
+      }
+      if (dataset.source_kind !== "connector") {
+        return jsonResponse(
+          { detail: "仅连接器（connector）来源数据集支持增量同步设置" },
+          422,
+        );
+      }
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        sync_mode?: string;
+        watermark_column?: string;
+        reset_watermark?: boolean;
+      };
+      if (payload.reset_watermark === true) {
+        dataset.watermark_value = null;
+        return jsonResponse(dataset);
+      }
+      const nextMode = payload.sync_mode ?? dataset.sync_mode ?? "snapshot";
+      if (nextMode === "incremental") {
+        const column = payload.watermark_column ?? dataset.watermark_column ?? "";
+        if (!column) {
+          return jsonResponse(
+            { detail: "增量模式必须配置水位列（watermark_column）" },
+            422,
+          );
+        }
+        if (!dataset.columns.some((c) => c.name === column)) {
+          return jsonResponse(
+            { detail: `水位列 ${column} 不在数据集列清单中` },
+            422,
+          );
+        }
+        dataset.sync_mode = "incremental";
+        dataset.watermark_column = column;
+      } else {
+        dataset.sync_mode = "snapshot";
+        dataset.watermark_column = null;
+        dataset.watermark_value = null;
+      }
+      return jsonResponse(dataset);
     }
     return jsonResponse({ detail: "not found" }, 404);
   }) as unknown as typeof fetch;
@@ -1078,6 +1159,266 @@ describe("DatasetDetail 重派生入口门禁（wire-pipeline-actions 任务 1.3
         ),
       ).toEqual([]);
     }
+  });
+});
+
+describe("DatasetDetail 增量同步设置（wire-incremental-sync）", () => {
+  it("连接器数据集渲染卡片（默认全量快照+诚实注记）；上传/声明/派生来源不渲染且零 PATCH", async () => {
+    for (const dataset of [
+      makeDataset({ source_kind: "upload" }),
+      makeDataset({ source_kind: "declared" }),
+      makeDataset({ source_kind: "derived" }),
+    ]) {
+      cleanup();
+      vi.unstubAllGlobals();
+      const backend = install({ dataset });
+      render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+      await screen.findByTestId("preview-grid");
+      expect(screen.queryByTestId("sync-settings-section")).toBeNull();
+      expect(
+        backend.calls.filter((call) => call.url.pathname === SYNC_SETTINGS_PATH),
+      ).toEqual([]);
+    }
+
+    // 连接器来源：卡片渲染，默认 snapshot（缺省字段容错）+ 无水位；
+    // snapshot 态无重置按钮、无「尚未同步」注记（水位概念仅增量态）。
+    cleanup();
+    vi.unstubAllGlobals();
+    install({ dataset: makeConnectorDataset() });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("sync-settings-section");
+    expect(screen.getByTestId("sync-status-mode").getAttribute("data-mode")).toBe(
+      "snapshot",
+    );
+    expect(screen.getByTestId("sync-status-mode").textContent).toContain("全量快照");
+    expect(screen.getByTestId("sync-status-column").textContent).toContain("—");
+    expect(screen.queryByTestId("sync-reset-button")).toBeNull();
+    expect(screen.queryByTestId("sync-not-synced")).toBeNull();
+    // 诚实口径小字（合并语义 + 重置回全量）
+    expect(screen.getByTestId("sync-honesty-note").textContent).toContain(
+      "不会同步源端删除的行",
+    );
+  });
+
+  it("切增量+选水位列保存：PATCH {sync_mode, watermark_column} 带 Bearer，成功后详情刷新、状态转增量；切回 snapshot 只发 sync_mode", async () => {
+    const backend = install({ dataset: makeConnectorDataset() });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("sync-settings-section");
+    const detailGetsBefore = callsOf(backend.calls, "GET", "/api/v1/datasets/ds-1")
+      .length;
+
+    // 切增量：水位列下拉出现（选项 = 数据集列清单），未选时保存禁用
+    fireEvent.change(screen.getByTestId("sync-mode-select"), {
+      target: { value: "incremental" },
+    });
+    const columnSelect = screen.getByTestId("watermark-column-select");
+    expect(
+      Array.from(columnSelect.querySelectorAll("option")).map((o) => o.value),
+    ).toEqual(["", "id", "amount", "updated_at"]);
+    expect(screen.getByTestId("sync-settings-save").hasAttribute("disabled")).toBe(
+      true,
+    );
+
+    // 选水位列 → 保存放行 → PATCH 契约载荷（Bearer）
+    fireEvent.change(columnSelect, { target: { value: "updated_at" } });
+    expect(screen.getByTestId("sync-settings-save").hasAttribute("disabled")).toBe(
+      false,
+    );
+    fireEvent.click(screen.getByTestId("sync-settings-save"));
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "PATCH", SYNC_SETTINGS_PATH).length).toBe(1),
+    );
+    const patch = callsOf(backend.calls, "PATCH", SYNC_SETTINGS_PATH)[0]!;
+    expect(patch.headers["authorization"]).toMatch(/^Bearer /);
+    expect(patch.body).toEqual({
+      sync_mode: "incremental",
+      watermark_column: "updated_at",
+    });
+
+    // 成功后详情重拉（手动 fetch 模式）：状态行转增量 + 水位列 + 未同步注记
+    await waitFor(() =>
+      expect(
+        callsOf(backend.calls, "GET", "/api/v1/datasets/ds-1").length,
+      ).toBeGreaterThan(detailGetsBefore),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("sync-status-mode").getAttribute("data-mode"),
+      ).toBe("incremental"),
+    );
+    expect(screen.getByTestId("sync-status-column").textContent).toContain(
+      "updated_at",
+    );
+    expect(screen.getByTestId("sync-not-synced").textContent).toBe(
+      "尚未同步（首次将建立基线）",
+    );
+
+    // 切回 snapshot：只发模式（水位字段由服务端清空）→ 状态回全量、无水位
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("sync-mode-select").hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    fireEvent.change(screen.getByTestId("sync-mode-select"), {
+      target: { value: "snapshot" },
+    });
+    fireEvent.click(screen.getByTestId("sync-settings-save"));
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "PATCH", SYNC_SETTINGS_PATH).length).toBe(2),
+    );
+    expect(callsOf(backend.calls, "PATCH", SYNC_SETTINGS_PATH)[1]!.body).toEqual({
+      sync_mode: "snapshot",
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("sync-status-mode").getAttribute("data-mode"),
+      ).toBe("snapshot"),
+    );
+    expect(screen.getByTestId("sync-status-column").textContent).toContain("—");
+  });
+
+  it("增量未选水位列 → 保存禁用零 PATCH；服务端 422 → 后端 detail 原样展示、卡片不崩、按钮复位", async () => {
+    const backend = install({
+      dataset: makeConnectorDataset(),
+      failSyncSettingsStatus: 422,
+      failSyncSettingsDetail: "水位列 nosuch 不在数据集列清单中",
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("sync-settings-section");
+
+    // 客户端闸：增量未选水位列 → 保存禁用，点击不发请求
+    fireEvent.change(screen.getByTestId("sync-mode-select"), {
+      target: { value: "incremental" },
+    });
+    const save = screen.getByTestId("sync-settings-save");
+    expect(save.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(save);
+    expect(callsOf(backend.calls, "PATCH", SYNC_SETTINGS_PATH).length).toBe(0);
+
+    // 服务端 422（注入失败态）：detail 原样展示，卡片仍完整渲染
+    fireEvent.change(screen.getByTestId("watermark-column-select"), {
+      target: { value: "id" },
+    });
+    fireEvent.click(save);
+    const error = await screen.findByTestId("sync-settings-error");
+    expect(error.textContent).toContain("水位列 nosuch 不在数据集列清单中");
+    expect(screen.getByTestId("sync-settings-section")).toBeTruthy();
+    expect(screen.getByTestId("sync-mode-select")).toBeTruthy();
+    await waitFor(() =>
+      expect(save.hasAttribute("disabled")).toBe(false),
+    );
+  });
+
+  it("重置水位二次确认：警告「下次同步将全量重建」；取消不发，确认 PATCH {reset_watermark: true} 只清水位值", async () => {
+    const backend = install({
+      dataset: makeConnectorDataset({
+        sync_mode: "incremental",
+        watermark_column: "updated_at",
+        watermark_value: "2026-10-11T08:30:00",
+      }),
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("sync-settings-section");
+    // 当前水位值字符串原样展示
+    expect(screen.getByTestId("sync-status-value-text").textContent).toBe(
+      "2026-10-11T08:30:00",
+    );
+
+    // 重置 → 二次确认（全量重建警告）；取消不发请求
+    fireEvent.click(screen.getByTestId("sync-reset-button"));
+    expect(screen.getByTestId("sync-reset-warning").textContent).toContain(
+      "下次同步将全量重建",
+    );
+    fireEvent.click(screen.getByTestId("sync-reset-cancel"));
+    expect(screen.queryByTestId("sync-reset-dialog")).toBeNull();
+    expect(callsOf(backend.calls, "PATCH", SYNC_SETTINGS_PATH).length).toBe(0);
+
+    // 再开确认 → 确认 → PATCH 恰为 {reset_watermark: true}
+    fireEvent.click(screen.getByTestId("sync-reset-button"));
+    fireEvent.click(screen.getByTestId("sync-reset-confirm"));
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "PATCH", SYNC_SETTINGS_PATH).length).toBe(1),
+    );
+    const patch = callsOf(backend.calls, "PATCH", SYNC_SETTINGS_PATH)[0]!;
+    expect(patch.body).toEqual({ reset_watermark: true });
+
+    // 重置只清水位值：模式/水位列保持，状态回「尚未同步（首次将建立基线）」
+    await waitFor(() =>
+      expect(screen.getByTestId("sync-not-synced").textContent).toBe(
+        "尚未同步（首次将建立基线）",
+      ),
+    );
+    expect(screen.getByTestId("sync-status-mode").getAttribute("data-mode")).toBe(
+      "incremental",
+    );
+    expect(screen.getByTestId("sync-status-column").textContent).toContain(
+      "updated_at",
+    );
+    // 水位值清空后重置按钮不再渲染
+    await waitFor(() =>
+      expect(screen.queryByTestId("sync-reset-button")).toBeNull(),
+    );
+  });
+
+  it("长水位值截断展示 + title 全文（字符串原样口径不丢信息）", async () => {
+    const long = "2026-10-11T08:30:00.123456789+00:00-extremely-long-watermark";
+    install({
+      dataset: makeConnectorDataset({
+        sync_mode: "incremental",
+        watermark_column: "id",
+        watermark_value: long,
+      }),
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("sync-settings-section");
+
+    const text = screen.getByTestId("sync-status-value-text");
+    expect(text.textContent).not.toBe(long);
+    expect(text.textContent).toContain("…");
+    expect(text.textContent!.startsWith(long.slice(0, 32))).toBe(true);
+    expect(text.getAttribute("title")).toBe(long);
+  });
+
+  it("i18n 双语对照：zh/en 的诚实口径注记与未同步注记（卡片标题两语言）", async () => {
+    const incrementalNotSynced = () =>
+      makeConnectorDataset({
+        sync_mode: "incremental",
+        watermark_column: "updated_at",
+        watermark_value: null,
+      });
+
+    // zh（beforeEach 默认语言）
+    install({ dataset: incrementalNotSynced() });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("sync-settings-section");
+    expect(
+      screen.getByTestId("sync-settings-section").querySelector("h2")!
+        .textContent,
+    ).toBe("增量同步");
+    expect(screen.getByTestId("sync-honesty-note").textContent).toBe(
+      "增量同步按主键合并，不会同步源端删除的行；需要重建时重置水位，下次同步回到全量快照。",
+    );
+    expect(screen.getByTestId("sync-not-synced").textContent).toBe(
+      "尚未同步（首次将建立基线）",
+    );
+
+    // en 对照（重渲染）
+    cleanup();
+    vi.unstubAllGlobals();
+    i18n.changeLanguage("en");
+    install({ dataset: incrementalNotSynced() });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("sync-settings-section");
+    expect(
+      screen.getByTestId("sync-settings-section").querySelector("h2")!
+        .textContent,
+    ).toBe("Incremental sync");
+    expect(screen.getByTestId("sync-honesty-note").textContent).toBe(
+      "Incremental sync merges by primary key; rows deleted at the source are not removed. Reset the watermark to rebuild with a full snapshot.",
+    );
+    expect(screen.getByTestId("sync-not-synced").textContent).toBe(
+      "Not synced yet (first run takes a full baseline)",
+    );
   });
 });
 

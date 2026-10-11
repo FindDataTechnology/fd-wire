@@ -40,6 +40,12 @@ type Adapter interface {
 	Snapshot(ctx context.Context, fn SnapshotFunc) error
 }
 
+// IncrementalReader 是适配器的可选增量读取能力（数据库源实现；文件源不实现）。
+type IncrementalReader interface {
+	// Incremental 按水位列有序（ASC）回调 col > after 的行；after 是字符串形式的水位值。
+	Incremental(ctx context.Context, column, after string, fn SnapshotFunc) error
+}
+
 // ColumnNames 抽出列名列表。
 func ColumnNames(cols []Column) []string {
 	names := make([]string, 0, len(cols))

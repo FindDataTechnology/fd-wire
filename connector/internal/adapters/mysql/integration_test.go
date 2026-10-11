@@ -146,3 +146,60 @@ func TestIntegrationSchemaQualifiedAndErrors(t *testing.T) {
 		t.Fatal("不可达地址的 Snapshot 应报错")
 	}
 }
+
+func TestIntegrationIncrementalWindow(t *testing.T) {
+	dsn := mysqlDSN(t)
+	ctx := context.Background()
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		t.Fatalf("打开连接失败: %v", err)
+	}
+	defer db.Close()
+	if err := db.PingContext(ctx); err != nil {
+		t.Fatalf("连接失败: %v", err)
+	}
+	prepareSales(t, ctx, db)
+
+	a := New(dsn, "it_sales", 2000)
+
+	// BIGINT 水位：字符串参数隐式转换比较。
+	var rows []adapters.Row
+	if err := a.Incremental(ctx, "id", "1", func(batch []adapters.Row) error {
+		rows = append(rows, batch...)
+		return nil
+	}); err != nil {
+		t.Fatalf("Incremental(id): %v", err)
+	}
+	if len(rows) != 2 || rows[0]["id"] != int64(2) || rows[1]["id"] != int64(3) {
+		t.Fatalf("整数水位窗口 = %#v, want ids [2 3]（ASC）", rows)
+	}
+
+	// DATETIME 水位：字符串隐式转换。
+	rows = nil
+	if err := a.Incremental(ctx, "updated_at", "2026-10-06 05:00:00", func(batch []adapters.Row) error {
+		rows = append(rows, batch...)
+		return nil
+	}); err != nil {
+		t.Fatalf("Incremental(updated_at): %v", err)
+	}
+	if len(rows) != 2 || rows[0]["id"] != int64(2) || rows[1]["id"] != int64(3) {
+		t.Fatalf("时间水位窗口 = %#v, want ids [2 3]", rows)
+	}
+
+	// 空窗口：水位之后的零行。
+	calls := 0
+	if err := a.Incremental(ctx, "updated_at", "2026-10-07 00:00:00", func([]adapters.Row) error {
+		calls++
+		return nil
+	}); err != nil {
+		t.Fatalf("Incremental(空窗口): %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("空窗口不应回调，实际 %d 次", calls)
+	}
+
+	// 水位列不存在：应报错（驱动 Unknown column 包装）。
+	if err := a.Incremental(ctx, "no_such_col", "0", func([]adapters.Row) error { return nil }); err == nil {
+		t.Fatal("水位列不存在应报错")
+	}
+}

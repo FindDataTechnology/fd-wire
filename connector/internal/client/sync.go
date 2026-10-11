@@ -43,6 +43,13 @@ type SyncChunkResponse struct {
 	Accepted int `json:"accepted"`
 }
 
+// SyncCommitRequest 是 POST /api/v1/connector/syncs/{sid}/commit 的请求体。
+type SyncCommitRequest struct {
+	// WatermarkValue 上报本轮同步的最大水位（增量模式）；nil = 不上报
+	// （全量模式 / 增量窗口无新行 / 源不支持增量），云端水位保持不动。
+	WatermarkValue *string `json:"watermark_value,omitempty"`
+}
+
 // SyncCommitResponse 返回提交结果。
 type SyncCommitResponse struct {
 	Status string `json:"status"`
@@ -87,13 +94,14 @@ func (c *Client) SyncChunk(ctx context.Context, syncID string, index int, rows [
 	return &resp, nil
 }
 
-// SyncCommit 提交同步（引擎原子替换 staging → base）。
-func (c *Client) SyncCommit(ctx context.Context, syncID string) (*SyncCommitResponse, error) {
+// SyncCommit 提交同步（引擎按服务端语义整表替换或 merge）；req.WatermarkValue
+// 非空时随 commit 上报本轮最大水位，云端以此推进增量游标。
+func (c *Client) SyncCommit(ctx context.Context, syncID string, req SyncCommitRequest) (*SyncCommitResponse, error) {
 	if syncID == "" {
 		return nil, errors.New("sync commit 缺少 sync_id")
 	}
 	var resp SyncCommitResponse
-	if err := c.do(ctx, "POST", syncPath(syncID, "commit"), struct{}{}, &resp); err != nil {
+	if err := c.do(ctx, "POST", syncPath(syncID, "commit"), req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

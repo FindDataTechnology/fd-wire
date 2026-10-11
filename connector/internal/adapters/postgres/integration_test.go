@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -185,5 +186,78 @@ func TestIntegrationMissingTableIsClearError(t *testing.T) {
 	}
 	if err := a.Snapshot(ctx, func([]adapters.Row) error { return nil }); err == nil {
 		t.Fatal("不可达地址的 Snapshot 应报错")
+	}
+}
+
+func TestIntegrationIncrementalWindow(t *testing.T) {
+	dsn := pgDSN(t)
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("连接失败: %v", err)
+	}
+	defer conn.Close(ctx)
+	prepareSales(t, ctx, conn)
+
+	a := New(dsn, "it_sales", 2000)
+
+	// TIMESTAMPTZ 水位：CAST 后比较，只拉 05:00 之后的行且按水位 ASC。
+	var rows []adapters.Row
+	if err := a.Incremental(ctx, "updated_at", "2026-10-06T05:00:00Z", func(batch []adapters.Row) error {
+		rows = append(rows, batch...)
+		return nil
+	}); err != nil {
+		t.Fatalf("Incremental(timestamptz): %v", err)
+	}
+	if len(rows) != 2 || rows[0]["id"] != int64(2) || rows[1]["id"] != int64(3) {
+		t.Fatalf("时间水位窗口 = %#v, want ids [2 3]（ASC）", rows)
+	}
+	if rows[1]["updated_at"] != "2026-10-06T06:00:00Z" {
+		t.Fatalf("时间值收敛 = %#v", rows[1]["updated_at"])
+	}
+
+	// BIGINT 水位：字符串参数 CAST 到 int8。
+	rows = nil
+	if err := a.Incremental(ctx, "id", "1", func(batch []adapters.Row) error {
+		rows = append(rows, batch...)
+		return nil
+	}); err != nil {
+		t.Fatalf("Incremental(int8): %v", err)
+	}
+	if len(rows) != 2 || rows[0]["id"] != int64(2) || rows[1]["id"] != int64(3) {
+		t.Fatalf("整数水位窗口 = %#v, want ids [2 3]", rows)
+	}
+
+	// 大整数水位（>2^53）无损：整表超过该值的行全部拉回。
+	if _, err := conn.Exec(ctx, `INSERT INTO it_sales (id, amount) VALUES (9007199254740994, 1.5)`); err != nil {
+		t.Fatalf("插入大整数失败: %v", err)
+	}
+	rows = nil
+	if err := a.Incremental(ctx, "id", "9007199254740993", func(batch []adapters.Row) error {
+		rows = append(rows, batch...)
+		return nil
+	}); err != nil {
+		t.Fatalf("Incremental(大整数): %v", err)
+	}
+	if len(rows) != 1 || rows[0]["id"] != int64(9007199254740994) {
+		t.Fatalf("大整数水位窗口 = %#v", rows)
+	}
+
+	// 空窗口：水位之后的零行。
+	calls := 0
+	if err := a.Incremental(ctx, "updated_at", "2026-10-07T00:00:00Z", func([]adapters.Row) error {
+		calls++
+		return nil
+	}); err != nil {
+		t.Fatalf("Incremental(空窗口): %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("空窗口不应回调，实际 %d 次", calls)
+	}
+
+	// 水位列不存在：清晰的本地错误（而非驱动报错）。
+	err = a.Incremental(ctx, "no_such_col", "0", func([]adapters.Row) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "no_such_col") {
+		t.Fatalf("水位列不存在应报清晰错误: %v", err)
 	}
 }

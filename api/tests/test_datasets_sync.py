@@ -591,7 +591,8 @@ def test_storage_quota_commit_precheck_aborts_staging(datasets_env, monkeypatch)
 
 
 def test_sync_history_row_model_terminal_statuses() -> None:
-    """dataset_syncs 行结构按契约 §3.2（终态 ok/failed/drift/quota；在飞 syncing）。"""
+    """dataset_syncs 行结构按契约 §3.2（终态 ok/failed/drift/quota；在飞 syncing；
+    mode 记本轮同步模式——wire-connector-incremental-sync 0025）。"""
     assert set(DatasetSync.__table__.columns.keys()) == {
         "id",
         "dataset_id",
@@ -600,4 +601,5 @@ def test_sync_history_row_model_terminal_statuses() -> None:
         "status",
         "rows",
         "error",
+        "mode",
     }

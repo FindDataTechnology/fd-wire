@@ -143,8 +143,34 @@ func (a *Adapter) Snapshot(ctx context.Context, fn adapters.SnapshotFunc) error 
 		return err
 	}
 	defer db.Close()
+	return a.streamQuery(ctx, db, "SELECT * FROM "+quoteQualified(database, table), nil, fn)
+}
 
-	rows, err := db.QueryContext(ctx, "SELECT * FROM "+quoteQualified(database, table))
+// Incremental 增量拉取：只读水位列 > after 的行，按水位列 ASC 有序回调。
+// MySQL 字符串参数与列比较走隐式类型转换，无需显式 CAST。
+func (a *Adapter) Incremental(ctx context.Context, column, after string, fn adapters.SnapshotFunc) error {
+	database, table, err := a.databaseTable()
+	if err != nil {
+		return err
+	}
+	db, err := a.open(ctx)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return a.streamQuery(ctx, db, incrementalQuery(database, table, column), []any{after}, fn)
+}
+
+// incrementalQuery 构造增量拉取 SQL；表/列标识符反引号引用（与 Snapshot 同一转义方式）。
+func incrementalQuery(database, table, column string) string {
+	col := quoteIdent(column)
+	return "SELECT * FROM " + quoteQualified(database, table) + " WHERE " + col + " > ? ORDER BY " + col
+}
+
+// streamQuery 流式扫描一条查询并按批次回调；行值 → 引擎三型的收敛与
+// Snapshot/Incremental 完全一致。
+func (a *Adapter) streamQuery(ctx context.Context, db *sql.DB, query string, args []any, fn adapters.SnapshotFunc) error {
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("查询 %s 失败: %w", a.Table, err)
 	}
@@ -201,6 +227,11 @@ func NormalizeValue(value any) any {
 	}
 }
 
+// quoteIdent 反引号引用单个标识符（表名/列名共用；内部反引号加倍，杜绝注入）。
+func quoteIdent(part string) string {
+	return "`" + strings.ReplaceAll(part, "`", "``") + "`"
+}
+
 // quoteQualified 组合反引号表名（标识符自己转义，杜绝注入）。
 func quoteQualified(parts ...string) string {
 	quoted := make([]string, 0, len(parts))
@@ -208,7 +239,7 @@ func quoteQualified(parts ...string) string {
 		if strings.TrimSpace(p) == "" {
 			continue
 		}
-		quoted = append(quoted, "`"+strings.ReplaceAll(p, "`", "``")+"`")
+		quoted = append(quoted, quoteIdent(p))
 	}
 	return strings.Join(quoted, ".")
 }

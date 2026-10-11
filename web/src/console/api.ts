@@ -268,6 +268,9 @@ export async function fetchAllArtifacts(
 
 export type DatasetSourceKind = "upload" | "connector" | "declared" | "derived";
 
+/** 连接器数据集同步模式：全量快照（每次整表重拍）或增量水位（按水位列合并）。 */
+export type DatasetSyncMode = "snapshot" | "incremental";
+
 export const SYNC_STATUSES = [
   "idle",
   "syncing",
@@ -300,6 +303,13 @@ export interface Dataset {
   sync_cron: string | null;
   sync_status: SyncStatus;
   paused_reason: string | null;
+  /** 同步模式（wire-incremental-sync：连接器数据集；响应缺省按 snapshot
+   *  容错读取——旧后端不带该字段时与全量口径一致）。 */
+  sync_mode?: DatasetSyncMode;
+  /** 增量水位列名（snapshot 模式 / 未配置为 null；须 ∈ columns 列清单）。 */
+  watermark_column?: string | null;
+  /** 当前水位值（字符串原样呈现；尚未同步为 null）。 */
+  watermark_value?: string | null;
   created_at: string;
   updated_at: string;
   /** 假后端归属过滤用（客户面响应可省略）。 */
@@ -574,6 +584,33 @@ export function resumeDataset(
     method: "POST",
     body: { accept_columns: acceptColumns },
   }) as Promise<Dataset>;
+}
+
+// ── 增量同步设置（wire-incremental-sync）────────────────────────────
+// 契约：PATCH /api/v1/datasets/{id}/sync-settings，body
+// {sync_mode?, watermark_column?, reset_watermark?}——服务端校验：非连接器
+// 数据集 422、水位列必须 ∈ 数据集列清单、增量模式必须配水位列、切回
+// snapshot 清水位字段、reset_watermark 只清水位值；成功返回更新后数据集。
+
+/** 同步设置更新入参（三字段均可选，至少传其一）。 */
+export interface SyncSettingsInput {
+  sync_mode?: DatasetSyncMode;
+  /** 增量模式必配（服务端校验 ∈ 列清单）；切回 snapshot 由服务端清空。 */
+  watermark_column?: string;
+  /** true = 只清当前水位值（下次同步回到全量快照基线）。 */
+  reset_watermark?: boolean;
+}
+
+/** 更新连接器数据集的同步模式 / 水位列 / 重置水位（返回更新后数据集）。 */
+export function updateSyncSettings(
+  datasetId: string,
+  body: SyncSettingsInput,
+): Promise<Dataset> {
+  return requestJsonAnyMethod(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/sync-settings`,
+    "PATCH",
+    { body },
+  ) as Promise<Dataset>;
 }
 
 // ── 数据面 key（wire-customer-data-engine 5.2）────────────────────
@@ -1059,11 +1096,12 @@ interface PutRequestOptions {
   body?: unknown;
 }
 
-/** 带任意 method 的 JSON 请求（上方 RequestOptions 联合不含 PUT，
- * 本节追加的产物端点专用；鉴权与错误语义与 requestJson 完全一致）。 */
+/** 带任意 method 的 JSON 请求（上方 RequestOptions 联合不含 PUT/PATCH，
+ * 产物端点与 sync-settings 等追加路由专用；鉴权与错误语义与 requestJson
+ * 完全一致）。 */
 async function requestJsonAnyMethod(
   url: string,
-  method: "PUT" | "POST",
+  method: "PUT" | "POST" | "PATCH",
   options: PutRequestOptions = {},
 ): Promise<unknown> {
   const { body } = options;

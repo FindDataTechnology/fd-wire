@@ -77,3 +77,32 @@ func TestNewDefaultsBatchSize(t *testing.T) {
 		t.Errorf("默认批次 = %d, want 2000", got)
 	}
 }
+
+func TestIncrementalQueryShape(t *testing.T) {
+	cases := []struct {
+		database, table, column string
+		want                    string
+	}{
+		{"", "sales", "updated_at",
+			"SELECT * FROM `sales` WHERE `updated_at` > ? ORDER BY `updated_at`"},
+		{"shop", "sales", "id",
+			"SELECT * FROM `shop`.`sales` WHERE `id` > ? ORDER BY `id`"},
+	}
+	for _, c := range cases {
+		if got := incrementalQuery(c.database, c.table, c.column); got != c.want {
+			t.Errorf("incrementalQuery = %s\nwant %s", got, c.want)
+		}
+	}
+	// 注入尝试只能落成一个（不存在的）被反引号包裹的安全标识符。
+	injected := incrementalQuery("shop", "sales", "id`; DROP TABLE x; --")
+	if injected != "SELECT * FROM `shop`.`sales` WHERE `id``; DROP TABLE x; --` > ? ORDER BY `id``; DROP TABLE x; --`" {
+		t.Errorf("水位列注入转义异常: %s", injected)
+	}
+}
+
+func TestIncrementalFailsFastWithoutTable(t *testing.T) {
+	a := New("user:pass@tcp(127.0.0.1:1)/db", "", 0)
+	if err := a.Incremental(context.Background(), "id", "0", func([]adapters.Row) error { return nil }); err == nil {
+		t.Fatal("缺 source_ref 的 Incremental 应立即报错（不连库）")
+	}
+}

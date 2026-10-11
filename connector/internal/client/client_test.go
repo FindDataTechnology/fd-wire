@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -287,7 +288,7 @@ func TestSyncThreePhaseSequence(t *testing.T) {
 	if _, err := c.SyncChunk(ctx, begin.SyncID, 2, []map[string]any{{"id": 3}}); err != nil {
 		t.Fatalf("SyncChunk: %v", err)
 	}
-	commit, err := c.SyncCommit(ctx, begin.SyncID)
+	commit, err := c.SyncCommit(ctx, begin.SyncID, SyncCommitRequest{})
 	if err != nil {
 		t.Fatalf("SyncCommit: %v", err)
 	}
@@ -446,7 +447,7 @@ func TestDriftErrorFromPlainDetailText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = c.SyncCommit(context.Background(), "sync-1")
+	_, err = c.SyncCommit(context.Background(), "sync-1", SyncCommitRequest{})
 	if !IsDrift(err) {
 		t.Fatalf("纯文本 detail 的 409 也应判为漂移: %v", err)
 	}
@@ -512,5 +513,68 @@ func TestContextCancellationStopsRetry(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Fatalf("取消后不应再发请求，调用次数 = %d", got)
+	}
+}
+
+// TestSyncCommitWatermarkBody 验证 commit 请求体：带指针上报水位，nil 则完全省略。
+func TestSyncCommitWatermarkBody(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(raw))
+		writeJSON(t, w, http.StatusOK, map[string]any{"status": "ok", "rows": 3})
+	}))
+	defer srv.Close()
+	c, err := New(srv.URL, "fwc_key", noSleep())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	wm := "9007199254740993"
+	if _, err := c.SyncCommit(ctx, "sync-1", SyncCommitRequest{WatermarkValue: &wm}); err != nil {
+		t.Fatalf("SyncCommit: %v", err)
+	}
+	if _, err := c.SyncCommit(ctx, "sync-2", SyncCommitRequest{}); err != nil {
+		t.Fatalf("SyncCommit: %v", err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("commit 次数 = %d", len(bodies))
+	}
+	if bodies[0] != `{"watermark_value":"9007199254740993"}` {
+		t.Fatalf("增量 commit 体 = %s", bodies[0])
+	}
+	if bodies[1] != "{}" {
+		t.Fatalf("全量 commit 体应为空对象: %s", bodies[1])
+	}
+}
+
+// TestFetchConfigParsesIncrementalFields 验证增量三字段的下发解析。
+func TestFetchConfigParsesIncrementalFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, http.StatusOK, map[string]any{
+			"datasets": []map[string]any{
+				{"dataset_key": "orders", "source": "erp_db", "source_ref": "public.orders",
+					"sync_mode": "incremental", "watermark_column": "updated_at", "watermark_value": "9007199254740993"},
+				{"dataset_key": "dim", "source": "erp_db", "source_ref": "public.dim",
+					"sync_mode": "snapshot"},
+			},
+		})
+	}))
+	defer srv.Close()
+	c, err := New(srv.URL, "fwc_key", noSleep())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := c.FetchConfig(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfig: %v", err)
+	}
+	orders, _ := cfg.Dataset("orders")
+	if orders.SyncMode != "incremental" || orders.WatermarkColumn != "updated_at" || orders.WatermarkValue != "9007199254740993" {
+		t.Fatalf("增量字段解析 = %#v", orders)
+	}
+	dim, _ := cfg.Dataset("dim")
+	if dim.SyncMode != "snapshot" || dim.WatermarkColumn != "" || dim.WatermarkValue != "" {
+		t.Fatalf("全量数据集不应有水位: %#v", dim)
 	}
 }

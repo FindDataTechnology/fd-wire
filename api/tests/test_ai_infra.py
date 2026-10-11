@@ -546,8 +546,8 @@ def test_migration_0005_creates_ai_tables(migrated_sqlite) -> None:
     }
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    # 迁移链只增不改：head 随链推进（1.1 起 = 0024_demand_source_public）
-    assert version == "0024_demand_source_public"
+    # 迁移链只增不改：head 随链推进（wire-connector-incremental-sync 起 = 0025）
+    assert version == "0025_connector_incremental_sync"
 
 
 def _cfg() -> Config:

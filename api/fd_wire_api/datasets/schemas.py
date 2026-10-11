@@ -62,6 +62,12 @@ class DatasetOut(BaseModel):
     sync_cron: str | None = None
     sync_status: str = "idle"
     paused_reason: str | None = None
+    #: 连接器同步模式与水位（wire-connector-incremental-sync）：snapshot
+    #: 默认；incremental 时 watermark_column/watermark_value 有值（水位值
+    #: 原样字符串，列清单里既有列可前台做下拉）
+    sync_mode: str = "snapshot"
+    watermark_column: str | None = None
+    watermark_value: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -74,7 +80,7 @@ class DatasetOut(BaseModel):
             source_kind=dataset.source_kind,
             storage_tier=getattr(dataset, "storage_tier", "cell"),
             connector_id=dataset.connector_id,
-            source_name=getattr(dataset, "source_name", None),
+            source_name=dataset.source_name,
             source_ref=dataset.source_ref,
             columns=[ColumnIn(**c) for c in (dataset.columns_json or [])],
             row_count=dataset.row_count,
@@ -82,6 +88,9 @@ class DatasetOut(BaseModel):
             sync_cron=dataset.sync_cron,
             sync_status=dataset.sync_status,
             paused_reason=dataset.paused_reason,
+            sync_mode=getattr(dataset, "sync_mode", "snapshot") or "snapshot",
+            watermark_column=getattr(dataset, "watermark_column", None),
+            watermark_value=getattr(dataset, "watermark_value", None),
             created_at=dataset.created_at,
             updated_at=dataset.updated_at,
         )
@@ -140,6 +149,23 @@ class ResumeIn(BaseModel):
     accept_columns: list[ColumnIn] = Field(min_length=1)
 
 
+class SyncSettingsPatchIn(BaseModel):
+    """增量同步设置（wire-connector-incremental-sync；仅连接器数据集）。
+
+    - ``sync_mode``：snapshot ↔ incremental 切换；切回 snapshot 清水位
+      两字段（watermark_column/watermark_value 置 NULL）。
+    - ``watermark_column``：增量模式的水位列（须 ∈ columns_json 既有列）；
+      换列会同时清水位值（旧值属于旧列，比较语义失效——下次同步回到
+      全量替换重建基线）。
+    - ``reset_watermark``：只清水位值（模式与列保留）——下次同步按全量
+      替换重建基线并重新捕获水位。
+    """
+
+    sync_mode: Literal["snapshot", "incremental"] | None = None
+    watermark_column: str | None = Field(default=None, max_length=64)
+    reset_watermark: bool = False
+
+
 class SyncOut(BaseModel):
     """同步历史行（客户可见；失败原因如实呈现）。"""
 
@@ -152,6 +178,8 @@ class SyncOut(BaseModel):
     status: str
     rows: int = 0
     error: str | None = None
+    #: 本轮同步模式 snapshot|incremental（wire-connector-incremental-sync）
+    mode: str = "snapshot"
 
 
 class PairingTokenOut(BaseModel):
@@ -234,6 +262,18 @@ class ChunkIn(BaseModel):
 
 class ChunkOut(BaseModel):
     accepted: int
+
+
+class CommitIn(BaseModel):
+    """推送阶段三请求体：可选水位上报（wire-connector-incremental-sync）。
+
+    ``watermark_value`` 为连接器本轮增量窗口的末值（字符串原样——整数十
+    进制/浮点 %v/时间 RFC3339Nano/字符串原样）；空串视为未上报（本轮零
+    行不动水位）。非增量数据集携带水位 → 422 fail-closed（防误配）。
+    长度校验（Trim 后 ≤256）在路由层做（422 带原因）。
+    """
+
+    watermark_value: str | None = None
 
 
 class CommitOut(BaseModel):

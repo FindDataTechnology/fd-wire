@@ -329,8 +329,13 @@ def push_sync(
     rows: list[dict],
     pk_columns: list[str] | None = None,
     chunk_size: int | None = None,
+    watermark_value: str | None = None,
 ) -> dict:
-    """完整走一遍三阶段（begin → chunks → commit），返回各步响应。"""
+    """完整走一遍三阶段（begin → chunks → commit），返回各步响应。
+
+    ``watermark_value`` 提供时随 commit 上报（增量水位捕获；
+    wire-connector-incremental-sync）。
+    """
     headers = connector_headers(connector_key)
     begun = env.client.post(
         "/api/v1/connector/syncs",
@@ -356,7 +361,9 @@ def push_sync(
         if resp.status_code != 200:
             return {"begin": begun, "chunk": resp}
     committed = env.client.post(
-        f"/api/v1/connector/syncs/{sync_id}/commit", headers=headers
+        f"/api/v1/connector/syncs/{sync_id}/commit",
+        headers=headers,
+        json=None if watermark_value is None else {"watermark_value": watermark_value},
     )
     return {"begin": begun, "commit": committed}
 

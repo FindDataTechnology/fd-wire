@@ -10,6 +10,9 @@
 - 行预览（cell 层透传引擎 ``preview``；api 层本地执行）、修正三件套
   （cell 层透传引擎覆盖层；api 层走本地修正层——wire-dataset-form-editing，
   基行永不改写）、同步历史、漂移恢复 ``resume``
+- 增量同步设置 ``PATCH /api/v1/datasets/{id}/sync-settings``
+  （wire-connector-incremental-sync；仅连接器数据集：模式切换、水位列
+  ∈ columns_json、重置水位；切回 snapshot 清水位两字段）
 - CSV 导出 ``GET /api/v1/datasets/{id}/export``（wire-dataset-export）：
   api 层本地有效视图全量；cell 层引擎 query 分页循环（1000/页 × 10 页
   上限），触顶 ``X-Export-Truncated`` 如实标注；UTF-8 带 BOM
@@ -74,6 +77,7 @@ from .schemas import (
     PairingTokenOut,
     ResumeIn,
     SyncOut,
+    SyncSettingsPatchIn,
     UploadOut,
 )
 from .settings import get_settings
@@ -1044,6 +1048,78 @@ def resume_dataset(
     dataset.columns_json = [c.model_dump() for c in payload.accept_columns]
     dataset.paused_reason = None
     dataset.sync_status = "idle"
+    db.commit()
+    db.refresh(dataset)
+    return DatasetOut.from_dataset(dataset)
+
+
+@router.patch("/api/v1/datasets/{dataset_id}/sync-settings", response_model=DatasetOut)
+def patch_sync_settings(
+    dataset_id: str,
+    payload: SyncSettingsPatchIn,
+    customer_id: str = Depends(require_console_customer_id),
+    db: Session = Depends(get_db),
+) -> DatasetOut:
+    """增量同步设置（wire-connector-incremental-sync；仅连接器数据集）。
+
+    - 仅 ``source_kind=connector`` 可配（上传数据集没有调度同步概念，422）；
+    - 切到 incremental：水位列必须本次提供或已存，且必须是
+      ``columns_json`` 既有列名（422 带原因）——列基线为空（尚未首同步）
+      时任何列名都不合格；
+    - 切回 snapshot：水位两字段清空（watermark_column/watermark_value
+      置 NULL）；
+    - 换水位列：旧水位值属于旧列（比较语义失效），一并清空——下次同步
+      回到全量替换重建基线；
+    - ``reset_watermark=true``：只清水位值（模式与列保留），下次同步按
+      全量替换重建并重新捕获水位（删除不传播的诚实口径出口）。
+    """
+    dataset = _dataset_or_404(db, dataset_id, customer_id)
+    if dataset.source_kind != "connector":
+        raise HTTPException(
+            status_code=422,
+            detail=f"仅连接器数据集可配置同步设置（当前 source_kind={dataset.source_kind}）",
+        )
+
+    new_mode = payload.sync_mode if payload.sync_mode is not None else dataset.sync_mode
+    new_column = dataset.watermark_column
+    if payload.watermark_column is not None:
+        candidate = payload.watermark_column.strip()
+        if not candidate:
+            raise HTTPException(status_code=422, detail="水位列不能为空")
+        new_column = candidate
+
+    if new_mode == "incremental":
+        if not new_column:
+            raise HTTPException(
+                status_code=422,
+                detail="增量模式必须指定水位列（watermark_column 本次提供或已存）",
+            )
+        known = {
+            str(c.get("name")) for c in (dataset.columns_json or []) if c.get("name")
+        }
+        if new_column not in known:
+            raise HTTPException(
+                status_code=422,
+                detail=f"水位列 {new_column} 不在数据集既有列中"
+                f"（候选：{sorted(known) or '无（尚未同步）'}）",
+            )
+    else:
+        # snapshot：水位列只在增量模式有意义；快照态显式提供 → 422（fail-closed）
+        if payload.watermark_column is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="快照模式没有水位列概念——请先切换 sync_mode=incremental",
+            )
+
+    dataset.sync_mode = new_mode
+    if new_mode == "snapshot":
+        dataset.watermark_column = None
+        dataset.watermark_value = None
+    elif new_column != dataset.watermark_column:
+        dataset.watermark_column = new_column
+        dataset.watermark_value = None  # 换列即换坐标系：旧值失效，重建基线
+    if payload.reset_watermark:
+        dataset.watermark_value = None  # 只清水位值（模式与列保留）
     db.commit()
     db.refresh(dataset)
     return DatasetOut.from_dataset(dataset)

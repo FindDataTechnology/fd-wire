@@ -90,6 +90,9 @@ def test_upgrade_head_creates_dataset_tables(migrated_sqlite) -> None:
         "sync_status",
         "paused_reason",
         "provenance_tier",
+        "sync_mode",
+        "watermark_column",
+        "watermark_value",
         "created_at",
         "updated_at",
     }
@@ -101,6 +104,7 @@ def test_upgrade_head_creates_dataset_tables(migrated_sqlite) -> None:
         "status",
         "rows",
         "error",
+        "mode",
     }
     assert {c["name"] for c in inspector.get_columns("uploads")} == {
         "id",
@@ -173,6 +177,28 @@ def test_upgrade_head_creates_dataset_tables(migrated_sqlite) -> None:
             " WHERE name='storage_tier'"
         ).scalar()
     assert tier_default == "'cell'"
+    # 增量同步字段存量缺省（wire-connector-incremental-sync 0025）：sync_mode
+    # 与 dataset_syncs.mode 落 snapshot（=现状全量语义）；水位两列可空。
+    with engine.connect() as conn:
+        mode_default = conn.exec_driver_sql(
+            "SELECT dflt_value FROM pragma_table_info('datasets')"
+            " WHERE name='sync_mode'"
+        ).scalar()
+        sync_mode_default = conn.exec_driver_sql(
+            "SELECT dflt_value FROM pragma_table_info('dataset_syncs')"
+            " WHERE name='mode'"
+        ).scalar()
+        # pragma_table_info 列序：cid, name, type, notnull, dflt_value, pk
+        watermark_notnull = {
+            row[1]: bool(row[3])
+            for row in conn.exec_driver_sql(
+                "SELECT * FROM pragma_table_info('datasets')"
+                " WHERE name IN ('watermark_column','watermark_value')"
+            ).fetchall()
+        }
+    assert mode_default == "'snapshot'"
+    assert sync_mode_default == "'snapshot'"
+    assert watermark_notnull == {"watermark_column": False, "watermark_value": False}
     engine.dispose()
 
 
@@ -182,7 +208,28 @@ def test_chain_head_is_provenance_foundation(migrated_sqlite) -> None:
         version = conn.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
         ).scalar()
-    assert version == "0024_demand_source_public"
+    assert version == "0025_connector_incremental_sync"
+    engine.dispose()
+
+
+def test_incremental_sync_migration_roundtrip(migrated_sqlite, monkeypatch) -> None:
+    """0025 幂等可重跑：0024 → 0025 降/升往返后三列一字段仍在、缺省不变。"""
+    monkeypatch.setenv("DATABASE_URL", migrated_sqlite)
+    command.downgrade(_alembic_config(), "0024_demand_source_public")
+    engine = create_engine(migrated_sqlite)
+    inspector = inspect(engine)
+    assert not ({"sync_mode", "watermark_column", "watermark_value"} & {
+        c["name"] for c in inspector.get_columns("datasets")
+    })
+    assert "mode" not in {c["name"] for c in inspector.get_columns("dataset_syncs")}
+    engine.dispose()
+    command.upgrade(_alembic_config(), "head")
+    engine = create_engine(migrated_sqlite)
+    inspector = inspect(engine)
+    assert {"sync_mode", "watermark_column", "watermark_value"} <= {
+        c["name"] for c in inspector.get_columns("datasets")
+    }
+    assert "mode" in {c["name"] for c in inspector.get_columns("dataset_syncs")}
     engine.dispose()
 
 

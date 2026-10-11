@@ -103,3 +103,47 @@ func TestNewDefaultsBatchSize(t *testing.T) {
 		t.Errorf("批次应可覆盖: %d", got)
 	}
 }
+
+func TestIncrementalQueryShape(t *testing.T) {
+	cases := []struct {
+		schema, table, column, native string
+		want                          string
+	}{
+		{"", "sales", "updated_at", "timestamptz",
+			`SELECT * FROM "sales" WHERE "updated_at" > CAST($1 AS "timestamptz") ORDER BY "updated_at"`},
+		{"public", "sales", "id", "int8",
+			`SELECT * FROM "public"."sales" WHERE "id" > CAST($1 AS "int8") ORDER BY "id"`},
+		{"public", "sales", "amount", "numeric",
+			`SELECT * FROM "public"."sales" WHERE "amount" > CAST($1 AS "numeric") ORDER BY "amount"`},
+	}
+	for _, c := range cases {
+		if got := incrementalQuery(c.schema, c.table, c.column, c.native); got != c.want {
+			t.Errorf("incrementalQuery = %s\nwant %s", got, c.want)
+		}
+	}
+	// 注入尝试只能落成一个（不存在的）被引号包裹的安全标识符。
+	injected := incrementalQuery("public", "sales", `id"; DROP TABLE x; --`, "int8")
+	if injected != `SELECT * FROM "public"."sales" WHERE "id""; DROP TABLE x; --" > CAST($1 AS "int8") ORDER BY "id""; DROP TABLE x; --"` {
+		t.Errorf("水位列注入转义异常: %s", injected)
+	}
+}
+
+func TestNativeTypeOf(t *testing.T) {
+	defs := []columnDef{
+		{Name: "id", Native: "int8"},
+		{Name: "updated_at", Native: "timestamptz"},
+	}
+	if got, ok := nativeTypeOf(defs, "updated_at"); !ok || got != "timestamptz" {
+		t.Errorf("nativeTypeOf(updated_at) = %q, %v", got, ok)
+	}
+	if _, ok := nativeTypeOf(defs, "nope"); ok {
+		t.Error("不存在的列应返回 false")
+	}
+}
+
+func TestIncrementalFailsFastWithoutTable(t *testing.T) {
+	a := New("postgres://user:pass@127.0.0.1:1/db", "", 0)
+	if err := a.Incremental(context.Background(), "id", "0", func([]adapters.Row) error { return nil }); err == nil {
+		t.Fatal("缺 source_ref 的 Incremental 应立即报错（不连库）")
+	}
+}

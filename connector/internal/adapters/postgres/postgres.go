@@ -54,6 +54,38 @@ func (a *Adapter) connect(ctx context.Context) (*pgx.Conn, error) {
 	return conn, nil
 }
 
+// columnDef 是一列的名字与源库原生类型名（udt_name 优先，data_type 兜底）。
+type columnDef struct {
+	Name   string
+	Native string
+}
+
+// queryColumnDefs 从 information_schema 查列名与原生类型名；Columns() 的
+// 三型映射与 Incremental() 的水位参数 CAST 共用这一份查询。
+func (a *Adapter) queryColumnDefs(ctx context.Context, conn *pgx.Conn, schema, table string) ([]columnDef, error) {
+	const q = `SELECT column_name, COALESCE(NULLIF(udt_name, ''), data_type)
+	           FROM information_schema.columns
+	           WHERE table_name = $1 AND table_schema = COALESCE(NULLIF($2, ''), current_schema())
+	           ORDER BY ordinal_position`
+	rows, err := conn.Query(ctx, q, table, schema)
+	if err != nil {
+		return nil, fmt.Errorf("查询 %s 列定义失败: %w", a.Table, err)
+	}
+	defer rows.Close()
+	var defs []columnDef
+	for rows.Next() {
+		var name, udt string
+		if err := rows.Scan(&name, &udt); err != nil {
+			return nil, fmt.Errorf("读取列定义失败: %w", err)
+		}
+		defs = append(defs, columnDef{Name: name, Native: udt})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("读取列定义失败: %w", err)
+	}
+	return defs, nil
+}
+
 // Columns 从 information_schema 读列名与类型并映射到引擎三型。
 func (a *Adapter) Columns(ctx context.Context) ([]adapters.Column, error) {
 	schema, table, err := a.schemaTable()
@@ -66,28 +98,16 @@ func (a *Adapter) Columns(ctx context.Context) ([]adapters.Column, error) {
 	}
 	defer conn.Close(context.WithoutCancel(ctx))
 
-	const q = `SELECT column_name, COALESCE(NULLIF(udt_name, ''), data_type)
-	           FROM information_schema.columns
-	           WHERE table_name = $1 AND table_schema = COALESCE(NULLIF($2, ''), current_schema())
-	           ORDER BY ordinal_position`
-	rows, err := conn.Query(ctx, q, table, schema)
+	defs, err := a.queryColumnDefs(ctx, conn, schema, table)
 	if err != nil {
-		return nil, fmt.Errorf("查询 %s 列定义失败: %w", a.Table, err)
+		return nil, err
 	}
-	defer rows.Close()
-	var cols []adapters.Column
-	for rows.Next() {
-		var name, udt string
-		if err := rows.Scan(&name, &udt); err != nil {
-			return nil, fmt.Errorf("读取列定义失败: %w", err)
-		}
-		cols = append(cols, adapters.Column{Name: name, Type: adapters.MapSQLType(udt)})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("读取列定义失败: %w", err)
-	}
-	if len(cols) == 0 {
+	if len(defs) == 0 {
 		return nil, fmt.Errorf("表 %s 不存在或无可见列（受限账号请确认库级权限）", a.Table)
+	}
+	cols := make([]adapters.Column, 0, len(defs))
+	for _, d := range defs {
+		cols = append(cols, adapters.Column{Name: d.Name, Type: adapters.MapSQLType(d.Native)})
 	}
 	return cols, nil
 }
@@ -140,8 +160,57 @@ func (a *Adapter) Snapshot(ctx context.Context, fn adapters.SnapshotFunc) error 
 		return err
 	}
 	defer conn.Close(context.WithoutCancel(ctx))
+	return a.streamRows(ctx, conn, "SELECT * FROM "+quoteQualified(schema, table), nil, fn)
+}
 
-	rows, err := conn.Query(ctx, "SELECT * FROM "+quoteQualified(schema, table))
+// Incremental 增量拉取：只读水位列 > after 的行，按水位列 ASC 有序回调。
+func (a *Adapter) Incremental(ctx context.Context, column, after string, fn adapters.SnapshotFunc) error {
+	schema, table, err := a.schemaTable()
+	if err != nil {
+		return err
+	}
+	conn, err := a.connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(context.WithoutCancel(ctx))
+
+	defs, err := a.queryColumnDefs(ctx, conn, schema, table)
+	if err != nil {
+		return err
+	}
+	native, ok := nativeTypeOf(defs, column)
+	if !ok {
+		return fmt.Errorf("表 %s 不存在水位列 %s", a.Table, column)
+	}
+	query := incrementalQuery(schema, table, column, native)
+	return a.streamRows(ctx, conn, query, []any{after}, fn)
+}
+
+// nativeTypeOf 从列定义里找水位列的原生类型名。
+func nativeTypeOf(defs []columnDef, column string) (string, bool) {
+	for _, d := range defs {
+		if d.Name == column {
+			return d.Native, true
+		}
+	}
+	return "", false
+}
+
+// incrementalQuery 构造增量拉取 SQL：水位参数 CAST 到列原生类型后比较
+// （TEXT 参数 → 整型/时间戳/数值全适用），表/列/类型名标识符走 pgx 转义。
+func incrementalQuery(schema, table, column, native string) string {
+	quotedCol := pgx.Identifier{column}.Sanitize()
+	quotedType := pgx.Identifier{native}.Sanitize()
+	return "SELECT * FROM " + quoteQualified(schema, table) +
+		" WHERE " + quotedCol + " > CAST($1 AS " + quotedType + ")" +
+		" ORDER BY " + quotedCol
+}
+
+// streamRows 流式扫描一条查询并按批次回调；行值 → 引擎三型的收敛与
+// Snapshot/Incremental 完全一致（字段 OID 走同一张类型映射表）。
+func (a *Adapter) streamRows(ctx context.Context, conn *pgx.Conn, query string, args []any, fn adapters.SnapshotFunc) error {
+	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("查询 %s 失败: %w", a.Table, err)
 	}

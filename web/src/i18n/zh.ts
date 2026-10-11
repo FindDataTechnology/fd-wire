@@ -864,6 +864,35 @@ const zh = {
         exporting: "导出中…",
         exportError: "导出失败",
         exportTruncated: "导出已截断至前 10,000 行。",
+        // 增量同步设置（wire-incremental-sync）：仅连接器来源数据集渲染——
+        // 模式切换（增量必须配水位列）+ 当前水位状态 + 重置水位（下次全量重建）
+        // + 合并口径诚实注记（源端删除不传播）。
+        syncSettings: {
+          title: "增量同步",
+          modeLabel: "同步模式",
+          modes: {
+            snapshot: "全量快照",
+            incremental: "增量水位",
+          },
+          watermarkLabel: "水位列",
+          watermarkPlaceholder: "选水位列…",
+          notSynced: "尚未同步（首次将建立基线）",
+          statusModeLabel: "模式",
+          statusColumnLabel: "水位列",
+          statusValueLabel: "当前水位",
+          statusNone: "—",
+          save: "保存",
+          saving: "保存中…",
+          error: "同步设置保存失败",
+          reset: "重置水位",
+          resetting: "重置中…",
+          resetTitle: "确认重置水位？",
+          resetWarning: "下次同步将全量重建（放弃增量合并，回到全量快照基线）。",
+          resetConfirm: "确认重置",
+          resetCancel: "取消",
+          honestyNote:
+            "增量同步按主键合并，不会同步源端删除的行；需要重建时重置水位，下次同步回到全量快照。",
+        },
         // 重派生 + 定时重派生（wire-pipeline-actions 任务 1.2）：仅 derived +
         // cell 档渲染——级联结果逐级呈现、cron 登记态如实展示、UTC 诚实注记。
         rederive: {

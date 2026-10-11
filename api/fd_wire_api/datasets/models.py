@@ -115,6 +115,14 @@ class Dataset(DatasetsBase):
     paused_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: 溯源档位 off|chain_only|anchored_batch|anchored_realtime（wire-provenance-ledger）
     provenance_tier: Mapped[str] = mapped_column(String(24), default="chain_only")
+    #: 连接器同步模式 snapshot（全量替换，默认）| incremental（增量水位，
+    #: wire-connector-incremental-sync）；仅 source_kind=connector 有意义
+    sync_mode: Mapped[str] = mapped_column(String(16), default="snapshot")
+    #: 增量水位列（须 ∈ columns_json 既有列名；sync-settings 端点校验）
+    watermark_column: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: 最近水位值（TEXT 字符串原样——保整型精度；commit 上报捕获、config 下发；
+    #: 非空时 begin 给引擎 ingest_begin 传 mode=merge，否则不传=replace）
+    watermark_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow_naive, onupdate=_utcnow_naive
@@ -139,6 +147,9 @@ class DatasetSync(DatasetsBase):
     status: Mapped[str] = mapped_column(String(16))
     rows: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: 本轮同步模式 snapshot|incremental（begin 时按数据集配置落值；
+    #: wire-connector-incremental-sync——历史行记录每轮口径）
+    mode: Mapped[str] = mapped_column(String(16), default="snapshot")
 
 
 class Upload(DatasetsBase):

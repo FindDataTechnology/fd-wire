@@ -39,6 +39,7 @@ from .schemas import (
     AbortOut,
     ChunkIn,
     ChunkOut,
+    CommitIn,
     CommitOut,
     HeartbeatIn,
     HeartbeatOut,
@@ -219,6 +220,12 @@ def connector_config(
                 "columns": list(dataset.columns_json or []),
                 "row_count": dataset.row_count,
                 "sync_status": dataset.sync_status,
+                # 增量水位配置下发（wire-connector-incremental-sync）：水位值
+                # 原样字符串（整型精度端到端保持）；snapshot 数据集两水位字段
+                # 恒 None、sync_mode=snapshot，连接器走既有全量路径零变化。
+                "sync_mode": dataset.sync_mode or "snapshot",
+                "watermark_column": dataset.watermark_column,
+                "watermark_value": dataset.watermark_value,
             }
             for dataset in datasets
         ],
@@ -254,6 +261,9 @@ def _record_sync(
         status=status_,
         rows=rows,
         error=error,
+        # 失败/配额/漂移行同样按数据集当前配置记模式（历史口径完整；
+        # 增量数据集的首同步建基线失败也留 incremental 痕迹）
+        mode=dataset.sync_mode or "snapshot",
     )
     db.add(row)
     return row
@@ -366,17 +376,20 @@ def begin_sync(
         stale.finished_at = service.utcnow()
     if stale_rows:
         db.commit()
+    begin_arguments = {
+        "dataset_key": dataset.key,
+        "columns": incoming,
+        "pk_columns": list(payload.pk_columns),
+        "row_count": payload.row_count,
+        "actor": f"connector:{connector.id}",
+    }
+    # 增量且已有水位 → merge（按主键 upsert）；否则不传 mode（=引擎默认
+    # replace，存量 cell 未升级零影响）。增量首同步（无水位值）走全量替换
+    # 建基线，commit 捕获初始水位（wire-connector-incremental-sync）。
+    if dataset.sync_mode == "incremental" and dataset.watermark_value:
+        begin_arguments["mode"] = "merge"
     try:
-        begun = client.call(
-            TOOL_INGEST_BEGIN,
-            {
-                "dataset_key": dataset.key,
-                "columns": incoming,
-                "pk_columns": list(payload.pk_columns),
-                "row_count": payload.row_count,
-                "actor": f"connector:{connector.id}",
-            },
-        )
+        begun = client.call(TOOL_INGEST_BEGIN, begin_arguments)
         engine_ingest_id = str(begun.get("ingest_id") or "")
         if not engine_ingest_id:
             raise EngineCallError("引擎 ingest_begin 未返回 ingest_id")
@@ -388,7 +401,15 @@ def begin_sync(
         raise engine_failure(exc) from exc
 
     sync_id = service.new_uuid()
-    db.add(DatasetSync(id=sync_id, dataset_id=dataset.id, status="syncing", rows=0))
+    db.add(
+        DatasetSync(
+            id=sync_id,
+            dataset_id=dataset.id,
+            status="syncing",
+            rows=0,
+            mode=dataset.sync_mode or "snapshot",
+        )
+    )
     dataset.sync_status = "syncing"
     dataset.paused_reason = None
     db.commit()
@@ -452,11 +473,18 @@ def push_chunk(
 @router.post("/api/v1/connector/syncs/{sync_id}/commit", response_model=CommitOut)
 def commit_sync(
     sync_id: str,
+    payload: CommitIn | None = None,
     connector: Connector = Depends(require_connector_key),
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> CommitOut:
-    """阶段三：存储终检 → 引擎 ``ingest_commit``（原子替换）→ 更新登记。"""
+    """阶段三：存储终检 → 引擎 ``ingest_commit``（快照=原子替换 /
+    增量=按主键 upsert 合并）→ 更新登记与水位。
+
+    ``watermark_value`` 可选上报（wire-connector-incremental-sync）：空串/
+    缺省=本轮零行不动水位；非增量数据集携带 → 422 fail-closed（防误配）；
+    Trim 后超 256 字符 → 422。校验先于配额与引擎调用（坏请求零副作用）。
+    """
     row = _sync_or_404(db, connector, sync_id)
     if row.status != "syncing":
         raise HTTPException(
@@ -465,6 +493,26 @@ def commit_sync(
     session = _session_or_409(sync_id)
     dataset = db.get(Dataset, session.dataset_id)
     client = engine_factory(connector.customer_id)
+
+    # 水位上报校验（先于任何引擎调用/状态改写——客户端错误零副作用）
+    watermark: str | None = None
+    reported = payload.watermark_value if payload is not None else None
+    if reported is not None:
+        watermark = reported.strip()
+        if watermark:
+            if dataset.sync_mode != "incremental":
+                raise HTTPException(
+                    status_code=422,
+                    detail="非增量数据集不接受 watermark_value 上报"
+                    f"（当前 sync_mode={dataset.sync_mode}）——请检查连接器配置",
+                )
+            if len(watermark) > 256:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"watermark_value 超长（Trim 后 {len(watermark)} > 256 字符）",
+                )
+        else:
+            watermark = None  # 空串=未上报（本轮零行不动水位）
 
     try:
         service.ensure_storage_quota(
@@ -520,6 +568,10 @@ def commit_sync(
     dataset.columns_json = list(session.schema)
     dataset.sync_status = "ok"
     dataset.paused_reason = None
+    # 水位捕获（仅增量数据集；首同步在此落初始水位，后续轮滚动前移）。
+    # mode 已在 begin 按数据集配置落进本 DatasetSync 行，这里不改写。
+    if watermark is not None and dataset.sync_mode == "incremental":
+        dataset.watermark_value = watermark
     row.status = "ok"
     row.rows = rows
     row.finished_at = service.utcnow()

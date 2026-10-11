@@ -30,6 +30,10 @@ type DatasetConfig struct {
 	SyncEnabled    *bool        `json:"sync_enabled,omitempty"`
 	MinSyncMinutes int          `json:"min_sync_minutes,omitempty"`
 	MaxRows        int64        `json:"max_rows,omitempty"`
+
+	SyncMode        string `json:"sync_mode,omitempty"`        // ""|"snapshot"|"incremental"
+	WatermarkColumn string `json:"watermark_column,omitempty"` // 增量水位列（sync_mode=incremental 时生效）
+	WatermarkValue  string `json:"watermark_value,omitempty"`  // 字符串水位（保 int64 精度）；空 = 尚无基线
 }
 
 // RemoteLimits 是云端下发的全局上限/用量（契约 §3.3 config 响应）。
