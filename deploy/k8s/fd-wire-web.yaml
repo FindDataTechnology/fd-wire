@@ -28,7 +28,7 @@ spec:
       containers:
         - name: web
           # TODO(go-live): 首次构建后回填实际 sha- tag。
-          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-2cfd6fc
+          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-17b666a
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
