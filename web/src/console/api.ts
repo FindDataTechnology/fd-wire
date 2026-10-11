@@ -1105,6 +1105,21 @@ export function importArtifactFromDraft(
   }) as Promise<ArtifactDetail>;
 }
 
+// ── 空白建板（wire-dashboard-blank-create 任务 1.2 web 面）──────────────────
+// 契约：POST /api/v1/artifacts（Bearer 登录身份）body {kind:"dashboard",
+// title} → 201 ArtifactDetail（draft v1，spec = 最小空板 {title,
+// spec:{title, panels:[]}}，origin_conversation_id=null）。kind 白名单 v0
+// 仅 dashboard、title 非空——非法 422 带 detail 如实上抛（走既有
+// requestJson POST 通道与 ConsoleApiError 语义，与其它创建端点一致）。
+
+/** 空白新建看板：免 cell 免 AI 的出生路径（免费档第一块板）。 */
+export function createBlankDashboard(title: string): Promise<ArtifactDetail> {
+  return requestJson(`${API_BASE}/v1/artifacts`, {
+    method: "POST",
+    body: { kind: "dashboard", title },
+  }) as Promise<ArtifactDetail>;
+}
+
 // ── 源包（wire-source-packs 任务 3.3）──────────────────────────────────
 // 契约（tasks.md 2.1/2.2）：GET /api/v1/packs 与 GET /api/v1/packs/{id} 为
 // 公开端点（匿名可读——目录公开通道，不过计量轨道）；详情响应为平铺分页

@@ -13,6 +13,8 @@
 // wire-dashboard-export 任务 1.2：查看态工具区加「导出 CSV」——整板单文件
 // 客户端本地合成（快照在 spec 里，零请求零新端点）；archived 只读也可导
 // （纯读不落库）；分享页/渲染器本体零导出入口（公开只读红线）。
+// wire-dashboard-blank-create 任务 1.2：startEditing prop——空白建板成功后
+// 展开即进编辑器（其余入口缺省查看态，行为零变化）。
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -36,9 +38,12 @@ import {
 export function DashboardPane({
   artifactId,
   onSaved,
+  startEditing = false,
 }: {
   artifactId: number;
   onSaved: (artifact: Artifact) => void;
+  /** 挂载即编辑态（空白新建的板「创建即跳编辑器」；缺省查看态）。 */
+  startEditing?: boolean;
 }) {
   const { t } = useTranslation();
   const [detail, setDetail] = useState<ArtifactDetail | null>(null);
@@ -56,7 +61,7 @@ export function DashboardPane({
     let alive = true;
     setDetail(null);
     setFailed(false);
-    setEditing(false);
+    setEditing(startEditing);
     setRefreshing(false);
     setRefreshResult(null);
     setRefreshError(null);
@@ -70,7 +75,7 @@ export function DashboardPane({
     return () => {
       alive = false;
     };
-  }, [artifactId]);
+  }, [artifactId, startEditing]);
 
   /** 手动刷新：留存响应（提示文案按 mode 派生）并重拉详情重渲染（行版本号
    * 经 onSaved 同步）。 */

@@ -371,6 +371,17 @@ const zh = {
       archive: "归档",
       restore: "恢复",
       actionErrorTitle: "操作失败，请稍后重试。",
+      // 空白新建看板（wire-dashboard-blank-create）：标题输入 → 创建 → 跳编辑器。
+      create: {
+        button: "新建看板",
+        titleLabel: "看板标题",
+        titlePlaceholder: "给新看板起个名字",
+        submit: "创建",
+        creating: "创建中…",
+        cancel: "取消",
+        titleRequired: "请输入看板标题。",
+        failed: "创建失败，请稍后重试。",
+      },
       viewer: {
         title: "spec 编辑器",
         note: "保存到服务端会追加为新版本；未保存的编辑自动暂存到本地浏览器（仅作离开提示缓冲）。",

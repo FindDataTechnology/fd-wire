@@ -9,6 +9,7 @@ import "../i18n";
 import i18n from "../i18n";
 import { ArtifactsPage } from "./ArtifactsPage";
 import { installConsoleBackend, seedConsoleSession } from "./testing";
+import type { ConsoleBackendOptions } from "./testing";
 import { formatServerDate } from "./util";
 import type { Conversation } from "./api";
 
@@ -55,8 +56,8 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
-function install() {
-  const backend = installConsoleBackend(CONVERSATIONS);
+function install(options: ConsoleBackendOptions = {}) {
+  const backend = installConsoleBackend(CONVERSATIONS, options);
   backend.addLifecycleArtifact({
     id: 11,
     kind: "dashboard",
@@ -596,5 +597,171 @@ describe("ArtifactsPage 分享入口（wire-dashboard-share 2.2/2.3）", () => {
     expect(screen.getByTestId("share-expires").textContent).toContain(
       formatServerDate("2026-11-10T08:00:00"),
     );
+  });
+});
+
+// ── 新建看板（wire-dashboard-blank-create 任务 1.2）──────────────────────
+// 契约：POST /api/v1/artifacts body {kind:"dashboard", title} → 201
+// ArtifactDetail（draft v1，最小空板 spec）；成功后新行置顶并走既有行展开
+// 直接进编辑器（startEditing）；422 detail 如实呈现；空标题前端先拦不发；
+// 创建中禁用防重复提交。
+
+describe("ArtifactsPage 新建看板（wire-dashboard-blank-create 1.2）", () => {
+  beforeEach(() => {
+    i18n.changeLanguage("zh");
+    localStorage.clear();
+    sessionStorage.clear();
+    seedConsoleSession({ sub: "demo-customer" });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  /** 打开新建表单（列表就绪后）。 */
+  async function openCreateForm() {
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+    fireEvent.click(screen.getByTestId("create-dashboard-open"));
+    expect(screen.getByTestId("create-dashboard-form")).toBeTruthy();
+  }
+
+  it("创建流：标题输入 → POST {kind:'dashboard', title} → 新行置顶 + 直接进编辑器", async () => {
+    const backend = install();
+    await openCreateForm();
+
+    fireEvent.change(screen.getByTestId("create-dashboard-title"), {
+      target: { value: "免费档第一块板" },
+    });
+    fireEvent.click(screen.getByTestId("create-dashboard-submit"));
+
+    // 创建即跳编辑器：既有行展开路径（dashboardFor）+ startEditing——
+    // 编辑器直接可见，标题回填，空板提示在。
+    expect(await screen.findByTestId("dashboard-editor")).toBeTruthy();
+    expect(
+      (screen.getByTestId("editor-dashboard-title") as HTMLInputElement).value,
+    ).toBe("免费档第一块板");
+    expect(screen.getByTestId("editor-empty-panels").textContent).toContain(
+      "还没有面板",
+    );
+
+    // POST 载荷断言：kind 白名单 + 标题 + 登录 Bearer
+    const post = backend.calls.find(
+      (c) => c.method === "POST" && c.url.pathname === "/api/v1/artifacts",
+    );
+    expect(post).toBeTruthy();
+    expect(post?.body).toEqual({ kind: "dashboard", title: "免费档第一块板" });
+    expect(post?.headers["authorization"]).toMatch(/^Bearer /);
+
+    // 新行置顶：draft 徽标 + v1 + 直接创建（无来源会话指针）；表单收起
+    const items = screen.getAllByTestId("artifact-item");
+    expect(items.length).toBe(4);
+    const newRow = items[0]!;
+    expect(newRow.getAttribute("data-artifact-id")).toBe("14");
+    expect(
+      within(newRow).getByTestId("artifact-status-badge").getAttribute("data-status"),
+    ).toBe("draft");
+    expect(within(newRow).getByTestId("artifact-version").textContent).toBe("v1");
+    expect(
+      within(newRow).getByTestId("artifact-source-none").textContent,
+    ).toContain("直接创建");
+    expect(screen.queryByTestId("create-dashboard-form")).toBeNull();
+  });
+
+  it("422 呈现：后端 detail 如实显示，表单保留可重试", async () => {
+    install({
+      failArtifactCreateStatus: 422,
+      failArtifactCreateDetail: "产物数量已达上限（10 个）",
+    });
+    await openCreateForm();
+
+    fireEvent.change(screen.getByTestId("create-dashboard-title"), {
+      target: { value: "超限板" },
+    });
+    fireEvent.click(screen.getByTestId("create-dashboard-submit"));
+
+    expect(
+      (await screen.findByTestId("create-dashboard-error")).textContent,
+    ).toContain("产物数量已达上限");
+    // 表单不关、无新行、按钮恢复可重试
+    expect(screen.getByTestId("create-dashboard-form")).toBeTruthy();
+    expect(screen.getAllByTestId("artifact-item").length).toBe(3);
+    expect(
+      (screen.getByTestId("create-dashboard-submit") as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it("空标题前端校验：空/纯空白不发 POST，提示后可修正再创建", async () => {
+    const backend = install();
+    await openCreateForm();
+
+    // 空标题：前端先拦
+    fireEvent.click(screen.getByTestId("create-dashboard-submit"));
+    expect(screen.getByTestId("create-dashboard-error").textContent).toContain(
+      "请输入看板标题",
+    );
+    // 纯空白标题：同样不发
+    fireEvent.change(screen.getByTestId("create-dashboard-title"), {
+      target: { value: "   " },
+    });
+    fireEvent.click(screen.getByTestId("create-dashboard-submit"));
+    expect(screen.getByTestId("create-dashboard-error").textContent).toContain(
+      "请输入看板标题",
+    );
+    expect(
+      backend.calls.filter(
+        (c) => c.method === "POST" && c.url.pathname === "/api/v1/artifacts",
+      ),
+    ).toHaveLength(0);
+    expect(screen.getAllByTestId("artifact-item").length).toBe(3);
+
+    // 修正为合法标题后可正常创建（前端校验不阻塞后续流程）
+    fireEvent.change(screen.getByTestId("create-dashboard-title"), {
+      target: { value: "修正后的板" },
+    });
+    fireEvent.click(screen.getByTestId("create-dashboard-submit"));
+    expect(await screen.findByTestId("dashboard-editor")).toBeTruthy();
+  });
+
+  it("防重复提交：创建中按钮禁用 + 仅一发；成功后表单收起进编辑器", async () => {
+    const backend = install();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const posts: string[] = [];
+    const wrapped = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://console.test");
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.pathname === "/api/v1/artifacts" && method === "POST") {
+        posts.push(`${method} ${url.pathname}`);
+        return gate.then(() => backend.fetchImpl(input, init));
+      }
+      return backend.fetchImpl(input, init);
+    }) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", wrapped);
+
+    await openCreateForm();
+    fireEvent.change(screen.getByTestId("create-dashboard-title"), {
+      target: { value: "防重复板" },
+    });
+    fireEvent.click(screen.getByTestId("create-dashboard-submit"));
+
+    // 创建中：loading 文案 + 禁用，再点不产生第二个 POST
+    expect(posts).toEqual(["POST /api/v1/artifacts"]);
+    const submit = screen.getByTestId("create-dashboard-submit");
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    expect(submit.textContent).toContain("创建中");
+    fireEvent.click(submit);
+    expect(posts).toEqual(["POST /api/v1/artifacts"]);
+
+    // 放行后：单次创建成功 → 表单收起、直接进编辑器
+    release();
+    expect(await screen.findByTestId("dashboard-editor")).toBeTruthy();
+    expect(screen.queryByTestId("create-dashboard-form")).toBeNull();
   });
 });

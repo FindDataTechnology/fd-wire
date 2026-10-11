@@ -8,6 +8,9 @@
 - 非法迁移 409（说明合法路径）；状态迁移操作记录（status_history）；
 - append-only：历史版本内容不可变、无改写端点；
 - spec 最小校验 422；鉴权 401；
+- 空白建板（wire-dashboard-blank-create 1.1）：免费档第一块板的出生
+  路径——{kind,title} 建最小空板 draft v1（kind 白名单仅 dashboard、
+  title 必填非空 422、审计同款、他企列表隔离）；
 - 模型约束（kind 五类 / status 三态，与 ai.tools 值域对表）；
 - 迁移链 0021（0020 未落盘时以临时 no-op stub 接链验证，集成后自动走真链）。
 """
@@ -362,6 +365,113 @@ def test_from_draft_not_found_variants(client, db_session) -> None:
     ).status_code == 201
 
 
+# ------------------------------------------------------------------ 空白建板
+
+
+def test_blank_create_dashboard_success(client, db_session) -> None:
+    """空白建板：201 draft v1 + 最小空板 spec + 审计同款 + 无来源会话指针。"""
+    resp = client.post(
+        "/api/v1/artifacts",
+        json={"kind": "dashboard", "title": "我的第一块板"},
+        headers=CUST,
+    )
+    assert resp.status_code == 201, resp.text
+    artifact = resp.json()
+    assert artifact["kind"] == "dashboard"
+    assert artifact["title"] == "我的第一块板"
+    assert artifact["status"] == "draft"
+    assert artifact["version"] == 1
+    # v1 = 最小空板 spec（frozen 契约：{"title", "spec":{"title","panels":[]}}）
+    assert artifact["spec"] == {
+        "title": "我的第一块板",
+        "spec": {"title": "我的第一块板", "panels": []},
+    }
+    # 直接创建：无来源会话指针（区别于 from-draft）
+    assert artifact["origin_conversation_id"] is None
+    # 初始状态留痕 + operator 审计同款（console:<customer_id>）
+    assert artifact["status_history"][0]["status"] == "draft"
+    assert artifact["status_history"][0]["by"] == "console:cust-001"
+    assert "空白" in artifact["status_history"][0]["note"]
+
+    # 详情可读；版本链 v1 唯一，operator 审计同款
+    detail = client.get(f"/api/v1/artifacts/{artifact['id']}", headers=CUST)
+    assert detail.status_code == 200
+    assert detail.json()["spec"] == artifact["spec"]
+    versions = client.get(
+        f"/api/v1/artifacts/{artifact['id']}/versions", headers=CUST
+    )
+    assert [v["version"] for v in versions.json()] == [1]
+    assert versions.json()[0]["operator"] == "console:cust-001"
+
+    # 出生即接入既有编辑路径（免费档自助 BI 闭环）：PUT 追加 v2
+    edited = client.put(
+        f"/api/v1/artifacts/{artifact['id']}",
+        json={
+            "spec": {
+                "title": "我的第一块板",
+                "spec": {"title": "我的第一块板", "panels": [{"id": "p1"}]},
+            }
+        },
+        headers=CUST,
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["version"] == 2
+
+    # 他企不可见（列表隔离——产物域既有隔离语义覆盖新出生路径）
+    assert client.get("/api/v1/artifacts", headers=OTHER).json() == []
+
+
+def test_blank_create_kind_whitelist_422(client) -> None:
+    """kind 白名单 v0 仅 dashboard：其他 kind 422 如实拒，零半写。"""
+    resp = client.post(
+        "/api/v1/artifacts",
+        json={"kind": "research_report", "title": "报告"},
+        headers=CUST,
+    )
+    assert resp.status_code == 422
+    assert (
+        resp.json()["detail"]
+        == "空白创建仅支持 dashboard（其他 kind 由 AI 构建产生）"
+    )
+    # 拒收零半写：不落任何产物行
+    assert client.get("/api/v1/artifacts", headers=CUST).json() == []
+
+
+def test_blank_create_title_required_422(client) -> None:
+    """title 必填非空：缺/空串/纯空白/非字符串 422；合法输入 strip 归一。"""
+    # 缺 title（模型边界如实 422）
+    assert client.post(
+        "/api/v1/artifacts", json={"kind": "dashboard"}, headers=CUST
+    ).status_code == 422
+    # 空串 / 纯空白（service 统一口径）
+    empty = client.post(
+        "/api/v1/artifacts", json={"kind": "dashboard", "title": ""}, headers=CUST
+    )
+    assert empty.status_code == 422
+    assert "title" in empty.json()["detail"]
+    assert client.post(
+        "/api/v1/artifacts",
+        json={"kind": "dashboard", "title": "   "},
+        headers=CUST,
+    ).status_code == 422
+    # 非字符串（模型边界如实 422）
+    assert client.post(
+        "/api/v1/artifacts", json={"kind": "dashboard", "title": 123}, headers=CUST
+    ).status_code == 422
+    # 拒收零半写
+    assert client.get("/api/v1/artifacts", headers=CUST).json() == []
+
+    # 合法输入 strip 归一：title 投影与 spec 内外层一致去边空白
+    ok = client.post(
+        "/api/v1/artifacts",
+        json={"kind": "dashboard", "title": "  空白板  "},
+        headers=CUST,
+    )
+    assert ok.status_code == 201, ok.text
+    assert ok.json()["title"] == "空白板"
+    assert ok.json()["spec"]["title"] == "空白板"
+
+
 # ---------------------------------------------------------------- 跨客户隔离
 
 
@@ -428,6 +538,10 @@ def test_auth_required(client) -> None:
     assert client.post(
         "/api/v1/artifacts/from-draft",
         json={"conversation_id": 1, "draft_id": 1},
+    ).status_code == 401
+    assert client.post(
+        "/api/v1/artifacts",
+        json={"kind": "dashboard", "title": "x"},
     ).status_code == 401
 
 

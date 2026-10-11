@@ -1,6 +1,9 @@
 // 产物页（#/console/artifacts；wire-artifacts-persistence web 面）。
 // - 列表接 GET /api/v1/artifacts（持久化产物）：kind 徽标 + 状态徽标
 //   （draft/published/archived）+ 版本号 + 来源会话指针；kind/status 筛选。
+// - 页头「新建看板」（wire-dashboard-blank-create）：标题输入 → POST
+//   /api/v1/artifacts {kind:"dashboard", title} → 新行置顶并走既有行展开
+//   直接进编辑器（免 cell 免 AI 的出生路径——免费档第一块板）。
 // - spec 编辑保存走 PUT（成功提示新版本号）；localStorage 退位为未保存
 //   离开提示的本地缓冲（自动暂存 + 可一键丢弃）；archived 只读（服务端
 //   409 文案如实呈现）。
@@ -20,6 +23,7 @@ import {
   ARTIFACT_STATUSES,
   apiErrorText,
   archiveArtifact,
+  createBlankDashboard,
   createDashboardShareLink,
   fetchArtifactVersion,
   fetchArtifactVersions,
@@ -31,6 +35,7 @@ import {
   saveArtifactSpec,
   SHARE_TTL_DAYS,
   type Artifact,
+  type ArtifactDetail,
   type ArtifactKind,
   type ArtifactStatus,
   type ArtifactVersionDetail,
@@ -74,6 +79,10 @@ export function ArtifactsPage() {
   // 分享弹层展开的产物 id（wire-dashboard-share：published dashboard 专属）。
   const [shareFor, setShareFor] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  // 新建看板表单开合（wire-dashboard-blank-create：免 cell 免 AI 的出生入口）。
+  const [createOpen, setCreateOpen] = useState(false);
+  // 刚空白创建的产物 id：其看板展开区直接进编辑态（创建即跳编辑器）。
+  const [freshlyCreatedId, setFreshlyCreatedId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -136,6 +145,18 @@ export function ArtifactsPage() {
     [replaceArtifact, t],
   );
 
+  /** 空白建板成功（wire-dashboard-blank-create）：新行置顶（服务端按更新
+   *  时间倒序，新建即最新）+ 复位筛选保证新板可见，随即走既有「打开看板」
+   *  同款行展开（dashboardFor）并直接进编辑态（freshlyCreatedId）。 */
+  const handleDashboardCreated = useCallback((detail: ArtifactDetail) => {
+    setArtifacts((prev) => (prev ? [detail, ...prev] : prev));
+    setKindFilter("all");
+    setStatusFilter("all");
+    setCreateOpen(false);
+    setFreshlyCreatedId(detail.id);
+    setDashboardFor(detail.id);
+  }, []);
+
   return (
     <div>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -146,6 +167,18 @@ export function ArtifactsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* 空白建板入口（wire-dashboard-blank-create）：免费档无 cell 无 AI
+              草稿时的唯一出生路径——标题输入 → POST → 直接进编辑器。 */}
+          {!createOpen && (
+            <button
+              type="button"
+              data-testid="create-dashboard-open"
+              onClick={() => setCreateOpen(true)}
+              className="rounded bg-indigo-600 px-3 py-1 text-xs text-white hover:bg-indigo-500"
+            >
+              {t("console.artifacts.create.button")}
+            </button>
+          )}
           <label htmlFor="artifact-kind-filter" className="text-xs text-slate-500">
             {t("console.artifacts.kindFilterLabel")}
           </label>
@@ -182,6 +215,13 @@ export function ArtifactsPage() {
           </select>
         </div>
       </div>
+
+      {createOpen && (
+        <CreateDashboardForm
+          onCreated={handleDashboardCreated}
+          onCancel={() => setCreateOpen(false)}
+        />
+      )}
 
       {error && (
         <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-4" data-testid="artifacts-error">
@@ -368,6 +408,8 @@ export function ArtifactsPage() {
                     key={`dashboard-${artifact.id}`}
                     artifactId={artifact.id}
                     onSaved={replaceArtifact}
+                    // 刚空白创建的板直接进编辑态（创建即跳编辑器）。
+                    startEditing={artifact.id === freshlyCreatedId}
                   />
                 )}
               </li>
@@ -388,6 +430,96 @@ export function ArtifactsPage() {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * 新建看板表单（wire-dashboard-blank-create 任务 1.2）：标题输入 →
+ * POST /api/v1/artifacts {kind:"dashboard", title}。空标题前端先拦（不发
+ * 请求）；创建中禁用防重复提交；失败（422/网络等）后端 detail 如实呈现、
+ * 表单不关可改再试；成功交 onCreated（置顶 + 展开直接进编辑器）。
+ */
+function CreateDashboardForm({
+  onCreated,
+  onCancel,
+}: {
+  onCreated: (artifact: ArtifactDetail) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const [title, setTitle] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (creating) return;
+    const trimmed = title.trim();
+    if (!trimmed) {
+      setError(t("console.artifacts.create.titleRequired"));
+      return;
+    }
+    setCreating(true);
+    setError(null);
+    try {
+      onCreated(await createBlankDashboard(trimmed));
+    } catch (err) {
+      setError(apiErrorText(err, t("console.artifacts.create.failed")));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <form
+      data-testid="create-dashboard-form"
+      className="mt-4 rounded-lg border border-slate-200 bg-white p-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <label htmlFor="create-dashboard-title" className="block text-xs text-slate-500">
+        {t("console.artifacts.create.titleLabel")}
+      </label>
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <input
+          id="create-dashboard-title"
+          data-testid="create-dashboard-title"
+          value={title}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            setError(null);
+          }}
+          placeholder={t("console.artifacts.create.titlePlaceholder")}
+          disabled={creating}
+          className="w-64 rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+        />
+        <button
+          type="submit"
+          data-testid="create-dashboard-submit"
+          disabled={creating}
+          className="rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {creating
+            ? t("console.artifacts.create.creating")
+            : t("console.artifacts.create.submit")}
+        </button>
+        <button
+          type="button"
+          data-testid="create-dashboard-cancel"
+          disabled={creating}
+          onClick={onCancel}
+          className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {t("console.artifacts.create.cancel")}
+        </button>
+      </div>
+      {error && (
+        <p data-testid="create-dashboard-error" className="mt-1.5 text-[11px] text-red-600">
+          {error}
+        </p>
+      )}
+    </form>
   );
 }
 

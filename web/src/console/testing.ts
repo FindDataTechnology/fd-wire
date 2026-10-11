@@ -168,6 +168,10 @@ export interface ConsoleBackendOptions {
   /** 强制 GET /api/v1/pipeline/graph 返回该状态（错误态测试）。 */
   failPipelineGraphStatus?: number;
   failPipelineGraphDetail?: string;
+  /** 强制 POST /api/v1/artifacts（空白建板，wire-dashboard-blank-create）
+   *  返回该状态（如 422 校验回显）。 */
+  failArtifactCreateStatus?: number;
+  failArtifactCreateDetail?: string;
 }
 
 /** 源包种子（wire-source-packs）：假后端按 indicators 分页切片出详情。 */
@@ -829,6 +833,73 @@ export function installConsoleBackend(
         updated_at: lifecycleNow(),
         versions: [
           { version: 1, spec: draft.spec, operator: `console:${customerId}`, created_at: lifecycleNow() },
+        ],
+      };
+      lifecycleArtifacts.set(id, created);
+      return Promise.resolve(jsonResponse(lifecycleDetail(created), 201));
+    }
+
+    // ── 空白建板（wire-dashboard-blank-create 1.2）：POST /api/v1/artifacts
+    //    {kind:"dashboard", title} → 201 ArtifactDetail（draft v1，spec = 最小
+    //    空板 {title, spec:{title, panels:[]}}）——kind 白名单 v0 仅 dashboard、
+    //    title 非空，非法 422 带 detail，语义对齐 api 仓建板路由。 ──
+    if (path === "/api/v1/artifacts" && method === "POST") {
+      if (options.failArtifactCreateStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failArtifactCreateDetail ??
+                `artifact create ${options.failArtifactCreateStatus}`,
+            },
+            options.failArtifactCreateStatus,
+          ),
+        );
+      }
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        kind?: string;
+        title?: string;
+      };
+      if (payload.kind !== "dashboard") {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                `kind 白名单仅支持 dashboard（当前 ${String(payload.kind)}）` +
+                "——其他类型仍由 AI 草稿转正产生",
+            },
+            422,
+          ),
+        );
+      }
+      const title = typeof payload.title === "string" ? payload.title.trim() : "";
+      if (!title) {
+        return Promise.resolve(
+          jsonResponse({ detail: "title 不能为空（或全为空白字符）" }, 422),
+        );
+      }
+      const id = nextLifecycleArtifactId++;
+      const blankSpec = { title, spec: { title, panels: [] } };
+      const created: StoredLifecycleArtifact = {
+        id,
+        customer_id: customerId,
+        kind: "dashboard",
+        title,
+        status: "draft",
+        version: 1,
+        origin_conversation_id: null,
+        status_history: [
+          {
+            status: "draft",
+            at: lifecycleNow(),
+            by: `console:${customerId}`,
+            note: "空白新建",
+          },
+        ],
+        created_at: lifecycleNow(),
+        updated_at: lifecycleNow(),
+        versions: [
+          { version: 1, spec: blankSpec, operator: `console:${customerId}`, created_at: lifecycleNow() },
         ],
       };
       lifecycleArtifacts.set(id, created);

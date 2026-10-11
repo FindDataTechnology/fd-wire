@@ -257,3 +257,64 @@ def import_from_draft(
     db.commit()
     db.refresh(artifact)
     return artifact
+
+
+# ----------------------------------------------------------------- 空白建板
+
+#: 空白创建的 kind 白名单：v0 仅 dashboard——其余四类（复合指标/研报/告警/
+#: 定时）结构强，仍只能由 AI 构建草稿转正产生，不给「空壳」出生路径。
+BLANK_CREATE_KINDS: tuple[str, ...] = ("dashboard",)
+
+
+def create_blank_artifact(
+    db: Session, *, customer_id: str, kind: str, title: str
+) -> Artifact:
+    """空白建板（wire-dashboard-blank-create）：console 直接创建 draft 产物。
+
+    产物此前唯一出生路径是会话草稿转正（import_from_draft），而草稿只能由
+    AI 构建产生、AI 构建要求 cell——免费档（无 cell）造不出任何看板。本
+    函数补第二条出生路径：构造最小空板 spec，走与 from-draft 完全相同的
+    建档手法（version=1 版本行 + operator 审计 + 初始状态留痕 + title
+    投影），仅来源会话指针为 None。
+
+    约束：kind 白名单 v0 仅 dashboard（BLANK_CREATE_KINDS）；title strip
+    后须非空——违者 InvalidArtifactSpec（路由层 422），且零半写（拒收不
+    落任何产物/版本行）。
+    """
+    if kind not in BLANK_CREATE_KINDS:
+        raise InvalidArtifactSpec("空白创建仅支持 dashboard（其他 kind 由 AI 构建产生）")
+    if not title.strip():
+        raise InvalidArtifactSpec("title 必须是非空字符串")
+    title = title.strip()
+    spec = {"title": title, "spec": {"title": title, "panels": []}}
+    artifact = Artifact(
+        customer_id=customer_id,
+        kind=kind,
+        # title 投影同 update_spec 口径（strip + 截 200）
+        title=title[:200],
+        status=ArtifactStatus.draft.value,
+        version=1,
+        # 直接创建无来源会话（区别于 from-draft 保留会话指针）
+        origin_conversation_id=None,
+        status_history=[
+            {
+                "status": ArtifactStatus.draft.value,
+                "at": utc_now_iso(),
+                "by": operator_label(customer_id),
+                "note": "空白创建（console 直接新建）",
+            }
+        ],
+    )
+    db.add(artifact)
+    db.flush()
+    db.add(
+        ArtifactVersion(
+            artifact_id=artifact.id,
+            version=1,
+            spec=spec,
+            operator=operator_label(customer_id),
+        )
+    )
+    db.commit()
+    db.refresh(artifact)
+    return artifact

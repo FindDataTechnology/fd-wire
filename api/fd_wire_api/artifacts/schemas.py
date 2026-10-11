@@ -62,6 +62,17 @@ class ArtifactFromDraftIn(BaseModel):
     draft_id: int
 
 
+class ArtifactCreateIn(BaseModel):
+    """空白建板入参（wire-dashboard-blank-create）。
+
+    kind/title 均必填；白名单与非空校验在 service 层统一裁决（空 title、
+    非 dashboard kind 一律 422 带原因）——模型只保字段在位与类型。
+    """
+
+    kind: str
+    title: str
+
+
 class PanelRefreshResult(BaseModel):
     """契约刷新的单面板结果（面板级失败隔离的如实呈现）。"""
 

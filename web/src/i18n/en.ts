@@ -390,6 +390,18 @@ const en: Translation = {
       archive: "Archive",
       restore: "Restore",
       actionErrorTitle: "Action failed, please retry later.",
+      // Blank dashboard creation (wire-dashboard-blank-create): title input →
+      // create → jump straight into the editor.
+      create: {
+        button: "New dashboard",
+        titleLabel: "Dashboard title",
+        titlePlaceholder: "Name your new dashboard",
+        submit: "Create",
+        creating: "Creating…",
+        cancel: "Cancel",
+        titleRequired: "Please enter a dashboard title.",
+        failed: "Creation failed, please retry later.",
+      },
       viewer: {
         title: "Spec editor",
         note: "Saving to the server appends a new version; unsaved edits are buffered in this browser only as a leave-warning buffer.",

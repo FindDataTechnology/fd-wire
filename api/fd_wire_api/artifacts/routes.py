@@ -21,6 +21,11 @@
                                                面板 query 同形入参 → 同一执行
                                                路径出试取快照，所见即所刷；
                                                不落任何版本）
+- ``POST /api/v1/artifacts``                    空白建板（wire-dashboard-blank-create：
+                                               免费档第一块板的出生路径——kind
+                                               白名单 v0 仅 dashboard，title
+                                               必填非空，v1 = 最小空板 spec，
+                                               无来源会话指针）
 - ``POST /api/v1/artifacts/from-draft``        会话草稿导入为 draft 产物
 
 版本行只读——没有任何改写历史版本的端点（append-only 由路由面保证）。
@@ -50,6 +55,7 @@ from ..datasets.ingest import (
 from . import query_contract, refresh, service
 from .models import ArtifactStatus
 from .schemas import (
+    ArtifactCreateIn,
     ArtifactDetailOut,
     ArtifactFromDraftIn,
     ArtifactOut,
@@ -196,6 +202,38 @@ def restore_artifact(
 ) -> ArtifactDetailOut:
     """恢复：archived → draft（唯一回退边；恢复后方可再编辑/发布）。"""
     return _transition(artifact_id, "restore", customer_id, db)
+
+
+@router.post(
+    "/api/v1/artifacts",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ArtifactDetailOut,
+)
+def create_artifact(
+    payload: ArtifactCreateIn,
+    customer_id: str = Depends(require_console_customer_id),
+    db: Session = Depends(get_db),
+) -> ArtifactDetailOut:
+    """空白建板（wire-dashboard-blank-create）：免费档第一块板的出生路径。
+
+    产物此前只有 from-draft 一条出生路径（会话草稿转正），而草稿只能由
+    AI 构建产生、AI 构建要求 cell——免费档（无 cell）造不出任何看板，
+    编辑/契约绑定/刷新等后续能力对第一块板全部够不着。本端点补直接出生
+    路径：``{kind,title}`` → 最小空板 spec ``{"title":…, "spec":
+    {"title":…, "panels":[]}}`` 建 draft 产物 v1，复用既有建档与审计
+    语义（版本行 operator=console:<cid> + 初始状态留痕），无来源会话
+    指针；创建即可进编辑器加面板/绑定数据。
+
+    语义边界：kind 白名单 v0 仅 dashboard（其他 kind 由 AI 构建产生）
+    422；title 缺/空/非字符串 422 如实；拒收零半写。
+    """
+    try:
+        artifact = service.create_blank_artifact(
+            db, customer_id=customer_id, kind=payload.kind, title=payload.title
+        )
+    except service.InvalidArtifactSpec as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return artifact_detail(artifact, service.current_spec(db, artifact))
 
 
 @router.post(
