@@ -15,6 +15,7 @@ export type MessageRole = "user" | "assistant" | "tool_trace";
 
 export const ARTIFACT_KINDS = [
   "dashboard",
+  "form",
   "composite_indicator",
   "research_report",
   "alert_rule",
@@ -1225,6 +1226,21 @@ export function createBlankDashboard(title: string): Promise<ArtifactDetail> {
   }) as Promise<ArtifactDetail>;
 }
 
+// ── 表单产物（wire-form-builder 任务 1.2/4.1 web 面）──────────────────────
+// 契约：POST /api/v1/artifacts body {kind:"form", title} → 201 ArtifactDetail
+// （draft v1，spec = 最小空表单 {title, spec:{title, datasetId:null, fields:[]}}，
+// origin_conversation_id=null）。空白创建白名单 (dashboard, form)——form 与
+// dashboard 同属可空白出生的 kind；保存走既有 PUT 版本链（saveArtifactSpec），
+// spec 结构见 console/form/formSpec.ts。
+
+/** 空白新建表单：选数据集配字段的录入面出生路径（v0 不入 AI 工具白名单）。 */
+export function createBlankForm(title: string): Promise<ArtifactDetail> {
+  return requestJson(`${API_BASE}/v1/artifacts`, {
+    method: "POST",
+    body: { kind: "form", title },
+  }) as Promise<ArtifactDetail>;
+}
+
 // ── 源包（wire-source-packs 任务 3.3）──────────────────────────────────
 // 契约（tasks.md 2.1/2.2）：GET /api/v1/packs 与 GET /api/v1/packs/{id} 为
 // 公开端点（匿名可读——目录公开通道，不过计量轨道）；详情响应为平铺分页
@@ -1393,6 +1409,102 @@ export async function fetchSharedDashboard(
     );
   }
   return readResponse(response, url) as Promise<SharedDashboard>;
+}
+
+// ── 表单分享与公开提交（wire-form-builder 任务 3.1/3.3 web 面）──────────────
+// 契约（api 仓 share 模块，proposal 冻结形状）：
+// - POST /api/v1/artifacts/{id}/share 放行 kind∈{dashboard, form}（Bearer
+//   登录身份）：form 产物响应 url 路径分派为 /api/v1/share/form/{id}?t=…&v=…
+//   （TTL 选项、published 门、secret 禁用语义与 dashboard 一致）。
+// - 公开 GET /api/v1/share/form/{id}?t&v → {title, spec(钉死版本信封原样),
+//   version, expires_at}——spec 内只有字段定义与文案，零行数据；失败统一
+//   404（令牌/版本/发布态任一不满足），secret 未配置 503。
+// - 公开 POST /api/v1/share/form/{id}/submit?t&v body {values} → 201
+//   {ok:true, message:成功文案}；422 detail=字段级原因；429=令牌限流/行数闸；
+//   404=链接失效。公开面免登录——绝不携带 Bearer。
+
+/** 公开分享表单载荷（钉死版本：spec 为产物信封原样，仅字段定义与文案）。 */
+export interface SharedForm {
+  title: string;
+  spec: Record<string, unknown>;
+  version: number;
+  expires_at: string;
+}
+
+/** 公开表单提交响应（201 {ok:true, message}）。 */
+export interface SharedFormSubmitResult {
+  ok: boolean;
+  message: string;
+}
+
+/** 生成表单分享链接（仅 published form；url 路径为 /api/v1/share/form/…）。 */
+export function createFormShareLink(
+  id: number,
+  ttlDays: ShareTtlDays = 30,
+): Promise<DashboardShareLink> {
+  return requestJsonAnyMethod(
+    `${API_BASE}/v1/artifacts/${id}/share`,
+    "POST",
+    { body: { ttl_days: ttlDays } },
+  ) as Promise<DashboardShareLink>;
+}
+
+/** 公开取分享表单（无鉴权端点——绝不携带登录头，未登录填写者直接打开）。
+ *  404 = 链接无效/过期/产物下线（统一口径）；503 = 分享功能未配置。 */
+export async function fetchSharedForm(
+  id: number,
+  token: string,
+  version?: number | null,
+): Promise<SharedForm> {
+  const params = new URLSearchParams({ t: token });
+  if (version != null) params.set("v", String(version));
+  const url = `${API_BASE}/v1/share/form/${id}?${params}`;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+  } catch (err) {
+    if (err instanceof ConsoleApiError) throw err;
+    throw new ConsoleApiError(
+      `network error fetching ${url}: ${(err as Error).message}`,
+    );
+  }
+  return readResponse(response, url) as Promise<SharedForm>;
+}
+
+/** 公开表单提交端点地址（t/v 进 query）——FormRuntime public 态的提交目标。 */
+export function sharedFormSubmitUrl(
+  id: number,
+  token: string,
+  version: number | null,
+): string {
+  const params = new URLSearchParams({ t: token });
+  if (version != null) params.set("v", String(version));
+  return `${API_BASE}/v1/share/form/${id}/submit?${params}`;
+}
+
+/** 公开写端点（无鉴权头、无会话）：公开表单提交等——错误语义与 requestJson
+ *  完全一致（ConsoleApiError 带 status/detail，如 422 字段级原因、429 限流）。 */
+export async function postPublicJson(url: string, body: unknown): Promise<unknown> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    if (err instanceof ConsoleApiError) throw err;
+    throw new ConsoleApiError(
+      `network error fetching ${url}: ${(err as Error).message}`,
+    );
+  }
+  return readResponse(response, url);
 }
 
 // ── 仪表盘手动刷新（wire-dashboard-refresh 任务 2.1 web 面；

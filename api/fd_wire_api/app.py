@@ -180,9 +180,10 @@ app.include_router(datasets_connector_router)
 # /api/v1/downloads/connector/*（manifest + 二进制；无鉴权——下载件不含
 # 敏感数据；FD_WIRE_DOWNLOADS_DIR 未配置时诚实 404 并说明原因）
 app.include_router(downloads_router)
-# 签名分享链接（wire-dashboard-share）：POST 生成（客户鉴权，仅 published
-# dashboard）+ GET /api/v1/share/dashboard/* 公开验签（任一不满足统一 404）；
-# FD_WIRE_SHARE_SECRET 未配置时两端正点 503 诚实禁用（无表 HMAC 令牌）
+# 签名分享链接（wire-dashboard-share；form 扩展 wire-form-builder）：POST
+# 生成（客户鉴权，仅 published dashboard/form）+ 公开验签面（dashboard 只读
+# 渲染；form 只读渲染 + POST submit 公开提交，任一不满足统一 404）；
+# FD_WIRE_SHARE_SECRET 未配置时两端点 503 诚实禁用（无表 HMAC 令牌）
 app.include_router(share_router)
 # 统一刷新调度器（wire-refresh-scheduler）：定时刷新 CRUD（Bearer 身份，
 # 派生数据集 / dashboard 产物两类目标；间隔地板与每客户配额见 service）

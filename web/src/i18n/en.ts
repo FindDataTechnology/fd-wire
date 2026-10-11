@@ -185,6 +185,26 @@ const en: Translation = {
       "After revocation: revoking takes effect immediately (the connector gets a 401); generate a new pairing token and run pair again — datasets and allowlists are kept.",
     consoleLink: "Open Console → My data →",
   },
+  forms: {
+    // Form-artifact customer tutorial (wire-form-builder task 5.1): the full
+    // flow of create → bind → configure fields → try it → publish → share →
+    // submissions landing in the correction history (keyed like docs.localData).
+    title: "Forms: bringing data in",
+    intro:
+      "Turn \"recording and collecting data\" into a mature web form you can share for others to fill in: build it on one of your datasets, configure the fields, try it yourself, then publish and share — every submission lands in the dataset through the correction layer (visible and revertable), never writing back to your source.",
+    stepsTitle: "Five steps to a form",
+    step1:
+      "Create: Console → Artifacts → New form — a title is all it takes to get a draft (the cell-free, AI-free birth path);",
+    step2:
+      "Bind a dataset and configure fields: pick one of your datasets, check columns to become fields (labels default to column names with input types suggested from column types; adjust label, number, date, dropdown options or required as needed), and optionally set the submit button and success message — saving appends a new version;",
+    step3:
+      "Try it: the form's detail view is the live runtime — fill the required fields and submit; the row lands in the dataset immediately as an insert correction;",
+    step4:
+      "Publish and share: once published, generate a signed share link (7/30/90-day validity) and send it out — recipients open it without signing in and fill it per the version pinned to the link;",
+    step5:
+      "Collect and roll back: all submissions settle in the dataset's correction history (attributable to the console or the specific shared form) and can be reverted one by one; the customer source is never touched.",
+    consoleLink: "Open Console → Artifacts →",
+  },
   demands: {
       title: "Demand workflow",
       // Three-state machine (wire-ux-consolidation task 3.5): submitted →
@@ -373,7 +393,7 @@ const en: Translation = {
     artifacts: {
       title: "Artifacts",
       subtitle:
-        "Five artifact kinds persisted across conversations — every spec save appends a new version, with a draft/published/archived lifecycle.",
+        "Six artifact kinds persisted across conversations — every spec save appends a new version, with a draft/published/archived lifecycle.",
       loading: "Loading artifacts…",
       errorTitle: "Failed to load artifacts",
       retry: "Retry",
@@ -384,6 +404,7 @@ const en: Translation = {
       kindAll: "All kinds",
       kinds: {
         dashboard: "Dashboard",
+        form: "Form",
         composite_indicator: "Composite indicator",
         research_report: "Research workflow",
         alert_rule: "Alert rule",
@@ -416,6 +437,18 @@ const en: Translation = {
         creating: "Creating…",
         cancel: "Cancel",
         titleRequired: "Please enter a dashboard title.",
+        failed: "Creation failed, please retry later.",
+      },
+      // Blank form creation (wire-form-builder task 4.4): the birth entry
+      // alongside new dashboards.
+      createForm: {
+        button: "New form",
+        titleLabel: "Form title",
+        titlePlaceholder: "Name your new form",
+        submit: "Create",
+        creating: "Creating…",
+        cancel: "Cancel",
+        titleRequired: "Please enter a form title.",
         failed: "Creation failed, please retry later.",
       },
       viewer: {
@@ -623,6 +656,85 @@ const en: Translation = {
         ttlNote: "Changing the validity regenerates the link.",
         versionNote: "The link pins the version snapshot at creation time (v{{version}}) — regenerate it after edits.",
         close: "Close",
+      },
+    },
+    // Form artifacts (wire-form-builder tasks 4.2/4.3/4.4): the form-kind row
+    // expansion view, the shared runtime (console submits via corrections,
+    // public submits via the share endpoint) and the builder (dataset picker →
+    // column checkboxes → field cards → copy) strings.
+    form: {
+      viewButton: "Open form",
+      editButton: "Edit form",
+      paneTitle: "Form view",
+      loading: "Loading the form…",
+      loadError: "Failed to load the form.",
+      lockedBadge: "Archived · read-only",
+      // Public share page fallback title (when the response omits one).
+      untitled: "Untitled form",
+      // Public share page og:description (link-preview card blurb).
+      ogDescription: "A Baixun data form — submissions land safely in the ledger",
+      runtime: {
+        submitDefault: "Submit",
+        submitting: "Submitting…",
+        successDefault: "Submitted — thank you.",
+        unboundTitle: "No dataset bound",
+        unboundBody:
+          "This form is not bound to a dataset yet — pick one in the editor and save before filling it in.",
+        requiredMark: "Required",
+        errors: {
+          required: "This field is required.",
+          number: "Enter a number (decimals allowed).",
+          date: "The date must be in YYYY-MM-DD format.",
+          select: "Pick one of the options.",
+          text: "Enter text.",
+        },
+        submitFailed: "Submission failed, please retry later.",
+      },
+      editor: {
+        titleLabel: "Form title",
+        datasetLabel: "Dataset",
+        datasetPlaceholder: "Select a dataset…",
+        datasetOption: "{{name}} ({{tier}} · {{rows}} rows)",
+        datasetOptionPlain: "{{name}} ({{rows}} rows)",
+        loadingDatasets: "Loading datasets…",
+        datasetsLoadFailed: "Failed to load the dataset list.",
+        retry: "Retry",
+        columnsLabel: "Field columns",
+        columnsHint: "check columns to become fields, in dataset order",
+        columnLabel: "Column",
+        fieldLabelLabel: "Display label",
+        fieldInputLabel: "Input type",
+        fieldRequiredLabel: "Required",
+        fieldOptionsLabel: "Options (comma-separated)",
+        fieldMissingColumn: "This column is no longer in the dataset",
+        inputTypes: {
+          text: "Text",
+          number: "Number",
+          date: "Date",
+          select: "Dropdown",
+        },
+        submitLabelLabel: "Submit button text",
+        submitLabelPlaceholder: "Default “Submit”",
+        successMessageLabel: "Success message",
+        successMessagePlaceholder: "Default “Submitted — thank you.”",
+        save: "Save as new version",
+        saving: "Saving…",
+        savedVersion: "Saved as version v{{version}}.",
+        saveFailed: "Save failed, please retry later.",
+        dirtyLeaveConfirm: "You have unsaved changes — leave the editor anyway?",
+        backToView: "Back to view",
+        errors: {
+          titleRequired: "The form title cannot be empty.",
+          titleTooLong: "The form title exceeds the length limit (200).",
+          badField: "A field is structurally invalid (missing column or label).",
+          inputInvalid:
+            "A field carries an input type outside the enum (only text/number/date/select).",
+          columnDuplicate: "Two fields share the same column.",
+          selectOptions: "Dropdown fields need at least one non-empty option.",
+          labelTooLong: "A field label exceeds the length limit (100).",
+          submitLabelTooLong: "The submit button text exceeds the length limit (50).",
+          successMessageTooLong: "The success message exceeds the length limit (200).",
+        },
       },
     },
     // Scheduled refresh section (wire-refresh-scheduler task 4.1): shared by

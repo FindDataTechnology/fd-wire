@@ -9,7 +9,7 @@ import "../i18n";
 import i18n from "../i18n";
 import { ArtifactsPage } from "./ArtifactsPage";
 import { installConsoleBackend, seedConsoleSession } from "./testing";
-import type { ConsoleBackendOptions } from "./testing";
+import type { ConsoleBackendOptions, LifecycleArtifactSeed } from "./testing";
 import { formatServerDate } from "./util";
 import type { Conversation } from "./api";
 
@@ -763,5 +763,288 @@ describe("ArtifactsPage 新建看板（wire-dashboard-blank-create 1.2）", () =
     release();
     expect(await screen.findByTestId("dashboard-editor")).toBeTruthy();
     expect(screen.queryByTestId("create-dashboard-form")).toBeNull();
+  });
+});
+
+// ── 表单产物（wire-form-builder 任务 4.4）──────────────────────────────────
+// 契约：POST /api/v1/artifacts {kind:"form", title} → 201 draft v1（最小空
+// 表单信封）；kind=form 行展开 = FormRuntime（当前版本）+ 编辑器入口；
+// published form 分享按钮照 dashboard 范式（url 直接用后端返回的
+// /api/v1/share/form/…，展示链接构造 /#/share/form/{id}?t&v）。
+
+/** 表单 spec 信封（绑定态：两字段 + 文案）。 */
+const FORM_SPEC_BOUND = {
+  title: "门店日报表",
+  spec: {
+    title: "门店日报表",
+    datasetId: "ds-form-1",
+    fields: [
+      { column: "city", label: "城市", input: "text", required: true },
+      { column: "amount", label: "金额", input: "number" },
+    ],
+    submitLabel: "上报",
+    successMessage: "门店数据已收到",
+  },
+};
+
+/** 供 corrections 提交落账的种子数据集。 */
+const FORM_DATASET = {
+  id: "ds-form-1",
+  key: "ds_form_1",
+  name: "门店日报",
+  source_kind: "upload" as const,
+  connector_id: null,
+  source_ref: null,
+  columns: [
+    { name: "city", type: "TEXT" },
+    { name: "amount", type: "REAL" },
+  ],
+  row_count: 5,
+  size_bytes: 120,
+  sync_cron: null,
+  sync_status: "ok" as const,
+  paused_reason: null,
+  created_at: "2026-10-01T08:00:00",
+  updated_at: "2026-10-01T08:00:00",
+};
+
+/** 在 install() 三产物之上补 form 行：16 draft（绑定态）、17 published。 */
+function installFormRows() {
+  const backend = installConsoleBackend(CONVERSATIONS, {
+    datasets: [FORM_DATASET],
+  });
+  const seeds: LifecycleArtifactSeed[] = [
+    { id: 11, kind: "dashboard", title: "宏观仪表盘", status: "draft", version: 1, origin_conversation_id: 1, spec: V1_DASH, created_at: "2026-10-09T09:00:00", updated_at: "2026-10-10T09:00:00" },
+    { id: 12, kind: "alert_rule", title: "煤价周环比 >5% 告警（放宽到 8%）", status: "published", version: 2, origin_conversation_id: 2, versions: [{ spec: ALERT_V1 }, { spec: ALERT_V2 }], created_at: "2026-10-09T10:00:00", updated_at: "2026-10-10T10:00:00" },
+    { id: 13, kind: "refresh_schedule", title: "每日 08:00 刷新", status: "archived", version: 1, origin_conversation_id: null, spec: { title: "每日 08:00 刷新", spec: { cron: "0 8 * * *", timezone: "Asia/Shanghai" } }, created_at: "2026-10-09T11:00:00", updated_at: "2026-10-10T11:00:00" },
+  ];
+  for (const seed of seeds) {
+    backend.addLifecycleArtifact(seed);
+  }
+  backend.addLifecycleArtifact({
+    id: 16,
+    kind: "form",
+    title: "门店日报表",
+    status: "draft",
+    version: 1,
+    origin_conversation_id: null,
+    spec: FORM_SPEC_BOUND,
+    created_at: "2026-10-11T09:00:00",
+    updated_at: "2026-10-11T09:30:00",
+  });
+  backend.addLifecycleArtifact({
+    id: 17,
+    kind: "form",
+    title: "访客登记表",
+    status: "published",
+    version: 1,
+    origin_conversation_id: null,
+    spec: FORM_SPEC_BOUND,
+    created_at: "2026-10-11T10:00:00",
+    updated_at: "2026-10-11T10:00:00",
+  });
+  vi.stubGlobal("fetch", backend.fetchImpl);
+  return backend;
+}
+
+/** 包装假后端：拦截 form share POST（published form 17 合法 →
+ *  {url:"/api/v1/share/form/…", expires_at, version}，其余 403），透传其余。 */
+function withFormShareEndpoint(
+  backend: ReturnType<typeof installConsoleBackend>,
+): typeof fetch {
+  const original = backend.fetchImpl;
+  return ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://console.test");
+    const match = url.pathname.match(/^\/api\/v1\/artifacts\/(\d+)\/share$/);
+    if (match && (init?.method ?? "GET").toUpperCase() === "POST") {
+      const id = Number(match[1]);
+      const headers: Record<string, string> = {};
+      new Headers(init?.headers as HeadersInit | undefined).forEach((v, k) => {
+        headers[k.toLowerCase()] = v;
+      });
+      backend.calls.push({
+        method: "POST",
+        url,
+        headers,
+        body:
+          typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      });
+      if (id !== 17) {
+        return Promise.resolve(
+          localJson(
+            { detail: `产物 ${id} 不允许生成分享链接（仅已发布表单可分享）` },
+            403,
+          ),
+        );
+      }
+      return Promise.resolve(
+        localJson({
+          url: `/api/v1/share/form/17?t=form-token-17&v=1`,
+          expires_at: "2026-11-10T08:00:00",
+          version: 1,
+        }),
+      );
+    }
+    return original(input, init);
+  }) as unknown as typeof fetch;
+}
+
+describe("ArtifactsPage 表单产物（wire-form-builder 4.4）", () => {
+  beforeEach(() => {
+    i18n.changeLanguage("zh");
+    localStorage.clear();
+    sessionStorage.clear();
+    seedConsoleSession({ sub: "demo-customer" });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  it("kind 徽标与筛选：form 行呈中文徽标，kind=form 筛选收窄到两行", async () => {
+    installFormRows();
+    render(<ArtifactsPage />);
+
+    const row16 = await waitFor(() => rowOf(16));
+    expect(
+      within(row16).getByTestId("artifact-kind-badge").textContent,
+    ).toContain("表单");
+    expect(
+      within(row16).getByTestId("artifact-kind-badge").getAttribute("data-kind"),
+    ).toBe("form");
+
+    fireEvent.change(screen.getByTestId("artifact-kind-filter"), {
+      target: { value: "form" },
+    });
+    expect(screen.getAllByTestId("artifact-item").length).toBe(2);
+  });
+
+  it("新建表单入口：与新建看板并列；标题 → POST {kind:'form', title} → 置顶 + 直接进构建器（免费档路径：零 cell 零 AI 出生）", async () => {
+    const backend = installFormRows();
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+
+    // 入口与新建看板并列
+    fireEvent.click(screen.getByTestId("create-form-open"));
+    expect(screen.getByTestId("create-form-form")).toBeTruthy();
+
+    fireEvent.change(screen.getByTestId("create-form-title"), {
+      target: { value: "门店巡检表" },
+    });
+    fireEvent.click(screen.getByTestId("create-form-submit"));
+
+    // 创建即跳构建器：FormPane 展开且直接进 FormEditor
+    expect(await screen.findByTestId("form-editor")).toBeTruthy();
+
+    const post = backend.calls.find(
+      (c) => c.method === "POST" && c.url.pathname === "/api/v1/artifacts",
+    );
+    expect(post).toBeTruthy();
+    expect(post?.body).toEqual({ kind: "form", title: "门店巡检表" });
+    expect(post?.headers["authorization"]).toMatch(/^Bearer /);
+
+    // 新行置顶：form 徽标 + draft v1 + 直接创建；表单收起
+    const items = screen.getAllByTestId("artifact-item");
+    expect(items.length).toBe(6);
+    const newRow = items[0]!;
+    expect(newRow.getAttribute("data-artifact-id")).toBe("18");
+    expect(
+      within(newRow).getByTestId("artifact-kind-badge").getAttribute("data-kind"),
+    ).toBe("form");
+    expect(within(newRow).getByTestId("artifact-version").textContent).toBe("v1");
+    expect(
+      within(newRow).getByTestId("artifact-source-none").textContent,
+    ).toContain("直接创建");
+    expect(screen.queryByTestId("create-form-form")).toBeNull();
+  });
+
+  it("新建表单空标题前端先拦：不发 POST、提示后可修正再创建", async () => {
+    const backend = installFormRows();
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+
+    fireEvent.click(screen.getByTestId("create-form-open"));
+    fireEvent.click(screen.getByTestId("create-form-submit"));
+    expect(screen.getByTestId("create-form-error").textContent).toContain(
+      "请输入表单标题",
+    );
+    expect(
+      backend.calls.filter(
+        (c) => c.method === "POST" && c.url.pathname === "/api/v1/artifacts",
+      ),
+    ).toHaveLength(0);
+
+    fireEvent.change(screen.getByTestId("create-form-title"), {
+      target: { value: "修正后的表" },
+    });
+    fireEvent.click(screen.getByTestId("create-form-submit"));
+    expect(await screen.findByTestId("form-editor")).toBeTruthy();
+  });
+
+  it("form 行展开 = FormRuntime（当前版本字段）+ 编辑入口；console 提交落 corrections", async () => {
+    const backend = installFormRows();
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+
+    fireEvent.click(within(rowOf(16)).getByTestId("artifact-form-view"));
+    const pane = await screen.findByTestId("form-pane");
+    // 运行时按当前版本 spec 渲染（字段/自定义提交文案）
+    expect(within(pane).getAllByTestId("form-field").length).toBe(2);
+    expect(within(pane).getByTestId("form-submit").textContent).toContain("上报");
+
+    // console 试填提交：corrections insert 落修正层（op=insert + 归一 values）
+    fireEvent.change(
+      within(pane).getAllByTestId("form-field-input")[0] as HTMLInputElement,
+      { target: { value: "上海" } },
+    );
+    fireEvent.change(
+      within(pane).getAllByTestId("form-field-input")[1] as HTMLInputElement,
+      { target: { value: "12.5" } },
+    );
+    fireEvent.click(within(pane).getByTestId("form-submit"));
+    expect(await within(pane).findByTestId("form-success")).toBeTruthy();
+    const correction = backend.getCorrections("ds-form-1")[0];
+    expect(correction?.op).toBe("insert");
+    expect(correction?.values).toEqual({ city: "上海", amount: 12.5 });
+
+    // 编辑入口：进 FormEditor（标题回填产物标题）
+    fireEvent.click(within(pane).getByTestId("form-edit"));
+    expect(await screen.findByTestId("form-editor")).toBeTruthy();
+    expect(
+      (screen.getByTestId("editor-form-title") as HTMLInputElement).value,
+    ).toBe("门店日报表");
+  });
+
+  it("published form 分享按钮照 dashboard 范式：url 用后端 /api/v1/share/form/…，展示链接 /#/share/form/{id}?t&v", async () => {
+    const backend = installFormRows();
+    vi.stubGlobal("fetch", withFormShareEndpoint(backend));
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+
+    // 入口分发：published form（17）有、draft form（16）无
+    expect(within(rowOf(17)).getByTestId("artifact-share")).toBeTruthy();
+    expect(within(rowOf(16)).queryByTestId("artifact-share")).toBeNull();
+
+    fireEvent.click(within(rowOf(17)).getByTestId("artifact-share"));
+    expect(await screen.findByTestId("share-dialog")).toBeTruthy();
+
+    // 请求带登录 Bearer；展示链接 = origin + #/share/form/17?t=<响应 url 解出的 t>&v=<响应 version>
+    const post = backend.calls.find(
+      (c) =>
+        c.method === "POST" && /\/artifacts\/17\/share$/.test(c.url.pathname),
+    );
+    expect(post).toBeTruthy();
+    expect(post?.headers["authorization"]).toMatch(/^Bearer /);
+    expect(
+      (await screen.findByTestId("share-url") as HTMLInputElement).value,
+    ).toBe(
+      `${window.location.origin}/#/share/form/17?t=form-token-17&v=1`,
+    );
+    expect(screen.getByTestId("share-expires").textContent).toContain(
+      formatServerDate("2026-11-10T08:00:00"),
+    );
   });
 });

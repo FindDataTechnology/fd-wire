@@ -173,6 +173,25 @@ const zh = {
       "吊销后重配对：控制台吊销即时生效（连接器收到 401）；重新生成配对令牌、重跑 pair 即可，数据集与白名单保留。",
     consoleLink: "前往控制台「我的数据」→",
   },
+  forms: {
+    // 表单产物客户教程（wire-form-builder 任务 5.1）：创建→绑定→配字段→试填
+    // →发布→分享→数据落修正历史的全流程（照 docs.localData 的步骤 key 组织）。
+    title: "表单：把数据「收」进来",
+    intro:
+      "把「记录/收集数据」做成一个成熟表单直接分享给别人填：以本企业数据集为底建表单、配字段，自己先试填，再发布分享——所有提交以修正层落进数据集（可查可回滚），绝不写回你的源数据。",
+    stepsTitle: "建表单五步",
+    step1:
+      "创建：控制台「产物 → 新建表单」，起名即得草稿（免 cell 免 AI 的出生路径）；",
+    step2:
+      "绑定数据集并配字段：选择本企业数据集，按列勾选生成字段（默认显示名=列名、按列类型建议输入类型，可改显示名/数字/日期/下拉选项/必填），并可配置提交按钮与成功提示文案——保存追加新版本；",
+    step3:
+      "试填：表单详情内即运行时——填必填项提交，数据立即以「加行」修正落进数据集，详情页立即可见；",
+    step4:
+      "发布并分享：发布后生成签名分享链接（有效期 7/30/90 天可选），发给填写者免登录打开、按链接钉死的版本字段填写提交；",
+    step5:
+      "收集与回滚：全部提交沉淀在数据集的修正历史（可归因到控制台或具体分享表单），逐条可回滚，客户源数据不受任何影响。",
+    consoleLink: "前往控制台「产物」→",
+  },
   demands: {
       title: "需求单流程",
       // 三态机（wire-ux-consolidation 任务 3.5）：submitted → in_progress →
@@ -351,7 +370,7 @@ const zh = {
     artifacts: {
       title: "产物",
       subtitle:
-        "跨会话持久化的五类产物——spec 每次保存追加新版本，草稿/已发布/已归档三态可流转。",
+        "跨会话持久化的六类产物——spec 每次保存追加新版本，草稿/已发布/已归档三态可流转。",
       loading: "产物加载中…",
       errorTitle: "产物加载失败",
       retry: "重试",
@@ -361,6 +380,7 @@ const zh = {
       kindAll: "全部类型",
       kinds: {
         dashboard: "仪表盘",
+        form: "表单",
         composite_indicator: "组合指标",
         research_report: "研究工作流",
         alert_rule: "告警",
@@ -392,6 +412,17 @@ const zh = {
         creating: "创建中…",
         cancel: "取消",
         titleRequired: "请输入看板标题。",
+        failed: "创建失败，请稍后重试。",
+      },
+      // 空白新建表单（wire-form-builder 任务 4.4）：与新建看板并列的出生入口。
+      createForm: {
+        button: "新建表单",
+        titleLabel: "表单标题",
+        titlePlaceholder: "给新表单起个名字",
+        submit: "创建",
+        creating: "创建中…",
+        cancel: "取消",
+        titleRequired: "请输入表单标题。",
         failed: "创建失败，请稍后重试。",
       },
       viewer: {
@@ -588,6 +619,83 @@ const zh = {
         ttlNote: "调整有效期将重新生成链接。",
         versionNote: "链接固定生成时刻的版本快照（v{{version}}）——改版后请重新生成。",
         close: "关闭",
+      },
+    },
+    // 表单产物（wire-form-builder 任务 4.2/4.3/4.4）：form kind 的行展开视图、
+    // 共用运行时（console 提交走 corrections、公开提交走分享端点）与构建器
+    // （数据集选择→列勾选→字段卡→文案）文案。
+    form: {
+      viewButton: "打开表单",
+      editButton: "编辑表单",
+      paneTitle: "表单视图",
+      loading: "表单加载中…",
+      loadError: "表单加载失败。",
+      lockedBadge: "已归档 · 只读",
+      // 分享页公开呈现兜底（响应缺 title 时）。
+      untitled: "未命名表单",
+      // 公开分享页 og:description（链接预览卡片段落）。
+      ogDescription: "柏讯数据表单——填写提交即安全入账",
+      runtime: {
+        submitDefault: "提交",
+        submitting: "提交中…",
+        successDefault: "已提交，感谢填写。",
+        unboundTitle: "未绑定数据集",
+        unboundBody:
+          "该表单尚未绑定数据集——请先在编辑器中选择数据集并保存，再进行填写。",
+        requiredMark: "必填",
+        errors: {
+          required: "必填项，请填写。",
+          number: "请输入数字（支持小数）。",
+          date: "日期格式应为 YYYY-MM-DD。",
+          select: "请从选项中选择。",
+          text: "请输入文本。",
+        },
+        submitFailed: "提交失败，请稍后重试。",
+      },
+      editor: {
+        titleLabel: "表单标题",
+        datasetLabel: "数据集",
+        datasetPlaceholder: "选择数据集…",
+        datasetOption: "{{name}}（{{tier}} · {{rows}} 行）",
+        datasetOptionPlain: "{{name}}（{{rows}} 行）",
+        loadingDatasets: "数据集加载中…",
+        datasetsLoadFailed: "数据集列表加载失败。",
+        retry: "重试",
+        columnsLabel: "字段列",
+        columnsHint: "按数据集列序勾选生成字段",
+        columnLabel: "列",
+        fieldLabelLabel: "显示名",
+        fieldInputLabel: "输入类型",
+        fieldRequiredLabel: "必填",
+        fieldOptionsLabel: "选项（逗号分隔）",
+        fieldMissingColumn: "该列已不在数据集中",
+        inputTypes: {
+          text: "文本",
+          number: "数字",
+          date: "日期",
+          select: "下拉选择",
+        },
+        submitLabelLabel: "提交按钮文案",
+        submitLabelPlaceholder: "缺省「提交」",
+        successMessageLabel: "成功提示文案",
+        successMessagePlaceholder: "缺省「已提交，感谢填写。」",
+        save: "保存为新版本",
+        saving: "保存中…",
+        savedVersion: "已保存为版本 v{{version}}。",
+        saveFailed: "保存失败，请稍后重试。",
+        dirtyLeaveConfirm: "有未保存的修改，确定离开编辑吗？",
+        backToView: "返回查看",
+        errors: {
+          titleRequired: "表单标题不能为空。",
+          titleTooLong: "表单标题超过长度上限（200 字）。",
+          badField: "存在结构非法的字段（缺少列名或显示名）。",
+          inputInvalid: "存在输入类型越枚举的字段（仅支持文本/数字/日期/下拉选择）。",
+          columnDuplicate: "存在重复列名的字段。",
+          selectOptions: "下拉选择字段必须配置至少一个非空选项。",
+          labelTooLong: "字段显示名超过长度上限（100 字）。",
+          submitLabelTooLong: "提交按钮文案超过长度上限（50 字）。",
+          successMessageTooLong: "成功提示文案超过长度上限（200 字）。",
+        },
       },
     },
     // 定时刷新调度小节（wire-refresh-scheduler 任务 4.1）：derived 数据集

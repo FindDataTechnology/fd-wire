@@ -1,10 +1,13 @@
-// 公开分享页（/#/share/dashboard/{id}?t=&v=，wire-dashboard-share 任务 2.1）。
-// - 免登录只读：调公开端点 GET /api/v1/share/dashboard/{id}?t=&v=（无
-//   Bearer），成功 → parseDashboardSpec 宽容解析标题 + DashboardRenderer
-//   复用渲染（只读，无任何编辑入口）。
+// 公开分享页（/#/share/dashboard/{id}?t=&v=，wire-dashboard-share 任务 2.1；
+// wire-form-builder 任务 4.5 起 /#/share/form/{id}?t=&v= 同框架分派）。
+// - 免登录只读：调公开端点 GET /api/v1/share/{dashboard|form}/{id}?t=&v=
+//   （无 Bearer）；dashboard 态 → parseDashboardSpec 宽容解析标题 +
+//   DashboardRenderer 复用渲染；form 态 → parseFormSpec + FormRuntime
+//   （public endpoint，t/v 透传进 submit 地址——提交成功/失败态在组件内
+//   呈现，公开提交免登录且绝不携带 Authorization）。
 // - 品牌面（wire-share-branding）：四态同一顶栏双语品牌锁定（寻数·柏讯 /
 //   Wire，双语锁定即两语言下文案相同）链产品首页；页脚就绪态
-//   「{看板名} · 由 寻数·柏讯 提供 · 版本 v{n}」、非就绪态产品署名；
+//   「{标题} · 由 寻数·柏讯 提供 · 版本 v{n}」、非就绪态产品署名；
 //   就绪态注入 og:title/og:description/og:site_name 链接预览元信息。
 // - noindex 红线：挂载即注入 <meta name="robots" content="noindex">（卸载
 //   移除）——分享页不得入公开目录或搜索引擎；document.title 前缀「分享 · 」。
@@ -16,15 +19,27 @@ import { useTranslation } from "react-i18next";
 import {
   ConsoleApiError,
   fetchSharedDashboard,
-  type SharedDashboard,
+  fetchSharedForm,
+  sharedFormSubmitUrl,
 } from "../console/api";
 import { DashboardRenderer } from "../console/dashboard/DashboardRenderer";
 import { parseDashboardSpec } from "../console/dashboard/spec";
+import { FormRuntime } from "../console/form/FormRuntime";
+import { parseFormSpec } from "../console/form/formSpec";
+
+/** 分享模式：按路由路径分派（dashboard=只读看板；form=可填写表单）。 */
+export type ShareMode = "dashboard" | "form";
 
 /** 四态：加载中 / 就绪 / 链接无效（含网络错）/ 分享未开通（503）。 */
 type ShareState =
   | { kind: "loading" }
-  | { kind: "ready"; data: SharedDashboard; title: string }
+  | {
+      kind: "ready";
+      /** 钉死版本 spec（产物信封原样——按 mode 交给对应渲染件宽容解析）。 */
+      spec: Record<string, unknown>;
+      title: string;
+      version: number;
+    }
   | { kind: "invalid" }
   | { kind: "disabled" };
 
@@ -32,6 +47,7 @@ export function ShareView({
   artifactId,
   token,
   version,
+  mode = "dashboard",
 }: {
   /** 路由段里的产物 id（数字字符串；非法时交给服务端 404）。 */
   artifactId: string;
@@ -39,6 +55,8 @@ export function ShareView({
   token: string;
   /** 钉死版本 v（可选；缺失时省略该参数）。 */
   version: string | null;
+  /** 分享模式（路由分派；缺省看板——既有深链零漂移）。 */
+  mode?: ShareMode;
 }) {
   const { t } = useTranslation();
   const [state, setState] = useState<ShareState>({ kind: "loading" });
@@ -63,10 +81,14 @@ export function ShareView({
   const ogTitle = state.kind === "ready" ? state.title : null;
   useEffect(() => {
     if (ogTitle == null) return;
+    const ogDescription =
+      mode === "form"
+        ? t("console.form.ogDescription")
+        : t("console.dashboard.share.ogDescription");
     const metas = (
       [
         ["og:title", ogTitle],
-        ["og:description", t("console.dashboard.share.ogDescription")],
+        ["og:description", ogDescription],
         ["og:site_name", t("console.dashboard.share.ogSiteName")],
       ] as const
     ).map(([property, content]) => {
@@ -82,42 +104,76 @@ export function ShareView({
         document.head.removeChild(meta);
       });
     };
-  }, [ogTitle, t]);
+  }, [ogTitle, mode, t]);
 
   useEffect(() => {
     let alive = true;
     setState({ kind: "loading" });
-    fetchSharedDashboard(
-      Number(artifactId),
-      token,
-      version != null && version !== "" ? Number(version) : null,
-    )
-      .then((data) => {
-        if (!alive) return;
-        // 标题：响应 title 优先，缺失回落 spec 宽容解析（信封/本体皆可；
-        // legacy 形态无 title 字段，回落空由兜底占位）。
-        const parsed = parseDashboardSpec(data.spec);
-        const parsedTitle = parsed.kind === "v1" ? parsed.title : "";
-        const title =
-          (typeof data.title === "string" && data.title.trim()) ||
-          parsedTitle ||
-          t("console.dashboard.share.untitled");
-        setState({ kind: "ready", data, title });
-      })
-      .catch((err: unknown) => {
-        if (!alive) return;
-        // 503 = 未配置 secret（分享功能整体禁用）；其余（404/网络错）一律
-        // 无效链接页——不区分原因，绝不泄露验签细节。
-        setState(
-          err instanceof ConsoleApiError && err.status === 503
-            ? { kind: "disabled" }
-            : { kind: "invalid" },
-        );
+    const numericVersion =
+      version != null && version !== "" ? Number(version) : null;
+    // 标题：响应 title 优先，缺失回落 spec 宽容解析（信封/本体皆可），
+    // 兜底占位按 mode 取「未命名看板/表单」。
+    const resolveTitle = (spec: Record<string, unknown>, rawTitle: string) => {
+      // form 信封内层无标题字段——标题只认响应 title；dashboard 回落 v1
+      // 解析（legacy 形态无 title 字段，回落空由兜底占位）。
+      const parsedTitle =
+        mode === "form"
+          ? ""
+          : (() => {
+              const parsed = parseDashboardSpec(spec);
+              return parsed.kind === "v1" ? parsed.title : "";
+            })();
+      return (
+        (typeof rawTitle === "string" && rawTitle.trim()) ||
+        parsedTitle ||
+        (mode === "form"
+          ? t("console.form.untitled")
+          : t("console.dashboard.share.untitled"))
+      );
+    };
+    const ready = (spec: Record<string, unknown>, rawTitle: string, v: number) => {
+      setState({
+        kind: "ready",
+        spec,
+        title: resolveTitle(spec, rawTitle),
+        version: v,
       });
+    };
+    if (mode === "form") {
+      fetchSharedForm(Number(artifactId), token, numericVersion)
+        .then((data) => {
+          if (!alive) return;
+          ready(data.spec, data.title, data.version);
+        })
+        .catch((err: unknown) => {
+          if (!alive) return;
+          setState(
+            err instanceof ConsoleApiError && err.status === 503
+              ? { kind: "disabled" }
+              : { kind: "invalid" },
+          );
+        });
+    } else {
+      fetchSharedDashboard(Number(artifactId), token, numericVersion)
+        .then((data) => {
+          if (!alive) return;
+          ready(data.spec, data.title, data.version);
+        })
+        .catch((err: unknown) => {
+          if (!alive) return;
+          // 503 = 未配置 secret（分享功能整体禁用）；其余（404/网络错）一律
+          // 无效链接页——不区分原因，绝不泄露验签细节。
+          setState(
+            err instanceof ConsoleApiError && err.status === 503
+              ? { kind: "disabled" }
+              : { kind: "invalid" },
+          );
+        });
+    }
     return () => {
       alive = false;
     };
-  }, [artifactId, token, version, t]);
+  }, [artifactId, token, version, mode, t]);
 
   // document.title 前缀「分享 · 」：进页面即生效，就绪后带上板名。
   const pageTitle =
@@ -193,7 +249,7 @@ export function ShareView({
           </div>
         )}
 
-        {state.kind === "ready" && (
+        {state.kind === "ready" && mode === "dashboard" && (
           <div data-testid="share-dashboard">
             <h1
               data-testid="share-dashboard-title"
@@ -202,13 +258,37 @@ export function ShareView({
               {state.title}
             </h1>
             <div className="mt-4">
-              <DashboardRenderer spec={state.data.spec} />
+              <DashboardRenderer spec={state.spec} />
+            </div>
+          </div>
+        )}
+
+        {state.kind === "ready" && mode === "form" && (
+          <div data-testid="share-form">
+            <h1
+              data-testid="share-form-title"
+              className="text-lg font-semibold text-slate-900"
+            >
+              {state.title}
+            </h1>
+            <div className="mt-4">
+              <FormRuntime
+                spec={parseFormSpec(state.spec) ?? { datasetId: null, fields: [] }}
+                endpoint={{
+                  kind: "public",
+                  url: sharedFormSubmitUrl(
+                    Number(artifactId),
+                    token,
+                    version != null && version !== "" ? Number(version) : null,
+                  ),
+                }}
+              />
             </div>
           </div>
         )}
       </main>
 
-      {/* 页脚署名（wire-share-branding）：就绪态三段「看板名 · 由 寻数·柏讯
+      {/* 页脚署名（wire-share-branding）：就绪态三段「{标题} · 由 寻数·柏讯
           提供 · 版本 v{n}」；非就绪态（loading/invalid/disabled）产品署名。 */}
       <footer
         data-testid="share-footer"
@@ -217,7 +297,7 @@ export function ShareView({
         {state.kind === "ready"
           ? t("console.dashboard.share.footerVersion", {
               title: state.title,
-              version: state.data.version,
+              version: state.version,
             })
           : t("console.dashboard.share.footer")}
       </footer>

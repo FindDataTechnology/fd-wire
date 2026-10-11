@@ -422,7 +422,7 @@ def test_blank_create_dashboard_success(client, db_session) -> None:
 
 
 def test_blank_create_kind_whitelist_422(client) -> None:
-    """kind 白名单 v0 仅 dashboard：其他 kind 422 如实拒，零半写。"""
+    """kind 白名单 v0=dashboard+form：白名单外 kind 422 如实拒，零半写。"""
     resp = client.post(
         "/api/v1/artifacts",
         json={"kind": "research_report", "title": "报告"},
@@ -431,7 +431,7 @@ def test_blank_create_kind_whitelist_422(client) -> None:
     assert resp.status_code == 422
     assert (
         resp.json()["detail"]
-        == "空白创建仅支持 dashboard（其他 kind 由 AI 构建产生）"
+        == "空白创建仅支持 dashboard、form（其他 kind 由 AI 构建产生）"
     )
     # 拒收零半写：不落任何产物行
     assert client.get("/api/v1/artifacts", headers=CUST).json() == []

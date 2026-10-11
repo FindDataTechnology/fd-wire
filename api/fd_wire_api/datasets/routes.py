@@ -723,21 +723,32 @@ def add_correction(
     cell 层透传引擎覆盖层；api 层数据集走本地修正层
     （wire-dataset-form-editing，镜像引擎语义——基行永不改写、悬空如实、
     insert 受免费档行数闸），全链路零引擎调用。
+
+    insert 分支经 :func:`~.service.submit_insert_correction` 共享落层
+    （wire-form-builder 2.1：表单运行时/公开提交与 corrections 端点同一
+    实现，同闸同审计）；异常转译留在路由层，400/429/502 语义与下沉前
+    逐字一致。update/delete 分支不动。
     """
     dataset = _dataset_or_404(db, dataset_id, customer_id)
+    if payload.op == "insert":
+        try:
+            correction_id = service.submit_insert_correction(
+                db,
+                dataset=dataset,
+                values=payload.values,
+                actor=_actor(customer_id),
+                engine_factory=engine_factory,
+            )
+        except api_store.LocalQueryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except service.QuotaExceeded as exc:
+            _raise_quota(exc)
+        except (EngineUnavailable, EngineCallError) as exc:
+            raise _ensure_engine_ok(exc) from exc
+        return CorrectionOut(correction_id=correction_id)
     if getattr(dataset, "storage_tier", service.TIER_CELL) == service.TIER_API:
         return _add_local_correction(db, dataset=dataset, payload=payload, customer_id=customer_id)
-    if payload.op == "insert":
-        if not payload.values:
-            raise HTTPException(status_code=400, detail="insert 必须带 values（整行值）")
-        arguments = {
-            "dataset_key": dataset.key,
-            "op": "insert",
-            "anchor": None,
-            "values": payload.values,
-            "actor": _actor(customer_id),
-        }
-    elif payload.op == "update":
+    if payload.op == "update":
         if not payload.row_id or not payload.column:
             raise HTTPException(
                 status_code=400, detail="update 必须带 row_id 与 column"

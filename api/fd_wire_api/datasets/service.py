@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .ingest import TOOL_CORRECTION_ADD, EngineCallError, EngineClientFactory
 from .models import Connector, Dataset
 from .settings import get_settings
 
@@ -376,3 +377,68 @@ def connector_status(connector: Connector, *, now: datetime | None = None) -> st
 
 def new_uuid() -> str:
     return str(uuid.uuid4())
+
+
+# ----------------------------------------------------- 修正提交（共享 insert 落层）
+
+
+def submit_insert_correction(
+    db: Session,
+    *,
+    dataset: Dataset,
+    values: dict,
+    actor: str,
+    engine_factory: EngineClientFactory | None = None,
+) -> int:
+    """表单提交的 insert 修正共享落层（wire-form-builder 任务 2.1，design D2）。
+
+    从 corrections 路由的 insert 分支下沉（行为零漂移）：console 表单运行时
+    与公开提交与 corrections 端点走**同一实现**（同闸同审计，杜绝两口径）。
+
+    - 载荷校验：values 空对象 → :class:`~.api_store.LocalQueryError`
+      （路由层转 400，文案与下沉前逐字一致）；
+    - api 档（storage_tier=api）：``api_store.apply_local_correction`` 本地
+      落层——免费档行数闸 :class:`QuotaExceeded`（路由层转 429）、未知列
+      LocalQueryError（路由层转 400）原样上抛，全链路零引擎调用；
+    - cell 档：经 ``engine_factory`` 透传引擎 ``TOOL_CORRECTION_ADD``（报文
+      与 corrections 端点同形：dataset_key/op/anchor/values/actor）；引擎
+      不可达/报错抛 EngineUnavailable/EngineCallError、未返回 correction_id
+      抛 EngineCallError（路由层一律转 502）。
+
+    异常转译（400/429/502）留在路由层——本函数只抛域异常。返回 correction_id。
+    """
+    # 局部导入防环：api_store 模块头导入本模块（service ← api_store 互引）
+    from . import api_store
+
+    if not values:
+        raise api_store.LocalQueryError("insert 必须带 values（整行值）")
+    if getattr(dataset, "storage_tier", TIER_CELL) == TIER_API:
+        return api_store.apply_local_correction(
+            db,
+            dataset=dataset,
+            op="insert",
+            row_anchor=None,
+            column_name=None,
+            value=values,
+            actor=actor,
+        )
+    if engine_factory is None:
+        # 路由/调用方接线遗漏（cell 档必须注入引擎工厂）——fail-loud
+        raise RuntimeError(
+            "cell 档数据集的 insert 修正需要 engine_factory（调用方注入引擎工厂）"
+        )
+    client = engine_factory(dataset.customer_id)
+    result = client.call(
+        TOOL_CORRECTION_ADD,
+        {
+            "dataset_key": dataset.key,
+            "op": "insert",
+            "anchor": None,
+            "values": values,
+            "actor": actor,
+        },
+    )
+    correction_id = result.get("correction_id")
+    if correction_id is None:
+        raise EngineCallError("引擎未返回 correction_id")
+    return int(correction_id)

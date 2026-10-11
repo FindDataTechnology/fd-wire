@@ -8,10 +8,11 @@
 // 红线——noindex meta 注入与卸载移除、document.title 前缀「分享 · 」、
 // 公开端点请求绝不携带 Authorization（免登录接收者直接打开）。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "../i18n";
 import i18n from "../i18n";
 import { ShareView } from "./ShareView";
+import { parseHash } from "../App";
 
 /** v1 信封 spec（产物详情原样形状）：单 kpi 面板。 */
 const DASH_SPEC = {
@@ -245,5 +246,225 @@ describe("ShareView（公开分享页三态 + noindex 红线）", () => {
     expect(ogMeta("og:description")?.getAttribute("content")).toBe(
       "Baixun data dashboards — enterprise data × macro indicators",
     );
+  });
+});
+
+// ── 表单分享态（wire-form-builder 任务 4.5）──────────────────────────────
+// 契约：GET /api/v1/share/form/{id}?t&v → {title, spec(钉死版本信封原样),
+// version, expires_at}；公开提交 POST /api/v1/share/form/{id}/submit?t&v
+// body {values} → 201 {ok:true, message}；失败统一 404 / 503。四态框架、
+// 品牌面、noindex 与看板分享页同款（mode 分派）。
+
+/** 表单产物信封 spec（钉死版本原样）：城市必填 + 金额数字 + 下拉级别。 */
+const FORM_SHARE_SPEC = {
+  title: "门店日报表",
+  spec: {
+    title: "门店日报表",
+    datasetId: "ds-store-1",
+    fields: [
+      { column: "city", label: "城市", input: "text", required: true },
+      { column: "amount", label: "金额", input: "number" },
+      {
+        column: "level",
+        label: "级别",
+        input: "select",
+        options: ["高", "低"],
+      },
+    ],
+    submitLabel: "上报",
+    successMessage: "门店数据已收到",
+  },
+};
+
+const FORM_SHARE_BODY = {
+  title: "门店日报表",
+  spec: FORM_SHARE_SPEC,
+  version: 2,
+  expires_at: "2026-11-11T08:00:00",
+};
+
+type FormFetchRecord = Array<{
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body?: unknown;
+}>;
+
+/** 打公开表单端点假 fetch：GET 回表单载荷；POST /submit 回提交结果；
+ *  记录全部请求（断言无 Authorization 与 t/v 透传）。 */
+function stubFormShareFetch(): FormFetchRecord {
+  const calls: FormFetchRecord = [];
+  vi.stubGlobal(
+    "fetch",
+    ((input: RequestInfo | URL, init?: RequestInit) => {
+      const headers: Record<string, string> = {};
+      new Headers(init?.headers as HeadersInit | undefined).forEach(
+        (v, k) => {
+          headers[k.toLowerCase()] = v;
+        },
+      );
+      const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      calls.push({
+        url,
+        method,
+        headers,
+        body:
+          typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      });
+      if (method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          status: 201,
+          json: () =>
+            Promise.resolve({ ok: true, message: "感谢上报，数据已收到" }),
+        } as unknown as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(FORM_SHARE_BODY),
+      } as unknown as Response);
+    }) as unknown as typeof fetch,
+  );
+  return calls;
+}
+
+describe("ShareView 表单态（wire-form-builder 4.5：渲染 + 公开提交）", () => {
+  beforeEach(() => {
+    i18n.changeLanguage("zh");
+    localStorage.clear();
+    sessionStorage.clear();
+    document.title = "柏讯 Wire — B2B 数据平台";
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  it("渲染：GET 公开表单端点（t/v 透传、无鉴权头）→ FormRuntime 字段 + 页脚版本 + noindex/og", async () => {
+    const calls = stubFormShareFetch();
+
+    render(
+      <ShareView artifactId="9" token="tok-form" version="2" mode="form" />,
+    );
+
+    // 公开 GET：路径 + t/v 查询参数齐整，绝不携带 Authorization
+    await waitFor(() => {
+      expect(calls[0]?.url).toBe("/api/v1/share/form/9?t=tok-form&v=2");
+    });
+    expect(calls[0]?.headers["authorization"]).toBeUndefined();
+
+    // 标题 + FormRuntime（钉死版本字段：三字段 + 自定义提交文案）
+    expect(
+      (await screen.findByTestId("share-form-title")).textContent,
+    ).toBe("门店日报表");
+    expect(screen.getAllByTestId("form-field").length).toBe(3);
+    expect(screen.getByTestId("form-submit").textContent).toContain("上报");
+
+    // 品牌顶栏 + 页脚三段署名（版本 v2）
+    expectShareBrand();
+    expect(screen.getByTestId("share-footer").textContent).toBe(
+      "门店日报表 · 由 寻数·柏讯 提供 · 版本 v2",
+    );
+
+    // 红线：noindex + og:title/og:site_name 注入（form og:description）
+    expect(robotsMeta()?.getAttribute("content")).toBe("noindex");
+    expect(ogMeta("og:title")?.getAttribute("content")).toBe("门店日报表");
+    expect(ogMeta("og:description")?.getAttribute("content")).toBe(
+      "柏讯数据表单——填写提交即安全入账",
+    );
+  });
+
+  it("公开提交：POST /submit（t/v 透传、无鉴权头、归一 values）→ 成功文案呈现", async () => {
+    const calls = stubFormShareFetch();
+
+    render(
+      <ShareView artifactId="9" token="tok-form" version="2" mode="form" />,
+    );
+    await screen.findByTestId("form-runtime");
+
+    // 必填缺失先拦（前端零请求）
+    fireEvent.click(screen.getByTestId("form-submit"));
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(0);
+
+    // 填写并提交：公开 submit 端点
+    fireEvent.change(
+      screen
+        .getAllByTestId("form-field")
+        .find((el) => el.getAttribute("data-column") === "city")!
+        .querySelector('[data-testid="form-field-input"]')!,
+      { target: { value: "上海" } },
+    );
+    fireEvent.change(
+      screen
+        .getAllByTestId("form-field")
+        .find((el) => el.getAttribute("data-column") === "amount")!
+        .querySelector('[data-testid="form-field-input"]')!,
+      { target: { value: "12.5" } },
+    );
+    fireEvent.click(screen.getByTestId("form-submit"));
+
+    expect(
+      (await screen.findByTestId("form-success")).textContent,
+    ).toBe("感谢上报，数据已收到");
+    const post = calls.find((c) => c.method === "POST");
+    expect(post?.url).toBe("/api/v1/share/form/9/submit?t=tok-form&v=2");
+    expect(post?.headers["authorization"]).toBeUndefined();
+    expect(post?.body).toEqual({
+      values: { city: "上海", amount: 12.5 },
+    });
+  });
+
+  it("令牌无效（404）：落「链接无效或已过期」页——不渲染表单", async () => {
+    vi.stubGlobal(
+      "fetch",
+      (() =>
+        Promise.resolve({
+          ok: false,
+          status: 404,
+          json: () => Promise.resolve({ detail: "not found" }),
+        } as unknown as Response)) as unknown as typeof fetch,
+    );
+
+    render(
+      <ShareView artifactId="9" token="bad-token" version="2" mode="form" />,
+    );
+
+    expect(await screen.findByTestId("share-invalid")).toBeTruthy();
+    expect(screen.getByTestId("share-invalid").textContent).toContain(
+      "链接无效或已过期",
+    );
+    expect(screen.queryByTestId("form-runtime")).toBeNull();
+    expect(screen.getByTestId("share-footer").textContent).toBe(
+      "由 寻数·柏讯 提供",
+    );
+  });
+
+  it("路由分派：#/share/form/{id}?t&v 解析为 shareForm（照 shareDashboard 方式）", () => {
+    const route = parseHash("#/share/form/9?t=abc&v=2");
+    expect(route).toEqual({
+      name: "shareForm",
+      id: "9",
+      token: "abc",
+      version: "2",
+    });
+    // 看板分派零漂移
+    expect(parseHash("#/share/dashboard/11?t=d&v=3")).toEqual({
+      name: "shareDashboard",
+      id: "11",
+      token: "d",
+      version: "3",
+    });
+    // 缺 t：路由层不拦截（交 ShareView 落无效页）
+    expect(parseHash("#/share/form/9")).toEqual({
+      name: "shareForm",
+      id: "9",
+      token: null,
+      version: null,
+    });
   });
 });

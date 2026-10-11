@@ -24,7 +24,9 @@ import {
   apiErrorText,
   archiveArtifact,
   createBlankDashboard,
+  createBlankForm,
   createDashboardShareLink,
+  createFormShareLink,
   fetchArtifactVersion,
   fetchArtifactVersions,
   fetchConversations,
@@ -46,11 +48,13 @@ import {
 } from "./api";
 import { formatServerDate } from "./util";
 import { DashboardPane } from "./dashboard/DashboardPane";
+import { FormPane } from "./form/FormPane";
 
 const BUFFER_STORAGE_PREFIX = "wire-web-artifact-buffer-";
 
 const KIND_BADGE_CLASS: Record<string, string> = {
   dashboard: "bg-indigo-50 text-indigo-700 ring-indigo-200",
+  form: "bg-emerald-50 text-emerald-700 ring-emerald-200",
   composite_indicator: "bg-violet-50 text-violet-700 ring-violet-200",
   research_report: "bg-sky-50 text-sky-700 ring-sky-200",
   alert_rule: "bg-rose-50 text-rose-700 ring-rose-200",
@@ -75,14 +79,21 @@ export function ArtifactsPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // 看板视图展开的产物 id（wire-dashboard-renderer：dashboard kind 内嵌入口）。
   const [dashboardFor, setDashboardFor] = useState<number | null>(null);
+  // 表单视图展开的产物 id（wire-form-builder：form kind 内嵌入口）。
+  const [formFor, setFormFor] = useState<number | null>(null);
   const [historyFor, setHistoryFor] = useState<number | null>(null);
-  // 分享弹层展开的产物 id（wire-dashboard-share：published dashboard 专属）。
+  // 分享弹层展开的产物 id（wire-dashboard-share / wire-form-builder：
+  // published dashboard/form 专属——kind 随打开行分派）。
   const [shareFor, setShareFor] = useState<number | null>(null);
+  const [shareKind, setShareKind] = useState<"dashboard" | "form">("dashboard");
   const [actionError, setActionError] = useState<string | null>(null);
   // 新建看板表单开合（wire-dashboard-blank-create：免 cell 免 AI 的出生入口）。
   const [createOpen, setCreateOpen] = useState(false);
-  // 刚空白创建的产物 id：其看板展开区直接进编辑态（创建即跳编辑器）。
+  // 新建表单表单开合（wire-form-builder 任务 4.4：与新建看板并列）。
+  const [createFormOpen, setCreateFormOpen] = useState(false);
+  // 刚空白创建的产物 id：其看板/表单展开区直接进编辑态（创建即跳编辑器）。
   const [freshlyCreatedId, setFreshlyCreatedId] = useState<number | null>(null);
+  const [freshlyFormId, setFreshlyFormId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -157,6 +168,17 @@ export function ArtifactsPage() {
     setDashboardFor(detail.id);
   }, []);
 
+  /** 空白建表单成功（wire-form-builder 任务 4.4）：与建板同款范式——置顶 +
+   *  复位筛选 + 行展开（formFor）直接进构建器（freshlyFormId）。 */
+  const handleFormCreated = useCallback((detail: ArtifactDetail) => {
+    setArtifacts((prev) => (prev ? [detail, ...prev] : prev));
+    setKindFilter("all");
+    setStatusFilter("all");
+    setCreateFormOpen(false);
+    setFreshlyFormId(detail.id);
+    setFormFor(detail.id);
+  }, []);
+
   return (
     <div>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -169,7 +191,7 @@ export function ArtifactsPage() {
         <div className="flex items-center gap-2">
           {/* 空白建板入口（wire-dashboard-blank-create）：免费档无 cell 无 AI
               草稿时的唯一出生路径——标题输入 → POST → 直接进编辑器。 */}
-          {!createOpen && (
+          {!createOpen && !createFormOpen && (
             <button
               type="button"
               data-testid="create-dashboard-open"
@@ -177,6 +199,18 @@ export function ArtifactsPage() {
               className="rounded bg-indigo-600 px-3 py-1 text-xs text-white hover:bg-indigo-500"
             >
               {t("console.artifacts.create.button")}
+            </button>
+          )}
+          {/* 空白建表单入口（wire-form-builder 任务 4.4）：与新建看板并列的
+              出生路径——标题输入 → POST kind=form → 直接进构建器。 */}
+          {!createFormOpen && !createOpen && (
+            <button
+              type="button"
+              data-testid="create-form-open"
+              onClick={() => setCreateFormOpen(true)}
+              className="rounded bg-emerald-600 px-3 py-1 text-xs text-white hover:bg-emerald-500"
+            >
+              {t("console.artifacts.createForm.button")}
             </button>
           )}
           <label htmlFor="artifact-kind-filter" className="text-xs text-slate-500">
@@ -220,6 +254,13 @@ export function ArtifactsPage() {
         <CreateDashboardForm
           onCreated={handleDashboardCreated}
           onCancel={() => setCreateOpen(false)}
+        />
+      )}
+
+      {createFormOpen && (
+        <CreateFormForm
+          onCreated={handleFormCreated}
+          onCancel={() => setCreateFormOpen(false)}
         />
       )}
 
@@ -322,7 +363,41 @@ export function ArtifactsPage() {
                       <button
                         type="button"
                         data-testid="artifact-share"
-                        onClick={() => setShareFor(artifact.id)}
+                        onClick={() => {
+                          setShareKind("dashboard");
+                          setShareFor(artifact.id);
+                        }}
+                        className="rounded border border-sky-300 px-2 py-1 text-xs text-sky-700 hover:bg-sky-50"
+                      >
+                        {t("console.dashboard.share.button")}
+                      </button>
+                    )}
+                    {artifact.kind === "form" && (
+                      // 表单视图入口（wire-form-builder 任务 4.4）：form kind
+                      // 内嵌展开 = FormRuntime + 编辑器入口。
+                      <button
+                        type="button"
+                        data-testid="artifact-form-view"
+                        onClick={() =>
+                          setFormFor(
+                            artifact.id === formFor ? null : artifact.id,
+                          )
+                        }
+                        className="rounded border border-emerald-300 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50"
+                      >
+                        {t("console.form.viewButton")}
+                      </button>
+                    )}
+                    {artifact.kind === "form" && artifact.status === "published" && (
+                      // 表单分享入口（wire-form-builder 任务 3.1）：仅 published
+                      // form——url 路径 /api/v1/share/form/…，与看板同款弹层。
+                      <button
+                        type="button"
+                        data-testid="artifact-share"
+                        onClick={() => {
+                          setShareKind("form");
+                          setShareFor(artifact.id);
+                        }}
                         className="rounded border border-sky-300 px-2 py-1 text-xs text-sky-700 hover:bg-sky-50"
                       >
                         {t("console.dashboard.share.button")}
@@ -412,6 +487,15 @@ export function ArtifactsPage() {
                     startEditing={artifact.id === freshlyCreatedId}
                   />
                 )}
+                {artifact.id === formFor && (
+                  <FormPane
+                    key={`form-${artifact.id}`}
+                    artifactId={artifact.id}
+                    onSaved={replaceArtifact}
+                    // 刚空白创建的表单直接进构建器（创建即跳编辑器）。
+                    startEditing={artifact.id === freshlyFormId}
+                  />
+                )}
               </li>
             );
           })}
@@ -426,6 +510,7 @@ export function ArtifactsPage() {
         <ShareLinkDialog
           key={`share-${shareFor}`}
           artifactId={shareFor}
+          kind={shareKind}
           onClose={() => setShareFor(null)}
         />
       )}
@@ -516,6 +601,96 @@ function CreateDashboardForm({
       </div>
       {error && (
         <p data-testid="create-dashboard-error" className="mt-1.5 text-[11px] text-red-600">
+          {error}
+        </p>
+      )}
+    </form>
+  );
+}
+
+/**
+ * 新建表单表单（wire-form-builder 任务 4.4）：与新建看板同款范式——标题
+ * 输入 → POST /api/v1/artifacts {kind:"form", title}。空标题前端先拦（不发
+ * 请求）；创建中禁用防重复提交；失败（422/网络等）后端 detail 如实呈现、
+ * 表单不关可改再试；成功交 onCreated（置顶 + 展开直接进构建器）。
+ */
+function CreateFormForm({
+  onCreated,
+  onCancel,
+}: {
+  onCreated: (artifact: ArtifactDetail) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const [title, setTitle] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (creating) return;
+    const trimmed = title.trim();
+    if (!trimmed) {
+      setError(t("console.artifacts.createForm.titleRequired"));
+      return;
+    }
+    setCreating(true);
+    setError(null);
+    try {
+      onCreated(await createBlankForm(trimmed));
+    } catch (err) {
+      setError(apiErrorText(err, t("console.artifacts.createForm.failed")));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <form
+      data-testid="create-form-form"
+      className="mt-4 rounded-lg border border-slate-200 bg-white p-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <label htmlFor="create-form-title" className="block text-xs text-slate-500">
+        {t("console.artifacts.createForm.titleLabel")}
+      </label>
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <input
+          id="create-form-title"
+          data-testid="create-form-title"
+          value={title}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            setError(null);
+          }}
+          placeholder={t("console.artifacts.createForm.titlePlaceholder")}
+          disabled={creating}
+          className="w-64 rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+        />
+        <button
+          type="submit"
+          data-testid="create-form-submit"
+          disabled={creating}
+          className="rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {creating
+            ? t("console.artifacts.createForm.creating")
+            : t("console.artifacts.createForm.submit")}
+        </button>
+        <button
+          type="button"
+          data-testid="create-form-cancel"
+          disabled={creating}
+          onClick={onCancel}
+          className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {t("console.artifacts.createForm.cancel")}
+        </button>
+      </div>
+      {error && (
+        <p data-testid="create-form-error" className="mt-1.5 text-[11px] text-red-600">
           {error}
         </p>
       )}
@@ -874,20 +1049,25 @@ function VersionDrawer({
 }
 
 /**
- * 分享链接弹层（wire-dashboard-share 任务 2.2）：打开即调
- * POST /api/v1/artifacts/{id}/share，展示完整公开页链接 + 复制按钮 +
- * 到期时间。响应的 url 是**数据端点**（/api/v1/share/...），给接收者的
- * 展示链接必须另行构造：origin + /#/share/dashboard/{id}?t=…&v={version}
- * （t 从响应 url 的 query 里解出，版本钉死生成时刻的响应 version）。
+ * 分享链接弹层（wire-dashboard-share 任务 2.2；wire-form-builder 任务 3.1
+ * 起 kind 分派）：打开即调 POST /api/v1/artifacts/{id}/share，展示完整公开
+ * 页链接 + 复制按钮 + 到期时间。响应的 url 是**数据端点**
+ * （/api/v1/share/dashboard|form/...），给接收者的展示链接必须另行构造：
+ * origin + /#/share/{kind}/{id}?t=…&v={version}（t 从响应 url 的 query 里
+ * 解出，版本钉死生成时刻的响应 version——form 链接路径即 /share/form/）。
  * wire-share-ttl-options 任务 2.1：有效期三选一（7/30/90 天，缺省 30）——
  * 改选即按新 ttl_days 重新生成；到期时间随选联动（生成中显示本地预览，
  * 响应到达后以 expires_at 覆盖）。
  */
 function ShareLinkDialog({
   artifactId,
+  kind = "dashboard",
   onClose,
 }: {
   artifactId: number;
+  /** 分享目标 kind：dashboard（缺省）| form（wire-form-builder）——决定
+   *  生成调用与公开页链接路径段。 */
+  kind?: "dashboard" | "form";
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -903,14 +1083,15 @@ function ShareLinkDialog({
     setShareUrl("");
     setError(null);
     setCopied(false);
-    createDashboardShareLink(artifactId, ttlDays)
+    const create = kind === "form" ? createFormShareLink : createDashboardShareLink;
+    create(artifactId, ttlDays)
       .then((res) => {
         if (!alive) return;
         setResult(res);
         // t 从数据端点 url 的 query 解出（相对路径也能被 URL 解析出 search）。
         const token = new URL(res.url, window.location.origin).searchParams.get("t") ?? "";
         setShareUrl(
-          `${window.location.origin}/#/share/dashboard/${artifactId}` +
+          `${window.location.origin}/#/share/${kind}/${artifactId}` +
             `?t=${encodeURIComponent(token)}&v=${res.version}`,
         );
       })
@@ -921,7 +1102,7 @@ function ShareLinkDialog({
     return () => {
       alive = false;
     };
-  }, [artifactId, ttlDays, t]);
+  }, [artifactId, kind, ttlDays, t]);
 
   /** 到期展示值：有响应用服务端 expires_at（覆盖本地预览），生成中按当前
    *  有效期本地预览（now + ttlDays，naive UTC 与后端同口径）。 */

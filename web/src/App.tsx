@@ -40,6 +40,7 @@ export type Route =
   | { name: "demandNew"; indicator: string | null }
   | { name: "admin"; section: AdminSection }
   | { name: "shareDashboard"; id: string; token: string | null; version: string | null }
+  | { name: "shareForm"; id: string; token: string | null; version: string | null }
   | { name: "login" };
 
 /** 控制台二级段 → tab（未知段回落默认 datasets）。 */
@@ -91,6 +92,16 @@ export function parseHash(rawHash: string): Route {
       version: query.get("v"),
     };
   }
+  if (head === "share" && second === "form" && third) {
+    // 公开表单深链 #/share/form/{id}?t=…&v=…（wire-form-builder 任务 4.5）：
+    // 与看板分享同款分派——四态框架/品牌面/noindex 沿用，运行时换 FormRuntime。
+    return {
+      name: "shareForm",
+      id: third,
+      token: query.get("t"),
+      version: query.get("v"),
+    };
+  }
   if (head === "catalog") {
     if (segments.length >= 2) {
       const raw = segments.slice(1).join("/");
@@ -134,6 +145,15 @@ function renderRoute(route: Route) {
           artifactId={route.id}
           token={route.token ?? ""}
           version={route.version}
+        />
+      );
+    case "shareForm":
+      return (
+        <ShareView
+          artifactId={route.id}
+          token={route.token ?? ""}
+          version={route.version}
+          mode="form"
         />
       );
     case "login":
@@ -205,9 +225,9 @@ export function App() {
     );
   }
 
-  // 公开分享页（wire-dashboard-share）：独立极简壳——自带「Wire」顶栏与
-  // 「由柏讯分享」页脚，不进站点导航/控制台布局，无需登录。
-  if (route.name === "shareDashboard") {
+  // 公开分享页（wire-dashboard-share / wire-form-builder）：独立极简壳——
+  // 自带「Wire」顶栏与「由柏讯分享」页脚，不进站点导航/控制台布局，无需登录。
+  if (route.name === "shareDashboard" || route.name === "shareForm") {
     return renderRoute(route);
   }
 

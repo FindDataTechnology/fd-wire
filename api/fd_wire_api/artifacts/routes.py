@@ -5,7 +5,10 @@
 
 - ``GET  /api/v1/artifacts``                 本企业产物列表（kind/status 过滤、更新倒序）
 - ``GET  /api/v1/artifacts/{id}``             产物详情（他企一律 404）
-- ``PUT  /api/v1/artifacts/{id}``             spec 更新（最小校验 → 追加新版本）
+- ``PUT  /api/v1/artifacts/{id}``             spec 更新（最小校验 → 追加新版本；
+                                               kind=form 追加结构校验与
+                                               datasetId 属主校验，
+                                               wire-form-builder）
 - ``GET  /api/v1/artifacts/{id}/versions``     版本历史（append-only，新在前）
 - ``GET  /api/v1/artifacts/{id}/versions/{n}`` 查看任一历史版本
 - ``POST /api/v1/artifacts/{id}/publish``      发布（draft → published）
@@ -21,11 +24,12 @@
                                                面板 query 同形入参 → 同一执行
                                                路径出试取快照，所见即所刷；
                                                不落任何版本）
-- ``POST /api/v1/artifacts``                    空白建板（wire-dashboard-blank-create：
-                                               免费档第一块板的出生路径——kind
-                                               白名单 v0 仅 dashboard，title
-                                               必填非空，v1 = 最小空板 spec，
-                                               无来源会话指针）
+- ``POST /api/v1/artifacts``                    空白创建（wire-dashboard-blank-create；
+                                               wire-form-builder 扩 kind=form——
+                                               白名单 dashboard/form，title
+                                               必填非空，v1 = 最小空 spec
+                                               （dashboard 空面板 / form 零字段
+                                               未绑数据集），无来源会话指针）
 - ``POST /api/v1/artifacts/from-draft``        会话草稿导入为 draft 产物
 
 版本行只读——没有任何改写历史版本的端点（append-only 由路由面保证）。
@@ -111,12 +115,23 @@ def update_artifact(
     payload: ArtifactUpdateIn,
     customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
+    datasets_db: Session = Depends(get_datasets_db),
 ) -> ArtifactDetailOut:
-    """spec 更新：最小校验通过后追加新版本并递增计数（archived 拒改 409）。"""
+    """spec 更新：校验（kind 分派）通过后追加新版本并递增计数（archived
+    拒改 409）。
+
+    form 产物的 datasetId 属主校验查 datasets 表 → 必须用 datasets 库会话
+    （生产 wire_platform/wire_datasets 分库，ai 会话落不到表；与 refresh/
+    query-preview 同款注入）。datasetId 他企/不存在 → 422 零半写。
+    """
     artifact = _artifact_or_404(db, artifact_id, customer_id)
     try:
         artifact = service.update_spec(
-            db, artifact, spec=payload.spec, customer_id=customer_id
+            db,
+            artifact,
+            spec=payload.spec,
+            customer_id=customer_id,
+            datasets_db=datasets_db,
         )
     except service.ArtifactLocked as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

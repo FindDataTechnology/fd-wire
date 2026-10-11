@@ -28,6 +28,16 @@ const CONNECTOR_STEPS = [
   "docs.localData.connectorStep3",
 ] as const;
 
+/** 表单全流程步骤（wire-form-builder 任务 5.1）：创建→绑定→配字段→试填→
+ *  发布分享→数据落修正历史。 */
+const FORM_STEPS = [
+  "docs.forms.step1",
+  "docs.forms.step2",
+  "docs.forms.step3",
+  "docs.forms.step4",
+  "docs.forms.step5",
+] as const;
+
 /** 常驻配置样例（deploy/README.md「连接器」段的客户面提炼；字面配置不进 i18n）。 */
 const SYSTEMD_SAMPLE = `[Unit]
 Description=fd-wire connector (outbound only)
@@ -355,6 +365,33 @@ export function DocsView() {
           className="inline-block text-sm text-slate-600 underline hover:text-slate-900"
         >
           {t("docs.localData.consoleLink")}
+        </a>
+      </section>
+
+      {/* 六、表单（wire-form-builder 任务 5.1）：把「收数据」做成成熟表单分享
+          给他人填写的全流程教程——创建/绑定/配字段/试填/发布分享/修正历史
+          回滚，面向客户的口径（照 docs.localData 的步骤条组织）。 */}
+      <section data-testid="docs-forms" className="space-y-4">
+        <h2 className="text-xl font-semibold">{t("docs.forms.title")}</h2>
+        <p className="max-w-3xl text-sm text-slate-500">
+          {t("docs.forms.intro")}
+        </p>
+        <div className="rounded-lg border border-slate-200 p-5">
+          <h3 className="font-medium">{t("docs.forms.stepsTitle")}</h3>
+          <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-sm text-slate-500">
+            {FORM_STEPS.map((key, i) => (
+              <li key={key} data-testid={`docs-form-step-${i + 1}`}>
+                {t(key)}
+              </li>
+            ))}
+          </ol>
+        </div>
+        <a
+          href="#/console/artifacts"
+          data-testid="docs-forms-console-link"
+          className="inline-block text-sm text-slate-600 underline hover:text-slate-900"
+        >
+          {t("docs.forms.consoleLink")}
         </a>
       </section>
 

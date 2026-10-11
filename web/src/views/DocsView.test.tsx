@@ -130,6 +130,36 @@ describe("DocsView（文档三节 · 如实呈现）", () => {
     i18n.changeLanguage("zh");
   });
 
+  // 表单教程（wire-form-builder 任务 5.1）：五步全流程 + 控制台互链 + 双语。
+  it("「表单」章节：建表单五步（创建/绑定配字段/试填/发布分享/收集回滚）+ 控制台互链", () => {
+    render(<DocsView />);
+
+    const section = screen.getByTestId("docs-forms");
+    expect(section.textContent).toContain("表单：把数据「收」进来");
+    for (let i = 1; i <= 5; i += 1) {
+      expect(screen.getByTestId(`docs-form-step-${i}`)).toBeTruthy();
+    }
+    expect(section.textContent).toContain("新建表单");
+    expect(section.textContent).toContain("绑定数据集并配字段");
+    expect(section.textContent).toContain("发布并分享");
+    expect(section.textContent).toContain("收集与回滚");
+    const link = screen.getByTestId("docs-forms-console-link");
+    expect(link.getAttribute("href")).toBe("#/console/artifacts");
+    expect(link.textContent).toContain("产物");
+  });
+
+  it("表单章节英文同步（docs.forms 双语键齐备）", () => {
+    i18n.changeLanguage("en");
+    render(<DocsView />);
+
+    const section = screen.getByTestId("docs-forms");
+    expect(section.textContent).toContain("Forms: bringing data in");
+    expect(section.textContent).toContain("Five steps to a form");
+    expect(section.textContent).toContain("Publish and share");
+    expect(section.textContent).toContain("Collect and roll back");
+    i18n.changeLanguage("zh");
+  });
+
   it("路由：#/docs 解析为 docs（未登录可访问）", () => {
     expect(parseHash("#/docs")).toEqual({ name: "docs" });
   });

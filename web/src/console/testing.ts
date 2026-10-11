@@ -893,10 +893,12 @@ export function installConsoleBackend(
       return Promise.resolve(jsonResponse(lifecycleDetail(created), 201));
     }
 
-    // ── 空白建板（wire-dashboard-blank-create 1.2）：POST /api/v1/artifacts
-    //    {kind:"dashboard", title} → 201 ArtifactDetail（draft v1，spec = 最小
-    //    空板 {title, spec:{title, panels:[]}}）——kind 白名单 v0 仅 dashboard、
-    //    title 非空，非法 422 带 detail，语义对齐 api 仓建板路由。 ──
+    // ── 空白建板（wire-dashboard-blank-create 1.2）/ 空白建表单
+    //    （wire-form-builder 1.2）：POST /api/v1/artifacts {kind, title} → 201
+    //    ArtifactDetail（draft v1）。kind 白名单 (dashboard, form)——dashboard
+    //    spec = 最小空板 {title, spec:{title, panels:[]}}；form spec = 最小
+    //    空表单 {title, spec:{title, datasetId:null, fields:[]}}（信封形状
+    //    逐端点对齐生产）；title 非空，非法 422 带 detail，语义对齐 api 仓。 ──
     if (path === "/api/v1/artifacts" && method === "POST") {
       if (options.failArtifactCreateStatus) {
         return Promise.resolve(
@@ -914,12 +916,12 @@ export function installConsoleBackend(
         kind?: string;
         title?: string;
       };
-      if (payload.kind !== "dashboard") {
+      if (payload.kind !== "dashboard" && payload.kind !== "form") {
         return Promise.resolve(
           jsonResponse(
             {
               detail:
-                `kind 白名单仅支持 dashboard（当前 ${String(payload.kind)}）` +
+                `kind 白名单仅支持 dashboard/form（当前 ${String(payload.kind)}）` +
                 "——其他类型仍由 AI 草稿转正产生",
             },
             422,
@@ -933,11 +935,15 @@ export function installConsoleBackend(
         );
       }
       const id = nextLifecycleArtifactId++;
-      const blankSpec = { title, spec: { title, panels: [] } };
+      const kind = payload.kind;
+      const blankSpec =
+        kind === "dashboard"
+          ? { title, spec: { title, panels: [] } }
+          : { title, spec: { title, datasetId: null, fields: [] } };
       const created: StoredLifecycleArtifact = {
         id,
         customer_id: customerId,
-        kind: "dashboard",
+        kind,
         title,
         status: "draft",
         version: 1,

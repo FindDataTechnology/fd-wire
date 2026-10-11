@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from ..ai.models import AIDraftArtifact
 from ..ai.service import ConversationNotFound, get_customer_conversation
+from ..datasets.models import Dataset
+from .form_spec import validate_form_spec
 from .models import Artifact, ArtifactStatus, ArtifactVersion
 
 
@@ -45,6 +47,52 @@ def validate_spec(spec: object) -> str | None:
     if not isinstance(inner, dict) or not inner:
         return "spec.spec 必须是非空 JSON 对象"
     return None
+
+
+#: form 产物 kind 短名（spec 校验按 kind 分派追加 form 结构层的依据）
+FORM_KIND = "form"
+
+
+def validate_kind_spec(kind: str, spec: object) -> str | None:
+    """按 kind 分派 spec 校验（wire-form-builder design D1）：
+
+    通用层先行（validate_spec：title 非空 + spec.spec 非空——既有口径
+    零漂移）；kind=form 再追加 form 结构层（form_spec.validate_form_spec，
+    design D1 第①层）。dashboard 及其余 kind 语义不变（仅通用层）。
+    """
+    error = validate_spec(spec)
+    if error is not None:
+        return error
+    if kind == FORM_KIND and isinstance(spec, dict):
+        return validate_form_spec(spec.get("spec"))
+    return None
+
+
+def _require_form_dataset(
+    spec: object, *, datasets_db: Session | None, customer_id: str
+) -> None:
+    """form spec 的 datasetId 属主校验（design D1 第②层，零引擎调用）。
+
+    datasetId 为 null（构建中间态——可保存不可提交）直接放行；非空时必须
+    在 datasets 库会话中命中**本企业**现存数据集，不存在或他企一律
+    InvalidArtifactSpec（路由层 422，不泄露他企存在性）。
+
+    ``datasets_db`` 必须是 datasets 库会话（生产 wire_platform/wire_datasets
+    分库——查 datasets 表不能走 ai 库会话，照 query_contract 先例由路由
+    注入）；缺席时 fail-closed 拒存（不允许跳过属主校验的写路径）。
+    列名是否仍在数据集中不在此裁决（design D1 第③层：提交时如实 422）。
+    """
+    if not isinstance(spec, dict):  # pragma: no cover - 前置校验已保证
+        return
+    inner = spec.get("spec")
+    dataset_id = inner.get("datasetId") if isinstance(inner, dict) else None
+    if dataset_id is None:
+        return
+    dataset = (
+        datasets_db.get(Dataset, dataset_id) if datasets_db is not None else None
+    )
+    if dataset is None or dataset.customer_id != customer_id:
+        raise InvalidArtifactSpec(f"数据集 {dataset_id} 不存在")
 
 
 def operator_label(customer_id: str) -> str:
@@ -112,19 +160,34 @@ def get_version(db: Session, artifact: Artifact, version: int) -> ArtifactVersio
 
 
 def update_spec(
-    db: Session, artifact: Artifact, *, spec: object, customer_id: str
+    db: Session,
+    artifact: Artifact,
+    *,
+    spec: object,
+    customer_id: str,
+    datasets_db: Session | None = None,
 ) -> Artifact:
-    """spec 更新：最小校验 → 追加新版本行（append-only）并递增计数。
+    """spec 更新：校验（kind 分派）→ 追加新版本行（append-only）并递增计数。
 
     archived 拒改（先恢复）；title 随 spec.title 投影同步。
+
+    form 产物在通用校验之上追加两层（wire-form-builder design D1，全部在
+    版本行落库前——任何拒绝**零半写**）：结构层（validate_form_spec）+
+    datasetId 属主层（``datasets_db``=datasets 库会话，datasetId 非空时验
+    存在且属本企业，见 _require_form_dataset）。dashboard 及其余 kind 仅
+    走通用层（语义零漂移，``datasets_db`` 不参与）。
     """
     if artifact.status == ArtifactStatus.archived.value:
         raise ArtifactLocked(
             f"产物 {artifact.id} 已归档（archived），不可编辑——请先恢复（restore）为草稿再修改。"
         )
-    error = validate_spec(spec)
+    error = validate_kind_spec(artifact.kind, spec)
     if error is not None:
         raise InvalidArtifactSpec(error)
+    if artifact.kind == FORM_KIND:
+        _require_form_dataset(
+            spec, datasets_db=datasets_db, customer_id=artifact.customer_id
+        )
     spec = dict(spec)  # type: ignore[arg-type]
     artifact.version += 1
     db.add(
@@ -259,34 +322,49 @@ def import_from_draft(
     return artifact
 
 
-# ----------------------------------------------------------------- 空白建板
+# --------------------------------------------------------------- 空白创建
 
-#: 空白创建的 kind 白名单：v0 仅 dashboard——其余四类（复合指标/研报/告警/
-#: 定时）结构强，仍只能由 AI 构建草稿转正产生，不给「空壳」出生路径。
-BLANK_CREATE_KINDS: tuple[str, ...] = ("dashboard",)
+#: 空白创建的 kind 白名单：dashboard（最小空板）与 form（最小空表单）——
+#: 两类结构简单、可「空壳」出生直接进编辑器/构建器；其余四类（复合指标/
+#: 研报/告警/定时）结构强，仍只能由 AI 构建草稿转正产生。
+BLANK_CREATE_KINDS: tuple[str, ...] = ("dashboard", "form")
+
+
+def _blank_spec(kind: str, title: str) -> dict:
+    """空白创建的最小 spec（kind 分派）：dashboard=空面板；form=零字段、
+    datasetId=None（构建中间态——可保存不可提交，进构建器再绑定数据集）。"""
+    if kind == FORM_KIND:
+        return {"title": title, "spec": {"title": title, "datasetId": None, "fields": []}}
+    return {"title": title, "spec": {"title": title, "panels": []}}
 
 
 def create_blank_artifact(
     db: Session, *, customer_id: str, kind: str, title: str
 ) -> Artifact:
-    """空白建板（wire-dashboard-blank-create）：console 直接创建 draft 产物。
+    """空白创建（wire-dashboard-blank-create；form 扩展 wire-form-builder）：
+    console 直接创建 draft 产物。
 
     产物此前唯一出生路径是会话草稿转正（import_from_draft），而草稿只能由
-    AI 构建产生、AI 构建要求 cell——免费档（无 cell）造不出任何看板。本
-    函数补第二条出生路径：构造最小空板 spec，走与 from-draft 完全相同的
-    建档手法（version=1 版本行 + operator 审计 + 初始状态留痕 + title
-    投影），仅来源会话指针为 None。
+    AI 构建产生、AI 构建要求 cell——免费档（无 cell）造不出任何看板/表单。
+    本函数补第二条出生路径：按 kind 构造最小空 spec（dashboard=空面板、
+    form=零字段未绑数据集），走与 from-draft 完全相同的建档手法（version=1
+    版本行 + operator 审计 + 初始状态留痕 + title 投影），仅来源会话指针
+    为 None。
 
-    约束：kind 白名单 v0 仅 dashboard（BLANK_CREATE_KINDS）；title strip
+    约束：kind 白名单 BLANK_CREATE_KINDS（dashboard/form）；title strip
     后须非空——违者 InvalidArtifactSpec（路由层 422），且零半写（拒收不
     落任何产物/版本行）。
     """
     if kind not in BLANK_CREATE_KINDS:
-        raise InvalidArtifactSpec("空白创建仅支持 dashboard（其他 kind 由 AI 构建产生）")
+        raise InvalidArtifactSpec("空白创建仅支持 dashboard、form（其他 kind 由 AI 构建产生）")
     if not title.strip():
         raise InvalidArtifactSpec("title 必须是非空字符串")
     title = title.strip()
-    spec = {"title": title, "spec": {"title": title, "panels": []}}
+    spec = _blank_spec(kind, title)
+    # kind 分派校验（内造最小 spec 恒过——防御位，保证出生版本永远合法）
+    error = validate_kind_spec(kind, spec)
+    if error is not None:  # pragma: no cover - 内造 spec 恒过校验
+        raise InvalidArtifactSpec(error)
     artifact = Artifact(
         customer_id=customer_id,
         kind=kind,

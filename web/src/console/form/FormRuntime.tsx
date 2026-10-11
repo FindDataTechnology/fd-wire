@@ -1,0 +1,208 @@
+// 表单运行时（wire-form-builder 任务 4.2）——console 详情与公开分享页共用。
+//
+// props {spec, endpoint}：console 态提交走既有 corrections 端点
+// （addCorrection op=insert，带登录会话）；公开态走分享 submit 端点
+// （postPublicJson，免登录、绝不携带 Bearer）。必填/类型前端先拦
+// （validateFormValues——与后端规则同源的纯函数），逐字段错误呈现；
+// 成功显示 successMessage（缺省文案 i18n）；datasetId==null 渲染
+// 「未绑定数据集」诚实态（不可提交）。服务端 422/429/404 的 detail
+// 如实呈现，绝不静默吞掉。
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { addCorrection, apiErrorText, postPublicJson } from "../api";
+import { validateFormValues, type FormSpecBody } from "./formSpec";
+
+/** 提交目标：console 态（corrections 端点，datasetId 随表单绑定）/ 公开态
+ *  （分享 submit 端点完整地址，t/v 已进 query）。 */
+export type FormRuntimeEndpoint =
+  | { kind: "console"; datasetId: string | null }
+  | { kind: "public"; url: string };
+
+export function FormRuntime({
+  spec,
+  endpoint,
+}: {
+  spec: FormSpecBody;
+  endpoint: FormRuntimeEndpoint;
+}) {
+  const { t } = useTranslation();
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // 未绑定数据集诚实态（构建中间态）：如实呈现而非可提交表单。
+  // （局部 const 承接窄化——闭包内保持非空。）
+  const boundDatasetId = spec.datasetId;
+  if (boundDatasetId == null) {
+    return (
+      <div
+        data-testid="form-runtime-unbound"
+        className="rounded-md border border-amber-200 bg-amber-50/60 p-4 text-center"
+      >
+        <p className="text-sm font-medium text-amber-700">
+          {t("console.form.runtime.unboundTitle")}
+        </p>
+        <p className="mt-1 text-xs text-amber-600">
+          {t("console.form.runtime.unboundBody")}
+        </p>
+      </div>
+    );
+  }
+
+  const setValue = (column: string, value: string) => {
+    setValues((prev) => ({ ...prev, [column]: value }));
+    setFieldErrors((prev) => {
+      if (!(column in prev)) return prev;
+      const next = { ...prev };
+      delete next[column];
+      return next;
+    });
+    setSubmitError(null);
+  };
+
+  /** 提交：前端先拦（必填/类型）→ console 走 corrections / 公开走分享端点；
+   *  成功显示 successMessage 并清空重填（表单面向重复录入），失败如实呈现。 */
+  const submit = async () => {
+    if (submitting) return;
+    const validation = validateFormValues(spec.fields, values);
+    if (Object.keys(validation.errors).length > 0) {
+      setFieldErrors(validation.errors);
+      setSubmitError(null);
+      return;
+    }
+    setFieldErrors({});
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      let message: string;
+      if (endpoint.kind === "console") {
+        await addCorrection(endpoint.datasetId ?? boundDatasetId, {
+          op: "insert",
+          values: validation.values,
+        });
+        message =
+          spec.successMessage?.trim() || t("console.form.runtime.successDefault");
+      } else {
+        const result = (await postPublicJson(endpoint.url, {
+          values: validation.values,
+        })) as { message?: unknown };
+        message =
+          (typeof result?.message === "string" && result.message) ||
+          spec.successMessage?.trim() ||
+          t("console.form.runtime.successDefault");
+      }
+      setSuccess(message);
+      setValues({});
+    } catch (err) {
+      // 422 字段级原因 / 429 限流与行数闸 / 404 链接失效：detail 如实呈现。
+      setSubmitError(
+        apiErrorText(err, t("console.form.runtime.submitFailed")),
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const submitLabel = spec.submitLabel?.trim() || t("console.form.runtime.submitDefault");
+
+  return (
+    <form
+      data-testid="form-runtime"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+      className="max-w-xl space-y-3"
+    >
+      {spec.fields.map((field) => {
+        const error = fieldErrors[field.column];
+        const fieldLabel = field.label || field.column;
+        return (
+          <div key={field.column} data-testid="form-field" data-column={field.column}>
+            <label
+              htmlFor={`form-field-${field.column}`}
+              className="flex flex-wrap items-center gap-1 text-xs text-slate-600"
+            >
+              <span>{fieldLabel}</span>
+              {field.required && (
+                <span
+                  data-testid="form-field-required"
+                  title={t("console.form.runtime.requiredMark")}
+                  className="rounded bg-rose-100 px-1 text-[10px] text-rose-600"
+                >
+                  {t("console.form.runtime.requiredMark")}
+                </span>
+              )}
+            </label>
+            {field.input === "select" ? (
+              <select
+                id={`form-field-${field.column}`}
+                data-testid="form-field-input"
+                value={values[field.column] ?? ""}
+                onChange={(e) => setValue(field.column, e.target.value)}
+                className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+              >
+                <option value="">—</option>
+                {(field.options ?? []).map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              /* 文本输入承载全部类型（number/date 由 validateFormValues 统一校验
+                 归一——不依赖浏览器原生控件，规则与后端公开提交同源）。 */
+              <input
+                id={`form-field-${field.column}`}
+                data-testid="form-field-input"
+                type="text"
+                inputMode={field.input === "number" ? "decimal" : undefined}
+                placeholder={field.input === "date" ? "YYYY-MM-DD" : undefined}
+                value={values[field.column] ?? ""}
+                onChange={(e) => setValue(field.column, e.target.value)}
+                className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+              />
+            )}
+            {error && (
+              <p
+                data-testid="form-field-error"
+                data-column={field.column}
+                className="mt-0.5 text-[11px] text-red-600"
+              >
+                {t(`console.form.runtime.errors.${error}`)}
+              </p>
+            )}
+          </div>
+        );
+      })}
+
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="submit"
+          data-testid="form-submit"
+          disabled={submitting}
+          className="rounded bg-slate-900 px-4 py-1.5 text-xs text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {submitting
+            ? t("console.form.runtime.submitting")
+            : submitLabel}
+        </button>
+        {success && (
+          <span
+            data-testid="form-success"
+            className="text-xs text-emerald-600"
+          >
+            {success}
+          </span>
+        )}
+        {submitError && (
+          <span data-testid="form-submit-error" className="text-xs text-red-600">
+            {submitError}
+          </span>
+        )}
+      </div>
+    </form>
+  );
+}
