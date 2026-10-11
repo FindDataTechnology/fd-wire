@@ -45,7 +45,8 @@ RUN pip install \
       "pyyaml>=6.0" \
       "jsonschema>=4.0" \
       "pypdf>=4.0" \
-      "httpx>=0.27"
+      "httpx>=0.27" \
+      "psycopg[binary]>=3.1",  # cell PG 数据根可选后端（wire-cell-postgres-storage）：DAAS_DATABASE_URL 指向 postgresql+psycopg:// 时启用；不带该 env 的 cell 仍是 sqlite 卷，行为不变
 
 # ---- 引擎源码（named context `daas`；目录清单 = registry.SOURCES 全组 + models） ----
 # pdf-mcp 为 optional 组（dep sqlite_vec 缺席即跳过），不进镜像。
