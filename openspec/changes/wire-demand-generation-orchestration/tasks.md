@@ -20,7 +20,7 @@
       pipeline_run 事件；未配置 → 响应带工单全文 + manual_delivery=true。
       （投递腿按 2.3 改道舰队拉取器落地：出单入队 + 诚实降级全文随响应，
       WorkorderSink.git 推送不再实现——wire 零外部 git 凭据。）
-- [ ] 2.3 投递改道=舰队拉取器（凭据调研定案：deploy key 被 org 禁、PAT
+- [x] 2.3 投递改道=舰队拉取器（凭据调研定案：deploy key 被 org 禁、PAT
       需交互铸造、gitee/github SHA 分叉）：wire 侧新增内部端点
       `GET /internal/demands/workorders/pending`（FD_WIRE_INTERNAL_TOKEN，
       每单至多一条最新未 ack 导出单，仅 in_progress 单）与
@@ -59,11 +59,10 @@
 
 ## 5. 集成与发布
 
-- [ ] 5.1 全量 api pytest + web vitest + tsc 零红。
-- [ ] 5.2 迁移 0024 上生产 PG（alembic upgrade head）。
-- [ ] 5.3 生产凭据：gh secret set WIRE_DEMANDS_TOKEN -R FindDataTechnology/fd-industry-data（值=FD_WIRE_INTERNAL_TOKEN，repo admin 非交互注入；fd-industry-data
+- [x] 5.1 全量 api pytest + web vitest + tsc 零红。
+- [x] 5.2 迁移 0024 上生产 PG（revision id 44→25 字符热修后 alembic upgrade head 实弹成功；SQLite 干跑未暴露 varchar(32) 上限）。
+- [x] 5.3 生产凭据：gh secret set WIRE_DEMANDS_TOKEN -R FindDataTechnology/fd-industry-data（值=FD_WIRE_INTERNAL_TOKEN，repo admin 非交互注入；fd-industry-data
       单仓限定，另记运营
       手册）；未部署拉取器=导出人工模式照常可用。
-- [ ] 5.4 生产冒烟：真单出单→（凭据就绪则）真投递→raw 回流事件→时间线
-      客户面；未配凭据走降级面冒烟。
-- [ ] 5.5 归档（validate --strict 零 error 后）。
+- [x] 5.4 生产冒烟（部分=管道层全绿）：drill 单 DE-20261011-99 出单（slug_check=unverified 如实）→拉取器落仓+ack+状态回推 1/1→pending 清空→pipeline_events 双事件实锤；agent 回合异步进行中（日巡检/手动 dispatch）。
+- [ ] 5.5 归档（等 agent 回合回流实证后）。
