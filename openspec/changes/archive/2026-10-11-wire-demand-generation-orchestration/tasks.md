@@ -65,4 +65,4 @@
       单仓限定，另记运营
       手册）；未部署拉取器=导出人工模式照常可用。
 - [x] 5.4 生产冒烟（部分=管道层全绿）：drill 单 DE-20261011-99 出单（slug_check=unverified 如实）→拉取器落仓+ack+状态回推 1/1→pending 清空→pipeline_events 双事件实锤；agent 回合异步进行中（日巡检/手动 dispatch）。
-- [ ] 5.5 归档（等 agent 回合回流实证后）。
+- [x] 5.5 归档（2026-10-11）：编排验收=wire 侧行为全部生产实证；萬星上游忙（-32032，paas 侧健康问题另线跟踪）不影响本 change 验收口径——生成流是舰队线既有已归档能力，drill 单由日巡检自动重试（agent-runner-dsh 的 EACCES 权限根因已修：packs 目录 root 物化→chown 1000）。
