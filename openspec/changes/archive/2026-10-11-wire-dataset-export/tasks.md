@@ -17,5 +17,5 @@
 
 ## 3. 收口
 
-- [ ] 3.1 api pytest 全量 + web vitest 全量 + tsc 全绿
-- [ ] 3.2 生产发布与实弹验证（导出 401 门/按钮 bundle 实证）
+- [x] 3.1 api pytest 全量 + web vitest 全量 + tsc 全绿
+- [x] 3.2 生产发布与实弹验证（导出 401 门/按钮 bundle 实证）
