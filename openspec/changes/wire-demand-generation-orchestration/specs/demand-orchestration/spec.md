@@ -26,24 +26,27 @@ pipeline_events（workorder_exported）——同一需求单可重出新工单�
 
 ### Requirement: 工单投递 SHALL 凭据门控且诚实降级
 
-配置工业仓凭据（INDUSTRY_GIT_SSH_KEY）时系统MUST把工单推送至
-fd-industry-data 公开镜像仓 main 的 reports/health-tickets/ 路径（仅此
-路径白名单），推送成功记 pipeline_run 事件（含分支/文件路径）；未配置
-凭据时控制台MUST展示工单全文供人工推送并明示「未配置自动投递」——
-MUST NOT在未真实投递时展示任何自动化成功假象。推送失败可重试，不影响
-需求单其他操作。
+工单投递MUST经舰队拉取器通道：wire 暴露内部拉取端点（内部令牌鉴权）供
+fd-industry-data 工作流拉取待投递工单、落仓自推、并回 ack；wire 侧MUST
+NOT持有任何外部仓 git 凭据。拉取器未部署时控制台MUST展示工单全文供
+人工推送并明示「等待舰队拉取器/人工推送」——MUST NOT在未真实投递时展示
+任何自动化成功假象。ack 幂等（同工单重复 ack 不重复记事件）。
 
-#### Scenario: 自动投递
-- **WHEN** 凭据已配置且操作员确认投递
-- **THEN** 工单文件落到目标仓 tickets 路径，事件留档含可追溯路径
+#### Scenario: 拉取投递
+- **WHEN** 舰队拉取器凭内部令牌拉取待投递工单并回 ack
+- **THEN** 工单文件由对方仓工作流落 tickets 路径，wire 侧 pipeline_run 事件留档含可追溯路径
 
 #### Scenario: 诚实降级
-- **WHEN** 凭据未配置
-- **THEN** 控制台展示工单全文与人工推送指引，无自动投递入口或假成功文案
+- **WHEN** 拉取器未部署（无 ack）
+- **THEN** 控制台展示工单全文与人工推送指引，无自动投递假成功文案
 
-#### Scenario: 路径白名单
-- **WHEN** 投递动作涉及 reports/health-tickets/ 以外路径
-- **THEN** 拒绝执行（代码级硬编码白名单）
+#### Scenario: ack 幂等
+- **WHEN** 同一工单被重复 ack
+- **THEN** 不重复追加事件，返回既有已 ack 状态
+
+#### Scenario: 内部端点鉴权
+- **WHEN** 无内部令牌访问拉取或 ack 端点
+- **THEN** 401，与既有内部端点口径一致
 
 ### Requirement: 状态回流 SHALL 只写真实进度
 

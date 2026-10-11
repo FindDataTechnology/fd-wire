@@ -1,20 +1,23 @@
 # Design: wire-demand-generation-orchestration
 
-## D1 投递通道为什么是「推工单文件」而不是直连 A2A
+## D1 投递通道为什么是「舰队拉取器」而不是 wire 推送或直连 A2A
 
 萬星生成 agent（spider-heal v6+，kind=generate 分诊）是**私有部署**：
 调用需 sub2api sk- 键 + 私有 agent 白名单——两件都要一次性的面板操作
 （sub2api 无 admin 造键，键只能用户面板会话自铸）。而 fd-industry-data
-的 health-inspect 工作流**已经持有在役凭据并每周消化工单**（每日 03:17
-跑 + workflow_dispatch；「工具出单」是生成流的正规入口——巡检器只产修复
-单，生成单本来就期望外部工具投递）。因此 v1 投递=复刻 fd-health-bot 模式
-推 YAML 工单进 `reports/health-tickets/`，SUBMIT 由在役工作流代劳：**零
-新凭据进 A2A 层、复用已验证链路**。直连 A2A 留 v2：投递层抽象成
-`WorkorderSink` 接口（git / a2a 两实现），切换不改编排语义。
+的 health-inspect 工作流**已经持有在役凭据并每日消化工单**（「工具出单」
+是生成流的正规入口）。投递方向的凭据调研结论（2026-10-11）：github
+deploy key 被 FDT org 禁用、PAT 铸造需交互式 web、gitee/github 主干
+SHA 分叉不可依赖镜像。因此定案**反转投递方向**：wire 暴露内部拉取端点
+（FD_WIRE_INTERNAL_TOKEN——我们自己铸的令牌），fd-industry-data 侧新增
+拉取工作流（自托管 runner 免 billing）拉工单→写 tickets 目录→
+GITHUB_TOKEN 自推 main（自家仓零新凭据）→回 ack。wire 仓**零外部
+git 凭据**。直连 A2A 留 v2（sub2api 服务键自铸+白名单后）。
 
-时延口径：每日一轮 SUBMIT → 需求→提交生成最坏 ~24h。对 B2B 需求单
-（既有承诺「1 个工作日内响应」）可接受；赶急单由操作员手动
-workflow_dispatch（gh CLI，运营手册条目）。
+时延口径：拉取工作流 schedule（建议 */30）→ 需求→投递最坏 ~30min；
+SUBMIT 由既有每日巡检代劳（03:17）。对 B2B 需求单（既有承诺「1 个工作日
+内响应」）充分；赶急单由操作员手动 workflow_dispatch（gh CLI，运营手册
+条目）。
 
 ## D2 合规门的「硬」与「软」
 
@@ -69,10 +72,10 @@ last-run.json；状态→事件映射：
 
 ## D6 安全
 
-- INDUSTRY_GIT_SSH_KEY 只授 fd-industry-data 单仓 deploy key（write），
-  不用宽权限 PAT；推送内容仅 `reports/health-tickets/` 下单文件（路径
-  白名单在代码里硬编码）。
+- 拉取/ack 端点=FD_WIRE_INTERNAL_TOKEN（既有内部令牌口径，401 一致）；
+  wire 不持有任何外部仓 git 凭据（投递由对方仓工作流自推自家 main）。
+- fd-industry-data 侧拉取工作流的凭据=WIRE_DEMANDS_TOKEN（GHA secret，
+  值=wire 内部令牌；repo admin 经 gh secret set 注入，单仓限定）。
 - 工单内容=客户源地址+意向文本：不含任何凭据（合规门已拒内嵌账密）；
-  公司名/邮箱进 notes 需注意——**只进 brief.notes 供内部追溯，PR 是公开
-  仓**：v0 决定 contact_email 不进工单，company 以「客户已脱敏代号」
-  （customer_id 前 8 位）形式留档。
+  公司名/邮箱**不进工单**——PR 是公开仓，客户以脱敏代号（customer_id
+  前 8 位）留档。

@@ -18,9 +18,15 @@
       出单 → pipeline_events 留档 workorder_exported（全文+哈希）→
       凭据已配置时经 WorkorderSink.git 推送（路径白名单硬编码）→
       pipeline_run 事件；未配置 → 响应带工单全文 + manual_delivery=true。
-- [ ] 2.3 推送实现：SSH key 从 env（INDUSTRY_GIT_SSH_KEY）写临时文件 →
-      git clone --depth 1 --filter+blob:none 单分支 → 添加单文件 →
-      commit（wire-orchestrator）→ push；冲突/失败如实抛、可重试。
+- [ ] 2.3 投递改道=舰队拉取器（凭据调研定案：deploy key 被 org 禁、PAT
+      需交互铸造、gitee/github SHA 分叉）：wire 侧新增内部端点
+      `GET /internal/demands/workorders/pending`（FD_WIRE_INTERNAL_TOKEN，
+      每单至多一条最新未 ack 导出单，仅 in_progress 单）与
+      `POST /internal/demands/workorders/ack`（幂等：同 ticket_path 重复
+      ack 不重复记 pipeline_run 事件）；fd-industry-data 侧新工作流
+      `wire-demands-pull.yml`（schedule+dispatch）拉取→写 tickets 目录→
+      自推 main（GITHUB_TOKEN 自家仓零新凭据）→回 ack。wire 仓零外部
+      git 凭据。
 - [ ] 2.4 测试：映射确定性（快照）、slug 冲突拒、脱敏断言、凭据缺省
       降级、白名单路径外拒绝（monkeypatch sink）。
 
@@ -46,9 +52,9 @@
 
 - [ ] 5.1 全量 api pytest + web vitest + tsc 零红。
 - [ ] 5.2 迁移 0024 上生产 PG（alembic upgrade head）。
-- [ ] 5.3 生产凭据：fd-wire-env 增 INDUSTRY_GIT_SSH_KEY（fd-industry-data
-      单仓 deploy key write——gh repo deploy-key add 一次性配置，另记运营
-      手册）；未配=导出人工模式照常可用。
+- [ ] 5.3 生产凭据：gh secret set WIRE_DEMANDS_TOKEN -R FindDataTechnology/fd-industry-data（值=FD_WIRE_INTERNAL_TOKEN，repo admin 非交互注入；fd-industry-data
+      单仓限定，另记运营
+      手册）；未部署拉取器=导出人工模式照常可用。
 - [ ] 5.4 生产冒烟：真单出单→（凭据就绪则）真投递→raw 回流事件→时间线
       客户面；未配凭据走降级面冒烟。
 - [ ] 5.5 归档（validate --strict 零 error 后）。

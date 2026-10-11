@@ -20,11 +20,13 @@
   派生 slug、brief={source_urls, expectations, cadence, notes} 取自需求单
   字段、golden 声明即强制、verify 挂 health_verify）；产物落
   pipeline_events（append-only：workorder_exported，含工单全文与哈希）。
-- **工单投递（凭据门控）**：配置 INDUSTRY_GIT_SSH_KEY 时自动推
-  fd-industry-data（github 镜像仓，公开）main 的
-  `reports/health-tickets/<date>-wire-<code>.yaml`（复刻 fd-health-bot
-  直推 main 的既有模式）并记 pipeline_run 事件；未配置时控制台展示工单
-  全文供人工推送（诚实降级，不假装自动化）。
+- **工单投递（舰队拉取器，凭据反转）**：wire 暴露内部拉取端点
+  （FD_WIRE_INTERNAL_TOKEN）：`GET /internal/demands/workorders/pending`
+  + `POST /internal/demands/workorders/ack`（幂等）；fd-industry-data 侧
+  新增拉取工作流（自托管 runner）拉工单→写 `reports/health-tickets/`→
+  GITHUB_TOKEN 自推 main→回 ack（wire 侧记 pipeline_run 事件）。wire 仓
+  零外部 git 凭据（deploy key 被 org 禁、PAT 需交互铸造的调研定案）；
+  拉取器未部署时控制台展示工单全文供人工推送（诚实降级）。
 - **状态回流（公开 raw 免凭据）**：lifespan 同步任务（metering driver
   同构）：拉 github raw 工单文件 + last-run.json → 工单状态迁移映射为
   pipeline_events + 客户可见时间线条目（已投生成/PR 已开/人审中/已合并
