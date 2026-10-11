@@ -52,7 +52,7 @@ console 产物页提供「新建表单」入口与 form 构建器：数据集选
 console 内 form 详情内嵌运行时：渲染钉在当前版本的字段、必填校验、提交即
 `POST /api/v1/datasets/{id}/corrections`（op=insert，整行 values）——api 档
 走本地修正层（零引擎调用，免费档行数闸照常 429 如实）、cell 档透传引擎覆盖
-层，actor=`console:<customer_id>`；成功显示 successMessage，失败逐字段如实
+层，actor 沿用 corrections 既有口径（`customer:<customer_id>`）；成功显示 successMessage，失败逐字段如实
 呈现，不做静默丢弃。
 
 #### Scenario: 提交落审计

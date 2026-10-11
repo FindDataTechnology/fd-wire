@@ -55,8 +55,8 @@
 
 - [x] 6.1 门禁：api pytest 全绿 / web vitest+tsc 零错 / `openspec validate
   wire-form-builder --strict` 零 error
-- [ ] 6.2 发布：commit → push scs001（CI 绿）→ relay 首见携带 → manifest
+- [x] 6.2 发布：commit → push scs001（CI 绿）→ relay 首见携带 → manifest
   滚版 → ArgoCD 同步 → 公网冒烟（空白建表单→绑定→提交→分享→公开提交→
   修正历史回滚全链）
-- [ ] 6.3 归档 `wire-form-builder`（validate --strict 过后 archive），主 spec
+- [x] 6.3 归档 `wire-form-builder`（validate --strict 过后 archive），主 spec
   合并核对（form-apps 新建/artifact-lifecycle+dashboard-share 修订）

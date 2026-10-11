@@ -10,15 +10,21 @@
 
 ### Requirement: 签名分享链接
 
-published 且 kind=dashboard 的产物可生成签名分享链接：令牌为
+published 且 kind∈{dashboard, form} 的产物可生成签名分享链接：令牌为
 HMAC-SHA256(artifact_id|version|exp)，**有效期可选 7/30/90 天（缺省 30 天，
 非法值 422 列合法项）**，钉死生成时刻的版本（稳定快照分享，改版后重新生成）；
-draft/archived/非 dashboard 不可生成；未配置 FD_WIRE_SHARE_SECRET 时分享整体
-禁用（503 带原因）。
+draft/archived/白名单外 kind 不可生成；dashboard 链接路径为
+`/api/v1/share/dashboard/{id}`（只读渲染），form 链接路径为
+`/api/v1/share/form/{id}`（只读渲染+公开提交，见 form-apps）；未配置
+FD_WIRE_SHARE_SECRET 时分享整体禁用（503 带原因）。
 
 #### Scenario: 生成与打开
 - **WHEN** 客户对 published 仪表盘生成分享链接，接收者未登录打开
 - **THEN** 免登录渲染该版本的只读看板
+
+#### Scenario: 表单链接
+- **WHEN** 客户对 published 表单生成分享链接，接收者未登录打开
+- **THEN** 免登录渲染该钉死版本的字段定义（零行数据），并可提交一条记录
 
 #### Scenario: 版本钉死
 - **WHEN** 分享后产物被编辑出新版本，旧链接打开
