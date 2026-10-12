@@ -385,3 +385,131 @@ describe("FormEditor（构建器）", () => {
     });
   });
 });
+
+// ------------------------------------- 显隐条件编辑（wire-form-field-linkage）
+
+describe("FormEditor（显隐条件编辑）", () => {
+  /** 字段卡条件区的查询域（每次现查——重渲染后不持旧 DOM 引用）。 */
+  function conditionArea(column: string): ReturnType<typeof within> {
+    return within(fieldRow(column));
+  }
+
+  /** 勾 city+amount 两字段并配 amount 的显隐条件（当字段=city、算子、值）。 */
+  async function openWithTwoFields(op: string, value?: string) {
+    const { backend, datasetSelect } = await openEditor();
+    fireEvent.change(datasetSelect, { target: { value: "ds-sales" } });
+    fireEvent.click(columnCheckbox("city"));
+    fireEvent.click(columnCheckbox("amount"));
+
+    // 开关打开：默认条件=当字段取首个其他字段（city）、算子等于、值空
+    fireEvent.click(
+      within(fieldRow("amount")).getByTestId("editor-field-condition-toggle"),
+    );
+    expect(
+      (conditionArea("amount").getByTestId(
+        "editor-field-condition-field",
+      ) as HTMLSelectElement).value,
+    ).toBe("city");
+    fireEvent.change(
+      conditionArea("amount").getByTestId("editor-field-condition-op"),
+      { target: { value: op } },
+    );
+    if (value !== undefined) {
+      fireEvent.change(
+        conditionArea("amount").getByTestId("editor-field-condition-value"),
+        { target: { value } },
+      );
+    }
+    return { backend };
+  }
+
+  /** 最近一次 PUT 的 spec.spec。 */
+  function lastSavedSpec(backend: ReturnType<typeof install>): {
+    datasetId: string | null;
+    fields: Array<{ column: string; visibleWhen?: unknown }>;
+  } {
+    const puts = backend.calls.filter((c) => c.method === "PUT");
+    return (puts[puts.length - 1]?.body as {
+      spec: { spec: { datasetId: string | null; fields: Array<{ column: string; visibleWhen?: unknown }> } };
+    }).spec.spec;
+  }
+
+  it("配条件往返保存：spec 里 visibleWhen 落形（当字段/算子/值）", async () => {
+    const { backend } = await openWithTwoFields("eq", "上海");
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      await screen.findByTestId("editor-form-saved-version"),
+    ).toBeTruthy();
+
+    const spec = lastSavedSpec(backend);
+    expect(spec.fields.find((f) => f.column === "amount")?.visibleWhen).toEqual(
+      { field: "city", op: "eq", value: "上海" },
+    );
+  });
+
+  it("清除条件：一键回无条件（visibleWhen 键不落、开关回关）", async () => {
+    const { backend } = await openWithTwoFields("eq", "上海");
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      await screen.findByTestId("editor-form-saved-version"),
+    ).toBeTruthy();
+
+    // 清除条件：条件区收起、开关回关，保存后 PUT 载荷零 visibleWhen 键
+    fireEvent.click(
+      within(fieldRow("amount")).getByTestId("editor-field-condition-clear"),
+    );
+    expect(
+      within(fieldRow("amount")).queryByTestId("editor-field-condition"),
+    ).toBeNull();
+    expect(
+      (within(fieldRow("amount")).getByTestId("editor-field-condition-toggle") as HTMLInputElement)
+        .checked,
+    ).toBe(false);
+
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      await screen.findByTestId("editor-form-saved-version"),
+    ).toBeTruthy();
+    const spec = lastSavedSpec(backend);
+    expect(JSON.stringify(spec).includes("visibleWhen")).toBe(false);
+    expect(spec.fields.find((f) => f.column === "amount")?.visibleWhen).toBeUndefined();
+  });
+
+  it("empty 算子无值控件；保存落 {field, op} 不带 value 键", async () => {
+    const { backend } = await openWithTwoFields("empty");
+    // 值控件随 empty 算子隐藏
+    expect(
+      conditionArea("amount").queryByTestId("editor-field-condition-value"),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      await screen.findByTestId("editor-form-saved-version"),
+    ).toBeTruthy();
+    const spec = lastSavedSpec(backend);
+    expect(spec.fields.find((f) => f.column === "amount")?.visibleWhen).toEqual(
+      { field: "city", op: "empty" },
+    );
+  });
+
+  it("存量零变化：未开条件时字段卡不渲染条件区，保存载荷零 visibleWhen 键", async () => {
+    const { backend, datasetSelect } = await openEditor();
+    fireEvent.change(datasetSelect, { target: { value: "ds-sales" } });
+    fireEvent.click(columnCheckbox("city"));
+    expect(
+      within(fieldRow("city")).queryByTestId("editor-field-condition"),
+    ).toBeNull();
+    expect(
+      (within(fieldRow("city")).getByTestId("editor-field-condition-toggle") as HTMLInputElement)
+        .checked,
+    ).toBe(false);
+
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      await screen.findByTestId("editor-form-saved-version"),
+    ).toBeTruthy();
+    expect(
+      JSON.stringify(lastSavedSpec(backend)).includes("visibleWhen"),
+    ).toBe(false);
+  });
+});

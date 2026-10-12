@@ -7,10 +7,20 @@
 // 成功显示 successMessage（缺省文案 i18n）；datasetId==null 渲染
 // 「未绑定数据集」诚实态（不可提交）。服务端 422/429/404 的 detail
 // 如实呈现，绝不静默吞掉。
-import { useState } from "react";
+//
+// 显隐联动（wire-form-field-linkage）：每次 values 变化重求隐藏集
+// （evaluateFieldVisibility），隐藏字段不渲染（连 label 都不出）；字段从
+// 可见转隐藏即清其 state 值（重新可见从空开始）；提交走联动感知
+// validateFormValues（隐藏必填不拦、隐藏携带值拒）。分享页共用本组件，
+// 联动自动生效。
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { addCorrection, apiErrorText, postPublicJson } from "../api";
-import { validateFormValues, type FormSpecBody } from "./formSpec";
+import {
+  evaluateFieldVisibility,
+  validateFormValues,
+  type FormSpecBody,
+} from "./formSpec";
 
 /** 提交目标：console 态（corrections 端点，datasetId 随表单绑定）/ 公开态
  *  （分享 submit 端点完整地址，t/v 已进 query）。 */
@@ -31,6 +41,36 @@ export function FormRuntime({
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // 显隐联动：每次 values 变化重求隐藏集（hooks 先于下方 unbound 早退——
+  // 组件实例跨 spec 演进保持 hook 顺序稳定）。
+  const hiddenColumns = useMemo(
+    () => evaluateFieldVisibility(spec.fields, values),
+    [spec, values],
+  );
+  // 稳定依赖键（Set 每次新建；排序串只在隐藏集真正变化时推进 effect）。
+  const hiddenKey = useMemo(
+    () => [...hiddenColumns].sort().join("\u0000"),
+    [hiddenColumns],
+  );
+  // 字段从可见转隐藏即清其 state 值（隐藏即清，重新可见从空开始——
+  // Non-Goal 定案）。级联（隐藏的控制字段被清值→下游可见性变化）由
+  // setValues 触发的重渲染自然推进。
+  useEffect(() => {
+    if (hiddenColumns.size === 0) return;
+    setValues((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const column of hiddenColumns) {
+        if (next[column]) {
+          next[column] = "";
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hiddenKey]);
 
   // 未绑定数据集诚实态（构建中间态）：如实呈现而非可提交表单。
   // （局部 const 承接窄化——闭包内保持非空。）
@@ -116,7 +156,10 @@ export function FormRuntime({
       }}
       className="max-w-xl space-y-3"
     >
-      {spec.fields.map((field) => {
+      {/* 隐藏字段不渲染（连 label 都不出）；可见性由上方 hiddenColumns 决定。 */}
+      {spec.fields
+        .filter((field) => !hiddenColumns.has(field.column))
+        .map((field) => {
         const error = fieldErrors[field.column];
         const fieldLabel = field.label || field.column;
         return (

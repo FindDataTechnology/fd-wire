@@ -7,6 +7,9 @@
   线程并发恰好放行 limit 次、mac 段键提取（每令牌独立桶）、reset 复位；
 - 3.3 validate_form_values 纯函数矩阵（归一/未知列/必填/类型四类逐条）+
   公开 GET（钉死版本信封原样）+ 公开 POST submit（design D3 校验序全链）；
+  3.3b visibleWhen 求值矩阵（wire-form-field-linkage：九算子/空值口径/
+  双端十进制/无递归——与 web 侧同款对拍）+ 提交三态联动（隐藏必填跳过、
+  隐藏携带值拒）；
 - 3.4 公开提交全矩阵：成功落 insert 修正且 actor=share-form:{id}、改版后
   旧令牌按旧字段集校验、未知列/缺必填/类型错 422 零写入、限流 429+
   Retry-After+超限不落库、归档断链 404、datasetId 未绑/数据集被删/他企
@@ -40,7 +43,7 @@ from fd_wire_api.ai.models import AIDraftArtifact
 from fd_wire_api.ai.schemas import ConversationCreate
 from fd_wire_api.ai.service import create_conversation
 from fd_wire_api.app import app
-from fd_wire_api.artifacts.form_spec import validate_form_values
+from fd_wire_api.artifacts.form_spec import evaluate_hidden_columns, validate_form_values
 from fd_wire_api.artifacts.models import ArtifactVersion
 from fd_wire_api.datasets import api_store
 from fd_wire_api.datasets.db import (
@@ -453,6 +456,148 @@ def test_validate_form_values_matrix() -> None:
         values, error = validate_form_values(FIELDS, {"region": "east", "note": bad})
         assert values is None, bad
         assert "note" in error, bad
+
+
+# --------------- 3.3b visibleWhen 求值与提交联动（wire-form-field-linkage）
+
+
+def _linked_pair(rule: dict) -> list[dict]:
+    """两字段：channel 控制列（select 必填）+ detail 受控列（visibleWhen=rule）。"""
+    return [
+        {
+            "column": "channel",
+            "label": "渠道",
+            "input": "select",
+            "required": True,
+            "options": ["其他", "电话"],
+        },
+        {
+            "column": "detail",
+            "label": "明细",
+            "input": "text",
+            "required": True,
+            "visibleWhen": rule,
+        },
+    ]
+
+
+def test_visible_when_evaluation_matrix() -> None:
+    """hidden 求值矩阵（与 web 侧同款对拍断言，逐条写死——冻结契约）。"""
+
+    def hidden(rule: dict, values: dict) -> set[str]:
+        return evaluate_hidden_columns(_linked_pair(rule), values)
+
+    # 1. eq 命中（ctrl=其他 value=其他 → 可见）；eq 不命中（"a" vs "b" → 隐藏）
+    rule = {"field": "channel", "op": "eq", "value": "其他"}
+    assert "detail" not in hidden(rule, {"channel": "其他"})
+    assert "detail" in hidden({"field": "channel", "op": "eq", "value": "b"}, {"channel": "a"})
+    # 2. eq 永远字符串比较（不走数值）："100" vs "100.0" → 隐藏
+    rule = {"field": "channel", "op": "eq", "value": "100.0"}
+    assert "detail" in hidden(rule, {"channel": "100"})
+    # 3. gt 数值口径：1200 > 1000 → 可见；相等 gt 假 / gte 真
+    assert "detail" not in hidden(
+        {"field": "channel", "op": "gt", "value": "1000"}, {"channel": "1200"}
+    )
+    assert "detail" in hidden(
+        {"field": "channel", "op": "gt", "value": "1200"}, {"channel": "1200"}
+    )
+    assert "detail" not in hidden(
+        {"field": "channel", "op": "gte", "value": "1200"}, {"channel": "1200"}
+    )
+    # 双端十进制（负数/科学计数法）才走数值：-200 < -1.5e2 → 可见
+    assert "detail" not in hidden(
+        {"field": "channel", "op": "lt", "value": "-1.5e2"}, {"channel": "-200"}
+    )
+    # 4. gt 字典序：双非数值 "abc" > "abd" 假 → 隐藏
+    assert "detail" in hidden(
+        {"field": "channel", "op": "gt", "value": "abd"}, {"channel": "abc"}
+    )
+    # 5. gt 混合：一端数值一端非 → 字典序 "12" > "abc" 假 → 隐藏
+    assert "detail" in hidden(
+        {"field": "channel", "op": "gt", "value": "abc"}, {"channel": "12"}
+    )
+    # 6. empty：缺键/空白串 → 可见；"0"/数字 0 → 隐藏（0 不是空）
+    rule = {"field": "channel", "op": "empty"}
+    for values in ({}, {"channel": "  "}):
+        assert "detail" not in hidden(rule, values), values
+    for values in ({"channel": "0"}, {"channel": 0}):
+        assert "detail" in hidden(rule, values), values
+    # 7. notEmpty：有值 → 可见；缺键 → 隐藏
+    assert "detail" not in hidden({"field": "channel", "op": "notEmpty"}, {"channel": "x"})
+    assert "detail" in hidden({"field": "channel", "op": "notEmpty"}, {})
+    # 8. 空值带值算子全假（含 neq；null 同缺键）
+    for op, value in (
+        ("neq", "z"),
+        ("eq", "z"),
+        ("gt", "0"),
+        ("contains", "z"),
+    ):
+        rule = {"field": "channel", "op": op, "value": value}
+        assert "detail" in hidden(rule, {}), op
+        assert "detail" in hidden(rule, {"channel": None}), op
+    # 9. contains："华东" in "华东大区" → 可见；不包含 → 隐藏
+    assert "detail" not in hidden(
+        {"field": "channel", "op": "contains", "value": "华东"}, {"channel": "华东大区"}
+    )
+    assert "detail" in hidden(
+        {"field": "channel", "op": "contains", "value": "华北"}, {"channel": "华东大区"}
+    )
+    # bool ctrl 按 JSON 口径 true/false stringify（False 不是空值）
+    assert "detail" not in hidden(
+        {"field": "channel", "op": "eq", "value": "true"}, {"channel": True}
+    )
+    assert "detail" not in hidden(
+        {"field": "channel", "op": "eq", "value": "false"}, {"channel": False}
+    )
+    # 10. 无递归：被控条件引用的字段自身隐藏，但其值仍在 values → 照常参与比较
+    chained = [
+        {"column": "master", "label": "主控", "input": "text"},
+        {
+            "column": "ctrl",
+            "label": "控制",
+            "input": "text",
+            "visibleWhen": {"field": "master", "op": "eq", "value": "on"},
+        },
+        {
+            "column": "target",
+            "label": "目标",
+            "input": "text",
+            "visibleWhen": {"field": "ctrl", "op": "eq", "value": "go"},
+        },
+    ]
+    assert evaluate_hidden_columns(chained, {"master": "off", "ctrl": "go"}) == {"ctrl"}
+    # 存量零回归：无 visibleWhen 的字段集恒得空 hidden 集
+    assert evaluate_hidden_columns(FIELDS, {"region": "east", "amount": 1}) == set()
+
+
+def test_validate_form_values_linkage() -> None:
+    """提交三态：可见必填照旧拦；隐藏必填跳过（不写键）；隐藏携带值拒。"""
+    fields = _linked_pair({"field": "channel", "op": "eq", "value": "其他"})
+    # 条件真（channel=其他）：明细可见——携带值正常收，必填缺失照旧拦
+    normalized, error = validate_form_values(fields, {"channel": "其他", "detail": "x"})
+    assert error is None
+    assert normalized == {"channel": "其他", "detail": "x"}
+    values, error = validate_form_values(fields, {"channel": "其他"})
+    assert values is None
+    assert "必填字段" in error and "明细" in error and "detail" in error
+    # 条件假（channel=电话）：明细隐藏——必填缺失不再检查（过，不写键）
+    normalized, error = validate_form_values(fields, {"channel": "电话"})
+    assert error is None
+    assert normalized == {"channel": "电话"}
+    # 隐藏字段携带非空值 → 拒（不做静默丢弃；已定义列不触发未定义列拒）
+    values, error = validate_form_values(fields, {"channel": "电话", "detail": "x"})
+    assert values is None
+    assert error == "字段 明细（detail）当前不可见，不能携带值"
+    # 隐藏字段携带非字符串标量（0）也算携带值 → 拒
+    values, error = validate_form_values(fields, {"channel": "电话", "detail": 0})
+    assert values is None
+    assert error == "字段 明细（detail）当前不可见，不能携带值"
+    # 隐藏字段携带空串/纯空白/null → 过（不写键）
+    for empty_value in ("", "   ", None):
+        payload = {"channel": "电话", "detail": empty_value}
+        normalized, error = validate_form_values(fields, payload)
+        assert error is None, empty_value
+        assert normalized == {"channel": "电话"}, empty_value
 
 
 # --------------------------------------------------- 3.1 生成：kind 门与分派

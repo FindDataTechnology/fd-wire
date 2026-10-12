@@ -1,9 +1,11 @@
 """form 产物 spec 结构校验（wire-form-builder 任务 1.1，design D1 第①层）
-与提交 values 校验（任务 3.3，design D3）。
+与提交 values 校验（任务 3.3，design D3）；字段显隐联动（wire-form-field-
+linkage 任务 1-2）。
 
 纯函数零依赖（不触库、不触引擎——artifacts 库内可独立测试）。校验对象是
 spec 信封的 ``spec.spec`` 部分：``{datasetId, fields[], submitLabel?,
-successMessage?}``，field = ``{column, label, input, required?, options?}``：
+successMessage?}``，field = ``{column, label, input, required?, options?,
+visibleWhen?}``：
 
 - ``datasetId``：null（构建中间态——可保存不可提交）或非空字符串；
 - ``fields``：数组（可为空）；每项必须是对象：
@@ -12,6 +14,9 @@ successMessage?}``，field = ``{column, label, input, required?, options?}``：
   - ``input`` ∈ :data:`FIELD_INPUTS`（text/number/date/select）；
   - ``required`` 可省略（缺省 false 语义），在则必须是布尔值；
   - ``input=select`` 必带 ``options``（非空字符串列表）；
+  - ``visibleWhen`` 可省略（缺省恒可见），在则须是单条件显隐规则
+    ``{field, op, value?}``（形状见 :data:`VISIBLE_WHEN_OPS`；``field``
+    须引用同表单**另一**字段列——自引用/引用不存在列均拒）；
 - ``submitLabel`` / ``successMessage`` 可省略，在则须为非空字符串 ≤200。
 
 **列名是否仍在数据集中不在保存时裁决**（design D1 第③层定案——数据集列
@@ -36,6 +41,27 @@ TEXT_LIMIT = 200
 #: date 输入的口径：YYYY-MM-DD（拒绝时间部分——design D3）
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
+#: visibleWhen 算子枚举（单条件显隐——wire-form-field-linkage）
+VISIBLE_WHEN_OPS: tuple[str, ...] = (
+    "eq",
+    "neq",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "contains",
+    "empty",
+    "notEmpty",
+)
+
+#: 无值算子（条件只看控制列空值，规则里不得带 value 键）
+_VALUELESS_OPS: frozenset[str] = frozenset({"empty", "notEmpty"})
+
+#: gt/gte/lt/lte 的数值口径：双端须同匹配该正则才按数值比较（双端十进制
+#: ——防 JS ``Number("0x10")`` 与 Python ``float()`` 的解析分歧，否则回退
+#: 字符串字典序）
+_DECIMAL_RE = re.compile(r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$")
+
 
 def _text_error(value: object, *, what: str) -> str | None:
     """非空字符串 ≤ :data:`TEXT_LIMIT` 校验；返回错误文案或 None。"""
@@ -43,6 +69,42 @@ def _text_error(value: object, *, what: str) -> str | None:
         return f"{what} 必须是非空字符串"
     if len(value) > TEXT_LIMIT:
         return f"{what} 长度超过 {TEXT_LIMIT} 上限"
+    return None
+
+
+def _visible_when_error(rule: object, where: str) -> str | None:
+    """visibleWhen 形状校验（不含引用存在性——那需全字段列齐后二趟）。
+
+    规则（wire-form-field-linkage 冻结契约）：
+    - 必须是 JSON 对象 ``{field, op, value?}``；
+    - ``field``：非空字符串（引用同表单另一字段的 column）；
+    - ``op`` ∈ :data:`VISIBLE_WHEN_OPS`；
+    - ``empty``/``notEmpty``：不得带 ``value`` 键（在则拒）；
+    - 其余算子：``value`` 必须是非空标量（str/int/float/bool——dict/list/
+      null 拒；字符串形态 trim 后非空，空串/纯空白拒）。
+    """
+    if not isinstance(rule, dict):
+        return f"{where}.visibleWhen 必须是 JSON 对象（{{field, op, value?}}）"
+    target = rule.get("field")
+    if not isinstance(target, str) or not target.strip():
+        return f"{where}.visibleWhen.field 必须是非空字符串（同表单另一字段的 column）"
+    op = rule.get("op")
+    if op not in VISIBLE_WHEN_OPS:
+        return (
+            f"{where}.visibleWhen.op 必须是 {'/'.join(VISIBLE_WHEN_OPS)}"
+            f"（收到 {op!r}）"
+        )
+    if op in _VALUELESS_OPS:
+        if "value" in rule:
+            return f"{where}.visibleWhen.{op} 不得带 value 键"
+        return None
+    if "value" not in rule:
+        return f"{where}.visibleWhen.value 必须是非空标量（op={op} 必带）"
+    raw = rule["value"]
+    if raw is None or not isinstance(raw, (str, int, float)):  # bool ⊂ int 过
+        return f"{where}.visibleWhen.value 必须是非空标量（收到 {raw!r}）"
+    if isinstance(raw, str) and not raw.strip():
+        return f"{where}.visibleWhen.value 必须是非空标量（收到 {raw!r}）"
     return None
 
 
@@ -96,12 +158,114 @@ def validate_form_spec(inner: object) -> str | None:
                 )
             ):
                 return f"{where}.options 必须是非空字符串列表（input=select 必带）"
+        if "visibleWhen" in field:
+            rule_error = _visible_when_error(field["visibleWhen"], where)
+            if rule_error is not None:
+                return rule_error
+    # visibleWhen 引用存在性（二趟——支持前向引用，须全字段列齐后裁决）
+    for index, field in enumerate(fields):
+        if not isinstance(field, dict):
+            continue
+        rule = field.get("visibleWhen")
+        if not isinstance(rule, dict):  # 非对象已在首趟拦
+            continue
+        where = f"fields[{index}]"
+        target = rule.get("field")
+        if target == field.get("column"):
+            return f"{where}.visibleWhen.field 不能自引用本字段: {target}"
+        if target not in seen_columns:
+            return f"{where}.visibleWhen.field 引用了不存在的字段列: {target}"
     for key in ("submitLabel", "successMessage"):
         if key in inner:
             error = _text_error(inner[key], what=f"spec.spec.{key}")
             if error is not None:
                 return error
     return None
+
+
+# --------------------------------------------- 字段显隐求值（wire-form-field-linkage）
+
+
+def _scalar_text(value: object) -> str:
+    """标量的字符串形态：bool 按 JSON 口径 true/false，其余按 ``str()``。"""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _is_blank_value(value: object) -> bool:
+    """空值口径：缺键/None/字符串形态 trim 后为空（数字 0、bool False 非空）。"""
+    return value is None or _scalar_text(value).strip() == ""
+
+
+def evaluate_hidden_columns(fields: object, values: object) -> set[str]:
+    """按提交 raw ``values`` 求带 visibleWhen 字段的隐藏列集合——纯函数。
+
+    与 web 侧逐字同规（冻结契约）：
+    - 无 visibleWhen 的字段恒可见（不在返回集合中）；求值只看 values 本身，
+      **不递归**判控制字段自身的可见性（控制字段值在 values 里即参与比较）；
+    - ``ctrl = values.get(visibleWhen.field)``（缺键/null → 空值）；
+    - ``empty``：ctrl 为空值 → 可见；``notEmpty`` 反之；
+    - **带值算子在 ctrl 为空值时一律为假（含 neq）**；
+    - 非空时 ``lhs = String(ctrl).trim()``、``rhs = String(value).trim()``：
+      eq/neq/contains 按字符串；gt/gte/lt/lte 双端同匹配
+      :data:`_DECIMAL_RE` 才按 float 数值比较，否则按字符串字典序。
+
+    防御位：fields 非数组/values 非对象 → 空集（``validate_form_values``
+    先做入参形态校验再调本函数；未知算子按可见收——保存校验已拦）。
+    """
+    if not isinstance(fields, list):
+        return set()
+    row = values if isinstance(values, dict) else {}
+    comparators = {
+        "gt": lambda lhs, rhs: lhs > rhs,
+        "gte": lambda lhs, rhs: lhs >= rhs,
+        "lt": lambda lhs, rhs: lhs < rhs,
+        "lte": lambda lhs, rhs: lhs <= rhs,
+    }
+    hidden: set[str] = set()
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        rule = field.get("visibleWhen")
+        if not isinstance(rule, dict):
+            continue
+        column = field.get("column")
+        if not isinstance(column, str) or not column:
+            continue
+        target = rule.get("field")
+        ctrl = row.get(target) if isinstance(target, str) else None
+        blank = _is_blank_value(ctrl)
+        op = rule.get("op")
+        if op == "empty":
+            visible = blank
+        elif op == "notEmpty":
+            visible = not blank
+        elif blank:
+            visible = False  # 带值算子在 ctrl 为空值时一律为假（含 neq）
+        else:
+            lhs = _scalar_text(ctrl).strip()
+            rhs_raw = rule.get("value")
+            rhs = (
+                _scalar_text(rhs_raw).strip()
+                if isinstance(rhs_raw, (str, int, float))
+                else ""
+            )
+            if op == "eq":
+                visible = lhs == rhs
+            elif op == "neq":
+                visible = lhs != rhs
+            elif op == "contains":
+                visible = rhs in lhs
+            elif op in comparators:
+                if _DECIMAL_RE.match(lhs) and _DECIMAL_RE.match(rhs):
+                    lhs, rhs = float(lhs), float(rhs)
+                visible = comparators[op](lhs, rhs)
+            else:
+                visible = True  # 未知算子防御位：按可见收
+        if not visible:
+            hidden.add(column)
+    return hidden
 
 
 # ------------------------------------------------------- 提交 values 校验（D3）
@@ -183,7 +347,12 @@ def validate_form_values(
     规则：
     - ``values`` 必须是 JSON 对象；
     - 只收 ``fields`` 声明过的列——未定义列即拒（文案带可用列）；
-    - 必填字段缺失/空串/仅空白/null → 文案；
+    - **显隐联动**（wire-form-field-linkage）：先用提交 raw ``values`` 经
+      :func:`evaluate_hidden_columns` 求 hidden 集，再逐字段——隐藏字段是
+      已定义列（不触发未定义列拒）：携带非空值（非 None、非纯空白串）即拒
+      （不做静默丢弃）；值为 None/空白/未传 → 跳过不写键且 **required 不
+      检查**（隐藏必填不算缺失）；
+    - 可见字段照旧：必填字段缺失/空串/仅空白/null → 文案；
     - 非必填字段未传/传 null/空串 = 跳过（**不写键**——下游 insert 不落
       null 键，design D3「未勾字段不传即缺省」）；
     - 其余值按 ``_normalize_field_value`` 类型校验并归一。
@@ -207,9 +376,17 @@ def validate_form_values(
         return None, (
             f"values 含未在表单中定义的列 {unknown[0]!r}（表单字段: {available}）"
         )
+    hidden = evaluate_hidden_columns(fields, values)
     normalized: dict = {}
     for column, field in known.items():  # 声明序（首个错误即返回）
         value = values.get(column)
+        if column in hidden:
+            if value is None or (isinstance(value, str) and not value.strip()):
+                continue  # 隐藏字段空值/未传 = 跳过不写键（required 不检查）
+            return None, (
+                f"字段 {_field_label(field, column)}（{column}）"
+                "当前不可见，不能携带值"
+            )
         if value is None or (isinstance(value, str) and not value.strip()):
             if field.get("required", False):
                 return None, f"必填字段 {_field_label(field, column)}（{column}）缺失或为空"

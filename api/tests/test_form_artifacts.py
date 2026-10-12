@@ -6,7 +6,8 @@ insert 修正共享落层（任务 2.1/2.2）的 API 测试。
   留痕与 dashboard 同款、无来源会话指针；kind 白名单外（其余四类 AI 产物
   kind）仍 422 零半写；title 校验对 form 同样生效；
 - form spec 结构校验矩阵：validate_form_spec 纯函数逐条文案断言 + 路由
-  422 零半写（版本行不增）；
+  422 零半写（版本行不增）；1.1b visibleWhen 保存校验矩阵（wire-form-
+  field-linkage：九算子合法/形状错/带值错/自引用与不存在列拒）；
 - datasetId 属主校验（design D1 第②层）：绑定本企数据集保存成功且版本
   递增；他企/不存在 422 且零半写（版本行不增）；datasetId=None 构建中间
   态可保存；
@@ -277,6 +278,127 @@ def test_validate_form_spec_matrix() -> None:
     assert validate_form_spec(
         {"datasetId": None, "fields": [], "successMessage": "x" * 201}
     ) == "spec.spec.successMessage 长度超过 200 上限"
+
+
+# ------------------------- 1.1b visibleWhen 保存校验（wire-form-field-linkage）
+
+
+def _linked_spec(rule: object) -> dict:
+    """两字段 spec：channel 控制列（select 必填）+ detail 带 visibleWhen 规则。"""
+    return {
+        "datasetId": None,
+        "fields": [
+            {
+                "column": "channel",
+                "label": "渠道",
+                "input": "select",
+                "required": True,
+                "options": ["其他", "电话"],
+            },
+            {
+                "column": "detail",
+                "label": "明细",
+                "input": "text",
+                "required": True,
+                "visibleWhen": rule,
+            },
+        ],
+    }
+
+
+def test_validate_form_spec_visible_when_matrix() -> None:
+    """visibleWhen 形状校验矩阵：九算子合法通过 + 形状/带值/引用错逐条拒。"""
+    # 合法：带值算子逐一通过（value 字符串）
+    for op in ("eq", "neq", "gt", "gte", "lt", "lte", "contains"):
+        rule = {"field": "channel", "op": op, "value": "其他"}
+        assert validate_form_spec(_linked_spec(rule)) is None, op
+    # 合法：无值算子（不得带 value——不带即合法）
+    for op in ("empty", "notEmpty"):
+        assert validate_form_spec(_linked_spec({"field": "channel", "op": op})) is None, op
+    # 合法：value 标量形态（int/float/bool 均为合法标量）
+    for value in (1, 1.5, True, False):
+        rule = {"field": "channel", "op": "eq", "value": value}
+        assert validate_form_spec(_linked_spec(rule)) is None, value
+    # 合法：前向引用（field[0] 引用后置字段列——引用存在性在全列齐后裁决）
+    forward = {
+        "datasetId": None,
+        "fields": [
+            {
+                "column": "a",
+                "label": "甲",
+                "input": "text",
+                "visibleWhen": {"field": "b", "op": "notEmpty"},
+            },
+            {"column": "b", "label": "乙", "input": "text"},
+        ],
+    }
+    assert validate_form_spec(forward) is None
+
+    # visibleWhen 非对象
+    assert validate_form_spec(_linked_spec(["x"])) == (
+        "fields[1].visibleWhen 必须是 JSON 对象（{field, op, value?}）"
+    )
+    # op 越枚举
+    assert validate_form_spec(
+        _linked_spec({"field": "channel", "op": "xor", "value": "1"})
+    ) == (
+        "fields[1].visibleWhen.op 必须是"
+        " eq/neq/gt/gte/lt/lte/contains/empty/notEmpty（收到 'xor'）"
+    )
+    # empty/notEmpty 带 value 键拒
+    for op in ("empty", "notEmpty"):
+        rule = {"field": "channel", "op": op, "value": "x"}
+        error = validate_form_spec(_linked_spec(rule))
+        assert error == f"fields[1].visibleWhen.{op} 不得带 value 键", op
+    # 带值算子缺 value 拒
+    assert validate_form_spec(_linked_spec({"field": "channel", "op": "eq"})) == (
+        "fields[1].visibleWhen.value 必须是非空标量（op=eq 必带）"
+    )
+    # value 空串/纯空白拒
+    for bad in ("", "   "):
+        rule = {"field": "channel", "op": "eq", "value": bad}
+        error = validate_form_spec(_linked_spec(rule))
+        assert error == (
+            f"fields[1].visibleWhen.value 必须是非空标量（收到 {bad!r}）"
+        ), bad
+    # value 为 list/dict/null 拒
+    for bad in (["x"], {"a": 1}, None):
+        rule = {"field": "channel", "op": "eq", "value": bad}
+        error = validate_form_spec(_linked_spec(rule))
+        assert error == (
+            f"fields[1].visibleWhen.value 必须是非空标量（收到 {bad!r}）"
+        ), bad
+    # field：缺失/空白串
+    bad_field = "fields[1].visibleWhen.field 必须是非空字符串（同表单另一字段的 column）"
+    assert validate_form_spec(_linked_spec({"op": "empty"})) == bad_field
+    assert validate_form_spec(_linked_spec({"field": "  ", "op": "empty"})) == bad_field
+    # field 自引用拒
+    assert validate_form_spec(_linked_spec({"field": "detail", "op": "empty"})) == (
+        "fields[1].visibleWhen.field 不能自引用本字段: detail"
+    )
+    # field 引用不存在的列拒
+    assert validate_form_spec(_linked_spec({"field": "ghost", "op": "empty"})) == (
+        "fields[1].visibleWhen.field 引用了不存在的字段列: ghost"
+    )
+    # 存量零回归：无 visibleWhen 的全字段形态 spec 全通过（显式锚点）
+    legacy = {
+        "datasetId": "ds-0001",
+        "fields": [
+            {
+                "column": "region",
+                "label": "区域",
+                "input": "select",
+                "required": True,
+                "options": ["east", "west"],
+            },
+            {"column": "amount", "label": "金额", "input": "number"},
+            {"column": "note", "label": "备注", "input": "text", "required": False},
+            {"column": "day", "label": "日期", "input": "date"},
+        ],
+        "submitLabel": "提交登记",
+        "successMessage": "登记成功",
+    }
+    assert validate_form_spec(legacy) is None
 
 
 # ------------------------------------------------------------- 1.2 空白创建

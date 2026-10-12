@@ -715,6 +715,7 @@ const en: Translation = {
           date: "The date must be in YYYY-MM-DD format.",
           select: "Pick one of the options.",
           text: "Enter text.",
+          hidden: "This field is currently hidden — please clear its value.",
         },
         submitFailed: "Submission failed, please retry later.",
       },
@@ -735,6 +736,26 @@ const en: Translation = {
         fieldRequiredLabel: "Required",
         fieldOptionsLabel: "Options (comma-separated)",
         fieldMissingColumn: "This column is no longer in the dataset",
+        // Conditional visibility editing (wire-form-field-linkage): one
+        // optional condition — show this field when another field's value
+        // satisfies the operator.
+        conditionToggle: "Show conditionally",
+        conditionWhenLabel: "When field",
+        conditionFieldPlaceholder: "Pick a field…",
+        conditionOpLabel: "is",
+        conditionValueLabel: "value",
+        conditionClear: "Clear condition",
+        conditionOps: {
+          eq: "equal to",
+          neq: "not equal to",
+          gt: "greater than",
+          gte: "greater than or equal",
+          lt: "less than",
+          lte: "less than or equal",
+          contains: "containing",
+          empty: "empty",
+          notEmpty: "not empty",
+        },
         inputTypes: {
           text: "Text",
           number: "Number",
@@ -762,6 +783,12 @@ const en: Translation = {
           labelTooLong: "A field label exceeds the length limit (100).",
           submitLabelTooLong: "The submit button text exceeds the length limit (50).",
           successMessageTooLong: "The success message exceeds the length limit (200).",
+          conditionBad:
+            "A visibility condition is invalid (missing field / unknown operator / unusable value).",
+          conditionSelf:
+            "A visibility condition references its own field (self-reference is not allowed).",
+          conditionMissing:
+            "A visibility condition references a field that does not exist in this form.",
         },
       },
     },

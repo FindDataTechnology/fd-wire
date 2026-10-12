@@ -8,6 +8,11 @@
 // 保存前结构自检（validateFormSpec——与后端规则同源），错误逐条呈现零请求；
 // 未绑数据集保存允许（构建中间态）；未保存离开 confirm + beforeunload 兜底
 // （照抄 DashboardEditor 范式）。字段顺序=勾选时数据集列序。
+//
+// 显隐条件编辑（wire-form-field-linkage）：每字段卡可选配单条件 visibleWhen
+// （当字段/算子/值三控件；empty 族免值；一键清除）。无 visibleWhen 的既有
+// 字段默认开关关闭、编辑面零变化；草稿允许中间态（如空值），保存自检
+// conditionBad/Self/Missing 拦截。
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -19,10 +24,13 @@ import {
   type DatasetColumn,
 } from "../api";
 import {
+  FIELD_CONDITION_OPS,
   FORM_INPUT_TYPES,
   buildFormEnvelope,
   fieldFromColumn,
   validateFormSpec,
+  type FieldConditionOp,
+  type FieldVisibleWhen,
   type FormField,
   type FormInputType,
   type FormSpecBody,
@@ -142,6 +150,24 @@ export function FormEditor({
         fields: draft.body.fields.map((f) =>
           f.column === column ? { ...f, ...patch } : f,
         ),
+      },
+    });
+  };
+
+  /** 显隐条件写入/清除（wire-form-field-linkage）：cond=null 时 visibleWhen
+   *  键整体不落（既有无条件字段零变化）。 */
+  const setFieldCondition = (column: string, cond: FieldVisibleWhen | null) => {
+    patchDraft({
+      body: {
+        ...draft.body,
+        fields: draft.body.fields.map((f) => {
+          if (f.column !== column) return f;
+          if (!cond) {
+            const { visibleWhen: _omit, ...rest } = f;
+            return rest;
+          }
+          return { ...f, visibleWhen: cond };
+        }),
       },
     });
   };
@@ -471,6 +497,142 @@ export function FormEditor({
                       }
                       className="w-64 rounded border border-slate-300 px-2 py-1 text-xs"
                     />
+                  </div>
+                )}
+                {/* 显隐条件（wire-form-field-linkage）：开关默认关（无
+                    visibleWhen 的既有字段零变化）；打开即给默认条件（当字段=
+                    首个其他字段、算子=等于、值空——草稿允许中间态，保存自检
+                    拦截）。 */}
+                <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                  <label className="flex items-center gap-1 text-[11px] text-slate-500">
+                    <input
+                      type="checkbox"
+                      data-testid="editor-field-condition-toggle"
+                      checked={field.visibleWhen !== undefined}
+                      onChange={(e) => {
+                        if (!e.target.checked) {
+                          setFieldCondition(field.column, null);
+                          return;
+                        }
+                        const other = draft.body.fields.find(
+                          (f) => f.column !== field.column,
+                        );
+                        setFieldCondition(field.column, {
+                          field: other?.column ?? "",
+                          op: "eq",
+                          value: "",
+                        });
+                      }}
+                    />
+                    {t("console.form.editor.conditionToggle")}
+                  </label>
+                </div>
+                {field.visibleWhen && (
+                  <div
+                    data-testid="editor-field-condition"
+                    className="mt-1.5 flex flex-wrap items-center gap-2"
+                  >
+                    <label className="text-[11px] text-slate-400">
+                      {t("console.form.editor.conditionWhenLabel")}
+                    </label>
+                    <select
+                      data-testid="editor-field-condition-field"
+                      value={field.visibleWhen.field}
+                      onChange={(e) =>
+                        setFieldCondition(field.column, {
+                          ...field.visibleWhen!,
+                          field: e.target.value,
+                        })
+                      }
+                      className="rounded border border-slate-300 px-1.5 py-1 text-xs"
+                    >
+                      {(() => {
+                        // 候选=同表单其他字段（选项 label、值 column）；条件
+                        // 引用的字段已被移除时保留占位选项，值不漂移（保存
+                        // 自检 conditionMissing 如实拦截）。
+                        const others = draft.body.fields.filter(
+                          (f) => f.column !== field.column,
+                        );
+                        const known = others.some(
+                          (f) => f.column === field.visibleWhen?.field,
+                        );
+                        return (
+                          <>
+                            {!known && (
+                              <option value={field.visibleWhen!.field}>
+                                {field.visibleWhen!.field ||
+                                  t("console.form.editor.conditionFieldPlaceholder")}
+                              </option>
+                            )}
+                            {others.map((other) => (
+                              <option key={other.column} value={other.column}>
+                                {other.label || other.column}
+                              </option>
+                            ))}
+                          </>
+                        );
+                      })()}
+                    </select>
+                    <label className="text-[11px] text-slate-400">
+                      {t("console.form.editor.conditionOpLabel")}
+                    </label>
+                    <select
+                      data-testid="editor-field-condition-op"
+                      value={field.visibleWhen.op}
+                      onChange={(e) => {
+                        const op = e.target.value as FieldConditionOp;
+                        const prev = field.visibleWhen!;
+                        const emptyFamily = op === "empty" || op === "notEmpty";
+                        // 切入 empty 族→value 键不落；切入带值算子→从空值
+                        // 起步（或沿用既有值）。
+                        setFieldCondition(field.column, {
+                          field: prev.field,
+                          op,
+                          ...(emptyFamily
+                            ? {}
+                            : {
+                                value:
+                                  prev.value === undefined
+                                    ? ""
+                                    : prev.value,
+                              }),
+                        });
+                      }}
+                      className="rounded border border-slate-300 px-1.5 py-1 text-xs"
+                    >
+                      {FIELD_CONDITION_OPS.map((op) => (
+                        <option key={op} value={op}>
+                          {t(`console.form.editor.conditionOps.${op}`)}
+                        </option>
+                      ))}
+                    </select>
+                    {field.visibleWhen.op !== "empty" &&
+                      field.visibleWhen.op !== "notEmpty" && (
+                        <>
+                          <label className="text-[11px] text-slate-400">
+                            {t("console.form.editor.conditionValueLabel")}
+                          </label>
+                          <input
+                            data-testid="editor-field-condition-value"
+                            value={String(field.visibleWhen.value ?? "")}
+                            onChange={(e) =>
+                              setFieldCondition(field.column, {
+                                ...field.visibleWhen!,
+                                value: e.target.value,
+                              })
+                            }
+                            className="w-28 rounded border border-slate-300 px-2 py-1 text-xs"
+                          />
+                        </>
+                      )}
+                    <button
+                      type="button"
+                      data-testid="editor-field-condition-clear"
+                      onClick={() => setFieldCondition(field.column, null)}
+                      className="rounded border border-slate-300 px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100"
+                    >
+                      {t("console.form.editor.conditionClear")}
+                    </button>
                   </div>
                 )}
               </li>

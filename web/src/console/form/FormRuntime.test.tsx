@@ -349,4 +349,140 @@ describe("FormRuntime（public 态：公开 submit 端点）", () => {
     expect(screen.getByTestId("form-runtime-unbound")).toBeTruthy();
     expect(screen.queryByTestId("form-submit")).toBeNull();
   });
+
+  it("公开态显隐联动（wire-form-field-linkage）：隐藏字段不渲染、载荷排除", async () => {
+    const calls = stubPublicFetch(201, { ok: true, message: "已收到" });
+    render(
+      <FormRuntime
+        spec={{
+          datasetId: "ds-form-1",
+          fields: [
+            { column: "city", label: "城市", input: "text", required: true },
+            {
+              column: "detail",
+              label: "明细",
+              input: "text",
+              visibleWhen: { field: "city", op: "contains", value: "京" },
+            },
+          ],
+        }}
+        endpoint={{ kind: "public", url: SUBMIT_URL }}
+      />,
+    );
+
+    // 控制字段空 → contains 条件假 → 明细隐藏（连 label 都不出）
+    expect(
+      screen
+        .getAllByTestId("form-field")
+        .some((el) => el.getAttribute("data-column") === "detail"),
+    ).toBe(false);
+
+    fill("city", "京");
+    expect(
+      screen
+        .getAllByTestId("form-field")
+        .some((el) => el.getAttribute("data-column") === "detail"),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByTestId("form-submit"));
+    expect(await screen.findByTestId("form-success")).toBeTruthy();
+    // 载荷不含隐藏字段键（此处 detail 可见未填 → 非必填缺省不写键）
+    expect(calls[0]?.body).toEqual({ values: { city: "京" } });
+  });
+});
+
+// ------------------------------------- 显隐联动（wire-form-field-linkage）
+
+describe("FormRuntime（显隐联动：条件渲染+隐藏即清+载荷排除）", () => {
+  const LINKAGE_SPEC: FormSpecBody = {
+    datasetId: "ds-form-1",
+    fields: [
+      { column: "city", label: "城市", input: "text", required: true },
+      {
+        column: "type",
+        label: "类型",
+        input: "select",
+        options: ["其他", "标准"],
+      },
+      {
+        column: "detail",
+        label: "明细",
+        input: "text",
+        required: true, // 隐藏必填不拦——只在可见时强制
+        visibleWhen: { field: "type", op: "eq", value: "其他" },
+      },
+    ],
+  };
+
+  function selectType(value: string) {
+    fireEvent.change(within(fieldOf("type")).getByTestId("form-field-input"), {
+      target: { value },
+    });
+  }
+
+  function detailRow(): HTMLElement | undefined {
+    return screen
+      .getAllByTestId("form-field")
+      .find((el) => el.getAttribute("data-column") === "detail");
+  }
+
+  it("显隐往返：选「其他」→明细出现；改选「标准」→消失且值被清；再选回从空开始", () => {
+    install();
+    render(
+      <FormRuntime
+        spec={LINKAGE_SPEC}
+        endpoint={{ kind: "console", datasetId: "ds-form-1" }}
+      />,
+    );
+
+    // 初态：控制字段空值 → 带值算子条件假 → 明细隐藏（连 label 都不出）
+    expect(screen.getAllByTestId("form-field").length).toBe(2);
+    expect(detailRow()).toBeUndefined();
+
+    // 选「其他」→ 条件命中 → 明细出现（必填标随行）并可填
+    selectType("其他");
+    const detail = detailRow()!;
+    expect(detail.textContent).toContain("明细");
+    expect(within(detail).getByTestId("form-field-required")).toBeTruthy();
+    const input = within(detail).getByTestId("form-field-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "备注X" } });
+    expect(input.value).toBe("备注X");
+
+    // 改选「标准」→ 明细消失且 state 值被清（隐藏即清）
+    selectType("标准");
+    expect(detailRow()).toBeUndefined();
+
+    // 再选回「其他」→ 重新可见从空开始
+    selectType("其他");
+    expect(
+      (within(detailRow()!).getByTestId("form-field-input") as HTMLInputElement)
+        .value,
+    ).toBe("");
+  });
+
+  it("隐藏必填不拦提交；提交载荷不含隐藏字段键（断言 fetch body）", async () => {
+    const backend = install();
+    render(
+      <FormRuntime
+        spec={LINKAGE_SPEC}
+        endpoint={{ kind: "console", datasetId: "ds-form-1" }}
+      />,
+    );
+
+    fill("city", "沪");
+    selectType("标准"); // 明细隐藏（必填不查、键不落）
+    fireEvent.click(screen.getByTestId("form-submit"));
+
+    expect(await screen.findByTestId("form-success")).toBeTruthy();
+    const post = backend.calls.find(
+      (c) =>
+        c.method === "POST" &&
+        c.url.pathname === "/api/v1/datasets/ds-form-1/corrections",
+    );
+    expect(post?.body).toEqual({
+      op: "insert",
+      values: { city: "沪", type: "标准" }, // detail 键不落
+    });
+    expect(JSON.stringify(post?.body).includes("detail")).toBe(false);
+  });
 });
