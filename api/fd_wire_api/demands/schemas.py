@@ -18,6 +18,7 @@ from pydantic import (
 )
 
 from .orchestration_sync import orchestration_customer_view
+from .source_policy import BLOCKED_SOURCE_REASON, blocked_source_domain
 from .statemachine import DemandStatus
 
 #: 联系邮箱的最小形态校验（非空 + 单 @ + 两侧各有非空白字符；不追求 RFC 全集）。
@@ -29,7 +30,9 @@ def _public_source_url(value: str) -> str:
 
     - 仅 http:// 或 https://（大小写不敏感）；
     - 不得内嵌账密（netloc 含 ``@`` 的 user:pass@host 形态即拒——工单面
-      只承接公开数据，凭据形态地址直接挡在提交口）。
+      只承接公开数据，凭据形态地址直接挡在提交口）；
+    - 平台禁爬清单（wire-crawl-source-blocklist）：淘宝/拼多多系域名
+      （含子域）即拒——用户定规 2026-10-12，代爬服务面按平台级禁区硬拒。
 
     挂在列表元素上校验：第 i 条非法 → 错误 loc 带 (source_urls, i) 索引定位。
     """
@@ -49,6 +52,9 @@ def _public_source_url(value: str) -> str:
         raise ValueError(
             "数据源地址不得内嵌账号密码（user:pass@host 形态）——仅承接公开数据"
         )
+    blocked = blocked_source_domain(stripped)
+    if blocked is not None:
+        raise ValueError(f"数据源命中禁爬平台 {blocked}——{BLOCKED_SOURCE_REASON}")
     return stripped
 
 

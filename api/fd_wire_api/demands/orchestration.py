@@ -34,6 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .models import Demand
+from .source_policy import BLOCKED_SOURCE_REASON, blocked_source_domain
 from .statemachine import DemandStatus
 
 # ---------------------------------------------------------------- 常量（契约冻结）
@@ -314,6 +315,16 @@ def export_workorder_service(
             "生成工单必须来自带合法源地址的新单；存量单请人工补源地址"
             "或线下处理",
         )
+    # 禁爬源复检（wire-crawl-source-blocklist）：存量单可能绕过提交口
+    # （历史遗留/直接入库）——出单闸是最后一道，命中即拒、零留档。
+    for url in source_urls:
+        blocked = blocked_source_domain(url)
+        if blocked is not None:
+            raise WorkorderExportError(
+                409,
+                f"需求单 {demand.code} 的源地址命中禁爬平台 {blocked}"
+                f"——{BLOCKED_SOURCE_REASON}，不能出单（请与客户沟通撤单或换源）",
+            )
     try:
         slug = derive_slug(source_urls[0], override=slug_override)
     except ValueError as exc:
