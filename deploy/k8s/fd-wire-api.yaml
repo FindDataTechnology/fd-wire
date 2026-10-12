@@ -42,8 +42,8 @@ spec:
       containers:
         - name: api
           # 不可变标签纪律（mcp-service-deploy spec：禁 latest/浮动标签）。
-          # 出片 tag=law-ai-official 快照仓 sha（fd-wire-images ce6aea2 = 真 68a20d5（scope 交付接线：重试端点+管理台按钮+SCOPE_API_BASE/TOKEN））。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-ce6aea2
+          # 出片 tag=law-ai-official 快照仓 sha（fd-wire-images dd11d72 = 真 f688ab0（表单联动 v1+：多条件组合+选项联动））。
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-dd11d72
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -73,11 +73,12 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: database_url }
-            # datasets 模块库：cheap-3 wire-postgres PG（2026-10-11 凌晨生产
-            # 实迁 82ccf0c；此前 sqlite-on-PVC 形态已归档 *.pre-pg-archive，
-            # 回退配方见 deploy/wire-postgres/CUTOVER-2026-10-11.md）
+            # datasets 模块库：cheap-3 wire-postgres PG（2026-10-11 实迁；
+            # 2026-10-12 密码轮换后入 secret——清单不再携带明文凭据，
+            # 配方见 deploy/README「wire 库凭据轮换配方」）
             - name: FD_WIRE_DATASETS_DATABASE_URL
-              value: postgresql+psycopg://wire:df56635229d61a5b26b5ae24af19beefcccde49b5228cdee@100.64.0.12:5433/wire_datasets
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: datasets_database_url }
             # 上传原件暂存目录：同一 PVC（原件哈希登记后文件即证据，不在 /tmp）
             - name: FD_WIRE_DATASETS_UPLOAD_DIR
               value: /var/lib/fd-wire/uploads
