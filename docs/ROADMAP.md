@@ -118,16 +118,21 @@ panel 爬虫平台 = **客户获取信息的桥梁** + **自身项目目标信�
 今天都已在役；缺的是把桥的中间段自动化。
 
 - 现状：桥两端已通——wire 需求单（submitted → in_progress → delivered，另 rejected
-  终态必附理由）交付时自动开私有 scope（失败可重试）；fleet + 万星生成/自愈双链 +
-  指标注册（verified 双闸）+ conformance 门全部在役。中间"需求→爬取"仍是人工批处理。
+  终态必附理由）交付时自动开私有 scope（失败可重试；**wire-demand-visibility 已补
+  管理台路径同语义**——此前管理台流转漏钩子，运营主路径交付不开 scope，真缺陷已修）；
+  fleet + 万星生成/自愈双链 + 指标注册（verified 双闸）+ conformance 门全部在役。
+  **中间段编排已在役**（工单 YAML→舰队拉取→萬星生成→PR→回流，生产实证）——纯手动
+  的只剩「触发出单」这一步（等合规门）。运营侧进度面（七阶段时间线+gate+交付状态）
+  与客户侧交付就绪面已上产。
 - 目标编排：需求单 in_progress 段从人工变 agent 驱动（萬星对话即生成）+ 人工抽审。
 - **飞轮**：客户需求 → 采到的数据进共享指标目录 → 所有客户可用 → 目录越厚平台
   越值得买。每次代客采数都是对平台资产的永久投资——Bloomberg（数据壁垒）与
   Palantir（平台能力）的合体。
 - 前置规矩：①**合规审查门**——代爬有真实法务面（robots/个人数据/版权/付费源），
-  需求流程必须有合规清单+人工放行闸，接客放量前定好规则集；②商务口径——代采进
+  需求流程必须有合规清单+人工放行闸，接客放量前定好规则集（**自动触发的前置**）；
+  ②商务口径——代采进
   共享目录还是客户私有数据集（独家），影响定价与编排分叉；③客户侧进度可见性
-  （侦察中/生成中/试爬中/已入库）；④交付 SLA 预期管理。
+  （**已上产：七阶段运营面+客户四阶段时间线+交付就绪；「已入库」阶段无信号源挂远期**）；④交付 SLA 预期管理。
 
 ### 方向 D：个人信息工作台（C 端）——快速搭建
 
@@ -200,7 +205,8 @@ web。规模验证后再考虑轻量个人 cell。
 - 客户接入契约：`docs/customer-onboarding-integration.md`；凭据操作：`docs/service-credentials.md`
 - 各能力 spec：`openspec/specs/`（wire-local-connector / wire-data-plane / provenance 等）
 - 候选 change 名（未立项）：`wire-dedicated-postgres`（方向 A）、产物转正与看板
-  （方向 B）、`demand-to-crawl-orchestration`（方向 C）、`wire-personal-workbench`
+  （方向 B）、`demand-to-crawl-orchestration`（方向 C，**中间段已上产**——剩自动
+  触发等合规门（用户件）；可见性面已由 wire-demand-visibility 落）、`wire-personal-workbench`
   （方向 D，C 端 MVP）
 
 ---

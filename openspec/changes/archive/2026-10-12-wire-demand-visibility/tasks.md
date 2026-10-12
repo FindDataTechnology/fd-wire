@@ -25,6 +25,6 @@
 ## 4. 门禁与发布
 
 - [x] 4.1 本地门禁：api pytest 全量+web vitest 全量+tsc --noEmit 0
-- [ ] 4.2 构建发布→relay→滚版（api+web 双滚）
-- [ ] 4.3 生产冒烟：管理台交付实弹（scope 触发或如实 pending）+ 双面板渲染
-- [ ] 4.4 归档+ROADMAP 方向 C 标注+记忆更新
+- [x] 4.2 构建发布→relay→滚版（api+web 双滚）
+- [x] 4.3 生产冒烟：管理台交付实弹（scope 触发或如实 pending）+ 双面板渲染
+- [x] 4.4 归档+ROADMAP 方向 C 标注+记忆更新
