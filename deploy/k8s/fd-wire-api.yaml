@@ -54,6 +54,12 @@ spec:
             # 轮询关闭（出站可达环境可开）。
             - name: WORKORDER_SYNC_ENABLED
               value: "false"
+            # 受理后自动出单补扫（wire-demand-auto-export）：in_progress 且
+            # 无出单尝试留档的单自动出单入拉取队列（缺省 60s 一轮）。
+            # slug 探测在生产走 unverified 放行（海外出站挡死），占用复检
+            # 由拉取器本地执行——与人工出单逐字同语义。
+            - name: DEMAND_AUTO_EXPORT_ENABLED
+              value: "true"
             # wire 账本数据库（平台库，外部实例；非本 pod 卷）
             - name: DATABASE_URL
               valueFrom:
