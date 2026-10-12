@@ -15,7 +15,9 @@
    ——转发既有内部 transition 端点语义（直接调 service 层，无 HTTP 自调）；
    迁入 delivered 时补调 ``maybe_auto_deliver`` 自动开客户私有 scope
    （wire-demand-visibility：与内部端点逐字同语义，scope 失败只落
-   pending、绝不打断迁移）。
+   pending、绝不打断迁移）；POST ``/demands/{id}/scope-retry``——对
+   delivered+pending 单重试开 scope（wire-scope-delivery-live：与内部
+   端点同语义，前置闸 409 如实回显）。
 5. **目录治理**：GET ``/catalog/pending``（读镜像表）、POST
    ``/catalog/{indicator_id}/verify-note``——不改镜像数据（仅同步管道可写），
    审核意见只记 admin 自己的 catalog_review_notes（append-only）。
@@ -54,7 +56,7 @@ from ..demands.db import get_db as get_demands_db
 from ..demands.models import Demand
 from ..demands.orchestration import WorkorderExportError, WorkorderIn
 from ..demands.orchestration import export_workorder_service
-from ..demands.schemas import DemandInternalOut, TransitionIn
+from ..demands.schemas import DemandInternalOut, ScopeRetryIn, TransitionIn
 from ..demands.statemachine import DemandStatus, TransitionError
 from ..metering.db import to_utc
 from ..metering.models import MeteringRecord
@@ -429,6 +431,41 @@ def transition_demand(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if payload.target_status is DemandStatus.delivered:
         demand = delivery_service.maybe_auto_deliver(db, demand, scope_client=scope_client)
+    return DemandInternalOut.model_validate(demand)
+
+
+@router.post("/demands/{demand_id}/scope-retry", response_model=DemandInternalOut)
+def retry_demand_scope(
+    demand_id: int,
+    payload: ScopeRetryIn | None = None,
+    db: Session = Depends(get_demands_db),
+    scope_client: ScopeClient | None = Depends(scope_client_dep),
+) -> DemandInternalOut:
+    """「重试开 scope」运营动作（wire-scope-delivery-live）。
+
+    与内部端点 ``POST /internal/demands/{id}/scope-retry`` 逐字同语义：
+    仅 delivered 且 scope_status=pending 受理（共用 ``scope_retry_conflict``
+    前置闸，409 如实回显当前状态/scope 态、零副作用），复用
+    ``deliver_demand`` 的重试分支只重试建私有 scope——成功 scope_status=ok
+    且 scope_name 落档，失败照旧留档 pending（诚实降级），响应即最新单态。
+    """
+    try:
+        demand = demands_service.get_demand(db, demand_id)
+    except demands_service.DemandNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    conflict = delivery_service.scope_retry_conflict(demand)
+    if conflict is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=conflict)
+    body = payload or ScopeRetryIn()
+    demand = delivery_service.deliver_demand(
+        db,
+        demand,
+        scope_client=scope_client,
+        by=body.by,
+        note=body.note,
+        indicators=body.indicators,
+        source_dbs=body.source_dbs,
+    )
     return DemandInternalOut.model_validate(demand)
 
 

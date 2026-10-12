@@ -1770,6 +1770,14 @@ const en: Translation = {
           none: "Delivery not initiated",
         },
       },
+      // "Retry scope creation" (wire-scope-delivery-live task 2.1): operator
+      // catch-up action for delivered+pending demands — success shows the
+      // scope name, failure shows the latest recorded error as-is.
+      scopeRetry: {
+        submit: "Retry scope creation",
+        errorDefault:
+          "Retry failed — scope still not created; you can retry again later.",
+      },
     },
     catalog: {
       title: "Catalog governance",

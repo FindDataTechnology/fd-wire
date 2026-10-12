@@ -329,3 +329,17 @@ class PublishAuthorizationIn(BaseModel):
     conditions: str | None = None
     by: str | None = Field(default=None, max_length=128)
     indicators: list[str] | None = None
+
+
+class ScopeRetryIn(BaseModel):
+    """scope 重试请求（wire-scope-delivery-live）：对 delivered+pending 单
+    只重试建客户私有 scope（不迁移状态）。
+
+    全字段可选（空 body 可受理）；indicators 缺省用需求单的
+    linked_indicators，source_dbs 可选（scope 的 source 维 allow-list）。
+    """
+
+    by: str = "operator"
+    note: str | None = None
+    indicators: list[str] | None = None
+    source_dbs: list[str] | None = None

@@ -239,3 +239,22 @@ sha256sum fd-wire-connector-linux-amd64   # 对照 manifest.json 的 platforms[]
 - **重试**：5xx 与网络错误指数退避（默认 4 次尝试）；4xx 立即失败并带原因（key 吊销 401、漂移 409、配额 429 均属此类，不做无谓重试）。
 - **schema 漂移**：加列自动跟随；缺列/改类型由控制台暂停该数据集（`paused_drift`）等人工 `resume`，期间数据集保持最后一次有效快照。
 - **安全**：只发起出站 HTTPS——唯一例外是本机回环 `http://127.0.0.1`（本地联调用），其余明文地址启动即拒；配置文件权限 0600，过宽时启动打印告警。轮换 = 控制台吊销连接器后重新配对。
+
+## scope 交付接线（wire-scope-delivery-live）
+
+交付私有 scope 的上下游配置对与运维口径：
+
+- **上游**：fd-prod 内网 `http://fd-open-data-mcp:8300`（REST scope 面，见
+  fd-open-data-mcp 仓 change `scope-rest-api`）。令牌两侧同值：
+  - fd-mcp-env `SCOPE_API_TOKEN`（envFrom 自动注入 mcp 容器）；
+  - fd-wire-env `scope_api_token`（wire 清单 secretKeyRef 映射为同名 env）。
+  轮换 = 两 secret 同批改值 → 滚动两 Deployment。
+- **wire 配置**：`SCOPE_API_BASE`（清单字面值，内网地址非敏感）+
+  `SCOPE_API_TOKEN`（secret）。未配置时交付与重试走既有诚实降级
+  （scope_status=pending + delivery_events 留档「scope API 未配置」）。
+- **重试**：`POST /internal/demands/{id}/scope-retry`（内网令牌；管理台同
+  语义端点+「重试开 scope」按钮）。仅 delivered+pending 受理；可带
+  `{indicators, source_dbs}` 覆盖（缺省 linked_indicators）。空指标单重试
+  会被上游空规则拒（invalid_scope）——如实留档，属预期。
+- **演练记录位**：交付即 scope ok 的全链证据记入 change
+  `wire-scope-delivery-live` 归档说明（2026-10-12 首次点亮）。

@@ -11,6 +11,9 @@
 内部侧（``X-Internal-Token`` 与 ``FD_WIRE_INTERNAL_TOKEN`` 比对）：
 - ``POST /internal/demands/{id}/transition``  目标状态+note（三态白名单裁决，
                                       非法 409；delivered 后自动建私有 scope）
+- ``POST /internal/demands/{id}/scope-retry`` 对 delivered+pending 单重试开
+                                      私有 scope（不迁移状态；前置闸 409
+                                      如实回显，其余状态零副作用）
 - ``POST /internal/demands/{id}/evaluation``  旧八态工作流遗留：对现行状态
                                       一律 409（评估字段随旧单保留可查）
 - ``POST /internal/demands/{id}/quote``       旧八态工作流遗留：报价不进三态
@@ -54,6 +57,7 @@ from .schemas import (
     DemandOut,
     EvaluationIn,
     QuoteIn,
+    ScopeRetryIn,
     TransitionIn,
 )
 from .statemachine import DemandStatus, TransitionError
@@ -167,6 +171,42 @@ def transition_demand(
         raise _conflict(exc) from exc
     if payload.target_status is DemandStatus.delivered:
         demand = delivery_service.maybe_auto_deliver(db, demand, scope_client=scope_client)
+    return DemandInternalOut.model_validate(demand)
+
+
+@router.post(
+    "/internal/demands/{demand_id}/scope-retry",
+    response_model=DemandInternalOut,
+    dependencies=[Depends(_require_internal)],
+)
+def retry_demand_scope(
+    demand_id: int,
+    payload: ScopeRetryIn | None = None,
+    db: Session = Depends(get_db),
+    scope_client: ScopeClient | None = Depends(scope_client_dep),
+) -> DemandInternalOut:
+    """对 delivered+pending 单重试开客户私有 scope（wire-scope-delivery-live）。
+
+    前置闸先行（端点自查，比 service 层 TransitionError 更准的 409 文案）：
+    非 delivered / scope 非 pending 一律 409 如实回显、零副作用；通过后复用
+    ``deliver_demand`` 的重试分支——只重试 ``_create_customer_scope``（建
+    scope + 逐指标 grant），不迁移状态，其 ScopeClientError 已被内部消化
+    留档（scope_status 保持 pending），响应即最新单态——绝不虚构成功。
+    """
+    demand = _demand_or_404(db, demand_id)
+    conflict = delivery_service.scope_retry_conflict(demand)
+    if conflict is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=conflict)
+    body = payload or ScopeRetryIn()
+    demand = delivery_service.deliver_demand(
+        db,
+        demand,
+        scope_client=scope_client,
+        by=body.by,
+        note=body.note,
+        indicators=body.indicators,
+        source_dbs=body.source_dbs,
+    )
     return DemandInternalOut.model_validate(demand)
 
 

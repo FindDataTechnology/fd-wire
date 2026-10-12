@@ -8,6 +8,7 @@ import { AdminErrorBox, AdminStates } from "./AdminLayout";
 import {
   exportDemandWorkorder,
   fetchDemands,
+  retryDemandScope,
   transitionDemand,
   type AdminDemand,
   type AdminWorkorderResult,
@@ -376,9 +377,45 @@ function DispatchPanel({
  * workorder_exported 带自动徽标；auto_export_failed 渲染失败原因，且
  * 有任一尝试留档（含失败）即不再显示「尚未出单」占位。
  * gate_result 不重复渲染（gate 摘要覆盖）；未知事件类型静默跳过不崩溃。
+ * scope 重试（wire-scope-delivery-live 任务 2.1）：delivered+pending 单在
+ * scope 状态行旁呈现「重试开 scope」——结果如实（成功呈现 scope 名，
+ * 失败呈现最新 scope_create_failed 文案），非 pending 态不渲染按钮。
  */
 function ProgressSection({ demand }: { demand: AdminDemand }) {
   const { t, i18n } = useTranslation();
+  const [scopeRetryBusy, setScopeRetryBusy] = useState(false);
+  // 最新一次重试的响应（比列表快照新——成功后 scope 行即时反映，不必整页刷新）
+  const [scopeRetryResult, setScopeRetryResult] = useState<AdminDemand | null>(
+    null,
+  );
+  const [scopeRetryError, setScopeRetryError] = useState<string | null>(null);
+
+  const retryScope = async () => {
+    setScopeRetryBusy(true);
+    setScopeRetryError(null);
+    try {
+      const updated = await retryDemandScope(demand.id);
+      setScopeRetryResult(updated);
+      if (updated.scope_status !== "ok") {
+        // 200 但 scope 仍未建立（诚实降级）：取最新 scope_create_failed 的 error
+        const failed = [...updated.delivery_events]
+          .reverse()
+          .find((event) => event.type === "scope_create_failed");
+        setScopeRetryError(
+          typeof failed?.error === "string"
+            ? failed.error
+            : t("admin.demands.scopeRetry.errorDefault"),
+        );
+      }
+    } catch (err) {
+      const apiErr = err as { detail?: string; message: string };
+      setScopeRetryError(
+        apiErr.detail ?? t("admin.demands.scopeRetry.errorDefault"),
+      );
+    } finally {
+      setScopeRetryBusy(false);
+    }
+  };
 
   // 阶段事件按序过滤；其余（gate_result 等）不进时间线。
   const entries = demand.pipeline_events.flatMap((event) => {
@@ -393,7 +430,8 @@ function ProgressSection({ demand }: { demand: AdminDemand }) {
     entries.length > 0 ||
     demand.pipeline_events.some((event) => event.type === "auto_export_failed");
 
-  const scopeStatus = demand.scope_status;
+  const scopeStatus = scopeRetryResult?.scope_status ?? demand.scope_status;
+  const scopeName = scopeRetryResult?.scope_name ?? demand.scope_name;
   const scopeKey =
     scopeStatus === "ok"
       ? "ready"
@@ -525,12 +563,38 @@ function ProgressSection({ demand }: { demand: AdminDemand }) {
         }`}
       >
         {t(`admin.demands.progress.scope.${scopeKey}`)}
-        {scopeKey === "ready" && demand.scope_name && (
-          <span className="ml-1 font-mono text-[11px] text-slate-500">
-            {demand.scope_name}
+        {scopeKey === "ready" && scopeName && (
+          <span
+            data-testid="admin-demand-scope-name"
+            className="ml-1 font-mono text-[11px] text-slate-500"
+          >
+            {scopeName}
           </span>
         )}
       </p>
+      {demand.status === "delivered" && scopeStatus === "pending" && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            data-testid="admin-demand-scope-retry"
+            disabled={scopeRetryBusy}
+            onClick={() => void retryScope()}
+            className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {scopeRetryBusy
+              ? t("admin.common.working")
+              : t("admin.demands.scopeRetry.submit")}
+          </button>
+          {scopeRetryError && (
+            <span
+              data-testid="admin-demand-scope-retry-error"
+              className="text-[11px] text-rose-600"
+            >
+              {scopeRetryError}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

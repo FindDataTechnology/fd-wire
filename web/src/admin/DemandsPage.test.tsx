@@ -767,6 +767,157 @@ describe("DemandsPage 编排进度面（wire-demand-visibility 任务 2.2）", (
   });
 });
 
+describe("DemandsPage scope 重试（wire-scope-delivery-live 任务 2.1）", () => {
+  it("按钮仅 delivered+pending 渲染：delivered+ok / in_progress / 未发起均无", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [
+          demand({
+            id: 3,
+            status: "delivered",
+            scope_status: "pending",
+            delivery_events: [
+              { type: "scope_create_failed", error: "scope API 未配置（SCOPE_API_BASE 为空）" },
+            ],
+          }),
+          demand({
+            id: 4,
+            status: "delivered",
+            scope_status: "ok",
+            scope_name: "demand-DE-20261004-04",
+          }),
+          demand({ id: 2, status: "in_progress" }),
+        ],
+        bearerToken: TOKEN,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    // 进度面逐单展开（单开互斥）：仅 delivered+pending 的第 3 单出现重试按钮
+    expandProgress(3);
+    const buttons = screen.getAllByTestId("admin-demand-scope-retry");
+    expect(buttons.length).toBe(1);
+    const item = screen
+      .getAllByTestId("admin-demand-item")
+      .find((el) => el.textContent!.includes("DE-20261004-03"))!;
+    expect(item.contains(buttons[0]!)).toBe(true);
+    expect(screen.queryByTestId("admin-demand-scope-retry-error")).toBeNull();
+
+    expandProgress(3); // 收起，换下一单
+    expandProgress(4);
+    // delivered+ok：scope 名照常呈现（无按钮、无重试错误位）
+    expect(screen.queryByTestId("admin-demand-scope-retry")).toBeNull();
+    expect(screen.getAllByTestId("admin-demand-scope-name").length).toBe(1);
+
+    expandProgress(4);
+    expandProgress(2);
+    // in_progress（scope 未发起）：无按钮
+    expect(screen.queryByTestId("admin-demand-scope-retry")).toBeNull();
+  });
+
+  it("点击成功：POST 形状 + scope 名出现 + scope 行转 ok + 按钮退场", async () => {
+    const backend = installAdminBackend({
+      demands: [
+        demand({
+          id: 3,
+          status: "delivered",
+          scope_status: "pending",
+        }),
+      ],
+      bearerToken: TOKEN,
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    expandProgress(3);
+    expect(
+      screen.getByTestId("admin-demand-scope").getAttribute("data-scope-status"),
+    ).toBe("pending");
+    fireEvent.click(screen.getByTestId("admin-demand-scope-retry"));
+
+    // 成功：scope 名行内呈现，scope 行如实转 ok
+    const name = await screen.findByTestId("admin-demand-scope-name");
+    expect(name.textContent).toContain("demand-DE-20261004-03");
+    expect(
+      screen.getByTestId("admin-demand-scope").getAttribute("data-scope-status"),
+    ).toBe("ok");
+    expect(screen.getByTestId("admin-demand-scope").textContent).toContain(
+      "私有数据面已就绪",
+    );
+    // 不再 pending：按钮退场，无错误文案
+    expect(screen.queryByTestId("admin-demand-scope-retry")).toBeNull();
+    expect(screen.queryByTestId("admin-demand-scope-retry-error")).toBeNull();
+
+    // 调用形状：POST 管理端点、无请求体、登录 Bearer
+    const call = backend.calls
+      .filter((c) => c.method === "POST")
+      .find((c) => c.url.pathname === "/internal/admin/demands/3/scope-retry")!;
+    expect(call).toBeDefined();
+    expect(call.body).toBeUndefined();
+    expect(call.headers["authorization"]).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("点击失败（200 仍 pending）：最新 scope_create_failed 文案出现，按钮仍在可再试", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [
+          demand({
+            id: 3,
+            status: "delivered",
+            scope_status: "pending",
+          }),
+        ],
+        bearerToken: TOKEN,
+        scopeRetryOutcome: "fail",
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    expandProgress(3);
+    fireEvent.click(screen.getByTestId("admin-demand-scope-retry"));
+
+    const error = await screen.findByTestId("admin-demand-scope-retry-error");
+    expect(error.textContent).toContain("scope API 未配置");
+    // 如实失败：scope 行仍 pending、按钮仍在（可再次重试）、无 scope 名假象
+    expect(
+      screen.getByTestId("admin-demand-scope").getAttribute("data-scope-status"),
+    ).toBe("pending");
+    expect(screen.getByTestId("admin-demand-scope-retry")).toBeDefined();
+    expect(screen.queryByTestId("admin-demand-scope-name")).toBeNull();
+  });
+
+  it("点击 409：服务端 detail 如实呈现（按钮保留）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [
+          demand({
+            id: 3,
+            status: "delivered",
+            scope_status: "pending",
+          }),
+        ],
+        bearerToken: TOKEN,
+        failScopeRetryStatus: 409,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    expandProgress(3);
+    fireEvent.click(screen.getByTestId("admin-demand-scope-retry"));
+
+    const error = await screen.findByTestId("admin-demand-scope-retry-error");
+    expect(error.textContent).toContain("scope 已交付或无 pending 留档");
+    expect(screen.getByTestId("admin-demand-scope-retry")).toBeDefined();
+  });
+});
+
 describe("demandsMachine 镜像（wire-ux-consolidation 任务 3.5）", () => {
   it("状态全集 = 三态 + rejected（旧五态不在全集）", () => {
     expect(ALL_DEMAND_STATUSES).toEqual([

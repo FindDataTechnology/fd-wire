@@ -1682,6 +1682,12 @@ const zh = {
           none: "交付未发起",
         },
       },
+      // 「重试开 scope」（wire-scope-delivery-live 任务 2.1）：delivered+pending
+      // 单的运营补课动作——成功呈现 scope 名，失败如实呈现最新留档文案。
+      scopeRetry: {
+        submit: "重试开 scope",
+        errorDefault: "重试失败——scope 仍未建立，稍后可再次重试。",
+      },
     },
     catalog: {
       title: "目录治理",

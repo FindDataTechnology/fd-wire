@@ -350,6 +350,18 @@ export function exportDemandWorkorder(
   });
 }
 
+/**
+ * 「重试开 scope」（wire-scope-delivery-live）：对 delivered+pending 单重试
+ * 建客户私有 scope（不迁移状态）。响应即最新单态——scope 面失败仍 200 且
+ * scope_status=pending（留档 scope_create_failed），绝不虚构成功；非法状态
+ * 409 由 AdminApiError.detail 如实上抛。
+ */
+export function retryDemandScope(demandId: number): Promise<AdminDemand> {
+  return requestJson(`/internal/admin/demands/${demandId}/scope-retry`, {
+    method: "POST",
+  });
+}
+
 // ---------------------------------------------------------------------------
 // 目录治理
 // ---------------------------------------------------------------------------

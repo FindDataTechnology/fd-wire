@@ -42,6 +42,20 @@ def scope_name_for(demand: Demand) -> str:
     return f"demand-{demand.code}"
 
 
+def scope_retry_conflict(demand: Demand) -> str | None:
+    """重试端点前置闸：非受理态 → 409 文案（``None``=放行）。
+
+    比 service 层 TransitionError 更准的口径——分别如实回显当前状态与
+    scope 状态；内部端点与管理台端点共用本函数（同语义 409 文案唯一来源）。
+    放行后的状态闸仍由 ``deliver_demand`` 的 delivered+pending 分支兜底。
+    """
+    if DemandStatus(demand.status) is not DemandStatus.delivered:
+        return f"仅已交付单可重试开 scope（当前 {demand.status}）"
+    if demand.scope_status != SCOPE_STATUS_PENDING:
+        return f"scope 已交付或无 pending 留档（当前 {demand.scope_status or 'none'}）"
+    return None
+
+
 def scope_summary_for(demand: Demand) -> str:
     """scope 摘要（description）：需求编码 + 标题，交付可追溯。"""
     return f"需求单 {demand.code}《{demand.title}》客户私有交付 scope"

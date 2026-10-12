@@ -79,6 +79,11 @@ export interface AdminBackendOptions {
   workorderResult?: AdminWorkorderResult;
   /** 强制 workorder 端点返回该状态（如 422 无源地址回显测试）。 */
   failWorkorderStatus?: number;
+  /** 「重试开 scope」结果（wire-scope-delivery-live）：ok（缺省，建 scope
+   *  成功）/ fail（上游仍不可用——200 但仍 pending，留档 scope_create_failed）。 */
+  scopeRetryOutcome?: "ok" | "fail";
+  /** 强制 scope-retry 端点返回该状态（如 409 门禁文案回显测试）。 */
+  failScopeRetryStatus?: number;
   customers?: AdminCustomer[];
   demands?: AdminDemand[];
   ledger?: LedgerEntry[];
@@ -322,6 +327,66 @@ export function installAdminBackend(options: AdminBackendOptions = {}): {
       return Promise.resolve(
         jsonResponse(options.workorderResult ?? DEFAULT_WORKORDER_RESULT),
       );
+    }
+
+    match = path.match(/^\/internal\/admin\/demands\/(\d+)\/scope-retry$/);
+    if (match && method === "POST") {
+      const id = Number(match[1]);
+      const demand = demands.find((d) => d.id === id);
+      if (!demand) {
+        return Promise.resolve(jsonResponse({ detail: `demand ${id} 不存在` }, 404));
+      }
+      // 前置闸镜像（api 仓 scope_retry_conflict）：409 文案逐字同语义
+      if (demand.status !== "delivered") {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `仅已交付单可重试开 scope（当前 ${demand.status}）` },
+            409,
+          ),
+        );
+      }
+      if (demand.scope_status !== "pending") {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail: `scope 已交付或无 pending 留档（当前 ${demand.scope_status ?? "none"}）`,
+            },
+            409,
+          ),
+        );
+      }
+      if (options.failScopeRetryStatus) {
+        // 强制失败（如 409 回显测试）：取并发态变化下的可信门禁文案
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `scope 已交付或无 pending 留档（当前 ${demand.scope_status ?? "none"}）` },
+            options.failScopeRetryStatus,
+          ),
+        );
+      }
+      if (options.scopeRetryOutcome === "fail") {
+        // 诚实降级：200 + 仍 pending，最新留档 scope_create_failed
+        demand.delivery_events = [
+          ...demand.delivery_events,
+          {
+            type: "scope_create_failed",
+            at: "2026-10-12T10:00:00+00:00",
+            error: "scope API 未配置（SCOPE_API_BASE 为空），私有 scope 交付挂起待重试",
+          },
+        ];
+        return Promise.resolve(jsonResponse(demand));
+      }
+      demand.scope_status = "ok";
+      demand.scope_name = `demand-${demand.code}`;
+      demand.delivery_events = [
+        ...demand.delivery_events,
+        {
+          type: "scope_created",
+          at: "2026-10-12T10:00:00+00:00",
+          scope_name: demand.scope_name,
+        },
+      ];
+      return Promise.resolve(jsonResponse(demand));
     }
 
     // -- 目录治理 ------------------------------------------------------------

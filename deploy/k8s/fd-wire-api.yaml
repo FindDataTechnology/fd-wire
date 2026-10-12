@@ -60,6 +60,15 @@ spec:
             # 由拉取器本地执行——与人工出单逐字同语义。
             - name: DEMAND_AUTO_EXPORT_ENABLED
               value: "true"
+            # 交付私有 scope 接线（wire-scope-delivery-live）：fd-prod 内网
+            # fd-open-data-mcp 的 REST scope 面（scope-rest-api）；令牌与
+            # fd-mcp-env 的 SCOPE_API_TOKEN 同值（fd-wire-env/scope_api_token）。
+            # 未配置时交付与重试照既有诚实降级（pending 留档）。
+            - name: SCOPE_API_BASE
+              value: http://fd-open-data-mcp:8300
+            - name: SCOPE_API_TOKEN
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: scope_api_token }
             # wire 账本数据库（平台库，外部实例；非本 pod 卷）
             - name: DATABASE_URL
               valueFrom:
