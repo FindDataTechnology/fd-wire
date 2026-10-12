@@ -10,9 +10,9 @@
 - [x] 4. deploy fd-wire-api.yaml 三明文 env + WANXING_CALLER_KEY
   secretKeyRef；deploy/README 增「萬星直连调度」节（env 表+冒烟配方）
 - [x] 5. 门禁：api pytest 全绿 + web vitest 全绿 + web build（主代理）
-- [ ] 6. 发布：双推 → 镜像链（clone/rsync/GHA/hkccr/relay/ccr）→
+- [x] 6. 发布：双推 → 镜像链（clone/rsync/GHA/hkccr/relay/ccr）→
   manifest bump + provenance 注 → ArgoCD hard-refresh → ready/health
-- [ ] 7. 生产冒烟：内部探针（未配置路径不触发）→ drill 需求单实弹直连
+- [x] 7. 生产冒烟：内部探针（未配置路径不触发）→ drill 需求单实弹直连
   （真 A2A 调用、事件落库验证、拉取队列空验证）→ drill 清理
 - [ ] 8. 归档：validate --strict → archive → ROADMAP 方向 C 勾注 →
   memory 更新

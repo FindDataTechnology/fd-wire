@@ -299,6 +299,18 @@ sha256sum fd-wire-connector-linux-amd64   # 对照 manifest.json 的 platforms[]
   # 502 = 万星侧调用失败（wanxing_dispatch_failed 事件全文留档，人工推送降级）
   ```
 
+- **实弹口径（2026-10-12 首次执行 drill DE-20261012-99）**：
+  - 409 `TURN_IN_FLIGHT` = 同 caller+agent 已有 turn 在跑（萬星 facade
+    串行单 turn）——前一次发送还在处理，不是配置错；等 turn 结束重发
+    （同工单同幂等键）即得回执。
+  - 真实生成单回执实测 ~109s（agent 会真建单元并开 PR）；读超时
+    `WANXING_A2A_TIMEOUT` 首版 120s 不够（首弹即超时 502 如实留档），
+    已改 **300s**——调大须同步评估网关/代理空闲超时。
+  - 验证向量两假（wire-postgres 轮换时同踩）：容器内 `psql -h 127.0.0.1`
+    走 **trust 免密**（任何口令都过）；容器 → 宿主发布口
+    `100.64.0.12:5433` 是**断 hairpin**（任何口令都拒）。口令生死判别
+    只能从 pod 侧（真 TCP+password 路径）做新旧对照。
+
   控制台按钮路径：DemandsPage（需求单）in_progress 单 →「转生成工单」区旁
   「萬星直连」按钮（testid `admin-demand-wanxing-dispatch`）；成功面板
   （`admin-wanxing-result`）出回执摘要，失败面板（`admin-wanxing-error`）
