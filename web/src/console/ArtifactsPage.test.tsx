@@ -6,8 +6,12 @@
 // wire-alert-evaluation 任务 5：alert_rule 行状态徽标四态 / 详情区告警事件
 // 列表（刷新）/ 试运行（成功与失败如实）/ 非 alert_rule 行零变化 / states
 // 拉取失败静默降级 + api client 翻译层三条。
+// wire-personal-preferences：dashboard 行置顶/取消置顶（PUT 偏好 + 「默认」
+// 徽标即时移动）、422 行内红字（徽标不动）、initialDashboardId 挂载即展开
+//（无该 prop 的重挂载不展开）。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import "../i18n";
 import i18n from "../i18n";
 import { ArtifactsPage } from "./ArtifactsPage";
@@ -1491,5 +1495,148 @@ describe("api client 翻译层（wire-alert-evaluation：snake→camel + 信封�
     expect(err).toBeInstanceOf(ConsoleApiError);
     expect((err as ConsoleApiError).status).toBe(422);
     expect((err as ConsoleApiError).detail).toContain("threshold 必须 ≥ 0");
+  });
+});
+
+describe("ArtifactsPage（默认看板置顶：wire-personal-preferences）", () => {
+  /** 容器替身：持有置顶态、onPinnedChange 即更新（模拟 ConsoleView 的
+   *  偏好态回写——徽标随 PUT 成功即时移动）。 */
+  function PinHarness(props: { initialDashboardId?: number | null }) {
+    const [pinned, setPinned] = useState<number | null>(null);
+    return (
+      <ArtifactsPage
+        pinnedDashboardId={pinned}
+        onPinnedChange={setPinned}
+        initialDashboardId={props.initialDashboardId ?? null}
+      />
+    );
+  }
+
+  /** 在既有种子（11 dashboard / 12 alert / 13 refresh）上追加：14 已发布
+   *  看板（可置顶）+ 15 已归档看板（422 用例）。 */
+  const installPinnable = () => {
+    const backend = install();
+    backend.addLifecycleArtifact({
+      id: 14,
+      kind: "dashboard",
+      title: "煤价看板",
+      status: "published",
+      version: 2,
+      origin_conversation_id: null,
+      spec: { title: "煤价看板", spec: { title: "煤价看板", panels: [] } },
+      created_at: "2026-10-09T12:00:00",
+      updated_at: "2026-10-10T12:00:00",
+    });
+    backend.addLifecycleArtifact({
+      id: 15,
+      kind: "dashboard",
+      title: "旧看板",
+      status: "archived",
+      version: 1,
+      origin_conversation_id: null,
+      spec: { title: "旧看板", spec: { title: "旧看板", panels: [] } },
+      created_at: "2026-10-09T13:00:00",
+      updated_at: "2026-10-10T13:00:00",
+    });
+    return backend;
+  };
+
+  const preferencePuts = (
+    backend: ReturnType<typeof installConsoleBackend>,
+  ) =>
+    backend.calls.filter(
+      (c) =>
+        c.url.pathname === "/api/console/me/preferences" && c.method === "PUT",
+    );
+
+  it("置顶/改置/取消：PUT pinned_dashboard_id 逐次写入，「默认」徽标即时移动", async () => {
+    const backend = installPinnable();
+    render(<PinHarness />);
+    await screen.findAllByTestId("artifact-item");
+
+    // 初始未置顶：无徽标，三块看板行各带「设为默认看板」。
+    expect(screen.queryByTestId("artifact-dashboard-default")).toBeNull();
+    expect(within(rowOf(11)).getByTestId("artifact-dashboard-pin")).toBeTruthy();
+
+    // 置顶 11：PUT {pinned_dashboard_id: 11}，徽标移入该行（unpin 入场）。
+    fireEvent.click(within(rowOf(11)).getByTestId("artifact-dashboard-pin"));
+    await waitFor(() => {
+      expect(preferencePuts(backend)).toEqual([
+        expect.objectContaining({ body: { pinned_dashboard_id: 11 } }),
+      ]);
+    });
+    expect(backend.getPreferences("demo-customer").pinned_dashboard_id).toBe(11);
+    expect(
+      within(rowOf(11)).getByTestId("artifact-dashboard-default").textContent,
+    ).toBe("默认");
+    expect(
+      within(rowOf(11)).getByTestId("artifact-dashboard-unpin").textContent,
+    ).toBe("取消默认看板");
+
+    // 改置 14：徽标移动到新行。
+    fireEvent.click(within(rowOf(14)).getByTestId("artifact-dashboard-pin"));
+    await waitFor(() =>
+      expect(
+        within(rowOf(14)).getByTestId("artifact-dashboard-default"),
+      ).toBeTruthy(),
+    );
+    expect(
+      within(rowOf(11)).queryByTestId("artifact-dashboard-default"),
+    ).toBeNull();
+
+    // 取消置顶：PUT null，徽标退场、pin 按钮回来。
+    fireEvent.click(within(rowOf(14)).getByTestId("artifact-dashboard-unpin"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("artifact-dashboard-default")).toBeNull(),
+    );
+    expect(backend.getPreferences("demo-customer").pinned_dashboard_id).toBeNull();
+    expect(preferencePuts(backend).map((c) => c.body)).toEqual([
+      { pinned_dashboard_id: 11 },
+      { pinned_dashboard_id: 14 },
+      { pinned_dashboard_id: null },
+    ]);
+  });
+
+  it("422（置顶已归档看板）：行内红字如实呈现，徽标不动、假后端态不污染", async () => {
+    const backend = installPinnable();
+    render(<PinHarness />);
+    await screen.findAllByTestId("artifact-item");
+
+    // 先成功置顶 11（徽标在位）。
+    fireEvent.click(within(rowOf(11)).getByTestId("artifact-dashboard-pin"));
+    await waitFor(() =>
+      expect(
+        within(rowOf(11)).getByTestId("artifact-dashboard-default"),
+      ).toBeTruthy(),
+    );
+
+    // 置顶已归档看板 15 → 假后端 422（归档/失存/跨客户同文案）。
+    fireEvent.click(within(rowOf(15)).getByTestId("artifact-dashboard-pin"));
+    const error = await screen.findByTestId("artifact-pin-error");
+    expect(error.textContent).toContain("置顶看板不存在或不可用");
+
+    // 徽标不动（仍 11）+ 失败写不落库（PUT 三键语义：仅成功写生效）。
+    expect(
+      within(rowOf(11)).getByTestId("artifact-dashboard-default"),
+    ).toBeTruthy();
+    expect(
+      within(rowOf(15)).queryByTestId("artifact-dashboard-default"),
+    ).toBeNull();
+    expect(backend.getPreferences("demo-customer").pinned_dashboard_id).toBe(11);
+  });
+
+  it("initialDashboardId：挂载即展开该看板；无该 prop 的重挂载不自动展开", async () => {
+    installPinnable();
+    const { unmount } = render(<PinHarness initialDashboardId={11} />);
+    // 置顶落地跳转：不点「查看看板」即直接展开。
+    expect(await screen.findByTestId("dashboard-pane")).toBeTruthy();
+    unmount();
+    cleanup();
+
+    // 普通重挂载（无 initialDashboardId）：不重复自动展开。
+    installPinnable();
+    render(<PinHarness />);
+    await screen.findAllByTestId("artifact-item");
+    expect(screen.queryByTestId("dashboard-pane")).toBeNull();
   });
 });

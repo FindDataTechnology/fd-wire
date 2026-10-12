@@ -25,6 +25,9 @@ from .console import router as console_router
 # 团队空间（wire-team-spaces）：邀请兑换入队走 session（routes.py）；此处
 # 注册 owner-only 团队管理四端点（/api/console/team*）
 from .console.team import router as console_team_router
+# 个人偏好（wire-personal-preferences）：GET/PUT /api/console/me/preferences
+# （per-sub 个人 UI 指针；任意已映射身份含 viewer，见 console/preferences.py）
+from .console.preferences import router as console_preferences_router
 from .datasets import connector_router as datasets_connector_router
 from .datasets import init_datasets_db
 from .datasets import router as datasets_router
@@ -164,6 +167,9 @@ app.include_router(console_router)
 # 团队空间（wire-team-spaces）：GET /api/console/team + 邀请生成/作废 +
 # 成员撤销（owner-only；门禁在 console.auth.require_console_owner）
 app.include_router(console_team_router)
+# 个人偏好（wire-personal-preferences）：语言/落地页/置顶看板三键读写
+# （身份=任意已映射成员含 viewer；置顶校验查 ai 库，读时自愈清列）
+app.include_router(console_preferences_router)
 app.include_router(demands_router)
 # 需求单 AI 预评估与人工报价（任务 6.4）：评估独立触发 + 确认台内部视图
 app.include_router(demands_admin_router)

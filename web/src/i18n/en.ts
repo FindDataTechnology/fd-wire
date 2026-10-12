@@ -409,6 +409,13 @@ const en: Translation = {
       hint: "Copy and store it now — for security, the plaintext key is never queryable again.",
       copy: "Copy",
     },
+    // Personal preferences (wire-personal-preferences): per-row pin/unpin for
+    // dashboards + the default badge (pinned dashboard syncs across devices).
+    preferences: {
+      pin: "Set as default dashboard",
+      unpin: "Unset default dashboard",
+      defaultBadge: "Default",
+    },
     // AI build guide card (wire-ux-consolidation task 2.1): the old chat page
     // is retired; the chat tab shows a Base trial guide — no timing promises.
     chatGuide: {

@@ -22,6 +22,9 @@
 一人一队），且应用层校验不得与任何 ``Customer.logto_sub`` 冲突（DB 跨表
 约束管不到，兑换入口 resolve_member_role 已覆盖该面）。``team_events``
 append-only：只 INSERT，审计不可改写。
+
+个人偏好（wire-personal-preferences，alembic 0029）：``member_preferences``
+每 sub 一行——语言/落地页/置顶看板三类个人 UI 指针（详见类 docstring）。
 """
 
 from __future__ import annotations
@@ -121,4 +124,37 @@ class TeamEvent(ConsoleBase):
     detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
+class MemberPreference(ConsoleBase):
+    """个人偏好（wire-personal-preferences：每 Logto sub 一行）。
+
+    偏好是 **per-sub 个人 UI 指针**，不是客户业务数据：语言/落地页/置顶
+    看板跨端同步用，owner 与团队成员通用，不经溯源账本、不进 team_events。
+    键面冻结三类：
+
+    - ``ui_locale``：zh|en|null（应用层校验，DB 不设 CHECK——值域演进免迁移）；
+    - ``landing_tab``：控制台九页签 chat|artifacts|datasets|entities|packs|
+      demands|usage|keys|team|null（同上应用层校验）；
+    - ``pinned_dashboard_id``：置顶看板产物 id。**裸整型、不建外键**——
+      产物表 ``artifacts`` 挂 AiBase（ai 库），与 ConsoleBase 分库，跨 Base
+      ForeignKey 声明解析不到对方 metadata（同 CustomerMember 对
+      billing_customers 的纪律，但这里连生产 FK 都不落：产物可归档/删除，
+      死链由 GET 读时自愈清列兜底，DB 约束反而会把归档变成写失败）。
+      有效性（存在/kind=dashboard/同客户/未归档）由应用层在写入与读取
+      两侧校验（console/preferences.py）。
+
+    ``updated_at`` 每次写刷新（服务层显式赋值，不依赖 onupdate 的净变更
+    检测——同值重写也要推进）。
+    """
+
+    __tablename__ = "member_preferences"
+
+    sub: Mapped[str] = mapped_column(String(64), primary_key=True)
+    ui_locale: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    landing_tab: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    pinned_dashboard_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )

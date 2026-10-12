@@ -221,6 +221,13 @@ export interface ConsoleBackendOptions {
    *  400 查询失败——detail 如实上抛）。 */
   failAlertTestStatus?: number;
   failAlertTestDetail?: string;
+  /** 种子个人偏好（wire-personal-preferences）：键 = Bearer sub（per-sub
+   *  一人一行）；未命中 sub 的 GET 回三键全 null。 */
+  preferences?: Record<string, FakePreferencesSeed>;
+  /** 强制 GET/PUT /api/console/me/preferences 返回该状态（偏好端点故障态：
+   *  控制台启动不阻塞、置顶操作行内报错）。 */
+  failPreferencesStatus?: number;
+  failPreferencesDetail?: string;
 }
 
 /** 源包种子（wire-source-packs）：假后端按 indicators 分页切片出详情。 */
@@ -338,6 +345,14 @@ export type FakeAlertEventSeed = {
   customer_id?: string;
 };
 
+/** 个人偏好种子（wire-personal-preferences）：wire snake_case 形状直存
+ * （键面冻结，不做 camel 翻译）；缺省键 = null（未设）。 */
+export type FakePreferencesSeed = {
+  ui_locale?: "zh" | "en" | null;
+  landing_tab?: string | null;
+  pinned_dashboard_id?: number | null;
+};
+
 /** 安装假后端为 global fetch；返回调用记录与状态注入接口。 */
 export function installConsoleBackend(
   conversations: Conversation[],
@@ -371,6 +386,7 @@ export function installConsoleBackend(
     getTeamInvites: () => FakeTeamInviteRow[];
     getAlertEvents: () => FakeAlertEventSeed[];
     getAlertStates: () => Record<string, FakeAlertStateSeed>;
+    getPreferences: (sub?: string) => Required<FakePreferencesSeed>;
     addAlertEvent: (seed: FakeAlertEventSeed) => void;
   } {
   const store = new Map<number, StoredConversation>();
@@ -515,6 +531,20 @@ export function installConsoleBackend(
   for (const seed of options.alertEvents ?? []) {
     alertEventsStore.set(seed.id, { ...seed });
     nextAlertEventId = Math.max(nextAlertEventId, seed.id + 1);
+  }
+
+  // ── 个人偏好假后端状态（wire-personal-preferences）：per-sub 一人一行，
+  //    wire snake_case 三键直存；PUT 部分更新（缺键不动、null 清空）+ 422
+  //    校验（locale 枚举 / 九页签 / 置顶须为本客户未归档 dashboard——
+  //    跨客户与失存同文案不泄露）；GET 对置顶指针重验自愈（产物失存/
+  //    归档/他企 → null 且清列，与 api 侧读时自愈语义一致）。──
+  const preferencesStore = new Map<string, Required<FakePreferencesSeed>>();
+  for (const [sub, seed] of Object.entries(options.preferences ?? {})) {
+    preferencesStore.set(sub, {
+      ui_locale: seed.ui_locale ?? null,
+      landing_tab: seed.landing_tab ?? null,
+      pinned_dashboard_id: seed.pinned_dashboard_id ?? null,
+    });
   }
 
   /** 追加告警事件（刷新/评估推进断言面：列表重拉后可见）。 */
@@ -888,6 +918,139 @@ export function installConsoleBackend(
           },
         ),
       );
+    }
+
+    // ── 个人偏好（wire-personal-preferences）：per-sub 三键；GET 重验置顶
+    //    自愈（失存/归档/他企 → null 且清列）；PUT 部分更新 + 422 校验
+    //    （跨客户与失存同文案不泄露）。──
+    const preferenceRow = (): Required<FakePreferencesSeed> => {
+      const row = preferencesStore.get(customerId);
+      if (row) return row;
+      const fresh: Required<FakePreferencesSeed> = {
+        ui_locale: null,
+        landing_tab: null,
+        pinned_dashboard_id: null,
+      };
+      return fresh;
+    };
+    /** 置顶指针重验：产物存在 + kind=dashboard + 同客户 + 未归档。 */
+    const pinnedStillValid = (id: number): boolean => {
+      const artifact = ownLifecycleArtifact(id, customerId);
+      return !!artifact && artifact.kind === "dashboard" && artifact.status !== "archived";
+    };
+    if (path === "/api/console/me/preferences" && method === "GET") {
+      if (options.failPreferencesStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failPreferencesDetail ??
+                `preferences ${options.failPreferencesStatus}`,
+            },
+            options.failPreferencesStatus,
+          ),
+        );
+      }
+      const row = preferenceRow();
+      // 读时自愈：置顶产物被归档/删除/跨客户 → 返回 null 且清列（不留死链）。
+      if (
+        row.pinned_dashboard_id != null &&
+        !pinnedStillValid(row.pinned_dashboard_id)
+      ) {
+        row.pinned_dashboard_id = null;
+        preferencesStore.set(customerId, row);
+      }
+      return Promise.resolve(jsonResponse({ ...row }));
+    }
+    if (path === "/api/console/me/preferences" && method === "PUT") {
+      if (options.failPreferencesStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failPreferencesDetail ??
+                `preferences ${options.failPreferencesStatus}`,
+            },
+            options.failPreferencesStatus,
+          ),
+        );
+      }
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        ui_locale?: unknown;
+        landing_tab?: unknown;
+        pinned_dashboard_id?: unknown;
+      };
+      const CONSOLE_TAB_IDS = [
+        "chat",
+        "artifacts",
+        "datasets",
+        "entities",
+        "packs",
+        "demands",
+        "usage",
+        "keys",
+        "team",
+      ];
+      if (
+        payload.ui_locale !== undefined &&
+        payload.ui_locale !== null &&
+        payload.ui_locale !== "zh" &&
+        payload.ui_locale !== "en"
+      ) {
+        return Promise.resolve(
+          jsonResponse({ detail: "ui_locale 只能是 zh 或 en" }, 422),
+        );
+      }
+      if (
+        payload.landing_tab !== undefined &&
+        payload.landing_tab !== null &&
+        (typeof payload.landing_tab !== "string" ||
+          !CONSOLE_TAB_IDS.includes(payload.landing_tab))
+      ) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `landing_tab 必须是九个控制台页签之一（当前 ${String(payload.landing_tab)}）` },
+            422,
+          ),
+        );
+      }
+      if (
+        payload.pinned_dashboard_id !== undefined &&
+        payload.pinned_dashboard_id !== null
+      ) {
+        const id = payload.pinned_dashboard_id;
+        if (typeof id !== "number" || !Number.isInteger(id)) {
+          return Promise.resolve(
+            jsonResponse({ detail: "pinned_dashboard_id 必须是整数" }, 422),
+          );
+        }
+        // 跨客户与失存同文案（不泄露他户存在性）：仅校验可见性 + kind + 未归档。
+        if (!pinnedStillValid(id)) {
+          return Promise.resolve(
+            jsonResponse(
+              {
+                detail:
+                  "置顶看板不存在或不可用（须为本客户未归档的看板产物）",
+              },
+              422,
+            ),
+          );
+        }
+      }
+      const row = preferenceRow();
+      if (payload.ui_locale !== undefined) {
+        row.ui_locale = (payload.ui_locale as "zh" | "en" | null) ?? null;
+      }
+      if (payload.landing_tab !== undefined) {
+        row.landing_tab = (payload.landing_tab as string | null) ?? null;
+      }
+      if (payload.pinned_dashboard_id !== undefined) {
+        row.pinned_dashboard_id =
+          (payload.pinned_dashboard_id as number | null) ?? null;
+      }
+      preferencesStore.set(customerId, row);
+      // PUT 响应 = 写后全量态（同 GET 形）。
+      return Promise.resolve(jsonResponse({ ...row }));
     }
 
     // ── 团队空间（wire-team-spaces 任务 5）：四端点全部 owner-only（spec
@@ -2790,6 +2953,12 @@ export function installConsoleBackend(
     getAlertEvents: () => [...alertEventsStore.values()].map((row) => ({ ...row })),
     getAlertStates: (): Record<string, FakeAlertStateSeed> =>
       Object.fromEntries([...alertStatesStore.entries()].map(([k, v]) => [k, { ...v }])),
+    getPreferences: (sub = "demo-customer"): Required<FakePreferencesSeed> => {
+      const row = preferencesStore.get(sub);
+      return row
+        ? { ...row }
+        : { ui_locale: null, landing_tab: null, pinned_dashboard_id: null };
+    },
     addAlertEvent,
   };
 }

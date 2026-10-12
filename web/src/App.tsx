@@ -25,6 +25,7 @@ import { AdminView } from "./admin/AdminView";
 import { parseAdminSection, type AdminSection } from "./admin/AdminLayout";
 import { CallbackView } from "./console/CallbackView";
 import { hasAdminRole, loadSession } from "./console/auth";
+import { putPreferences } from "./console/api";
 import type { ConsoleTab } from "./console/ConsoleLayout";
 import { ConsoleFooter } from "./components/ConsoleFooter";
 import { SiteFooter } from "./components/SiteFooter";
@@ -205,10 +206,25 @@ export function App() {
     </a>
   );
 
+  // 语言切换（wire-personal-preferences）：本地照旧先切；登录态下顺带把
+  // ui_locale 即写 server（fire-and-forget，静默失败——偏好同步绝不打断
+  // 切换本身）；未登录仅本地（localStorage），不发任何请求。
+  const handleLanguageSwitch = (lang: Language) => {
+    switchLanguage(lang);
+    if (!loadSession()?.idToken) return;
+    try {
+      void putPreferences({ ui_locale: lang }).catch(() => {
+        /* 偏好写失败静默：本地语言已生效，下次登录再收敛 */
+      });
+    } catch {
+      /* 会话读取异常等：仅本地语言切换 */
+    }
+  };
+
   const langButton = (lang: Language, label: string) => (
     <button
       type="button"
-      onClick={() => switchLanguage(lang)}
+      onClick={() => handleLanguageSwitch(lang)}
       className={`px-2 py-1 rounded text-xs transition-colors ${
         i18n.language === lang
           ? "bg-slate-200 font-medium"

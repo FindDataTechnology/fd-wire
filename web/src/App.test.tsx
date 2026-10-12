@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { parseHash, isConsoleCallbackPath, App } from "./App";
 import "./i18n";
 import i18n from "./i18n";
@@ -189,6 +189,73 @@ describe("App 页脚分发（wire-ux-consolidation 任务 1.2）", () => {
     expect(screen.getByTestId("admin-role-gate")).toBeTruthy();
     expect(screen.queryByTestId("site-footer")).toBeNull();
     expect(screen.queryByTestId("console-footer")).toBeNull();
+  });
+});
+
+describe("App 顶栏语言切换（wire-personal-preferences）", () => {
+  beforeEach(() => {
+    i18n.changeLanguage("zh");
+    resetCatalogStatsCacheForTests();
+    localStorage.clear();
+    sessionStorage.clear();
+    window.location.hash = "#/console";
+    // 控制台壳（顶栏常驻）：console 假后端承接 auth/session/preferences。
+    vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+    sessionStorage.clear();
+    window.location.hash = "";
+  });
+
+  it("登录态切语言 → PUT {ui_locale} 即写 server（fire-and-forget）", async () => {
+    // 预置 ui_locale=zh（避免首登领养 PUT 混入断言）。
+    const backend = installConsoleBackend([], {
+      preferences: { "demo-customer": { ui_locale: "zh" } },
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    seedConsoleSession({ sub: "demo-customer" });
+    render(<App />);
+    await screen.findByTestId("console-topbar");
+
+    fireEvent.click(screen.getByText("EN"));
+    await waitFor(() => {
+      expect(i18n.language).toBe("en");
+    });
+    await waitFor(() => {
+      expect(
+        backend.calls.find(
+          (c) =>
+            c.url.pathname === "/api/console/me/preferences" &&
+            c.method === "PUT" &&
+            (c.body as { ui_locale?: string })?.ui_locale === "en",
+        ),
+      ).toBeTruthy();
+    });
+    // 假后端状态确实写入（跨端下次登录收敛到 en）。
+    expect(backend.getPreferences("demo-customer").ui_locale).toBe("en");
+  });
+
+  it("未登录切语言 → 仅本地（不携带任何偏好写请求）", async () => {
+    const backend = installConsoleBackend([]);
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<App />);
+    // 匿名登录引导（无会话），顶栏语言按钮仍在。
+    await screen.findByTestId("console-signin");
+
+    fireEvent.click(screen.getByText("EN"));
+    await waitFor(() => {
+      expect(i18n.language).toBe("en");
+    });
+    expect(localStorage.getItem("wire-web-lang")).toBe("en");
+    expect(
+      backend.calls.filter(
+        (c) => c.url.pathname === "/api/console/me/preferences",
+      ),
+    ).toEqual([]);
   });
 });
 

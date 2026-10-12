@@ -22,6 +22,10 @@
 //   行展开（查看 spec）时附「告警事件」小节（最近 10 条 + 手动刷新）与
 //   「试运行」按钮（POST /artifacts/{id}/alert/test——成功展示归约值与
 //   触发判定，失败后端 detail 如实红条）。非 alert_rule 行零变化。
+// - dashboard 行置顶默认看板（wire-personal-preferences）：「设为默认看板/
+//   取消默认看板」+「默认」徽标（PUT /api/console/me/preferences）；成功经
+//   onPinnedChange 回调由容器更新徽标位置，失败（如置顶已归档看板 422）
+//   后端 detail 行内红字如实呈现、徽标不动。
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -42,6 +46,7 @@ import {
   getAlertEvents,
   getAlertStates,
   publishArtifact,
+  putPreferences,
   restoreArtifact,
   saveArtifactSpec,
   SHARE_TTL_DAYS,
@@ -112,7 +117,19 @@ function alertBadgeOf(state: AlertStateSummary | undefined): AlertBadgeState {
 
 type StatusAction = "publish" | "archive" | "restore";
 
-export function ArtifactsPage() {
+export function ArtifactsPage({
+  pinnedDashboardId = null,
+  onPinnedChange,
+  initialDashboardId = null,
+}: {
+  /** 已置顶为默认的看板产物 id（徽标行）；null = 未置顶。 */
+  pinnedDashboardId?: number | null;
+  /** 置顶/取消置顶成功回调（容器更新偏好态，徽标即时移动）。 */
+  onPinnedChange?: (id: number | null) => void;
+  /** 落地即展开的看板产物 id（wire-personal-preferences 置顶跳转）——仅
+   *  挂载期初始化 dashboardFor 消费一次；无该 prop 的重挂载不展开。 */
+  initialDashboardId?: number | null;
+}) {
   const { t } = useTranslation();
   const [artifacts, setArtifacts] = useState<Artifact[] | null>(null);
   const [conversations, setConversations] = useState<Conversation[] | null>(null);
@@ -121,7 +138,10 @@ export function ArtifactsPage() {
   const [statusFilter, setStatusFilter] = useState<ArtifactStatus | "all">("all");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // 看板视图展开的产物 id（wire-dashboard-renderer：dashboard kind 内嵌入口）。
-  const [dashboardFor, setDashboardFor] = useState<number | null>(null);
+  // 挂载期吃下 initialDashboardId（置顶落地跳转直接展开该看板）。
+  const [dashboardFor, setDashboardFor] = useState<number | null>(
+    initialDashboardId,
+  );
   // 表单视图展开的产物 id（wire-form-builder：form kind 内嵌入口）。
   const [formFor, setFormFor] = useState<number | null>(null);
   const [historyFor, setHistoryFor] = useState<number | null>(null);
@@ -143,6 +163,12 @@ export function ArtifactsPage() {
   // map；null = 尚未到达（徽标暂不渲染），{} = 已到达或失败降级（无键即
   // 「未评估」——拉取失败静默降级，绝不阻塞页面）。
   const [alertStates, setAlertStates] = useState<AlertStatesMap | null>(null);
+  // 置顶操作行内错误（wire-personal-preferences）：422 等 detail 按行呈现
+  //（如置顶已归档看板），新操作前清空。
+  const [pinError, setPinError] = useState<{
+    artifactId: number;
+    text: string;
+  } | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -211,6 +237,25 @@ export function ArtifactsPage() {
       }
     },
     [replaceArtifact, t],
+  );
+
+  /** 置顶/取消置顶默认看板（wire-personal-preferences）：PUT 偏好
+   *  pinned_dashboard_id；成功交容器（onPinnedChange）移动「默认」徽标，
+   *  失败（如置顶已归档看板 422）后端 detail 行内红字、徽标不动。 */
+  const handlePinToggle = useCallback(
+    async (artifactId: number, next: number | null) => {
+      setPinError(null);
+      try {
+        await putPreferences({ pinned_dashboard_id: next });
+        onPinnedChange?.(next);
+      } catch (err) {
+        setPinError({
+          artifactId,
+          text: apiErrorText(err, t("console.artifacts.actionErrorTitle")),
+        });
+      }
+    },
+    [onPinnedChange, t],
   );
 
   /** 空白建板成功（wire-dashboard-blank-create）：新行置顶（服务端按更新
@@ -427,6 +472,16 @@ export function ArtifactsPage() {
                   >
                     {t(`console.artifacts.statuses.${artifact.status}`, artifact.status)}
                   </span>
+                  {artifact.kind === "dashboard" &&
+                    artifact.id === pinnedDashboardId && (
+                      // 默认看板徽标（wire-personal-preferences）：置顶行专属。
+                      <span
+                        data-testid="artifact-dashboard-default"
+                        className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700"
+                      >
+                        {t("console.preferences.defaultBadge")}
+                      </span>
+                    )}
                   {artifact.kind === "alert_rule" && alertStates != null && (
                     // 告警执行态徽标：states map 命中四态分色；错误态完整
                     // 文案（最近出错时间）走 title，简短文案即「错误」。
@@ -457,6 +512,30 @@ export function ArtifactsPage() {
                     {t("console.artifacts.versionLabel", { version: artifact.version })}
                   </span>
                   <div className="ml-auto flex flex-wrap gap-2">
+                    {artifact.kind === "dashboard" &&
+                      (artifact.id === pinnedDashboardId ? (
+                        // 取消置顶（wire-personal-preferences）：PUT null 清空。
+                        <button
+                          type="button"
+                          data-testid="artifact-dashboard-unpin"
+                          onClick={() => void handlePinToggle(artifact.id, null)}
+                          className="rounded border border-indigo-300 px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-50"
+                        >
+                          {t("console.preferences.unpin")}
+                        </button>
+                      ) : (
+                        // 设为默认看板（wire-personal-preferences）：PUT 本行 id。
+                        <button
+                          type="button"
+                          data-testid="artifact-dashboard-pin"
+                          onClick={() =>
+                            void handlePinToggle(artifact.id, artifact.id)
+                          }
+                          className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                        >
+                          {t("console.preferences.pin")}
+                        </button>
+                      ))}
                     {artifact.kind === "dashboard" && (
                       <button
                         type="button"
@@ -565,6 +644,16 @@ export function ArtifactsPage() {
                     </button>
                   </div>
                 </div>
+                {pinError != null && pinError.artifactId === artifact.id && (
+                  // 置顶失败行内红字（wire-personal-preferences）：后端 detail
+                  //（如置顶已归档看板 422）如实呈现，徽标不动。
+                  <p
+                    data-testid="artifact-pin-error"
+                    className="mt-1 text-[11px] text-red-600"
+                  >
+                    {pinError.text}
+                  </p>
+                )}
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
                   <span data-testid="artifact-updated">
                     {t("console.artifacts.updatedLabel")} {formatServerDate(artifact.updated_at)}

@@ -2,12 +2,18 @@
 // 登录配置未下发的阻塞态（不发起任何受保护请求）、匿名登录引导、
 // 会话建立（POST /api/console/session）+ key_once 明文一次展示、
 // 开户失败（502）如实呈现、顶栏登录态（客户/档位/身份/登出）。
+// 个人偏好（wire-personal-preferences）：启动拉取与 locale 收敛/首登领养/
+// 端点失败不阻塞；落地序（裸 #/console 才走偏好：置顶跳转=artifacts+展开
+// 该看板 > landing_tab > datasets；显式页签直达不劫持）；用户切页签即写
+// landing_tab、程序跳转经 suppress 不回写——落地用例经 App 壳走真实
+// hash→tab 链路。
 // fetch 一律走 testing.ts 的内存假后端（零网络）。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "../i18n";
 import i18n from "../i18n";
 import { ConsoleView } from "./ConsoleView";
+import { App } from "../App";
 import {
   installConsoleBackend,
   seedConsoleSession,
@@ -227,5 +233,199 @@ describe("ConsoleView（tab 切换）", () => {
     const chatNav = screen.getByTestId("console-nav-chat");
     expect(chatNav.getAttribute("href")).toBe("#/console/chat");
     expect(chatNav.textContent).toContain("AI 构建");
+  });
+});
+
+describe("ConsoleView（个人偏好：跨端同步语义）", () => {
+  /** 偏好端点的 PUT 调用记录（landing_tab/locale 写回断言面）。 */
+  const preferencePuts = (
+    backend: ReturnType<typeof installConsoleBackend>,
+  ) =>
+    backend.calls.filter(
+      (c) =>
+        c.url.pathname === "/api/console/me/preferences" && c.method === "PUT",
+    );
+
+  /** 断言当前激活页签（侧栏高亮 = bg-slate-900）。 */
+  const expectActiveTab = (tab: string) => {
+    expect(
+      screen.getByTestId(`console-nav-${tab}`).className.includes("bg-slate-900"),
+    ).toBe(true);
+  };
+
+  /** 置顶落地用种子看板（id=11，published dashboard）。 */
+  const seedDashboard = (backend: ReturnType<typeof installConsoleBackend>) => {
+    backend.addLifecycleArtifact({
+      id: 11,
+      kind: "dashboard",
+      title: "宏观仪表盘",
+      status: "published",
+      version: 1,
+      origin_conversation_id: null,
+      spec: {
+        title: "宏观仪表盘",
+        spec: { title: "宏观仪表盘", panels: [] },
+      },
+      created_at: "2026-10-09T09:00:00",
+      updated_at: "2026-10-10T09:00:00",
+    });
+  };
+
+  it("启动拉取偏好：server ui_locale=en → 覆盖本地 i18n（跨设备语言同步）", async () => {
+    const backend = installConsoleBackend([], {
+      preferences: { "demo-customer": { ui_locale: "en" } },
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    seedConsoleSession({ sub: "demo-customer" });
+    window.location.hash = "#/console";
+    render(<App />);
+
+    await screen.findByTestId("console-topbar");
+    await waitFor(() => {
+      expect(i18n.language).toBe("en");
+    });
+    // 本地语言锚点同步（localStorage），顶栏 EN 按钮激活态。
+    expect(localStorage.getItem("wire-web-lang")).toBe("en");
+    expect(
+      screen.getByText("EN").className.includes("bg-slate-200"),
+    ).toBe(true);
+    // server 已有 locale → 不触发领养 PUT。
+    expect(preferencePuts(backend)).toEqual([]);
+  });
+
+  it("首登领养：GET 三键全空 → fire-and-forget PUT {ui_locale: 本地语言}", async () => {
+    const backend = installConsoleBackend([]);
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    seedConsoleSession({ sub: "demo-customer" });
+    window.location.hash = "#/console";
+    render(<App />);
+
+    await screen.findByTestId("console-topbar");
+    await waitFor(() => {
+      expect(preferencePuts(backend)).toEqual([
+        expect.objectContaining({ body: { ui_locale: "zh" } }),
+      ]);
+    });
+    // 无偏好 → 落 datasets 兜底（无重定向）。
+    expectActiveTab("datasets");
+    expect(window.location.hash).toBe("#/console");
+  });
+
+  it("偏好端点故障 → 控制台照常启动（不阻塞、不领养、不重定向）", async () => {
+    const backend = installConsoleBackend([], { failPreferencesStatus: 500 });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    seedConsoleSession({ sub: "demo-customer" });
+    window.location.hash = "#/console";
+    render(<App />);
+
+    await screen.findByTestId("console-topbar");
+    expectActiveTab("datasets");
+    expect(i18n.language).toBe("zh");
+    // GET 失败（非全空）→ 绝不触发领养 PUT。
+    expect(preferencePuts(backend)).toEqual([]);
+    expect(window.location.hash).toBe("#/console");
+  });
+
+  it("裸 #/console + 置顶看板 → 落 artifacts 并展开该看板；程序跳转不回写 landing_tab（suppress 消费后用户切页签照常即写）", async () => {
+    const backend = installConsoleBackend([], {
+      preferences: {
+        "demo-customer": {
+          ui_locale: "zh",
+          landing_tab: "team",
+          pinned_dashboard_id: 11,
+        },
+      },
+    });
+    seedDashboard(backend);
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    seedConsoleSession({ sub: "demo-customer" });
+    window.location.hash = "#/console";
+    render(<App />);
+
+    // 落 artifacts 页签（置顶优先于 landing_tab=team）+ 该看板视图直接展开。
+    await screen.findByTestId("console-nav");
+    await waitFor(() => expectActiveTab("artifacts"));
+    expect(window.location.hash).toBe("#/console/artifacts");
+    expect(await screen.findByTestId("dashboard-pane")).toBeTruthy();
+    // 置顶行的「默认」徽标（偏好态下传产物页）。
+    expect(screen.getByTestId("artifact-dashboard-default")).toBeTruthy();
+    // 程序跳转不回写：无任何 landing_tab PUT。
+    expect(
+      preferencePuts(backend).filter(
+        (c) => (c.body as Record<string, unknown> | undefined)?.landing_tab !== undefined,
+      ),
+    ).toEqual([]);
+
+    // suppress 已被程序跳转消费：用户随后切页签照常即写 landing_tab。
+    window.location.hash = "#/console/usage";
+    await waitFor(() => {
+      expect(
+        preferencePuts(backend).find(
+          (c) => (c.body as { landing_tab?: string })?.landing_tab === "usage",
+        ),
+      ).toBeTruthy();
+    });
+    expectActiveTab("usage");
+  });
+
+  it("裸 #/console 仅 landing_tab=team → 落 team；无置顶不展开、无任何 PUT", async () => {
+    const backend = installConsoleBackend([], {
+      preferences: { "demo-customer": { ui_locale: "zh", landing_tab: "team" } },
+    });
+    seedDashboard(backend);
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    seedConsoleSession({ sub: "demo-customer" });
+    window.location.hash = "#/console";
+    render(<App />);
+
+    await waitFor(() => expectActiveTab("team"));
+    expect(window.location.hash).toBe("#/console/team");
+    // landing_tab 跳转同样被 suppress：无任何偏好 PUT（含领养——三键非全空）。
+    expect(preferencePuts(backend)).toEqual([]);
+    expect(screen.queryByTestId("dashboard-pane")).toBeNull();
+  });
+
+  it("裸 #/console 无偏好 → 维持 datasets 兜底（领养仅 ui_locale，无重定向写）", async () => {
+    const backend = installConsoleBackend([]);
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    seedConsoleSession({ sub: "demo-customer" });
+    window.location.hash = "#/console";
+    render(<App />);
+
+    await screen.findByTestId("console-topbar");
+    await waitFor(() => {
+      expect(preferencePuts(backend).length).toBe(1);
+    });
+    expectActiveTab("datasets");
+    expect(window.location.hash).toBe("#/console");
+    // 唯一的 PUT 是首登领养（ui_locale），绝无 landing_tab 写。
+    expect(
+      preferencePuts(backend).every(
+        (c) => (c.body as Record<string, unknown> | undefined)?.landing_tab === undefined,
+      ),
+    ).toBe(true);
+  });
+
+  it("显式 #/console/usage 直达：偏好不劫持（不重定向、不展开置顶、不写 landing_tab）", async () => {
+    const backend = installConsoleBackend([], {
+      preferences: {
+        "demo-customer": {
+          ui_locale: "zh",
+          landing_tab: "team",
+          pinned_dashboard_id: 11,
+        },
+      },
+    });
+    seedDashboard(backend);
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    seedConsoleSession({ sub: "demo-customer" });
+    window.location.hash = "#/console/usage";
+    render(<App />);
+
+    await screen.findByTestId("console-topbar");
+    expectActiveTab("usage");
+    expect(window.location.hash).toBe("#/console/usage");
+    expect(screen.queryByTestId("dashboard-pane")).toBeNull();
+    expect(preferencePuts(backend)).toEqual([]);
   });
 });

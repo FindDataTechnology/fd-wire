@@ -249,6 +249,35 @@ def require_console_customer(
     return customer
 
 
+def require_console_member_identity(
+    request: Request, db: Session = Depends(get_platform_db)
+) -> tuple[Customer, str]:
+    """个人面依赖（wire-personal-preferences）：任意已映射身份（含 viewer）。
+
+    与 require_console_customer 同源解析（verify_id_token →
+    resolve_member_role，owner 优先→成员回退），未映射 401 同文案；返回
+    (Customer, sub)——偏好按 sub 一人一行，Customer 只用于置顶看板的
+    客户归属校验。
+
+    **刻意不做两类门禁**（与 require_console_customer 的差异所在）：
+    - 无 viewer 方法级只读门禁：偏好是 per-sub 个人 UI 数据（语言/落地
+      页/置顶看板），不是客户业务数据——viewer 改自己的界面习惯不属于
+      「变更客户面」，必须可 GET 也可 PUT；
+    - 无密钥物面 owner-only 门禁：偏好端点不在 KEY_SURFACE_PREFIXES 面
+      上，本就不涉密钥物。
+    """
+    identity = verify_id_token(bearer_token(request))
+    resolved = resolve_member_role(db, identity.sub)
+    if resolved is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="登录身份尚未映射到客户（请先完成首次登录开户）",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    customer, _role = resolved
+    return customer, identity.sub
+
+
 def require_console_owner(
     request: Request, db: Session = Depends(get_platform_db)
 ) -> tuple[Customer, str]:
@@ -300,6 +329,7 @@ __all__ = [
     "logto_issuer",
     "require_console_customer",
     "require_console_customer_id",
+    "require_console_member_identity",
     "require_console_owner",
     "resolve_customer",
     "resolve_member_role",

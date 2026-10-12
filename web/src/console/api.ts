@@ -2163,6 +2163,48 @@ export function removeTeamMember(
   ) as Promise<{ deleted: boolean }>;
 }
 
+// ── 个人偏好（wire-personal-preferences web 面）──────────────────────────
+// 契约（api 仓 preferences 路由，冻结形状；Bearer 登录身份，任意已映射身份
+// 含 viewer 可读写自己的偏好）：
+// - GET /api/console/me/preferences → 三键全量（未设=null，行不存在不 404）；
+// - PUT 同路径：body 三键任意子集（缺键不动、显式 null 清空），成功响应 =
+//   写后全量态（同 GET 形）；非法值 422 如实定位。
+// 键面纪律：本契约键面冻结为 snake_case——wire 与 TS 侧同形（与 team/alerts
+// 段的 camelCase 翻译纪律不同，不做边界改名）。
+
+/** 界面语言偏好（localStorage 本地值的跨端同步锚点）。 */
+export type PreferenceLocale = "zh" | "en";
+
+/** 个人偏好全量态（GET 与 PUT 写后响应同形）。 */
+export interface ConsolePreferences {
+  ui_locale: PreferenceLocale | null;
+  landing_tab: string | null;
+  pinned_dashboard_id: number | null;
+}
+
+/** 偏好部分更新入参（缺键不动、显式 null 清空）。 */
+export interface ConsolePreferencesPatch {
+  ui_locale?: PreferenceLocale | null;
+  landing_tab?: string | null;
+  pinned_dashboard_id?: number | null;
+}
+
+/** 拉取本人偏好（三键全量；未映射身份 401 如实上抛）。 */
+export function getPreferences(): Promise<ConsolePreferences> {
+  return requestJson(`${API_BASE}/console/me/preferences`, {
+    method: "GET",
+  }) as Promise<ConsolePreferences>;
+}
+
+/** 部分更新本人偏好（返回写后全量态；非法值 422 如实上抛）。 */
+export function putPreferences(
+  patch: ConsolePreferencesPatch,
+): Promise<ConsolePreferences> {
+  return requestJsonAnyMethod(`${API_BASE}/console/me/preferences`, "PUT", {
+    body: patch,
+  }) as Promise<ConsolePreferences>;
+}
+
 // ── 告警执行：状态/事件/试运行（wire-alert-evaluation 任务 5 web 面）──────
 // 契约（api 仓 alerts 路由，冻结形状；Bearer 登录身份，客户隔离）：
 // - GET /api/v1/alerts/states → {"states": {"<artifact_id>": {state,

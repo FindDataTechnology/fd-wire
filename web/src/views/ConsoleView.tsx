@@ -5,6 +5,12 @@
 //   会话过期先静默续期 → POST /api/console/session 建立映射/触发首登开户 →
 //   key_once 明文展示一次（关闭后不可再查）→ 进入控制台。
 // X-Customer-Id 开发占位已退场；子页请求一律自动附 Authorization: Bearer。
+// 个人偏好（wire-personal-preferences）：会话建立后拉取 GET
+// /api/console/me/preferences（失败不阻塞启动）——locale 收敛（server 有值
+// 覆盖本地 / 全空首登领养上传）；落地序仅裸 #/console 走偏好（pinned >
+// landing_tab > datasets，显式页签直达不劫持）；用户切页签即写
+// landing_tab，偏好驱动的程序跳转经 suppress 不回写；置顶看板经
+// initialDashboardId 传给产物页挂载即展开。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ConsoleLayout, type ConsoleTab } from "../console/ConsoleLayout";
@@ -21,6 +27,12 @@ import {
   type ConsoleAuthError,
   type ConsoleSession,
 } from "../console/auth";
+import {
+  getPreferences,
+  putPreferences,
+  type ConsolePreferences,
+} from "../console/api";
+import i18nInstance, { switchLanguage } from "../i18n";
 import { ChatPage } from "../console/ChatPage";
 import { ArtifactsPage } from "../console/ArtifactsPage";
 import { DatasetsPage } from "../console/DatasetsPage";
@@ -43,12 +55,54 @@ type BootstrapPhase =
 /** 静默续期提前量：距过期不足 5 分钟即尝试 refresh（有 refreshToken 才可能）。 */
 const RENEW_AHEAD_MS = 5 * 60_000;
 
+/** 偏好拉取等待上限（ms，wire-personal-preferences）：挂在 loading 门内
+ *  先行拉取以避免可见的 datasets 闪现再跳——端点挂起时按无偏好放行，
+ *  绝不让控制台启动无限等待。 */
+const PREFERENCES_BOOT_TIMEOUT_MS = 2_000;
+
+/** 裸控制台入口（无第二段）：#/console 或 #/console/ ——只有这种入口才走
+ *  偏好落地（显式页签直达 #/console/usage 永不劫持）。 */
+function isBareConsoleHash(): boolean {
+  return /^#\/console\/?$/.test(window.location.hash);
+}
+
+/** locale 收敛（wire-personal-preferences）：server ui_locale 有值 → 覆盖
+ *  本地 i18n；三键全空（首登）→ 领养：把当前本地语言上传一次，此后换设备
+ *  跟随。fire-and-forget，写失败静默（本地语言已可用）。 */
+function convergeLocale(prefs: ConsolePreferences): void {
+  if (prefs.ui_locale != null) {
+    if (i18nInstance.language !== prefs.ui_locale) {
+      switchLanguage(prefs.ui_locale);
+    }
+    return;
+  }
+  if (prefs.landing_tab == null && prefs.pinned_dashboard_id == null) {
+    const lang = i18nInstance.language === "en" ? "en" : "zh";
+    void putPreferences({ ui_locale: lang }).catch(() => {
+      /* 领养失败静默：下次登录 GET 仍全空会再试 */
+    });
+  }
+}
+
 export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
   const { t } = useTranslation();
   const [phase, setPhase] = useState<BootstrapPhase>({ kind: "loading" });
   // 会话建立只跑一轮；retry 由显式事件触发（bootstrapToken 重新计数）。
   const [bootstrapToken, setBootstrapToken] = useState(0);
   const configRef = useRef<ConsoleAuthConfig | null>(null);
+  // 个人偏好（wire-personal-preferences）：null = 未拉到（端点失败/未返回），
+  // 拉到后驱动 locale 收敛、落地序与看板置顶徽标。
+  const [prefs, setPrefs] = useState<ConsolePreferences | null>(null);
+  // 置顶跳转要展开的看板产物 id：仅传给产物页做挂载期初始化；离开
+  // artifacts 页签即清（回到该页不重复自动展开——展开只发生在落地那一次）。
+  const [initialDashboardId, setInitialDashboardId] = useState<number | null>(
+    null,
+  );
+  // 偏好驱动的程序跳转标记：置位期间 tab 变化不回写 landing_tab（见下方
+  // 页签写回 effect）；消费一次即复位。
+  const suppressTabWriteRef = useRef(false);
+  // 上一次生效的 tab（ready 后首帧不算用户导航，变更才写回）。
+  const lastTabRef = useRef<ConsoleTab | null>(null);
 
   const bootstrap = useCallback(async () => {
     setPhase({ kind: "loading" });
@@ -86,6 +140,46 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
         ...session,
         customer: establishment.customer,
       };
+      // 个人偏好（wire-personal-preferences）：挂在 loading 门内先行拉取
+      //（常规路径避免可见的 datasets 闪现再跳）；失败/超时绝不阻塞控制台
+      // 启动——null 偏好 = 现状 datasets 兜底 + 本地语言，照常进入。
+      let loaded: ConsolePreferences | null = null;
+      let prefTimeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        loaded = await Promise.race([
+          getPreferences(),
+          new Promise<null>((resolve) => {
+            prefTimeout = setTimeout(
+              () => resolve(null),
+              PREFERENCES_BOOT_TIMEOUT_MS,
+            );
+          }),
+        ]);
+      } catch {
+        loaded = null; // 端点故障（4xx/5xx/网络）：照常进入控制台
+      } finally {
+        if (prefTimeout !== undefined) clearTimeout(prefTimeout);
+      }
+      if (loaded) {
+        setPrefs(loaded);
+        convergeLocale(loaded);
+        // 落地序：仅裸 #/console 且用户拉取期间未点击（hash 仍裸）才走偏好；
+        // pinned（跳 artifacts + 展开该看板）> landing_tab > datasets。
+        if (isBareConsoleHash()) {
+          if (loaded.pinned_dashboard_id != null) {
+            suppressTabWriteRef.current = true;
+            setInitialDashboardId(loaded.pinned_dashboard_id);
+            window.location.hash = "#/console/artifacts";
+          } else if (
+            loaded.landing_tab != null &&
+            loaded.landing_tab !== "datasets"
+          ) {
+            // 落地 datasets = 裸入口现状（tab 不变），无需跳转也无需 suppress。
+            suppressTabWriteRef.current = true;
+            window.location.hash = `#/console/${loaded.landing_tab}`;
+          }
+        }
+      }
       setPhase({ kind: "ready", session: next, keyOnce: establishment.keyOnce });
     } catch (err) {
       const authErr = err as ConsoleAuthError;
@@ -113,6 +207,46 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
       void refreshSession(config, session);
     }, 60_000);
     return () => window.clearInterval(handle);
+  }, []);
+
+  // 页签写回（wire-personal-preferences）：ready 后 tab 变化即写 landing_tab
+  // （fire-and-forget，失败静默）；首帧不算导航；偏好驱动的程序跳转
+  //（置顶→artifacts / landing_tab 跳转）经 suppressTabWriteRef 不回写——
+  // 跳转本身不得覆盖用户存的落地习惯。
+  useEffect(() => {
+    if (phase.kind !== "ready") return;
+    const prev = lastTabRef.current;
+    lastTabRef.current = tab;
+    if (prev == null || prev === tab) return;
+    if (suppressTabWriteRef.current) {
+      suppressTabWriteRef.current = false;
+      return;
+    }
+    void putPreferences({ landing_tab: tab }).catch(() => {
+      /* 写回失败静默：落地偏好下次仍按旧值 */
+    });
+  }, [tab, phase.kind]);
+
+  // 离开 artifacts 页签即清落地展开锚（重进该页不再自动展开——展开只属于
+  // 置顶落地那一次，用户后续的收起意图优先）。按「从 artifacts 离开」判定：
+  // 置顶跳转的 ready 首帧仍是 datasets（App 的 hash 态随 hashchange 事件
+  // 滞后一拍），此时不得清掉刚设下的锚。
+  const prevTabRef = useRef<ConsoleTab | null>(null);
+  useEffect(() => {
+    if (prevTabRef.current === "artifacts" && tab !== "artifacts") {
+      setInitialDashboardId(null);
+    }
+    prevTabRef.current = tab;
+  }, [tab]);
+
+  // 置顶/取消置顶成功（wire-personal-preferences）：产物页回调更新本地
+  // 偏好态，默认徽标即时移动到新行（不重拉 GET）。
+  const handlePinnedChange = useCallback((id: number | null) => {
+    setPrefs((prev) => ({
+      ui_locale: prev?.ui_locale ?? null,
+      landing_tab: prev?.landing_tab ?? null,
+      pinned_dashboard_id: id,
+    }));
   }, []);
 
   const signIn = async () => {
@@ -299,7 +433,14 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
         </div>
       )}
       {tab === "chat" && <ChatPage />}
-      {tab === "artifacts" && <ArtifactsPage />}
+      {tab === "artifacts" && (
+        <ArtifactsPage
+          // 置顶徽标 + 落地展开锚（wire-personal-preferences）
+          pinnedDashboardId={prefs?.pinned_dashboard_id ?? null}
+          onPinnedChange={handlePinnedChange}
+          initialDashboardId={initialDashboardId}
+        />
+      )}
       {tab === "datasets" && (
         <DatasetsPage planCode={customer?.plan_code ?? ""} />
       )}

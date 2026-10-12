@@ -385,6 +385,13 @@ const zh = {
       hint: "请立即复制并妥善保存——出于安全考虑，明文密钥关闭后不再提供查询。",
       copy: "复制",
     },
+    // 个人偏好（wire-personal-preferences）：看板行「设为默认看板/取消」+
+    // 默认徽标（置顶看板跨端同步）。
+    preferences: {
+      pin: "设为默认看板",
+      unpin: "取消默认看板",
+      defaultBadge: "默认",
+    },
     // AI 构建引导卡（wire-ux-consolidation 任务 2.1）：旧对话页退役，
     // chat tab 落壹座试用引导；不写死任何时间承诺。
     chatGuide: {
