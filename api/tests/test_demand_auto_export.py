@@ -367,3 +367,28 @@ def test_auto_export_demand_returns_skipped_for_non_in_progress(harness) -> None
         db.close()
     assert outcome == {"action": "skipped", "reason": "not_in_progress"}
     assert _events(harness.Session, demand_id) == []
+
+
+# ---------------------------------------------------------------- 客户面红线
+
+
+def test_auto_export_failed_never_leaks_to_customer_view(harness) -> None:
+    """auto_export_failed（含 reason 全文）绝不进客户面编排时间线（安全子集）。"""
+    demand_id = _seed(harness.Session, source_urls=None)
+    db = harness.Session()
+    try:
+        sweep_missing_exports(db)
+    finally:
+        db.close()
+    # 内部留档确已落（前置成立）
+    assert [e["type"] for e in _events(harness.Session, demand_id)] == [
+        EVENT_AUTO_EXPORT_FAILED
+    ]
+    # 客户面详情：orchestration 安全子集为空、且响应文本零内部留档细节
+    # （source_urls 是客户自己提交的输入，属可见字段；红线是内部事件与文案）
+    resp = harness.client.get(f"/api/v1/demands/{demand_id}", headers=CUST)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["orchestration"] == []
+    assert "auto_export_failed" not in resp.text
+    assert "存量单无源地址" not in resp.text  # 内部拒绝文案不外露

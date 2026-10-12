@@ -131,8 +131,11 @@ def sweep_missing_exports(db: Session) -> dict:
         .where(Demand.status == DemandStatus.in_progress.value)
         .order_by(Demand.id)
     )
+    # 物化列表：循环内逐单 commit（出单/留痕），惰性游标跨 commit 在
+    # PG 服务端游标下不可靠（SQLAlchemy 默认缓冲可用，但不赌方言行为）。
+    demands = list(db.scalars(stmt).all())
     summary = {"checked": 0, "exported": 0, "failed": 0, "skipped": 0}
-    for demand in db.scalars(stmt):
+    for demand in demands:
         summary["checked"] += 1
         try:
             outcome = auto_export_demand(db, demand)
