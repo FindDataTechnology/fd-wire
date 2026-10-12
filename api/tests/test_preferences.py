@@ -191,7 +191,7 @@ def test_put_refreshes_updated_at_on_same_value_rewrite(env):
 
 
 # ---------------------------------------------------------------------------
-# 值域：locale zh|en + 九页签合法环；非法值 422 逐字文案
+# 值域：locale zh|en + 十页签合法环（含 workbench）；非法值 422 逐字文案
 # ---------------------------------------------------------------------------
 
 
@@ -208,7 +208,7 @@ def test_ui_locale_domain_cycle(env):
 
 def test_landing_tab_domain_cycle(env):
     client = env.client
-    tabs = ("chat", "artifacts", "datasets", "entities", "packs", "demands", "usage", "keys", "team")
+    tabs = ("workbench", "chat", "artifacts", "datasets", "entities", "packs", "demands", "usage", "keys", "team")
     for tab in tabs:
         resp = client.put(PREFS_URL, json={"landing_tab": tab}, headers=OWNER)
         assert resp.status_code == 200, tab

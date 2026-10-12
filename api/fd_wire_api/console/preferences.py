@@ -42,9 +42,12 @@ router = APIRouter(tags=["console"])
 #: ui_locale 值域（应用层校验；DB 不设 CHECK——值域演进免迁移）
 UI_LOCALES = frozenset({"zh", "en"})
 
-#: landing_tab 值域 = 控制台九页签（与 web ConsoleView 页签面冻结对表）
+#: landing_tab 值域 = 控制台十页签（与 web ConsoleView 页签面冻结对表；
+#: workbench 为 wire-personal-workbench 新增——漏加则切页签写回被 422
+#: 静默吞掉，工作台永远成不了落地候选，生产冒烟实弹抓出）
 LANDING_TABS = frozenset(
     {
+        "workbench",
         "chat",
         "artifacts",
         "datasets",
