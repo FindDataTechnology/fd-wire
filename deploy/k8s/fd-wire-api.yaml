@@ -79,7 +79,7 @@ spec:
             - name: WANXING_AGENT_SLUG
               value: packs-kkcie7nlrhluo4likpnn0w-spider-heal
             - name: WANXING_A2A_TIMEOUT
-              value: "120"
+              value: "300"
             - name: WANXING_CALLER_KEY
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: wanxing_caller_key }
