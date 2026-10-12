@@ -21,8 +21,8 @@
 
 ## 3. 门禁与发布
 
-- [ ] 3.1 本地门禁：api pytest 全量+web vitest 全量+tsc --noEmit 0
-- [ ] 3.2 迁移 0029 离线 SQL 先行上库（wire_platform+wire_datasets 双库），
+- [x] 3.1 本地门禁：api pytest 全量+web vitest 全量+tsc --noEmit 0
+- [x] 3.2 迁移 0029 离线 SQL 先行上库（wire_platform+wire_datasets 双库），
       再滚 api/web 镜像（快照 tag）
-- [ ] 3.3 生产冒烟：locale 跨端收敛/裸入口落地序/置顶自愈实证
+- [x] 3.3 生产冒烟：locale 跨端收敛/裸入口落地序/置顶自愈实证
 - [ ] 3.4 归档+ROADMAP 标注+记忆更新
