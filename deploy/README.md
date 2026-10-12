@@ -264,10 +264,16 @@ sha256sum fd-wire-connector-linux-amd64   # 对照 manifest.json 的 platforms[]
 背景：datasets PG 连接串密码曾以明文落在清单（10-11 实迁遗留、存于 git 历史）。
 轮换使历史泄露失效；此后 datasets URL 与 platform URL 一致走 secret。
 
-- **消费者清单**（轮换前核对）：仅 `fd-prod/fd-wire-api` pod 经
-  `100.64.0.12:5433` 以 wire 角色连库（platform+datasets 双库同角色）；
+- **消费者清单**（轮换前核对；2026-10-12 首次执行实弹教训）：仅
+  `fd-prod/fd-wire-api` pod 经 `100.64.0.12:5433` 以 wire 角色连库——但 pod 有
+  **四个 env 来源**（DATABASE_URL / AI_DATABASE_URL / FD_WIRE_DATABASE_URL /
+  FD_WIRE_DATASETS_DATABASE_URL），后三者曾为清单字面值/异名 secret 键——
+  轮换必须四路同批，漏一路即 crashloop（现四路均已 secretKeyRef 化）；
   本地/容器内 `docker exec psql -U wire` 走 local socket 免密不受影响；
   per-cell 库各有属主角色不受影响；backup.sh 走容器内 socket 不受影响。
+- **执行纪律**：ALTER 的密码必须经 stdin 管道传入——ssh 双引号嵌套
+  `PASSWORD '$VAR'` 会在远端展开成空串（首次执行实弹踩坑：PG 把空串当
+  clearing password，角色一度无口令）。
 - **紧凑序**（暴露窗口 ≈ ArgoCD 同步+启动 ~90s，期间旧池重连可能报错）：
   1. `ALTER ROLE wire WITH PASSWORD '<new>'`（cheap3 wire-postgres，local socket）；
   2. fd-wire-env 同批更新 `database_url` 与 `datasets_database_url`（新密码）；
