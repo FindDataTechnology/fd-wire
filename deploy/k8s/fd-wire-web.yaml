@@ -29,7 +29,7 @@ spec:
         - name: web
           # TODO(go-live): 首次构建后回填实际 sha- tag。
           # 出片 tag=law-ai-official 快照仓 sha（fd-wire-images 8f3ee4d = 真 9c720e7（nginx /internal/ 读超时 320s 修复））。
-          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-8f3ee4d
+          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-f4970ed
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
