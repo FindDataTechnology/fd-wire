@@ -23,7 +23,7 @@ import {
 } from "./api";
 import { formatServerDate } from "./util";
 import { packName } from "./PacksPage";
-import { YIZUO_DEMO_URL, YIZUO_PLATFORM_URL } from "../components/footerConstants";
+import { YIZUO_PLATFORM_URL } from "../components/footerConstants";
 import { CONTACT_MAILTO } from "../views/HomeView";
 
 /** by_kind 徽标键序：复用 api.ts 的 ARTIFACT_KINDS（六类，含表单构建器的
@@ -537,9 +537,10 @@ export function WorkbenchPage() {
           )}
         </SectionCard>
 
-        {/* ── 壹座入口紧凑卡：与 ChatPage 引导卡同链接语义（主入口=官网
-            demo 页、次级=platform.finddatatech.cloud）；绝不复述测试账号
-            邮箱/口令明文（console-ai-entry 红线），零网络请求。── */}
+        {/* ── 壹座入口紧凑卡：与 ChatPage 引导卡同链接语义（主入口直落
+            platform.finddatatech.cloud——壹座与柏讯共用同一 Logto IdP，
+            已登录客户直达即登）；绝不复述测试账号邮箱/口令明文
+            （console-ai-entry 红线），零网络请求。── */}
         <section
           data-testid="workbench-section-yizuo"
           className="rounded-lg border border-slate-200 bg-white p-4"
@@ -553,21 +554,12 @@ export function WorkbenchPage() {
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <a
               data-testid="workbench-yizuo-demo-cta"
-              href={YIZUO_DEMO_URL}
+              href={YIZUO_PLATFORM_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="rounded-md bg-slate-900 px-3 py-1.5 text-xs text-white transition-colors hover:bg-slate-700"
             >
               {t("console.workbench.yizuo.tryCta")}
-            </a>
-            <a
-              data-testid="workbench-yizuo-enter-link"
-              href={YIZUO_PLATFORM_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-slate-500 underline-offset-2 hover:text-slate-900 hover:underline"
-            >
-              {t("console.workbench.yizuo.haveAccount")}
             </a>
           </div>
         </section>

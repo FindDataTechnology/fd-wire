@@ -192,17 +192,13 @@ describe("WorkbenchPage（聚合渲染）", () => {
     render(<WorkbenchPage />);
     await screen.findByTestId("workbench-root");
 
-    // 主入口 = 官网 demo 页；次级 = platform.finddatatech.cloud（同 ChatPage）。
+    // 主入口直落 platform.finddatatech.cloud（同 IdP 免中转，同 ChatPage）。
     const demo = screen.getByTestId("workbench-yizuo-demo-cta");
-    expect(demo.getAttribute("href")).toBe("https://finddatatech.cloud/demo");
+    expect(demo.getAttribute("href")).toBe("https://platform.finddatatech.cloud");
     expect(demo.getAttribute("target")).toBe("_blank");
     expect(demo.getAttribute("rel")).toContain("noopener");
     expect(demo.textContent).toContain("去壹座试用");
-    const enter = screen.getByTestId("workbench-yizuo-enter-link");
-    expect(enter.getAttribute("href")).toBe(
-      "https://platform.finddatatech.cloud",
-    );
-    expect(enter.getAttribute("target")).toBe("_blank");
+    expect(screen.queryByTestId("workbench-yizuo-enter-link")).toBeNull();
     // 红线：卡片文本无测试账号邮箱（platform-test / @）/口令样式字样。
     const text = screen.getByTestId("workbench-section-yizuo").textContent ?? "";
     expect(text).not.toContain("platform-test");

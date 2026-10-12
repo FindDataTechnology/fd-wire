@@ -476,9 +476,8 @@ const en: Translation = {
     chatGuide: {
       title: "AI Build",
       body:
-        "Wire's conversational build capability will be provided through this entrance; data trials run on Base — the demo page carries the published test account and a guided tour.",
+        "Wire's conversational build capability will be provided through this entrance; data trials run on Base — Base shares the same account system as Wire, so you land there already signed in.",
       tryCta: "Try it on Base",
-      haveAccount: "Already have a Base account? Enter directly",
     },
     // Personal workbench (wire-personal-workbench tasks 2.1/2.3): six aggregate
     // section cards + a compact Base entry card. Counts and recent items come
@@ -544,9 +543,8 @@ const en: Translation = {
       yizuo: {
         title: "AI Build · Base",
         body:
-          "Build dashboards and composite indicators by chat — trials run on the Base demo page (published test account and tour included).",
+          "Build dashboards and composite indicators by chat — Base shares the same account system as Wire; enter directly to try it.",
         tryCta: "Try it on Base",
-        haveAccount: "Already have a Base account? Enter directly",
       },
     },
     artifacts: {

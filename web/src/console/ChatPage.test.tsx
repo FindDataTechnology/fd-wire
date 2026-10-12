@@ -21,22 +21,17 @@ afterEach(() => {
 });
 
 describe("ChatPage（壹座试用引导卡）", () => {
-  it("主按钮「去壹座试用」→ finddatatech.cloud/demo；次级链接直达壹座平台（均新窗口）", () => {
+  it("主按钮「去壹座试用」直落壹座平台首页（同 IdP 免中转，新窗口，无次级链接）", () => {
     render(<ChatPage />);
 
     const demo = screen.getByTestId("chat-guide-demo-cta");
-    expect(demo.getAttribute("href")).toBe("https://finddatatech.cloud/demo");
+    expect(demo.getAttribute("href")).toBe("https://platform.finddatatech.cloud");
     expect(demo.getAttribute("target")).toBe("_blank");
     expect(demo.getAttribute("rel")).toContain("noopener");
     expect(demo.textContent).toContain("去壹座试用");
 
-    const enter = screen.getByTestId("chat-guide-enter-link");
-    expect(enter.getAttribute("href")).toBe(
-      "https://platform.finddatatech.cloud",
-    );
-    expect(enter.getAttribute("target")).toBe("_blank");
-    expect(enter.getAttribute("rel")).toContain("noopener");
-    expect(enter.textContent).toContain("已有壹座账号？直接进入");
+    // 同一 IdP 直达后，原「已有壹座账号？直接进入」次级链接已无意义，移除。
+    expect(screen.queryByTestId("chat-guide-enter-link")).toBeNull();
   });
 
   it("卡片不出现任何测试账号的邮箱/口令明文", () => {

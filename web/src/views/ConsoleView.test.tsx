@@ -223,7 +223,7 @@ describe("ConsoleView（tab 切换）", () => {
 
     expect(await screen.findByTestId("chat-guide")).toBeTruthy();
     expect(screen.getByTestId("chat-guide-demo-cta").getAttribute("href")).toBe(
-      "https://finddatatech.cloud/demo",
+      "https://platform.finddatatech.cloud",
     );
     // 引导卡无测试账号明文
     expect(screen.getByTestId("chat-guide").textContent).not.toContain(
