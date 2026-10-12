@@ -198,6 +198,32 @@ const zh = {
       "质量指标在你的专属数据引擎内计算，平台只保存聚合数字、不接触你的数据内容——数据始终留在你的范围内。",
     consoleLink: "前往控制台「我的数据」→",
   },
+  transformPipelines: {
+    // 变换管线章节（wire-transform-pipelines 任务 7.1）：什么是管线/版本
+    // 语义/输出语义/失败隔离/调度/计量如实——口径与控制台管线工作台一致。
+    title: "变换管线",
+    intro:
+      "把已有的派生、挂接指标、关联三步原子操作编排成一条线性步骤链，一次运行按序执行、两级留痕——适合重复性的日常加工。",
+    pipelineTitle: "什么是管线",
+    pipelineDesc:
+      "一条管线是从基础数据集出发的线性步骤链：派生（过滤/排序/限行）→ 挂接指标 → 关联数据集，按需组合；末步输出即管线输出，可像普通数据集一样查询与再派生。",
+    versionTitle: "版本语义",
+    versionDesc:
+      "步骤列表的任何变更都会产生新版本，历史版本原样可查；仅改名称/描述不动版本。",
+    outputTitle: "输出语义",
+    outputDesc:
+      "同版本重跑原地刷新输出数据集（不新建）；升级新版本后首跑创建新输出，旧版本输出以普通数据集存续、不受影响。",
+    failureTitle: "失败隔离",
+    failureDesc:
+      "中途失败时，已成功步骤的输出保留，后续步骤不再执行——运行记录如实定位到失败步骤与错误摘要，绝不伪造后续结果。",
+    scheduleTitle: "调度",
+    scheduleDesc:
+      "管线级 cron 调度（五字段、UTC）：到点自动按当前版本运行，可暂停/恢复/删除；调度触发的运行与手动运行同等记入历史。",
+    meteringTitle: "计量如实",
+    meteringDesc:
+      "每个步骤的输出行数照常计入配额与用量——管线不提供绕过计量的路径；配额在中途耗尽时，运行如实记为失败并定位到触发的步骤。",
+    consoleLink: "前往控制台「我的数据 → 管线」→",
+  },
   forms: {
     // 表单产物客户教程（wire-form-builder 任务 5.1）：创建→绑定→配字段→试填
     // →发布→分享→数据落修正历史的全流程（照 docs.localData 的步骤 key 组织）。
@@ -1419,7 +1445,8 @@ const zh = {
         },
       },
       // 管线子视图（wire-transform-pipeline-view 任务 2.1/2.2）：数据页内
-      // 「数据集 / 管线」二选一子视图；管线为全企业派生血缘图（只读 v0）。
+      // 「数据集 / 管线」二选一子视图；管线内再分「管线」工作台
+      // （wire-transform-pipelines 5.1-5.4）与「图谱」只读血缘图两页签。
       pipeline: {
         viewList: "数据集",
         tab: "管线",
@@ -1437,6 +1464,123 @@ const zh = {
         tier: {
           api: "免费档",
           cell: "cell",
+        },
+        // 管线工作台（wire-transform-pipelines 任务 5.1-5.5）：列表（版本/
+        // 步骤数/调度态/最近运行）/ 编辑器（三类型步骤参数与原子操作同形、
+        // 版本语义明示）/ 运行（立即运行 + 逐步骤结果 + 历史分页）/ 调度
+        // （cron 挂接 + 暂停恢复删除）。
+        workbench: {
+          tab: "管线",
+          graphTab: "图谱",
+          subtitle:
+            "把派生、挂指标、关联编排成一条版本化的线性步骤链——按序执行、输出槽位稳定、失败如实定位；可挂 cron 到点自动运行。",
+          create: "新建管线",
+          loading: "加载中…",
+          empty: "还没有管线",
+          emptyHint:
+            "新建第一条管线：选基础数据集，编排 派生 → 挂接指标 → 关联数据集 步骤链。",
+          stepsCount: "{{count}} 步",
+          baseLabel: "基础数据集",
+          basePlaceholder: "选择数据集",
+          noSchedule: "未挂调度",
+          schedulePaused: "已暂停",
+          neverRun: "尚未运行",
+          trigger: {
+            manual: "手动",
+            schedule: "调度",
+          },
+          runStatus: {
+            success: "成功",
+            failed: "失败",
+          },
+          loadError: "加载失败",
+          backToList: "返回列表",
+          edit: "编辑",
+          scheduleManagedNote:
+            "输出已由管线调度管理——到点自动按当前版本运行，无需手工重跑。",
+          versionsTitle: "版本历史（append-only）",
+          currentVersion: "当前版本",
+          versionMeta: "{{time}} · {{actor}}",
+          opLabels: {
+            derive: "派生",
+            join: "挂接指标",
+            link: "关联数据集",
+          },
+          stepsEmpty: "（无步骤）",
+          editorTitleNew: "新建管线",
+          editorTitleEdit: "编辑管线",
+          editorError: "请补全管线名称、基础数据集与步骤名称。",
+          readOnlyNote:
+            "当前席位为只读（viewer）——管线定义仅 owner/editor 可修改。",
+          nameLabel: "名称",
+          namePlaceholder: "如：营收日报管线",
+          descLabel: "描述（可选）",
+          descPlaceholder: "一句话说明这条管线做什么",
+          stepsTitle: "步骤链（线性：首步以基础数据集为输入，其后逐步承接）",
+          stepsHint:
+            "步骤参数与既有单数据集操作一致；改步骤或基础数据集并保存将产生新版本。",
+          addStep: "添加步骤",
+          stepNamePlaceholder: "步骤名称",
+          stepNameRequired: "步骤名称不能为空",
+          moveUp: "上移",
+          moveDown: "下移",
+          removeStep: "移除步骤",
+          limitLabel: "限行 limit（可选）",
+          filtersLabel: "过滤 filters（JSON，可选）",
+          filtersPlaceholder: '[{"column":"city","op":"=","value":"上海"}]',
+          filtersHint:
+            "与单数据集派生的 filters 同形：[{column,op,value}] 数组；留空 = 不过滤。",
+          paramsLabel: "参数（JSON）",
+          joinHint:
+            '与「挂接指标」端点同形：{"indicators":[{"code":"…","as":"…"}],"date_column":"date","region_column":null,"default_entity":"中国"}。',
+          linkRightLabel: "右表数据集",
+          linkLeftKeysLabel: "左键列（逗号分隔）",
+          linkRightKeysLabel: "右键列（逗号分隔）",
+          keysPlaceholder: "如：city, date",
+          linkHint: "LEFT JOIN 语义：左表行全保留，未命中右列置空。",
+          jsonError: "参数 JSON 不合法",
+          versionConfirm: "步骤变更将创建新版本 v{{next}}",
+          save: "保存",
+          saving: "保存中…",
+          cancel: "取消",
+          runSectionTitle: "运行",
+          runNow: "立即运行",
+          runRunning: "运行中…",
+          runError: "运行失败",
+          runTitle: "本次运行",
+          rows: "{{count}} 行",
+          duration: "{{ms}} ms",
+          openDataset: "打开 {{name}}",
+          abortedNote: "后续步骤未执行（该步骤失败后管线中止）。",
+          stepStatus: {
+            success: "成功",
+            failed: "失败",
+            skipped: "跳过",
+            quota_exhausted: "配额耗尽",
+          },
+          historyTitle: "运行历史",
+          historyEmpty: "还没有运行记录",
+          historyError: "运行历史加载失败",
+          historyPageInfo: "共 {{total}} 次 · 第 {{page}} / {{pages}} 页",
+          prevPage: "上一页",
+          nextPage: "下一页",
+          scheduleTitle: "调度",
+          scheduleHint:
+            "为整条管线挂接一个 cron 调度：到点自动按当前版本运行（计量与留痕同口径）。",
+          scheduleUtcNote: "cron 为五字段（分 时 日 月 周），按 UTC 解释。",
+          scheduleError: "调度操作失败",
+          scheduleLoadError: "调度状态加载失败",
+          cronLabel: "cron",
+          cronPlaceholder: "0 6 * * *",
+          scheduleSave: "挂接调度",
+          scheduleUpdate: "更新",
+          scheduleSaving: "保存中…",
+          scheduleRegistered: "调度中",
+          scheduleLastRunLabel: "最近调度运行",
+          scheduleNever: "尚未触发",
+          schedulePause: "暂停",
+          scheduleResume: "恢复",
+          scheduleDelete: "删除",
         },
       },
     },

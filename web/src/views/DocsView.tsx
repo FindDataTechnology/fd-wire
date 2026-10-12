@@ -434,6 +434,90 @@ export function DocsView() {
         </a>
       </section>
 
+      {/* 五c、变换管线（wire-transform-pipelines 任务 7.1）：什么是管线
+          （线性步骤链：派生→挂指标→关联）/ 版本语义（步骤变更新版本、
+          旧版本可查）/ 输出语义（同版本重跑原地刷新、换版本新输出）/
+          失败隔离（中途失败前面保留、后面不执行）/ 调度（cron 管线级）/
+          计量如实（每步行数照常计入配额）——口径与控制台界面一致。 */}
+      <section
+        id="transform-pipelines"
+        data-testid="docs-transform-pipelines"
+        className="space-y-4"
+      >
+        <h2 className="text-xl font-semibold">
+          {t("docs.transformPipelines.title")}
+        </h2>
+        <p className="max-w-3xl text-sm text-slate-500">
+          {t("docs.transformPipelines.intro")}
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="rounded-lg border border-slate-200 p-5">
+            <h3 className="font-medium">
+              {t("docs.transformPipelines.pipelineTitle")}
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.transformPipelines.pipelineDesc")}
+            </p>
+          </div>
+          <div
+            data-testid="docs-transform-pipelines-version"
+            className="rounded-lg border border-slate-200 p-5"
+          >
+            <h3 className="font-medium">
+              {t("docs.transformPipelines.versionTitle")}
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.transformPipelines.versionDesc")}
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-200 p-5">
+            <h3 className="font-medium">
+              {t("docs.transformPipelines.outputTitle")}
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.transformPipelines.outputDesc")}
+            </p>
+          </div>
+          <div
+            data-testid="docs-transform-pipelines-failure"
+            className="rounded-lg border border-slate-200 p-5"
+          >
+            <h3 className="font-medium">
+              {t("docs.transformPipelines.failureTitle")}
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.transformPipelines.failureDesc")}
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-200 p-5">
+            <h3 className="font-medium">
+              {t("docs.transformPipelines.scheduleTitle")}
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.transformPipelines.scheduleDesc")}
+            </p>
+          </div>
+          <div
+            data-testid="docs-transform-pipelines-metering"
+            className="rounded-lg border border-slate-200 p-5"
+          >
+            <h3 className="font-medium">
+              {t("docs.transformPipelines.meteringTitle")}
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.transformPipelines.meteringDesc")}
+            </p>
+          </div>
+        </div>
+        <a
+          href="#/console/datasets"
+          data-testid="docs-transform-pipelines-console-link"
+          className="inline-block text-sm text-slate-600 underline hover:text-slate-900"
+        >
+          {t("docs.transformPipelines.consoleLink")}
+        </a>
+      </section>
+
       {/* 六、表单（wire-form-builder 任务 5.1）：把「收数据」做成成熟表单分享
           给他人填写的全流程教程——创建/绑定/配字段/试填/发布分享/修正历史
           回滚，面向客户的口径（照 docs.localData 的步骤条组织）。 */}

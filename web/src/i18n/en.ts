@@ -212,6 +212,33 @@ const en: Translation = {
       "Quality metrics are computed inside your dedicated data engine; the platform keeps only the aggregate numbers and never touches your data content — your data stays within your scope.",
     consoleLink: "Open Console → My data →",
   },
+  transformPipelines: {
+    // Transform-pipelines chapter (wire-transform-pipelines task 7.1): what a
+    // pipeline is / versioning / output semantics / failure isolation /
+    // scheduling / honest metering — wording matches the console workbench.
+    title: "Transform pipelines",
+    intro:
+      "Chain the existing atomic operations — derive, indicator join, link — into a linear step chain that runs in order with two-level history; ideal for recurring daily processing.",
+    pipelineTitle: "What is a pipeline",
+    pipelineDesc:
+      "A pipeline is a linear step chain starting from a base dataset: Derive (filter/sort/limit) → Join indicators → Link dataset, combined as needed. The last step's output is the pipeline output — query and derive from it like any other dataset.",
+    versionTitle: "Versioning",
+    versionDesc:
+      "Any change to the step list creates a new version, and past versions stay queryable as-is; renaming or editing the description never bumps the version.",
+    outputTitle: "Output semantics",
+    outputDesc:
+      "Re-running the same version refreshes the output datasets in place (nothing new is created); the first run of a new version creates new outputs, while old-version outputs persist as regular datasets, untouched.",
+    failureTitle: "Failure isolation",
+    failureDesc:
+      "If a step fails midway, outputs of already-successful steps are kept and later steps do not run — the run record locates the failed step and its error summary honestly; later results are never fabricated.",
+    scheduleTitle: "Scheduling",
+    scheduleDesc:
+      "One pipeline-level cron schedule (five fields, UTC) runs the current version automatically on time; pause/resume/delete at will. Scheduled runs enter the history exactly like manual ones.",
+    meteringTitle: "Honest metering",
+    meteringDesc:
+      "Every step's output rows count against quota and usage as usual — pipelines offer no path around metering; when quota runs out mid-run, the run is honestly recorded as failed at the triggering step.",
+    consoleLink: "Open Console → My data → Pipelines →",
+  },
   forms: {
     // Form-artifact customer tutorial (wire-form-builder task 5.1): the full
     // flow of create → bind → configure fields → try it → publish → share →
@@ -1493,8 +1520,9 @@ const en: Translation = {
         },
       },
       // Pipeline sub-view (wire-transform-pipeline-view tasks 2.1/2.2): the
-      // data page offers a "Datasets / Pipeline" sub-view switch; pipeline is
-      // the enterprise-wide derivation lineage graph (read-only v0).
+      // data page offers a "Datasets / Pipeline" sub-view switch; inside, the
+      // pipeline view splits into the "Pipelines" workbench
+      // (wire-transform-pipelines 5.1-5.4) and the read-only "Graph" lineage.
       pipeline: {
         viewList: "Datasets",
         tab: "Pipeline",
@@ -1515,6 +1543,129 @@ const en: Translation = {
         tier: {
           api: "Free tier",
           cell: "cell",
+        },
+        // Pipeline workbench (wire-transform-pipelines 5.1-5.5): list (version /
+        // steps / schedule / last run) / editor (three step types with params
+        // matching the atomic operations, version semantics spelled out) /
+        // runs (run now + per-step result + paged history) / schedule (cron
+        // attach + pause/resume/delete).
+        workbench: {
+          tab: "Pipelines",
+          graphTab: "Graph",
+          subtitle:
+            "Chain derive, indicator-join and link steps into a versioned linear pipeline — sequential execution, stable output slots, honest failure reporting, and optional cron scheduling.",
+          create: "New pipeline",
+          loading: "Loading…",
+          empty: "No pipelines yet",
+          emptyHint:
+            "Create your first pipeline: pick a base dataset and chain Derive → Join indicators → Link dataset steps.",
+          stepsCount: "{{count}} steps",
+          baseLabel: "Base dataset",
+          basePlaceholder: "Select a dataset",
+          noSchedule: "No schedule",
+          schedulePaused: "Paused",
+          neverRun: "Never run",
+          trigger: {
+            manual: "Manual",
+            schedule: "Scheduled",
+          },
+          runStatus: {
+            success: "Success",
+            failed: "Failed",
+          },
+          loadError: "Failed to load",
+          backToList: "Back to list",
+          edit: "Edit",
+          scheduleManagedNote:
+            "Outputs are managed by the pipeline schedule — it runs automatically on the current version; no manual reruns needed.",
+          versionsTitle: "Version history (append-only)",
+          currentVersion: "Current",
+          versionMeta: "{{time}} · {{actor}}",
+          opLabels: {
+            derive: "Derive",
+            join: "Join indicators",
+            link: "Link dataset",
+          },
+          stepsEmpty: "(no steps)",
+          editorTitleNew: "New pipeline",
+          editorTitleEdit: "Edit pipeline",
+          editorError:
+            "Fill in the pipeline name, base dataset and step names.",
+          readOnlyNote:
+            "Your seat is read-only (viewer) — only owner/editor can modify pipeline definitions.",
+          nameLabel: "Name",
+          namePlaceholder: "e.g. Revenue daily pipeline",
+          descLabel: "Description (optional)",
+          descPlaceholder: "One line about what this pipeline does",
+          stepsTitle:
+            "Step chain (linear: the first step takes the base dataset, each step feeds the next)",
+          stepsHint:
+            "Step params match the existing single-dataset operations; changing steps or the base dataset creates a new version on save.",
+          addStep: "Add step",
+          stepNamePlaceholder: "Step name",
+          stepNameRequired: "Step name is required",
+          moveUp: "Move up",
+          moveDown: "Move down",
+          removeStep: "Remove step",
+          limitLabel: "Row limit (optional)",
+          filtersLabel: "Filters (JSON, optional)",
+          filtersPlaceholder: '[{"column":"city","op":"=","value":"Shanghai"}]',
+          filtersHint:
+            "Same shape as single-dataset derive filters: an array of {column,op,value}; leave empty for no filtering.",
+          paramsLabel: "Params (JSON)",
+          joinHint:
+            'Same shape as the indicator-join endpoint: {"indicators":[{"code":"…","as":"…"}],"date_column":"date","region_column":null,"default_entity":"中国"}.',
+          linkRightLabel: "Right dataset",
+          linkLeftKeysLabel: "Left key columns (comma-separated)",
+          linkRightKeysLabel: "Right key columns (comma-separated)",
+          keysPlaceholder: "e.g. city, date",
+          linkHint:
+            "LEFT JOIN semantics: left rows are all kept; unmatched right columns are null.",
+          jsonError: "Invalid params JSON",
+          versionConfirm: "Step changes will create a new version v{{next}}",
+          save: "Save",
+          saving: "Saving…",
+          cancel: "Cancel",
+          runSectionTitle: "Runs",
+          runNow: "Run now",
+          runRunning: "Running…",
+          runError: "Run failed",
+          runTitle: "Latest run",
+          rows: "{{count}} rows",
+          duration: "{{ms}} ms",
+          openDataset: "Open {{name}}",
+          abortedNote:
+            "Later steps did not run (the pipeline stopped at this failed step).",
+          stepStatus: {
+            success: "Success",
+            failed: "Failed",
+            skipped: "Skipped",
+            quota_exhausted: "Quota exhausted",
+          },
+          historyTitle: "Run history",
+          historyEmpty: "No runs yet",
+          historyError: "Failed to load run history",
+          historyPageInfo: "{{total}} runs · page {{page}} / {{pages}}",
+          prevPage: "Previous",
+          nextPage: "Next",
+          scheduleTitle: "Schedule",
+          scheduleHint:
+            "Attach one cron schedule to the whole pipeline: it runs automatically on the current version (same metering and history).",
+          scheduleUtcNote:
+            "Cron uses five fields (minute hour day month weekday), interpreted as UTC.",
+          scheduleError: "Schedule operation failed",
+          scheduleLoadError: "Failed to load schedule state",
+          cronLabel: "cron",
+          cronPlaceholder: "0 6 * * *",
+          scheduleSave: "Attach schedule",
+          scheduleUpdate: "Update",
+          scheduleSaving: "Saving…",
+          scheduleRegistered: "Scheduled",
+          scheduleLastRunLabel: "Last scheduled run",
+          scheduleNever: "Not triggered yet",
+          schedulePause: "Pause",
+          scheduleResume: "Resume",
+          scheduleDelete: "Delete",
         },
       },
     },

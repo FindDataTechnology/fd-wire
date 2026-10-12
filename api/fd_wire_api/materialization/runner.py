@@ -247,10 +247,75 @@ class MaterializationRunner:
         self, artifact: MaterializedArtifact, *, now: datetime | None = None
     ) -> RunResult:
         """按产物行分派（调度器入口，wire-customer-data-engine 6.1）：
-        derived_dataset → 引擎重派生；其余 → 既有草稿物化路径。"""
+        derived_dataset → 引擎重派生；transform_pipeline → 管线运行服务
+        （wire-transform-pipelines D3，按当前版本跑、trigger=schedule）；
+        其余 → 既有草稿物化路径。"""
         if artifact.kind == "derived_dataset":
             return self._run_derived_refresh(artifact, now=now)
+        if artifact.kind == "transform_pipeline":
+            return self._run_transform_pipeline(artifact, now=now)
         return self.run(artifact.customer_id, artifact.artifact_id, now=now)
+
+    def _run_transform_pipeline(
+        self, artifact: MaterializedArtifact, *, now: datetime | None = None
+    ) -> RunResult:
+        """transform_pipeline 调度触发：调管线运行服务（trigger=schedule），
+        结果摘要落调度行（完整历史在 pipeline_runs/pipeline_run_steps——
+        「下次何时跑」与「跑过什么」两职责分离，design D3）。
+
+        配额硬停在管线步骤创建（``ensure_new_dataset_room``）如实定位到
+        步骤（step=quota_exhausted、run=failed）；此处不做平台侧额度前置
+        门——管线执行与手动运行同走统一代码路（D5），join 重拉指标的计量
+        与额度在 registry 行数门/入口侧生效，平台侧不重复计数。
+        """
+        if not artifact.enabled:
+            return self._record(
+                artifact, status=STATUS_DISABLED, rows=0,
+                error="产物已停用（enabled=false）", now=now,
+            )
+        pipeline_id = artifact.ref_key or ""
+        from ..datasets.db import get_session as get_datasets_session
+        from ..pipelines import service as pipeline_service
+        from ..pipelines.models import TransformPipeline
+
+        # artifact 实例可能挂在调用方会话（scheduler tick 加载）——merge 进本
+        # runner 会话后再改写，``_record`` 的 commit 才真正落库
+        artifact = self._db.merge(artifact)
+        engine_factory = globals().get("_engine_factory_override") or _default_engine_factory
+        session = get_datasets_session()
+        try:
+            pipeline = session.execute(
+                select(TransformPipeline).where(
+                    TransformPipeline.id == pipeline_id,
+                    TransformPipeline.customer_id == artifact.customer_id,
+                )
+            ).scalar_one_or_none()
+            if pipeline is None:
+                return self._record(
+                    artifact, status=STATUS_FAILED, rows=0,
+                    error=f"管线不存在或不属于本企业: {pipeline_id}", now=now,
+                )
+            try:
+                run, steps = pipeline_service.run_pipeline(
+                    session,
+                    pipeline,
+                    trigger=pipeline_service.TRIGGER_SCHEDULE,
+                    engine_factory=engine_factory,
+                )
+            except Exception as exc:  # noqa: BLE001 - 调度面如实记 failed 不上抛
+                return self._record(
+                    artifact, status=STATUS_FAILED, rows=0, error=str(exc), now=now
+                )
+            rows_total = sum(int(s.row_count or 0) for s in steps)
+            return self._record(
+                artifact,
+                status=STATUS_SUCCESS if run.status == "success" else STATUS_FAILED,
+                rows=rows_total,
+                error=run.error_text,
+                now=now,
+            )
+        finally:
+            session.close()
 
     def _run_derived_refresh(
         self, artifact: MaterializedArtifact, *, now: datetime | None = None

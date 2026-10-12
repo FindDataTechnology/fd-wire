@@ -1,195 +1,365 @@
-// 数据页「管线」子视图（wire-transform-pipeline-view 任务 2.1/2.2）：
-// 全企业数据集派生血缘图，GET /api/v1/pipeline/graph 一次拉全量。
-// - 分层布局：按拓扑深度分列（depth 0 源最左，派生逐级向右；列内按 name 排序）；
-// - 节点卡：名称 / 行数 / 更新时间（本地化短格式）/ tier 徽标（api=免费档、
-//   cell）/ 调度徽标（schedule_cron 非空）/ kind 标注（derived=派生、
-//   upload=上传、其余如实）；点击跳数据集详情（onOpenDataset 回调，
-//   与 DatasetsPage 列表卡同一导航方式）；
-// - SVG 连线父→子：列间三次贝塞尔曲线（测量卡片实际位置绘制，不强求
-//   避让算法）；窄屏（<768px）不画 SVG，退化为按深度分组的卡片列表；
-// - 如实呈现：加载失败错误态 + 重试；edges 为空显示空态引导（源数据集
-//   照常列出）；truncated 截断提示；anomalies>0 异常边提示。
-// v0 只读——不提供刷新/派生按钮（操作入口在数据集详情页）。
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+// 数据页「管线」子视图（wire-transform-pipeline-view 任务 2.1/2.2 起，
+// wire-transform-pipelines 任务 5.1-5.4 升级为双页签工作台）：
+// - 「管线」页签：管线工作台——列表（名称/版本徽标/步骤数/调度 cron 与
+//   启停态/最近运行状态章+触发方式+时间）→ 新建/编辑（步骤链编辑、
+//   版本语义明示）→ 详情（立即运行+逐步骤结果+运行历史分页、cron 调度
+//   挂接/暂停/恢复/删除、版本历史 append-only 可查）；
+// - 「图谱」页签：既有只读派生血缘图（PipelineGraphView，原样保留）。
+// 点击输出数据集跳数据集详情（onOpenDataset 回调，与列表卡同导航方式）。
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   apiErrorText,
-  getPipelineGraph,
-  type PipelineGraph,
-  type PipelineGraphNode,
+  fetchPipeline,
+  fetchPipelines,
+  fetchDatasets,
+  type PipelineDetail,
+  type PipelineListItem,
+  type PipelinePage,
+  type PipelineScheduleInfo,
+  type PipelineUpdateResult,
 } from "../api";
+import { PipelineGraphView, formatShortServerDate } from "./PipelineGraphView";
+import { PipelineEditor, type DatasetOption } from "./PipelineEditor";
+import { PipelineRunPanel } from "./PipelineRunPanel";
+import { PipelineScheduleSection } from "./PipelineScheduleSection";
 
-/** 窄屏断点：<768px 退化为分组卡片列表（v0 不做响应式画布）。 */
-const NARROW_QUERY = "(max-width: 767px)";
-
-/** kind 标注复用列表卡来源徽标文案（其他来源如实显示原值）。 */
-const KNOWN_SOURCE_KINDS = ["upload", "connector", "declared", "derived"];
-
-/**
- * 后端时间（naive UTC）→ 本地化短格式（如 2026/10/5 18:00）。
- * 与 util.formatServerDate 同解析规则（无时区标记按 UTC），仅呈现更短；
- * 空值（api 侧缺 updated_at 的容错分支）如实回「—」。
- */
-export function formatShortServerDate(naiveIso: string | null | undefined): string {
-  if (typeof naiveIso !== "string" || !naiveIso) return "—";
-  const normalized = /[Zz]|[+-]\d{2}:?\d{2}$/.test(naiveIso)
-    ? naiveIso
-    : `${naiveIso}Z`;
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return naiveIso;
-  return date.toLocaleString(undefined, {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
-}
-
-/** 深度分列：depth 升序，列内按 name 排序。 */
-export function columnsOfGraph(
-  nodes: PipelineGraphNode[],
-): Array<[number, PipelineGraphNode[]]> {
-  const byDepth = new Map<number, PipelineGraphNode[]>();
-  for (const node of nodes) {
-    const list = byDepth.get(node.depth) ?? [];
-    list.push(node);
-    byDepth.set(node.depth, list);
-  }
-  return [...byDepth.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(
-      ([depth, list]) =>
-        [depth, [...list].sort((a, b) => a.name.localeCompare(b.name))] as [
-          number,
-          PipelineGraphNode[],
-        ],
-    );
-}
-
-/** 窄屏判定：matchMedia 不可用时按宽屏渲染（绝不整页崩）。 */
-function useNarrowViewport(): boolean {
-  const [narrow, setNarrow] = useState<boolean>(
-    () =>
-      typeof window.matchMedia === "function"
-        ? window.matchMedia(NARROW_QUERY).matches
-        : false,
+/** 运行状态章（列表行内小号版；success/failed 双态）。 */
+function RunChip({ status }: { status: "success" | "failed" }) {
+  const { t } = useTranslation();
+  return (
+    <span
+      className={`rounded-full px-2 py-0.5 text-[11px] ring-1 ${
+        status === "success"
+          ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+          : "bg-red-50 text-red-700 ring-red-200"
+      }`}
+    >
+      {t(`console.datasets.pipeline.workbench.runStatus.${status}`)}
+    </span>
   );
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") return;
-    const query = window.matchMedia(NARROW_QUERY);
-    const listener = (event: MediaQueryListEvent) => setNarrow(event.matches);
-    if (typeof query.addEventListener !== "function") return;
-    query.addEventListener("change", listener);
-    return () => query.removeEventListener("change", listener);
-  }, []);
-  return narrow;
 }
 
-/** 计算后的边路径（含起止 dataset_id，供测试与 data-* 断言）。 */
-interface EdgePath {
-  from: string;
-  to: string;
-  op: string;
-  d: string;
-}
+/** 工作台子模式：列表 / 编辑器（新建 pipelineId=null）/ 详情。 */
+type WorkbenchMode =
+  | { kind: "list" }
+  | { kind: "editor"; pipelineId: number | null }
+  | { kind: "detail"; pipelineId: number };
 
 export function PipelineView({
   onOpenDataset,
 }: {
-  /** 点击节点卡跳数据集详情（DatasetsPage 以 setSelectedId 接线）。 */
+  /** 点击输出数据集跳数据集详情（DatasetsPage 以 setSelectedId 接线）。 */
   onOpenDataset: (datasetId: string) => void;
 }) {
   const { t } = useTranslation();
-  const [graph, setGraph] = useState<PipelineGraph | null>(null);
+  const [tab, setTab] = useState<"workbench" | "graph">("workbench");
+  const [mode, setMode] = useState<WorkbenchMode>({ kind: "list" });
+
+  return (
+    <section data-testid="pipeline-view" className="mt-2">
+      {/* 双页签：「管线」工作台 + 「图谱」只读视图（分段切换器同数据页风格）。 */}
+      <div
+        data-testid="pipeline-tabs"
+        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50/60 p-1"
+        role="tablist"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "workbench"}
+          data-testid="pipeline-tab-workbench"
+          onClick={() => setTab("workbench")}
+          className={`rounded-md px-3 py-1 text-xs transition-colors ${
+            tab === "workbench"
+              ? "bg-slate-900 text-white"
+              : "text-slate-600 hover:bg-slate-100"
+          }`}
+        >
+          {t("console.datasets.pipeline.workbench.tab")}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "graph"}
+          data-testid="pipeline-tab-graph"
+          onClick={() => setTab("graph")}
+          className={`rounded-md px-3 py-1 text-xs transition-colors ${
+            tab === "graph"
+              ? "bg-slate-900 text-white"
+              : "text-slate-600 hover:bg-slate-100"
+          }`}
+        >
+          {t("console.datasets.pipeline.workbench.graphTab")}
+        </button>
+      </div>
+
+      {tab === "graph" ? (
+        <PipelineGraphView onOpenDataset={onOpenDataset} />
+      ) : mode.kind === "list" ? (
+        <PipelineWorkbenchList
+          onOpen={(id) => setMode({ kind: "detail", pipelineId: id })}
+          onCreate={() => setMode({ kind: "editor", pipelineId: null })}
+        />
+      ) : mode.kind === "editor" ? (
+        <PipelineEditorScreen
+          pipelineId={mode.pipelineId}
+          onSaved={(result) =>
+            setMode({ kind: "detail", pipelineId: result.id })
+          }
+          onCancel={() => setMode({ kind: "list" })}
+        />
+      ) : (
+        <PipelineDetailScreen
+          pipelineId={mode.pipelineId}
+          onBack={() => setMode({ kind: "list" })}
+          onEdit={() => setMode({ kind: "editor", pipelineId: mode.pipelineId })}
+          onOpenDataset={onOpenDataset}
+        />
+      )}
+    </section>
+  );
+}
+
+/** 管线列表（5.1）：名称/版本徽标/步骤数/调度态/最近运行。 */
+function PipelineWorkbenchList({
+  onOpen,
+  onCreate,
+}: {
+  onOpen: (id: number) => void;
+  onCreate: () => void;
+}) {
+  const { t } = useTranslation();
+  const [page, setPage] = useState<PipelinePage | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const narrow = useNarrowViewport();
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      setGraph(await getPipelineGraph());
+      setPage(await fetchPipelines());
     } catch (err) {
-      setGraph(null);
+      setPage(null);
       setError(apiErrorText(err, t("console.datasets.pipeline.errorTitle")));
     }
   }, [t]);
 
   useEffect(() => {
+    setPage(null);
     void load();
   }, [load]);
 
-  const columns = useMemo(
-    () => (graph ? columnsOfGraph(graph.nodes) : []),
-    [graph],
-  );
-
-  // ── 宽屏 SVG 连线：测量卡片实际位置，父右缘 → 子左缘三次贝塞尔 ──
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const cardRefs = useRef(new Map<string, HTMLElement>());
-  const [edgePaths, setEdgePaths] = useState<EdgePath[]>([]);
-  const [svgSize, setSvgSize] = useState({ width: 0, height: 0 });
-
-  const measureEdges = useCallback(() => {
-    const container = containerRef.current;
-    if (!container || !graph) return;
-    const base = container.getBoundingClientRect();
-    const paths: EdgePath[] = [];
-    for (const edge of graph.edges) {
-      const from = cardRefs.current.get(edge.from_dataset_id);
-      const to = cardRefs.current.get(edge.to_dataset_id);
-      if (!from || !to) continue;
-      const a = from.getBoundingClientRect();
-      const b = to.getBoundingClientRect();
-      const x1 = a.right - base.left;
-      const y1 = a.top + a.height / 2 - base.top;
-      const x2 = b.left - base.left;
-      const y2 = b.top + b.height / 2 - base.top;
-      const dx = Math.max(24, Math.abs(x2 - x1) / 2);
-      paths.push({
-        from: edge.from_dataset_id,
-        to: edge.to_dataset_id,
-        op: edge.op,
-        d: `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`,
-      });
-    }
-    setEdgePaths(paths);
-    setSvgSize({ width: container.scrollWidth, height: container.scrollHeight });
-  }, [graph]);
-
-  useLayoutEffect(() => {
-    if (narrow) {
-      setEdgePaths([]);
-      return;
-    }
-    measureEdges();
-    window.addEventListener("resize", measureEdges);
-    return () => window.removeEventListener("resize", measureEdges);
-  }, [narrow, measureEdges]);
-
-  if (error != null) {
-    return (
-      <div
-        data-testid="pipeline-error"
-        className="mt-4 rounded-md border border-red-200 bg-red-50 p-4"
-      >
-        <p className="text-sm text-red-700">
-          {t("console.datasets.pipeline.errorTitle")}
+  return (
+    <div data-testid="pipeline-workbench" className="mt-2">
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="max-w-2xl text-xs text-slate-500">
+          {t("console.datasets.pipeline.workbench.subtitle")}
         </p>
-        {error !== t("console.datasets.pipeline.errorTitle") && (
-          <p className="mt-1 break-all font-mono text-[11px] text-red-500">
-            {error}
-          </p>
-        )}
         <button
           type="button"
-          data-testid="pipeline-retry"
+          data-testid="pipeline-create"
+          onClick={onCreate}
+          className="ml-auto rounded-md bg-slate-900 px-3 py-1.5 text-xs text-white hover:bg-slate-700"
+        >
+          {t("console.datasets.pipeline.workbench.create")}
+        </button>
+      </div>
+
+      {error != null && (
+        <div
+          data-testid="pipeline-list-error"
+          className="mt-4 rounded-md border border-red-200 bg-red-50 p-4"
+        >
+          <p className="text-sm text-red-700">
+            {t("console.datasets.pipeline.errorTitle")}
+          </p>
+          {error !== t("console.datasets.pipeline.errorTitle") && (
+            <p className="mt-1 break-all font-mono text-[11px] text-red-500">
+              {error}
+            </p>
+          )}
+          <button
+            type="button"
+            data-testid="pipeline-list-retry"
+            onClick={() => void load()}
+            className="mt-2 rounded border border-red-300 px-2 py-0.5 text-xs text-red-700 hover:bg-red-100"
+          >
+            {t("console.datasets.pipeline.retry")}
+          </button>
+        </div>
+      )}
+
+      {page == null && error == null && (
+        <p
+          data-testid="pipeline-list-loading"
+          className="mt-4 text-xs text-slate-400"
+        >
+          {t("console.datasets.pipeline.workbench.loading")}
+        </p>
+      )}
+
+      {page != null && page.items.length === 0 && (
+        <div
+          data-testid="pipeline-list-empty"
+          className="mt-4 rounded-lg border border-dashed border-slate-300 p-8 text-center"
+        >
+          <p className="text-sm text-slate-600">
+            {t("console.datasets.pipeline.workbench.empty")}
+          </p>
+          <p className="mt-1 text-xs text-slate-400">
+            {t("console.datasets.pipeline.workbench.emptyHint")}
+          </p>
+        </div>
+      )}
+
+      {page != null && page.items.length > 0 && (
+        <ul data-testid="pipeline-list" className="mt-3 space-y-2">
+          {page.items.map((item) => (
+            <PipelineRow key={item.id} item={item} onOpen={() => onOpen(item.id)} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function PipelineRow({ item, onOpen }: { item: PipelineListItem; onOpen: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <li>
+      <button
+        type="button"
+        data-testid="pipeline-row"
+        data-pipeline-id={item.id}
+        onClick={onOpen}
+        className="w-full rounded-lg border border-slate-200 bg-white p-4 text-left transition-colors hover:border-slate-400"
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            data-testid="pipeline-row-name"
+            className="text-sm font-medium text-slate-800"
+          >
+            {item.name}
+          </span>
+          <span
+            data-testid="pipeline-row-version"
+            data-version={item.current_version}
+            className="rounded-full bg-slate-900 px-2 py-0.5 font-mono text-[11px] text-white"
+          >
+            v{item.current_version}
+          </span>
+          <span
+            data-testid="pipeline-row-steps"
+            className="text-[11px] text-slate-500"
+          >
+            {t("console.datasets.pipeline.workbench.stepsCount", {
+              count: item.steps_count,
+            })}
+          </span>
+          {item.description && (
+            <span className="truncate text-[11px] text-slate-400">
+              {item.description}
+            </span>
+          )}
+        </div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+          <span data-testid="pipeline-row-base">
+            {t("console.datasets.pipeline.workbench.baseLabel")}：
+            {item.base_dataset_name}
+          </span>
+          {item.schedule ? (
+            <span
+              data-testid="pipeline-row-schedule"
+              data-cron={item.schedule.cron}
+              data-enabled={item.schedule.enabled ? "true" : "false"}
+              className={`rounded px-1.5 py-0.5 font-mono ${
+                item.schedule.enabled
+                  ? "bg-sky-50 text-sky-700"
+                  : "bg-slate-100 text-slate-500"
+              }`}
+              title={item.schedule.cron}
+            >
+              {item.schedule.cron}
+              {!item.schedule.enabled &&
+                ` · ${t("console.datasets.pipeline.workbench.schedulePaused")}`}
+            </span>
+          ) : (
+            <span data-testid="pipeline-row-noschedule">
+              {t("console.datasets.pipeline.workbench.noSchedule")}
+            </span>
+          )}
+          {item.last_run ? (
+            <span
+              data-testid="pipeline-row-lastrun"
+              data-status={item.last_run.status}
+              data-trigger={item.last_run.trigger}
+              className="flex items-center gap-1.5"
+            >
+              <RunChip status={item.last_run.status} />
+              <span>
+                {item.last_run.trigger === "schedule"
+                  ? t("console.datasets.pipeline.workbench.trigger.schedule")
+                  : t("console.datasets.pipeline.workbench.trigger.manual")}
+              </span>
+              <span>{formatShortServerDate(item.last_run.started_at)}</span>
+            </span>
+          ) : (
+            <span data-testid="pipeline-row-norun">
+              {t("console.datasets.pipeline.workbench.neverRun")}
+            </span>
+          )}
+        </div>
+      </button>
+    </li>
+  );
+}
+
+/** 编辑器屏幕：编辑既有管线时先拉详情（步骤草稿取当前版本）。 */
+function PipelineEditorScreen({
+  pipelineId,
+  onSaved,
+  onCancel,
+}: {
+  pipelineId: number | null;
+  onSaved: (result: PipelineUpdateResult) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const [pipeline, setPipeline] = useState<PipelineDetail | null>(null);
+  const [datasets, setDatasets] = useState<DatasetOption[] | null>(null);
+  const [loadError, setLoadError] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoadError(false);
+    try {
+      // 详情与数据集候选并行：任一失败整屏错误态（编辑器两端都依赖）。
+      const [detail, datasetList] = await Promise.all([
+        pipelineId == null ? Promise.resolve(null) : fetchPipeline(pipelineId),
+        fetchDatasets().catch(() => []),
+      ]);
+      setPipeline(detail);
+      setDatasets(datasetList.map((d) => ({ id: d.id, name: d.name })));
+    } catch {
+      setLoadError(true);
+    }
+  }, [pipelineId]);
+
+  useEffect(() => {
+    setPipeline(null);
+    setDatasets(null);
+    void load();
+  }, [load]);
+
+  if (loadError) {
+    return (
+      <div data-testid="pipeline-editor-load-error" className="mt-4">
+        <p className="text-xs text-red-600">
+          {t("console.datasets.pipeline.workbench.loadError")}
+        </p>
+        <button
+          type="button"
+          data-testid="pipeline-editor-load-retry"
           onClick={() => void load()}
-          className="mt-2 rounded border border-red-300 px-2 py-0.5 text-xs text-red-700 hover:bg-red-100"
+          className="mt-1 rounded border border-red-300 px-2 py-0.5 text-xs text-red-700 hover:bg-red-100"
         >
           {t("console.datasets.pipeline.retry")}
         </button>
@@ -197,214 +367,210 @@ export function PipelineView({
     );
   }
 
-  if (graph == null) {
+  if (datasets == null) {
     return (
-      <p className="mt-6 text-xs text-slate-400" data-testid="pipeline-loading">
-        {t("console.datasets.pipeline.loading")}
+      <p data-testid="pipeline-editor-loading" className="mt-4 text-xs text-slate-400">
+        {t("console.datasets.pipeline.workbench.loading")}
       </p>
     );
   }
 
   return (
-    <section data-testid="pipeline-view" className="mt-2">
-      <p className="mt-1 max-w-2xl text-xs text-slate-500">
-        {t("console.datasets.pipeline.subtitle")}
-      </p>
-
-      {/* 如实提示：无派生 / 截断 / 异常边（行内条，不阻塞节点呈现） */}
-      {graph.edges.length === 0 && (
-        <p
-          data-testid="pipeline-empty-hint"
-          className="mt-3 max-w-2xl rounded-md border border-dashed border-slate-300 bg-slate-50/60 px-3 py-2 text-xs text-slate-600"
-        >
-          {t("console.datasets.pipeline.emptyHint")}
-        </p>
-      )}
-      {graph.truncated && (
-        <p
-          data-testid="pipeline-truncated"
-          className="mt-3 max-w-2xl rounded-md border border-amber-200 bg-amber-50/60 px-3 py-2 text-xs text-amber-700"
-        >
-          {t("console.datasets.pipeline.truncated")}
-        </p>
-      )}
-      {graph.anomalies > 0 && (
-        <p
-          data-testid="pipeline-anomalies"
-          className="mt-3 max-w-2xl rounded-md border border-amber-200 bg-amber-50/60 px-3 py-2 text-xs text-amber-700"
-        >
-          {t("console.datasets.pipeline.anomalies", { count: graph.anomalies })}
-        </p>
-      )}
-
-      {narrow ? (
-        // 窄屏退化：按深度分组的卡片列表（无 SVG 画布）。
-        <div data-testid="pipeline-list" className="mt-4 space-y-5">
-          {columns.map(([depth, nodes]) => (
-            <section
-              key={depth}
-              data-testid="pipeline-depth-group"
-              data-depth={depth}
-            >
-              <p
-                data-testid="pipeline-depth-label"
-                className="text-[11px] font-medium uppercase tracking-wide text-slate-400"
-              >
-                {t("console.datasets.pipeline.columnLabel", { depth })}
-              </p>
-              <div className="mt-2 flex flex-col gap-2">
-                {nodes.map((node) => (
-                  <PipelineNodeCard
-                    key={node.dataset_id}
-                    node={node}
-                    onOpen={onOpenDataset}
-                  />
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
-      ) : (
-        // 宽屏：深度分列 + SVG 父→子连线（测量实际卡片位置绘制）。
-        <div
-          data-testid="pipeline-graph"
-          ref={containerRef}
-          className="relative mt-4 overflow-x-auto"
-        >
-          <div className="flex items-start gap-10 p-2">
-            {columns.map(([depth, nodes]) => (
-              <div
-                key={depth}
-                data-testid="pipeline-column"
-                data-depth={depth}
-                className="flex w-60 shrink-0 flex-col gap-3"
-              >
-                <p
-                  data-testid="pipeline-column-label"
-                  className="text-[11px] font-medium uppercase tracking-wide text-slate-400"
-                >
-                  {t("console.datasets.pipeline.columnLabel", { depth })}
-                </p>
-                {nodes.map((node) => (
-                  <PipelineNodeCard
-                    key={node.dataset_id}
-                    node={node}
-                    onOpen={onOpenDataset}
-                    attachRef={(el) => {
-                      if (el) cardRefs.current.set(node.dataset_id, el);
-                      else cardRefs.current.delete(node.dataset_id);
-                    }}
-                  />
-                ))}
-              </div>
-            ))}
-          </div>
-          <svg
-            data-testid="pipeline-edges"
-            className="pointer-events-none absolute inset-0"
-            width={svgSize.width}
-            height={svgSize.height}
-            aria-hidden="true"
-          >
-            {edgePaths.map((path) => (
-              <path
-                key={`${path.from}->${path.to}`}
-                data-testid="pipeline-edge"
-                data-from={path.from}
-                data-to={path.to}
-                data-op={path.op}
-                d={path.d}
-                fill="none"
-                strokeWidth="1.5"
-                className="stroke-slate-300"
-              >
-                <title>{`${path.from} → ${path.to} (${path.op})`}</title>
-              </path>
-            ))}
-          </svg>
-        </div>
-      )}
-    </section>
+    <PipelineEditor
+      pipeline={pipelineId == null ? null : pipeline}
+      datasets={datasets}
+      onSaved={onSaved}
+      onCancel={onCancel}
+    />
   );
 }
 
-function PipelineNodeCard({
-  node,
-  onOpen,
-  attachRef,
+/** 管线详情（5.3/5.4 载体）：头部信息 + 版本历史 + 调度小节 + 运行面板。 */
+function PipelineDetailScreen({
+  pipelineId,
+  onBack,
+  onEdit,
+  onOpenDataset,
 }: {
-  node: PipelineGraphNode;
-  onOpen: (datasetId: string) => void;
-  /** 宽屏布局接线卡片 DOM（连线测量用）；窄屏列表不传。 */
-  attachRef?: (el: HTMLButtonElement | null) => void;
+  pipelineId: number;
+  onBack: () => void;
+  onEdit: () => void;
+  onOpenDataset: (datasetId: string) => void;
 }) {
   const { t } = useTranslation();
-  const tier =
-    node.storage_tier === "api" || node.storage_tier === "cell"
-      ? node.storage_tier
-      : null;
-  const kindLabel = KNOWN_SOURCE_KINDS.includes(node.source_kind)
-    ? t(`console.datasets.source.${node.source_kind}`)
-    : node.source_kind;
-  return (
-    <button
-      type="button"
-      ref={attachRef}
-      data-testid="pipeline-node"
-      data-dataset-id={node.dataset_id}
-      data-depth={node.depth}
-      data-kind={node.source_kind}
-      onClick={() => onOpen(node.dataset_id)}
-      className="w-full rounded-lg border border-slate-200 bg-white p-3 text-left transition-colors hover:border-slate-400"
-    >
-      <span
-        data-testid="pipeline-node-name"
-        className="block truncate text-sm font-medium text-slate-800"
-        title={node.name}
-      >
-        {node.name}
-      </span>
-      <span className="mt-1.5 flex flex-wrap gap-1">
-        <span
-          data-testid="pipeline-node-kind"
-          data-kind={node.source_kind}
-          className={`rounded-full px-2 py-0.5 text-xs ring-1 ${
-            node.source_kind === "derived"
-              ? "bg-teal-50 text-teal-700 ring-teal-200"
-              : "bg-slate-100 text-slate-600 ring-slate-200"
-          }`}
+  const [detail, setDetail] = useState<PipelineDetail | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  // 调度态（「输出已由管线调度管理」提示依据；由调度小节加载/变更时同步）。
+  const [schedule, setSchedule] = useState<PipelineScheduleInfo | null>(null);
+
+  const load = useCallback(async () => {
+    setLoadError(false);
+    try {
+      setDetail(await fetchPipeline(pipelineId));
+    } catch {
+      setDetail(null);
+      setLoadError(true);
+    }
+  }, [pipelineId]);
+
+  useEffect(() => {
+    setDetail(null);
+    setSchedule(null);
+    void load();
+  }, [load]);
+
+  if (loadError) {
+    return (
+      <div data-testid="pipeline-detail-error" className="mt-4">
+        <p className="text-xs text-red-600">
+          {t("console.datasets.pipeline.workbench.loadError")}
+        </p>
+        <button
+          type="button"
+          data-testid="pipeline-detail-retry"
+          onClick={() => void load()}
+          className="mt-1 rounded border border-red-300 px-2 py-0.5 text-xs text-red-700 hover:bg-red-100"
         >
-          {kindLabel}
+          {t("console.datasets.pipeline.retry")}
+        </button>
+      </div>
+    );
+  }
+
+  if (detail == null) {
+    return (
+      <p data-testid="pipeline-detail-loading" className="mt-4 text-xs text-slate-400">
+        {t("console.datasets.pipeline.workbench.loading")}
+      </p>
+    );
+  }
+
+  const currentVersion =
+    detail.versions.find((v) => v.version === detail.current_version) ??
+    detail.versions[detail.versions.length - 1];
+
+  return (
+    <div data-testid="pipeline-detail" data-pipeline-id={detail.id} className="mt-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          data-testid="pipeline-detail-back"
+          onClick={onBack}
+          className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+        >
+          ← {t("console.datasets.pipeline.workbench.backToList")}
+        </button>
+        <h3
+          data-testid="pipeline-detail-name"
+          className="text-sm font-semibold text-slate-800"
+        >
+          {detail.name}
+        </h3>
+        <span
+          data-testid="pipeline-detail-version"
+          data-version={detail.current_version}
+          className="rounded-full bg-slate-900 px-2 py-0.5 font-mono text-[11px] text-white"
+        >
+          v{detail.current_version}
         </span>
-        {tier && (
-          <span
-            data-testid="pipeline-node-tier"
-            data-tier={tier}
-            className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 ring-1 ring-slate-200"
-          >
-            {t(`console.datasets.pipeline.tier.${tier}`)}
-          </span>
-        )}
-        {node.schedule_cron && (
-          <span
-            data-testid="pipeline-node-scheduled"
-            title={node.schedule_cron}
-            className="rounded-full bg-sky-50 px-2 py-0.5 text-xs text-sky-700 ring-1 ring-sky-200"
-          >
-            {t("console.datasets.pipeline.scheduled")}
-          </span>
-        )}
-      </span>
-      <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500">
-        <span data-testid="pipeline-node-rows">
-          {t("console.datasets.rowCount", { count: node.row_count })}
+        <button
+          type="button"
+          data-testid="pipeline-edit"
+          onClick={onEdit}
+          className="ml-auto rounded border border-slate-300 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+        >
+          {t("console.datasets.pipeline.workbench.edit")}
+        </button>
+      </div>
+
+      {detail.description && (
+        <p className="mt-1.5 max-w-2xl text-xs text-slate-500">
+          {detail.description}
+        </p>
+      )}
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+        <span data-testid="pipeline-detail-base">
+          {t("console.datasets.pipeline.workbench.baseLabel")}：
+          {detail.base_dataset_name}
         </span>
-        <span>·</span>
-        <span data-testid="pipeline-node-updated">
+        <span data-testid="pipeline-detail-updated">
           {t("console.datasets.pipeline.updatedLabel")}{" "}
-          {formatShortServerDate(node.updated_at)}
+          {formatShortServerDate(detail.updated_at)}
         </span>
-      </span>
-    </button>
+      </div>
+
+      {/* 已挂调度：输出由管线调度管理（不再手工重跑也保持新鲜）。 */}
+      {schedule != null && (
+        <p
+          data-testid="pipeline-schedule-managed-note"
+          className="mt-2 max-w-2xl rounded border border-sky-200 bg-sky-50/60 px-3 py-2 text-xs text-sky-700"
+        >
+          {t("console.datasets.pipeline.workbench.scheduleManagedNote")}
+        </p>
+      )}
+
+      {/* 版本历史（append-only）：当前版本步骤链 + 旧版本原样可查。 */}
+      <section data-testid="pipeline-versions" className="mt-5">
+        <h4 className="text-xs font-medium text-slate-600">
+          {t("console.datasets.pipeline.workbench.versionsTitle")}
+        </h4>
+        <ul className="mt-2 space-y-2">
+          {[...detail.versions].reverse().map((version) => (
+            <li
+              key={version.version}
+              data-testid="pipeline-version"
+              data-version={version.version}
+              data-current={version.version === detail.current_version ? "true" : "false"}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
+                  v{version.version}
+                </span>
+                {version.version === detail.current_version && (
+                  <span
+                    data-testid={`pipeline-version-current-${version.version}`}
+                    className="rounded bg-teal-50 px-1.5 py-0.5 text-[11px] text-teal-700"
+                  >
+                    {t("console.datasets.pipeline.workbench.currentVersion")}
+                  </span>
+                )}
+                <span className="text-[11px] text-slate-400">
+                  {t("console.datasets.pipeline.workbench.versionMeta", {
+                    time: formatShortServerDate(version.created_at),
+                    actor: version.created_by,
+                  })}
+                </span>
+              </div>
+              <ol className="mt-1.5 flex flex-wrap gap-1.5">
+                {version.steps.map((step, index) => (
+                  <li
+                    key={`${version.version}-${index}`}
+                    data-testid="pipeline-version-step"
+                    className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-600"
+                  >
+                    {index + 1}.
+                    {t(`console.datasets.pipeline.workbench.opLabels.${step.op}`)}
+                    {step.name ? `·${step.name}` : ""}
+                  </li>
+                ))}
+              </ol>
+            </li>
+          ))}
+        </ul>
+        {currentVersion && currentVersion.steps.length === 0 && (
+          <p className="mt-1 text-[11px] text-slate-400">
+            {t("console.datasets.pipeline.workbench.stepsEmpty")}
+          </p>
+        )}
+      </section>
+
+      <PipelineScheduleSection
+        pipelineId={pipelineId}
+        onScheduleChanged={setSchedule}
+      />
+
+      <PipelineRunPanel pipelineId={pipelineId} onOpenDataset={onOpenDataset} />
+    </div>
   );
 }

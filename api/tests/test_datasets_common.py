@@ -43,6 +43,7 @@ from fd_wire_api.datasets.ingest import (
     TOOL_INGEST_COMMIT,
     TOOL_JOIN_INDICATORS,
     TOOL_LINEAGE,
+    TOOL_LINK,
     TOOL_OVERVIEW,
     TOOL_PREVIEW,
     TOOL_QUERY,
@@ -126,6 +127,8 @@ class FakeEngine:
             "null_rates": [{"column": "id", "null_rate": 0.0, "sampled_rows": 2}],
             "sample_limit_hit": False,
         }
+        #: link 工具返回（wire-transform-pipelines link 步骤；行数可编程）
+        self.link_result: dict = {"rows": 3}
 
     @property
     def tools(self) -> list[str]:
@@ -213,6 +216,9 @@ class FakeEngine:
             }
         if tool == TOOL_DERIVE_REFRESH:
             return {"success": True, "dataset_key": arguments["dataset_key"], "rows": 4, "refreshed": True}
+        if tool == TOOL_LINK:
+            # LEFT JOIN 物化子集（wire-entity-link 引擎契约：rows + 子 key 回显）
+            return {"success": True, **dict(self.link_result)}
         if tool == TOOL_LINEAGE:
             return dict(self.lineage_result)
         if tool == TOOL_OVERVIEW:

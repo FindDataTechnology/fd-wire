@@ -1063,7 +1063,7 @@ describe("DatasetDetail 定时刷新小节（wire-refresh-scheduler 4.1/4.2）",
 // 数据页「数据集 / 管线」分段切换；管线视图由种子数据集在假后端组装成图
 //（上传源 ds-1 ← derived ds-2，source_ref 指父 key），点击节点进详情。
 describe("DatasetsPage 管线子视图（wire-transform-pipeline-view 2.2/2.3）", () => {
-  it("子视图入口与切换：默认列表；切「管线」拉图（Bearer），列表/上传/连接器区让位", async () => {
+  it("子视图入口与切换：默认列表；切「管线」默认工作台，进「图谱」拉图（Bearer），列表/上传/连接器区让位", async () => {
     const backend = install({
       datasets: [
         makeDataset({ id: "ds-1", name: "上传源" }),
@@ -1085,17 +1085,24 @@ describe("DatasetsPage 管线子视图（wire-transform-pipeline-view 2.2/2.3）
     ).toEqual([]);
 
     fireEvent.click(screen.getByTestId("datasets-subview-pipeline"));
+    // 默认进「管线」工作台（图谱不预取）
     expect(await screen.findByTestId("pipeline-view")).toBeTruthy();
-    // 图请求带 Bearer 登录头；假后端组装：两节点两深度、一条父→子边
+    expect(await screen.findByTestId("pipeline-workbench")).toBeTruthy();
+    expect(
+      backend.calls.filter((c) => c.url.pathname === "/api/v1/pipeline/graph"),
+    ).toEqual([]);
+
+    // 切「图谱」页签：图请求带 Bearer 登录头；假后端组装：两节点两深度、
+    // 一条父→子边
+    fireEvent.click(screen.getByTestId("pipeline-tab-graph"));
+    const columns = await screen.findAllByTestId("pipeline-column");
     const graphCalls = backend.calls.filter(
       (c) => c.url.pathname === "/api/v1/pipeline/graph",
     );
     expect(graphCalls).toHaveLength(1);
     expect(graphCalls[0]!.headers["authorization"]).toMatch(/^Bearer /);
     expect(
-      screen
-        .getAllByTestId("pipeline-column")
-        .map((el) => el.getAttribute("data-depth")),
+      columns.map((el) => el.getAttribute("data-depth")),
     ).toEqual(["0", "1"]);
     expect(screen.getAllByTestId("pipeline-edge")).toHaveLength(1);
     // 列表视图专属区块让位（管线视图自身管理加载/错误态）
@@ -1119,6 +1126,7 @@ describe("DatasetsPage 管线子视图（wire-transform-pipeline-view 2.2/2.3）
     });
     render(<DatasetsPage planCode="basic" />);
     fireEvent.click(screen.getByTestId("datasets-subview-pipeline"));
+    fireEvent.click(screen.getByTestId("pipeline-tab-graph"));
 
     const node = (await screen.findAllByTestId("pipeline-node")).find(
       (el) => el.getAttribute("data-dataset-id") === "ds-2",

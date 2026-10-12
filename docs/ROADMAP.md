@@ -45,7 +45,7 @@ A/B/C）与个人侧（C 端信息工作台，方向 D）——同一个供给�
 | ① 接入 | wire-customer-local-data（连接器+上传，29/29） | 形态对；免费档门控挡入口；二进制无发布页 | 增量水位、实时隧道、ERP/CRM 适配器（原二期） |
 | ② 治理 | wire-provenance-ledger / caller-preflight-map / usage-transparency | **不输 Palantir，甚至更硬**（证据包离线验签） | 团队协作权限面 |
 | ③ 语义 | unified-indicator-registry / indicator-scope | 指标侧成熟；客户数据侧=表 | 轻量实体层（实体+关系声明） |
-| ④ 变换 | wire-customer-data-engine（derive/join/血缘） | 原子操作齐 | 组合成管线、调度、版本 |
+| ④ 变换 | wire-customer-data-engine（derive/join/血缘） | 原子操作齐 | **管线化已上产（2026-10-13，wire-transform-pipelines）**：版本化管线（append-only）、线性步骤链（derive/join/link）、稳定输出槽位、run/step 两级运行历史、管线级 cron 调度、控制台工作台；剩余=DAG/异步执行器（v2） |
 | ⑤ 分析 | AI 构建 + 产物页 + MCP/REST 双面 | **产物还是 localStorage 草稿**（真保存与物化是页面标注的后续任务） | 产物持久化转正、渲染器 |
 | ⑥ 应用 | —— | 空 | 全部：看板编辑器、表单构建器、分享 |
 
@@ -83,7 +83,10 @@ A/B/C）与个人侧（C 端信息工作台，方向 D）——同一个供给�
 - 语义层升级：轻量实体建模（实体+主键互链+关系声明），join 从"表连接"升为
   "业务语义连接"——中台化绕不开，但不必做全量本体。
   **v0 已上产（2026-10-12，wire-entity-layer）**：实体/关系声明+图谱+图谱注入
-  AI 构建上下文+控制台实体页；数据集间物化 join（引擎 link 工具）留 v1。
+  AI 构建上下文+控制台实体页；数据集间物化 join（引擎 link 工具）
+  **已上产（2026-10-13，wire-transform-pipelines）**：`customer_dataset_link`
+  引擎实现+注册（LEFT JOIN 物化、lineage kind=link、重放、能力旗），实体物化
+  端点转正，并为管线 link 步骤提供原语。
 - 顺手解锁：增量水位同步、大表、变换管线（④层管线化）。
 
 ### 方向 B：应用平台层（把分析变成客户的应用）
@@ -204,7 +207,9 @@ web。规模验证后再考虑轻量个人 cell。
 - **中期**：
   cell 数据根迁 PG（新 cell 先行、存量逐户）；看板渲染器+编辑器（B/D 共用）；
   需求单→爬取编排自动化 + 合规门（**已上产 2026-10-12**：wire-demand-auto-export
-  受理即自动出单；合规门首条规则=禁爬清单双闸）；变换管线化；连接器发布页后的增量同步；
+  受理即自动出单；合规门首条规则=禁爬清单双闸）；~~变换管线化~~（**已上产
+  2026-10-13，wire-transform-pipelines**——版本化管线/步骤链/输出槽位/运行历史/
+  cron 调度/控制台工作台；剩余 DAG+异步执行器属 v2）；连接器发布页后的增量同步；
   个人侧迭代深化（**偏好持久化已上产**——分享链接、规则持久化（wire-alert-evaluation 告警引擎）与**个人偏好持久化（wire-personal-preferences：per-sub 语言/落地页/置顶看板跨端同步）三件全落**）。
 - **远期决策点**：
   表单构建器与分享 web（团队空间 / 子域托管形态）；轻量实体层；

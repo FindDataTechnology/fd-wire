@@ -439,6 +439,21 @@ def refresh_derived_dataset(
         engine_factory, principal, TOOL_DERIVE_REFRESH, {"dataset_key": dataset.key}
     )
     _sync_columns_and_size(db, dataset, engine_factory, principal)
+    # 质量快照钩子（wire-transform-pipelines D5 统一路收拢）：重派生成功后
+    # 触发一次质量快照（triggered_by=materialize）。此前钩子只挂在物化调度
+    # 路（materialization/runner._run_derived_refresh 尾部），手动刷新与
+    # 统一刷新调度器经本函数不带快照——语义分叉；管线步骤刷新复用本函数
+    # 时把钩子收拢到这一处（手动刷新/调度刷新/管线刷新/级联刷新同源）。
+    # 失败隔离：notify_dataset_changed 自身绝不抛异常（双保险 try），
+    # 快照失败绝不影响重派生主流程（结果已在头顶落库）。
+    try:
+        from ..quality import service as quality_service  # noqa: PLC0415
+
+        quality_service.notify_dataset_changed(
+            dataset, "materialize", client=engine_factory(dataset.customer_id)
+        )
+    except Exception:  # noqa: BLE001 - 双保险：主流程绝不因快照中断
+        pass
 
 
 def direct_derived_children(db: Session, dataset: Dataset) -> list[Dataset]:

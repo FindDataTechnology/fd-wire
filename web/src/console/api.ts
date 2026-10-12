@@ -2690,3 +2690,260 @@ export function refreshDatasetQuality(
     { method: "POST" },
   ) as Promise<QualitySnapshot>;
 }
+
+// ── 变换管线（wire-transform-pipelines 任务 5.5 web 客户端）────────────────
+// 契约（api 仓管线路由，Bearer 登录身份，写操作 owner/editor、viewer 403）：
+// - GET  /api/v1/pipelines → {items:[{id,name,description,current_version,
+//   steps_count,base_dataset_id,base_dataset_name,schedule:{cron,enabled,
+//   last_run_at,last_status}|null,last_run:{id,status,version,trigger,
+//   started_at,finished_at}|null,updated_at}],total}；
+// - POST /api/v1/pipelines {name,description?,base_dataset_id,steps:[{name,
+//   op,params}]} → 管线详情（versions 仅 v1）；
+// - PUT  /api/v1/pipelines/{id} {name?,description?,base_dataset_id?,steps?}
+//   → 详情 + version_created?: number（步骤列表或基础数据集变更时按序追加
+//   新版本并回号；仅名称/描述就地更新不动版本）；
+// - GET  /api/v1/pipelines/{id} → {…,versions:[{version,steps:[{name,op,
+//   params}],created_at,created_by}]}（append-only，历史版本原样可查）；
+// - POST /api/v1/pipelines/{id}/run {version?}（缺省当前版本）→
+//   {id,status:'success'|'failed',version,trigger,started_at,finished_at,
+//   error_text,steps:[{seq,name,op,status:'success'|'failed'|'skipped'|
+//   'quota_exhausted',output_dataset_id,output_dataset_name,row_count,
+//   duration_ms,error_text}]}——失败中止后续（后续步骤无记录，绝不伪造）；
+// - GET  /api/v1/pipelines/{id}/runs?page=&page_size= → {items:[{id,status,
+//   version,trigger,started_at,finished_at,error_text}],total}（时间倒序）；
+// - GET  /api/v1/pipelines/{id}/runs/{run_id} → 同 run 结果形状；
+// - PUT/GET/DELETE /api/v1/pipelines/{id}/schedule → {cron,enabled,
+//   last_run_at,last_status}（五字段 cron，naive UTC；删除幂等）；
+//   POST …/schedule/pause / …/schedule/resume → 同形状。
+// 步骤参数形状与既有原子操作端点一致（derive {filters?,sort?,limit?}；
+// join {indicators,date_column,region_column?,default_entity?,filters?}；
+// link {right_dataset_id,left_keys:[],right_keys:[]}）。
+
+/** 步骤类型三值（derive=派生 / join=挂接指标 / link=关联数据集）。 */
+export const PIPELINE_STEP_OPS = ["derive", "join", "link"] as const;
+
+export type PipelineStepOp = (typeof PIPELINE_STEP_OPS)[number];
+
+/** 步骤定义（版本体内逐条；params 与原子操作端点同形）。 */
+export interface PipelineStepDef {
+  name: string;
+  op: PipelineStepOp;
+  params: Record<string, unknown>;
+}
+
+/** 历史版本（append-only：步骤定义完整保存，历史不可改）。 */
+export interface PipelineVersion {
+  version: number;
+  steps: PipelineStepDef[];
+  created_at: string;
+  created_by: string;
+}
+
+/** 管线级调度登记态（未挂接为 null）。 */
+export interface PipelineScheduleInfo {
+  /** 五字段 cron（naive UTC）。 */
+  cron: string;
+  enabled: boolean;
+  last_run_at: string | null;
+  /** 最近一次调度运行状态（success/failed，原样呈现）。 */
+  last_status: string | null;
+}
+
+/** 运行摘要（列表项 / 历史条目；steps 在详情展开）。 */
+export interface PipelineRunSummary {
+  id: number;
+  status: "success" | "failed";
+  version: number;
+  /** 触发方式：manual（手动）/ schedule（调度）。 */
+  trigger: string;
+  started_at: string;
+  finished_at: string | null;
+  error_text: string | null;
+}
+
+/** 逐步骤执行记录（两级留痕的第二级；失败后续步骤无记录）。 */
+export interface PipelineStepRun {
+  seq: number;
+  name: string;
+  op: PipelineStepOp;
+  status: "success" | "failed" | "skipped" | "quota_exhausted";
+  output_dataset_id: string | null;
+  output_dataset_name: string | null;
+  row_count: number | null;
+  duration_ms: number | null;
+  error_text: string | null;
+}
+
+/** 运行详情（摘要 + 逐步骤记录）。 */
+export interface PipelineRunDetail extends PipelineRunSummary {
+  steps: PipelineStepRun[];
+}
+
+/** 管线列表项（列表页一屏）。 */
+export interface PipelineListItem {
+  id: number;
+  name: string;
+  description: string | null;
+  current_version: number;
+  steps_count: number;
+  base_dataset_id: string;
+  base_dataset_name: string;
+  schedule: PipelineScheduleInfo | null;
+  /** 最近一次运行（任意触发方式；从未运行为 null）。 */
+  last_run: PipelineRunSummary | null;
+  updated_at: string;
+}
+
+/** 管线列表分页结果。 */
+export interface PipelinePage {
+  items: PipelineListItem[];
+  total: number;
+}
+
+/** 管线详情（含全部历史版本）。 */
+export interface PipelineDetail {
+  id: number;
+  name: string;
+  description: string | null;
+  base_dataset_id: string;
+  base_dataset_name: string;
+  current_version: number;
+  updated_at: string;
+  versions: PipelineVersion[];
+}
+
+/** 保存结果：详情 + version_created（仅步骤/基础集变更产生新版本时出现）。 */
+export interface PipelineUpdateResult extends PipelineDetail {
+  version_created?: number;
+}
+
+/** 创建入参（v1 步骤链线性：首步吃基础数据集）。 */
+export interface PipelineCreateInput {
+  name: string;
+  description?: string;
+  base_dataset_id: string;
+  steps: PipelineStepDef[];
+}
+
+/** 部分更新入参（缺键不动；steps/base_dataset_id 变更 → 新版本）。 */
+export interface PipelineUpdateInput {
+  name?: string;
+  description?: string | null;
+  base_dataset_id?: string;
+  steps?: PipelineStepDef[];
+}
+
+/** 本企业管线列表。 */
+export function fetchPipelines(): Promise<PipelinePage> {
+  return requestJson(`${API_BASE}/v1/pipelines`, {
+    method: "GET",
+  }) as Promise<PipelinePage>;
+}
+
+/** 新建管线（首版 v1 由 steps 直接产生）。 */
+export function createPipeline(
+  payload: PipelineCreateInput,
+): Promise<PipelineDetail> {
+  return requestJson(`${API_BASE}/v1/pipelines`, {
+    method: "POST",
+    body: payload,
+  }) as Promise<PipelineDetail>;
+}
+
+/** 保存修改（仅名称/描述就地更新；步骤或基础集变更追加新版本）。 */
+export function updatePipeline(
+  id: number,
+  payload: PipelineUpdateInput,
+): Promise<PipelineUpdateResult> {
+  return requestJsonAnyMethod(`${API_BASE}/v1/pipelines/${id}`, "PUT", {
+    body: payload,
+  }) as Promise<PipelineUpdateResult>;
+}
+
+/** 管线详情（版本 append-only，历史原样可查）。 */
+export function fetchPipeline(id: number): Promise<PipelineDetail> {
+  return requestJson(`${API_BASE}/v1/pipelines/${id}`, {
+    method: "GET",
+  }) as Promise<PipelineDetail>;
+}
+
+/** 立即运行（缺省当前版本；返回 run + 逐步骤记录）。 */
+export function runPipeline(
+  id: number,
+  version?: number,
+): Promise<PipelineRunDetail> {
+  return requestJson(`${API_BASE}/v1/pipelines/${id}/run`, {
+    method: "POST",
+    body: version != null ? { version } : {},
+  }) as Promise<PipelineRunDetail>;
+}
+
+/** 运行历史（时间倒序分页）。 */
+export function fetchPipelineRuns(
+  id: number,
+  page = 1,
+  pageSize = 10,
+): Promise<{ items: PipelineRunSummary[]; total: number }> {
+  return requestJson(
+    `${API_BASE}/v1/pipelines/${id}/runs?page=${page}&page_size=${pageSize}`,
+    { method: "GET" },
+  ) as Promise<{ items: PipelineRunSummary[]; total: number }>;
+}
+
+/** 单次运行详情（含逐步骤记录）。 */
+export function fetchPipelineRun(
+  id: number,
+  runId: number,
+): Promise<PipelineRunDetail> {
+  return requestJson(`${API_BASE}/v1/pipelines/${id}/runs/${runId}`, {
+    method: "GET",
+  }) as Promise<PipelineRunDetail>;
+}
+
+/** 查看管线调度登记态（未挂接：cron 字段缺省 null 视为未登记）。 */
+export function getPipelineSchedule(
+  id: number,
+): Promise<PipelineScheduleInfo | { cron: null; enabled: false }> {
+  return requestJson(`${API_BASE}/v1/pipelines/${id}/schedule`, {
+    method: "GET",
+  }) as Promise<PipelineScheduleInfo | { cron: null; enabled: false }>;
+}
+
+/** 挂接/更新管线调度（五字段 cron，naive UTC）。 */
+export function putPipelineSchedule(
+  id: number,
+  cron: string,
+): Promise<PipelineScheduleInfo> {
+  return requestJsonAnyMethod(
+    `${API_BASE}/v1/pipelines/${id}/schedule`,
+    "PUT",
+    { body: { cron } },
+  ) as Promise<PipelineScheduleInfo>;
+}
+
+/** 删除管线调度（删除后回到未挂接态）。 */
+export function deletePipelineSchedule(
+  id: number,
+): Promise<{ removed: boolean }> {
+  return requestJson(`${API_BASE}/v1/pipelines/${id}/schedule`, {
+    method: "DELETE",
+  }) as Promise<{ removed: boolean }>;
+}
+
+/** 暂停调度（到点不触发；手动运行不受影响）。 */
+export function pausePipelineSchedule(
+  id: number,
+): Promise<PipelineScheduleInfo> {
+  return requestJson(`${API_BASE}/v1/pipelines/${id}/schedule/pause`, {
+    method: "POST",
+  }) as Promise<PipelineScheduleInfo>;
+}
+
+/** 恢复调度（继续到点自动运行）。 */
+export function resumePipelineSchedule(
+  id: number,
+): Promise<PipelineScheduleInfo> {
+  return requestJson(`${API_BASE}/v1/pipelines/${id}/schedule/resume`, {
+    method: "POST",
+  }) as Promise<PipelineScheduleInfo>;
+}

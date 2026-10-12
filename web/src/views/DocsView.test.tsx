@@ -176,6 +176,69 @@ describe("DocsView（文档三节 · 如实呈现）", () => {
     i18n.changeLanguage("zh");
   });
 
+  // 变换管线章节（wire-transform-pipelines 任务 7.1）：线性步骤链 / 版本
+  // 语义（原句必须在场）/ 输出语义（原地刷新）/ 失败隔离（原句必须在场）/
+  // 调度（cron 管线级）/ 计量如实——口径与控制台管线工作台一致。
+  it("「变换管线」章节：步骤链/版本语义/输出语义/失败隔离/调度/计量如实（关键句逐字断言）", () => {
+    render(<DocsView />);
+
+    const section = screen.getByTestId("docs-transform-pipelines");
+    expect(section.getAttribute("id")).toBe("transform-pipelines");
+    expect(section.textContent).toContain("变换管线");
+    // 什么是管线：三类型线性步骤链（派生→挂接指标→关联）
+    expect(section.textContent).toContain("线性步骤链");
+    expect(section.textContent).toContain("派生");
+    expect(section.textContent).toContain("挂接指标");
+    expect(section.textContent).toContain("关联数据集");
+    // 版本语义（原句逐字）：步骤变更新版本、历史可查；仅改名不动版本
+    const version = screen.getByTestId("docs-transform-pipelines-version");
+    expect(version.textContent).toContain("版本语义");
+    expect(version.textContent).toContain(
+      "步骤列表的任何变更都会产生新版本，历史版本原样可查",
+    );
+    expect(version.textContent).toContain("仅改名称/描述不动版本");
+    // 输出语义：同版本重跑原地刷新；新版本新输出
+    expect(section.textContent).toContain("同版本重跑原地刷新");
+    expect(section.textContent).toContain("旧版本输出以普通数据集存续");
+    // 失败隔离（原句逐字）：前面保留、后面不执行、不伪造
+    const failure = screen.getByTestId("docs-transform-pipelines-failure");
+    expect(failure.textContent).toContain("失败隔离");
+    expect(failure.textContent).toContain(
+      "已成功步骤的输出保留，后续步骤不再执行",
+    );
+    expect(failure.textContent).toContain("绝不伪造后续结果");
+    // 调度：管线级 cron（五字段 UTC）+ 暂停恢复
+    expect(section.textContent).toContain("管线级 cron 调度");
+    expect(section.textContent).toContain("暂停/恢复/删除");
+    // 计量如实：每步行数照常计入配额
+    const metering = screen.getByTestId("docs-transform-pipelines-metering");
+    expect(metering.textContent).toContain("计量如实");
+    expect(metering.textContent).toContain("照常计入配额与用量");
+    // 文档 → 控制台入口（管线工作台在「我的数据 → 管线」）
+    const link = screen.getByTestId("docs-transform-pipelines-console-link");
+    expect(link.getAttribute("href")).toBe("#/console/datasets");
+    expect(link.textContent).toContain("管线");
+  });
+
+  it("变换管线章节英文同步（docs.transformPipelines 双语键齐备）", () => {
+    i18n.changeLanguage("en");
+    render(<DocsView />);
+
+    const section = screen.getByTestId("docs-transform-pipelines");
+    expect(section.textContent).toContain("Transform pipelines");
+    const version = screen.getByTestId("docs-transform-pipelines-version");
+    expect(version.textContent).toContain(
+      "Any change to the step list creates a new version",
+    );
+    const failure = screen.getByTestId("docs-transform-pipelines-failure");
+    expect(failure.textContent).toContain(
+      "outputs of already-successful steps are kept and later steps do not run",
+    );
+    expect(section.textContent).toContain("five fields, UTC");
+    expect(section.textContent).toContain("count against quota and usage");
+    i18n.changeLanguage("zh");
+  });
+
   // 表单教程（wire-form-builder 任务 5.1）：五步全流程 + 控制台互链 + 双语。
   it("「表单」章节：建表单五步（创建/绑定配字段/试填/发布分享/收集回滚）+ 控制台互链", () => {
     render(<DocsView />);

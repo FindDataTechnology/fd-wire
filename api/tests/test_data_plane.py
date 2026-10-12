@@ -11,6 +11,11 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
+# 先经 app 入口导入（照 test_assets 先例）：直接首导入 data_plane.service 会
+# 触发 datasets.ingest → ai → entities → data_plane.data_routes 的环，从 app
+# 侧进入则各模块已完整初始化（单文件运行同样成立）
+from fd_wire_api.app import app  # noqa: F401
+
 from fd_wire_api.data_plane import service as key_service
 from fd_wire_api.datasets.ingest import (
     TOOL_ADD_COLUMN,

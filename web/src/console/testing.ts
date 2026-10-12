@@ -22,6 +22,11 @@ import type {
   MessageRole,
   PackIndicator,
   PipelineGraph,
+  PipelineRunDetail,
+  PipelineRunSummary,
+  PipelineScheduleInfo,
+  PipelineStepDef,
+  PipelineStepRun,
   RefreshSchedule,
   SyncRecord,
   UploadPreview,
@@ -257,6 +262,25 @@ export interface ConsoleBackendOptions {
   /** 强制 POST /api/v1/datasets/{id}/quality/refresh 返回该状态。 */
   failQualityRefreshStatus?: number;
   failQualityRefreshDetail?: string;
+  /** 种子管线（wire-transform-pipelines 5.x）：versions 按序即 v1..vN；
+   *  runs 为预置运行历史；failAt 注入运行失败点（后续步骤不产生记录）。 */
+  pipelines?: FakePipelineSeed[];
+  /** 强制 GET /api/v1/pipelines 返回该状态（列表故障态）。 */
+  failPipelinesStatus?: number;
+  /** 强制 GET /api/v1/pipelines/{id} 返回该状态（详情故障态）。 */
+  failPipelineDetailStatus?: number;
+  /** 强制 POST/PUT /api/v1/pipelines 返回该状态（保存失败态，如 422）。 */
+  failPipelineSaveStatus?: number;
+  failPipelineSaveDetail?: string;
+  /** 强制 POST /api/v1/pipelines/{id}/run 返回该状态。 */
+  failPipelineRunStatus?: number;
+  failPipelineRunDetail?: string;
+  /** 强制 GET /api/v1/pipelines/{id}/runs 返回该状态（历史故障态）。 */
+  failPipelineHistoryStatus?: number;
+  /** 强制调度端点（PUT/DELETE/pause/resume）返回该状态。 */
+  failPipelineScheduleStatus?: number;
+  /** run 端点响应延迟毫秒数（in-flight 禁用态观察用；缺省立即返回）。 */
+  pipelineRunDelayMs?: number;
 }
 
 /** 源包种子（wire-source-packs）：假后端按 indicators 分页切片出详情。 */
@@ -434,6 +458,45 @@ export type FakeQualitySeed = {
   cadence_hint?: "daily" | "weekly" | "monthly" | null;
 };
 
+/** 管线运行失败注入（wire-transform-pipelines）：seq 命中的步骤按 kind 失败
+ *  并中止后续步骤（后续步骤绝不产生记录——不伪造 skipped）。 */
+export type FakePipelineFailAt = {
+  seq: number;
+  kind: "failed" | "quota_exhausted" | "unsupported";
+  /** 覆盖默认错误文案（如实呈现面）。 */
+  error?: string;
+};
+
+/** 预置运行历史种子（steps 缺省按该版本步骤生成全 success 记录）。 */
+export type FakePipelineRunSeed = {
+  id: number;
+  status: "success" | "failed";
+  version: number;
+  trigger: "manual" | "schedule";
+  started_at: string;
+  finished_at?: string | null;
+  error_text?: string | null;
+  steps?: PipelineStepRun[];
+};
+
+/** 管线种子（wire-transform-pipelines 5.x）：versions 按序即 v1..vN（每版
+ *  完整步骤定义）；schedule 已挂接态；failAt 对后续 run 生效。 */
+export type FakePipelineSeed = {
+  id: number;
+  name: string;
+  description?: string | null;
+  base_dataset_id: string;
+  versions?: Array<{
+    steps: PipelineStepDef[];
+    created_at?: string;
+    created_by?: string;
+  }>;
+  schedule?: PipelineScheduleInfo | null;
+  runs?: FakePipelineRunSeed[];
+  failAt?: FakePipelineFailAt;
+  customer_id?: string;
+};
+
 /** 安装假后端为 global fetch；返回调用记录与状态注入接口。 */
 export function installConsoleBackend(
   conversations: Conversation[],
@@ -470,6 +533,16 @@ export function installConsoleBackend(
     getAlertEvents: () => FakeAlertEventSeed[];
     getAlertStates: () => Record<string, FakeAlertStateSeed>;
     getPreferences: (sub?: string) => Required<FakePreferencesSeed>;
+    /** 管线断言面：当前内存态（版本/调度）。 */
+    getPipelines: () => Array<{
+      id: number;
+      name: string;
+      current_version: number;
+      versions: Array<{ version: number; steps: PipelineStepDef[] }>;
+      schedule: PipelineScheduleInfo | null;
+    }>;
+    /** 运行历史断言面（倒序摘要）。 */
+    getPipelineRuns: (pipelineId: number) => PipelineRunSummary[];
     addAlertEvent: (seed: FakeAlertEventSeed) => void;
   } {
   const store = new Map<number, StoredConversation>();
@@ -657,6 +730,211 @@ export function installConsoleBackend(
   for (const [id, seed] of Object.entries(options.quality ?? {})) {
     qualityStore.set(id, { ...seed });
   }
+
+  // ── 变换管线索度假后端状态（wire-transform-pipelines 5.x）：版本
+  //    append-only（PUT 改步骤/基础集 → 追加新版本回号）、运行两级留痕
+  //    （run + step，失败中止后续不伪造记录）、输出槽位稳定（同
+  //    （管线,版本,步骤序号）→ 同一 dataset id，重跑原地刷新语义）、
+  //    调度独立态（pause/resume/delete）；写操作 viewer 403。──
+  interface StoredPipelineVersion {
+    version: number;
+    steps: PipelineStepDef[];
+    created_at: string;
+    created_by: string;
+  }
+  interface StoredPipeline {
+    id: number;
+    customer_id?: string;
+    name: string;
+    description: string | null;
+    base_dataset_id: string;
+    created_at: string;
+    updated_at: string;
+    versions: StoredPipelineVersion[];
+    schedule: PipelineScheduleInfo | null;
+    failAt?: FakePipelineFailAt;
+  }
+  type StoredPipelineRun = PipelineRunDetail;
+  const pipelinesStore = new Map<number, StoredPipeline>();
+  const pipelineRunsStore = new Map<number, StoredPipelineRun[]>();
+  let nextPipelineId = 1;
+  let nextPipelineRunId = 1;
+  const pipelineRunBase = Date.parse("2026-10-13T09:00:00Z");
+  let pipelineRunClock = 0;
+  for (const seed of options.pipelines ?? []) {
+    const versionSeeds = seed.versions ?? [];
+    const versions: StoredPipelineVersion[] = (versionSeeds.length
+      ? versionSeeds
+      : [{ steps: [] }]
+    ).map((entry, i) => ({
+      version: i + 1,
+      steps: entry.steps.map((step) => ({
+        name: step.name,
+        op: step.op,
+        params: { ...step.params },
+      })),
+      created_at: entry.created_at ?? `2026-10-12T10:${String(i).padStart(2, "0")}:00`,
+      created_by: entry.created_by ?? "demo-customer",
+    }));
+    pipelinesStore.set(seed.id, {
+      id: seed.id,
+      customer_id: seed.customer_id,
+      name: seed.name,
+      description: seed.description ?? null,
+      base_dataset_id: seed.base_dataset_id,
+      created_at: "2026-10-12T09:00:00",
+      updated_at: "2026-10-13T08:00:00",
+      versions,
+      schedule: seed.schedule ? { ...seed.schedule } : null,
+      failAt: seed.failAt,
+    });
+    nextPipelineId = Math.max(nextPipelineId, seed.id + 1);
+    // 预置运行历史：steps 缺省按对应版本步骤生成全 success 记录。
+    if (seed.runs?.length) {
+      const runs: StoredPipelineRun[] = seed.runs.map((run) => ({
+        id: run.id,
+        status: run.status,
+        version: run.version,
+        trigger: run.trigger,
+        started_at: run.started_at,
+        finished_at: run.finished_at ?? null,
+        error_text: run.error_text ?? null,
+        steps:
+          run.steps ??
+          (versions.find((v) => v.version === run.version)?.steps ?? []).map(
+            (step, i) =>
+              simulateStep(seed.id, run.version, step, i + 1, 100),
+          ),
+      }));
+      pipelineRunsStore.set(
+        seed.id,
+        runs.sort((a, b) => b.id - a.id),
+      );
+      nextPipelineRunId = Math.max(
+        nextPipelineRunId,
+        ...seed.runs.map((run) => run.id + 1),
+      );
+    }
+  }
+  /** 单步骤 success 记录（输出槽位 id 稳定：pl-{管线}-v{版本}-s{序号}）。 */
+  function simulateStep(
+    pipelineId: number,
+    version: number,
+    step: PipelineStepDef,
+    seq: number,
+    rows: number,
+  ): PipelineStepRun {
+    return {
+      seq,
+      name: step.name,
+      op: step.op,
+      status: "success",
+      output_dataset_id: `pl-${pipelineId}-v${version}-s${seq}`,
+      output_dataset_name: `${step.name}（v${version} 第${seq}步输出）`,
+      row_count: Math.max(0, rows - (seq - 1) * 10),
+      duration_ms: 120 * seq,
+      error_text: null,
+    };
+  }
+  /** 本客户可见管线（未钉 customer_id 的种子对任何登录客户可见）。 */
+  function ownPipeline(id: number, cid: string): StoredPipeline | undefined {
+    const pipeline = pipelinesStore.get(id);
+    if (!pipeline) return undefined;
+    return pipeline.customer_id && pipeline.customer_id !== cid
+      ? undefined
+      : pipeline;
+  }
+  const isViewer = (cid: string): boolean =>
+    teamMembersStore.get(cid)?.role === "viewer";
+  const viewerDenied = () =>
+    jsonResponse({ detail: "团队成员权限不足（viewer 只读）" }, 403);
+  /** 步骤定义深比较（PUT 版本判定：顺序/类型/参数任一不同即变更）。 */
+  function stepsEqual(
+    a: PipelineStepDef[],
+    b: PipelineStepDef[],
+  ): boolean {
+    if (a.length !== b.length) return false;
+    const norm = (steps: PipelineStepDef[]) =>
+      steps.map((s) => ({
+        name: s.name,
+        op: s.op,
+        params: s.params && typeof s.params === "object" ? s.params : {},
+      }));
+    return JSON.stringify(norm(a)) === JSON.stringify(norm(b));
+  }
+  /** 步骤入参校验（形状与原子操作端点同口径；非法 422）。 */
+  const validateSteps = (steps: unknown): string | null => {
+    if (!Array.isArray(steps) || steps.length === 0) {
+      return "steps 须为非空数组";
+    }
+    for (const step of steps) {
+      if (!step || typeof step !== "object") return "步骤须为对象";
+      const record = step as { name?: unknown; op?: unknown; params?: unknown };
+      if (typeof record.name !== "string" || !record.name.trim()) {
+        return "步骤名称不能为空";
+      }
+      if (
+        record.op !== "derive" &&
+        record.op !== "join" &&
+        record.op !== "link"
+      ) {
+        return "步骤类型只能是：derive / join / link";
+      }
+      if (
+        record.params !== undefined &&
+        (typeof record.params !== "object" || record.params === null)
+      ) {
+        return "步骤参数须为对象";
+      }
+    }
+    return null;
+  };
+  /** 管线详情响应体（版本 append-only 全量）。 */
+  const pipelineDetailOut = (pipeline: StoredPipeline): Record<string, unknown> => ({
+    id: pipeline.id,
+    name: pipeline.name,
+    description: pipeline.description,
+    base_dataset_id: pipeline.base_dataset_id,
+    base_dataset_name:
+      datasets.get(pipeline.base_dataset_id)?.name ?? pipeline.base_dataset_id,
+    current_version: pipeline.versions.length,
+    updated_at: pipeline.updated_at,
+    versions: pipeline.versions.map((v) => ({
+      version: v.version,
+      steps: v.steps,
+      created_at: v.created_at,
+      created_by: v.created_by,
+    })),
+  });
+  /** 列表项（schedule/last_run 按当前态与运行历史推导）。 */
+  const pipelineListItemOut = (pipeline: StoredPipeline): unknown => {
+    const runs = pipelineRunsStore.get(pipeline.id) ?? [];
+    const lastRun = runs[0];
+    return {
+      id: pipeline.id,
+      name: pipeline.name,
+      description: pipeline.description,
+      current_version: pipeline.versions.length,
+      steps_count: pipeline.versions[pipeline.versions.length - 1]?.steps.length ?? 0,
+      base_dataset_id: pipeline.base_dataset_id,
+      base_dataset_name:
+        datasets.get(pipeline.base_dataset_id)?.name ?? pipeline.base_dataset_id,
+      schedule: pipeline.schedule
+        ? { ...pipeline.schedule }
+        : null,
+      last_run: lastRun
+        ? {
+            id: lastRun.id,
+            status: lastRun.status,
+            version: lastRun.version,
+            trigger: lastRun.trigger,
+            started_at: lastRun.started_at,
+            finished_at: lastRun.finished_at,
+          }
+        : null,
+      updated_at: pipeline.updated_at,
+    };
+  };
   /** 新鲜度收窄（缺省 unknown——未声明节奏不误判）。 */
   const freshnessOf = (
     datasetId: string,
@@ -3407,6 +3685,435 @@ export function installConsoleBackend(
       return Promise.resolve(jsonResponse(snapshot, 201));
     }
 
+    // ── 变换管线（wire-transform-pipelines 5.x）：CRUD（版本 append-only：
+    //    PUT 改步骤/基础集 → 新版本并回 version_created；仅名称/描述就地更新）
+    //    / run（按序执行、失败中止后续、配额/引擎不支持如实态、调度触发的
+    //    run 记 trigger=schedule）/ runs 历史（倒序分页 + 单 run 详情）/
+    //    schedule（五字段 cron 校验、pause/resume/delete）。写操作 viewer 403。──
+    const delayed = <T,>(body: T, status = 200): Promise<FakeResponse> =>
+      options.pipelineRunDelayMs
+        ? new Promise((resolve) => {
+            setTimeout(
+              () => resolve(jsonResponse(body, status)),
+              options.pipelineRunDelayMs,
+            );
+          })
+        : Promise.resolve(jsonResponse(body, status));
+    if (path === "/api/v1/pipelines" && method === "GET") {
+      if (options.failPipelinesStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `pipelines ${options.failPipelinesStatus}` },
+            options.failPipelinesStatus,
+          ),
+        );
+      }
+      const mine = [...pipelinesStore.values()].filter(
+        (p) => !p.customer_id || p.customer_id === customerId,
+      );
+      return Promise.resolve(
+        jsonResponse({
+          items: mine
+        .sort((a, b) => b.id - a.id)
+        .map(pipelineListItemOut),
+          total: mine.length,
+        }),
+      );
+    }
+    if (path === "/api/v1/pipelines" && method === "POST") {
+      if (options.failPipelineSaveStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failPipelineSaveDetail ??
+                `pipelines ${options.failPipelineSaveStatus}`,
+            },
+            options.failPipelineSaveStatus,
+          ),
+        );
+      }
+      if (isViewer(customerId)) return Promise.resolve(viewerDenied());
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        name?: unknown;
+        description?: unknown;
+        base_dataset_id?: unknown;
+        steps?: unknown;
+      };
+      if (typeof payload.name !== "string" || !payload.name.trim()) {
+        return Promise.resolve(
+          jsonResponse({ detail: "管线名称不能为空" }, 422),
+        );
+      }
+      if (
+        typeof payload.base_dataset_id !== "string" ||
+        !payload.base_dataset_id
+      ) {
+        return Promise.resolve(
+          jsonResponse({ detail: "基础数据集不能为空" }, 422),
+        );
+      }
+      const stepsError = validateSteps(payload.steps);
+      if (stepsError) {
+        return Promise.resolve(jsonResponse({ detail: stepsError }, 422));
+      }
+      const id = nextPipelineId++;
+      const steps = (payload.steps as PipelineStepDef[]).map((step) => ({
+        name: step.name,
+        op: step.op,
+        params: { ...(step.params ?? {}) },
+      }));
+      pipelinesStore.set(id, {
+        id,
+        customer_id: customerId,
+        name: payload.name as string,
+        description:
+          typeof payload.description === "string" && payload.description
+            ? payload.description
+            : null,
+        base_dataset_id: payload.base_dataset_id as string,
+        created_at: "2026-10-13T09:00:00",
+        updated_at: "2026-10-13T09:00:00",
+        versions: [
+          {
+            version: 1,
+            steps,
+            created_at: "2026-10-13T09:00:00",
+            created_by: customerId,
+          },
+        ],
+        schedule: null,
+      });
+      pipelineRunsStore.set(id, []);
+      return Promise.resolve(
+        jsonResponse(pipelineDetailOut(pipelinesStore.get(id)!), 201),
+      );
+    }
+    match = path.match(/^\/api\/v1\/pipelines\/(\d+)$/);
+    if (match) {
+      const pipeline = ownPipeline(Number(match[1]), customerId);
+      if (!pipeline) {
+        return Promise.resolve(
+          jsonResponse({ detail: "pipeline not found" }, 404),
+        );
+      }
+      if (method === "GET") {
+        if (options.failPipelineDetailStatus) {
+          return Promise.resolve(
+            jsonResponse(
+              { detail: `pipeline ${options.failPipelineDetailStatus}` },
+              options.failPipelineDetailStatus,
+            ),
+          );
+        }
+        return Promise.resolve(jsonResponse(pipelineDetailOut(pipeline)));
+      }
+      if (method === "PUT") {
+        if (options.failPipelineSaveStatus) {
+          return Promise.resolve(
+            jsonResponse(
+              {
+                detail:
+                  options.failPipelineSaveDetail ??
+                  `pipelines ${options.failPipelineSaveStatus}`,
+              },
+              options.failPipelineSaveStatus,
+            ),
+          );
+        }
+        if (isViewer(customerId)) return Promise.resolve(viewerDenied());
+        const payload = (calls[calls.length - 1]!.body ?? {}) as {
+          name?: unknown;
+          description?: unknown;
+          base_dataset_id?: unknown;
+          steps?: unknown;
+        };
+        if (payload.name !== undefined) {
+          if (typeof payload.name !== "string" || !payload.name.trim()) {
+            return Promise.resolve(
+              jsonResponse({ detail: "管线名称不能为空" }, 422),
+            );
+          }
+          pipeline.name = payload.name;
+        }
+        if (payload.description !== undefined) {
+          pipeline.description =
+            typeof payload.description === "string" && payload.description
+              ? payload.description
+              : null;
+        }
+        let versionCreated: number | undefined;
+        const stepsChanged =
+          payload.steps !== undefined &&
+          !stepsEqual(
+            payload.steps as PipelineStepDef[],
+            pipeline.versions[pipeline.versions.length - 1]!.steps,
+          );
+        const baseChanged =
+          payload.base_dataset_id !== undefined &&
+          payload.base_dataset_id !== pipeline.base_dataset_id;
+        if (baseChanged) {
+          if (
+            typeof payload.base_dataset_id !== "string" ||
+            !payload.base_dataset_id
+          ) {
+            return Promise.resolve(
+              jsonResponse({ detail: "基础数据集不能为空" }, 422),
+            );
+          }
+          pipeline.base_dataset_id = payload.base_dataset_id;
+        }
+        if (stepsChanged || baseChanged) {
+          const stepsError = validateSteps(payload.steps);
+          if (stepsError) {
+            return Promise.resolve(
+              jsonResponse({ detail: stepsError }, 422),
+            );
+          }
+          const nextVersion = pipeline.versions.length + 1;
+          pipeline.versions.push({
+            version: nextVersion,
+            steps: (payload.steps as PipelineStepDef[]).map((step) => ({
+              name: step.name,
+              op: step.op,
+              params: { ...(step.params ?? {}) },
+            })),
+            created_at: "2026-10-13T10:00:00",
+            created_by: customerId,
+          });
+          versionCreated = nextVersion;
+        }
+        pipeline.updated_at = "2026-10-13T10:00:00";
+        return Promise.resolve(
+          jsonResponse({
+            ...pipelineDetailOut(pipeline),
+            ...(versionCreated != null ? { version_created: versionCreated } : {}),
+          }),
+        );
+      }
+    }
+    match = path.match(/^\/api\/v1\/pipelines\/(\d+)\/run$/);
+    if (match && method === "POST") {
+      const pipeline = ownPipeline(Number(match[1]), customerId);
+      if (!pipeline) {
+        return Promise.resolve(
+          jsonResponse({ detail: "pipeline not found" }, 404),
+        );
+      }
+      if (options.failPipelineRunStatus) {
+        return delayed(
+          {
+            detail:
+              options.failPipelineRunDetail ??
+              `pipeline run ${options.failPipelineRunStatus}`,
+          },
+          options.failPipelineRunStatus,
+        );
+      }
+      if (isViewer(customerId)) return Promise.resolve(viewerDenied());
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        version?: unknown;
+      };
+      const version =
+        typeof payload.version === "number" ? payload.version : pipeline.versions.length;
+      const versionRow = pipeline.versions.find((v) => v.version === version);
+      if (!versionRow) {
+        return Promise.resolve(
+          jsonResponse({ detail: `版本 v${version} 不存在` }, 404),
+        );
+      }
+      // 按序执行：失败/配额/引擎不支持即中止，后续步骤绝不产生记录；
+      // 输出槽位 id 稳定（同版本重跑同 id = 原地刷新语义）。
+      const steps: PipelineStepRun[] = [];
+      let failed = false;
+      let runError: string | null = null;
+      const baseRows =
+        datasets.get(pipeline.base_dataset_id)?.row_count ?? 100;
+      for (let i = 0; i < versionRow.steps.length; i += 1) {
+        const step = versionRow.steps[i]!;
+        const seq = i + 1;
+        const failAt = pipeline.failAt;
+        if (failAt && failAt.seq === seq) {
+          const error =
+            failAt.error ??
+            (failAt.kind === "quota_exhausted"
+              ? "配额硬停：本月行数额度已用尽"
+              : failAt.kind === "unsupported"
+                ? "引擎暂不支持 link：目标 cell 尚未滚动新引擎镜像"
+                : `步骤「${step.name}」执行失败`);
+          steps.push({
+            seq,
+            name: step.name,
+            op: step.op,
+            status: failAt.kind === "quota_exhausted" ? "quota_exhausted" : "failed",
+            output_dataset_id: null,
+            output_dataset_name: null,
+            row_count: null,
+            duration_ms: 90 * seq,
+            error_text: error,
+          });
+          failed = true;
+          runError = error;
+          break;
+        }
+        steps.push(simulateStep(pipeline.id, version, step, seq, baseRows));
+      }
+      pipelineRunClock += 1;
+      const startedAt = new Date(pipelineRunBase + pipelineRunClock * 60_000)
+        .toISOString()
+        .replace(/\.\d{3}Z$/, "");
+      const run: StoredPipelineRun = {
+        id: nextPipelineRunId++,
+        status: failed ? "failed" : "success",
+        version,
+        trigger: "manual",
+        started_at: startedAt,
+        finished_at: startedAt,
+        error_text: runError,
+        steps,
+      };
+      const history = pipelineRunsStore.get(pipeline.id) ?? [];
+      history.unshift(run);
+      pipelineRunsStore.set(pipeline.id, history);
+      return delayed(run, 201);
+    }
+    match = path.match(/^\/api\/v1\/pipelines\/(\d+)\/runs$/);
+    if (match && method === "GET") {
+      const pipeline = ownPipeline(Number(match[1]), customerId);
+      if (!pipeline) {
+        return Promise.resolve(
+          jsonResponse({ detail: "pipeline not found" }, 404),
+        );
+      }
+      if (options.failPipelineHistoryStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `pipeline runs ${options.failPipelineHistoryStatus}` },
+            options.failPipelineHistoryStatus,
+          ),
+        );
+      }
+      const runs = pipelineRunsStore.get(pipeline.id) ?? [];
+      const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);
+      const pageSize = Math.max(
+        1,
+        Number(url.searchParams.get("page_size") ?? "10") || 10,
+      );
+      return Promise.resolve(
+        jsonResponse({
+          items: runs
+        .slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize)
+        .map((run) => ({
+          id: run.id,
+          status: run.status,
+          version: run.version,
+          trigger: run.trigger,
+          started_at: run.started_at,
+          finished_at: run.finished_at,
+          error_text: run.error_text,
+        })),
+          total: runs.length,
+        }),
+      );
+    }
+    match = path.match(/^\/api\/v1\/pipelines\/(\d+)\/runs\/(\d+)$/);
+    if (match && method === "GET") {
+      const runId = Number(match[2]);
+      const pipeline = ownPipeline(Number(match[1]), customerId);
+      if (!pipeline) {
+        return Promise.resolve(
+          jsonResponse({ detail: "pipeline not found" }, 404),
+        );
+      }
+      const run = (pipelineRunsStore.get(pipeline.id) ?? []).find(
+        (entry) => entry.id === runId,
+      );
+      if (!run) {
+        return Promise.resolve(jsonResponse({ detail: "run not found" }, 404));
+      }
+      return Promise.resolve(jsonResponse(run));
+    }
+    match = path.match(/^\/api\/v1\/pipelines\/(\d+)\/schedule$/);
+    if (match) {
+      const pipeline = ownPipeline(Number(match[1]), customerId);
+      if (!pipeline) {
+        return Promise.resolve(
+          jsonResponse({ detail: "pipeline not found" }, 404),
+        );
+      }
+      const scheduleOut = () =>
+        pipeline.schedule ?? {
+          cron: null,
+          enabled: false,
+          last_run_at: null,
+          last_status: null,
+        };
+      if (method === "GET") {
+        return Promise.resolve(jsonResponse(scheduleOut()));
+      }
+      if (options.failPipelineScheduleStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `pipeline schedule ${options.failPipelineScheduleStatus}` },
+            options.failPipelineScheduleStatus,
+          ),
+        );
+      }
+      if (isViewer(customerId)) return Promise.resolve(viewerDenied());
+      if (method === "PUT") {
+        const payload = (calls[calls.length - 1]!.body ?? {}) as {
+          cron?: unknown;
+        };
+        const cron = typeof payload.cron === "string" ? payload.cron.trim() : "";
+        if (cron.split(/\s+/).filter(Boolean).length !== 5) {
+          return Promise.resolve(
+            jsonResponse(
+              { detail: "cron 须为五字段（分 时 日 月 周，UTC）" },
+              422,
+            ),
+          );
+        }
+        pipeline.schedule = {
+          cron,
+          enabled: true,
+          last_run_at: pipeline.schedule?.last_run_at ?? null,
+          last_status: pipeline.schedule?.last_status ?? null,
+        };
+        return Promise.resolve(jsonResponse({ ...pipeline.schedule }));
+      }
+      if (method === "DELETE") {
+        pipeline.schedule = null;
+        return Promise.resolve(jsonResponse({ removed: true }));
+      }
+    }
+    match = path.match(
+      /^\/api\/v1\/pipelines\/(\d+)\/schedule\/(pause|resume)$/,
+    );
+    if (match && method === "POST") {
+      const pipeline = ownPipeline(Number(match[1]), customerId);
+      if (!pipeline) {
+        return Promise.resolve(
+          jsonResponse({ detail: "pipeline not found" }, 404),
+        );
+      }
+      if (options.failPipelineScheduleStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `pipeline schedule ${options.failPipelineScheduleStatus}` },
+            options.failPipelineScheduleStatus,
+          ),
+        );
+      }
+      if (isViewer(customerId)) return Promise.resolve(viewerDenied());
+      if (!pipeline.schedule) {
+        return Promise.resolve(
+          jsonResponse({ detail: "尚未挂接调度" }, 400),
+        );
+      }
+      pipeline.schedule.enabled = match[2] === "resume";
+      return Promise.resolve(jsonResponse({ ...pipeline.schedule }));
+    }
+
     return Promise.resolve(jsonResponse({ detail: "not found" }, 404));
   }) as unknown as typeof fetch;
 
@@ -3459,6 +4166,28 @@ export function installConsoleBackend(
         ? { ...row }
         : { ui_locale: null, landing_tab: null, pinned_dashboard_id: null };
     },
+    /** 管线断言面：当前内存态（版本/调度）与运行历史（倒序）。 */
+    getPipelines: () =>
+      [...pipelinesStore.values()].map((pipeline) => ({
+        id: pipeline.id,
+        name: pipeline.name,
+        current_version: pipeline.versions.length,
+        versions: pipeline.versions.map((v) => ({
+          version: v.version,
+          steps: v.steps,
+        })),
+        schedule: pipeline.schedule ? { ...pipeline.schedule } : null,
+      })),
+    getPipelineRuns: (pipelineId: number): PipelineRunSummary[] =>
+      (pipelineRunsStore.get(pipelineId) ?? []).map((run) => ({
+        id: run.id,
+        status: run.status,
+        version: run.version,
+        trigger: run.trigger,
+        started_at: run.started_at,
+        finished_at: run.finished_at,
+        error_text: run.error_text,
+      })),
     addAlertEvent,
   };
 }

@@ -50,6 +50,10 @@ from .assets import router as assets_router
 # 数据集质量快照（wire-asset-catalog 任务组 4）：快照通道 + 新鲜度徽章
 # （表挂 DatasetsBase；生产迁移 alembic 0031）
 from .quality import router as quality_router
+# 变换管线（wire-transform-pipelines）：可组合的版本化变换步骤链——
+# derive/join/link 编排 + 输出槽位 + run/step 两级留痕 + 管线级 cron 调度
+# （五表挂 DatasetsBase；生产迁移 alembic 0032；步骤执行复用既有原语）
+from .pipelines import router as pipelines_router
 from .demands import admin_router as demands_admin_router
 from .demands import init_db as init_demands_db
 from .demands import pipeline_router as demands_pipeline_router
@@ -252,6 +256,9 @@ app.include_router(assets_router)
 # 徽章聚合 + /api/v1/datasets/{id}/quality 详情与手动 refresh
 # （计算在 cell 引擎侧，平台侧只收聚合计数——红线 2）
 app.include_router(quality_router)
+# 变换管线（wire-transform-pipelines）：/api/v1/pipelines 全端点——列表/
+# 详情/版本化编辑/立即运行/运行历史/管线级 cron 调度（暂停恢复）
+app.include_router(pipelines_router)
 # 溯源账本（wire-provenance-ledger 任务组 2）：客户面概览/时间线/状态/调档
 # （Bearer 身份，4.5）+ 内部 ingest 入账端点（X-Provenance-Token）
 app.include_router(provenance_router)

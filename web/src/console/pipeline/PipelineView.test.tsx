@@ -1,4 +1,6 @@
-// 管线子视图组件测试（wire-transform-pipeline-view 任务 2.1/2.3）：
+// 管线子视图组件测试（wire-transform-pipeline-view 任务 2.1/2.3；
+// wire-transform-pipelines 5.1 起血缘图拆为「图谱」页签——图谱行为直测
+// PipelineGraphView，双页签容器另测）：
 // 深度分列布局（列内按 name 排序）、节点卡信息与徽标（tier/调度/kind）、
 // SVG 父→子连线、空态引导（源照常列出）、truncated/anomalies 如实提示、
 // 节点点击跳数据集详情（mock 回调）、窄屏（<768px）退化分组列表、
@@ -15,6 +17,7 @@ import {
 } from "@testing-library/react";
 import "../../i18n";
 import i18n from "../../i18n";
+import { PipelineGraphView } from "./PipelineGraphView";
 import { PipelineView } from "./PipelineView";
 import { installConsoleBackend, seedConsoleSession } from "../testing";
 import type { PipelineGraph, PipelineGraphNode } from "../api";
@@ -123,7 +126,7 @@ afterEach(() => {
 describe("PipelineView（分层布局与节点卡，任务 2.1）", () => {
   it("按深度分列：depth 0 最左、派生逐级向右；列内按 name 排序", async () => {
     install({ pipelineGraph: CHAIN });
-    render(<PipelineView onOpenDataset={() => {}} />);
+    render(<PipelineGraphView onOpenDataset={() => {}} />);
 
     const columns = await screen.findAllByTestId("pipeline-column");
     expect(columns.map((el) => el.getAttribute("data-depth"))).toEqual([
@@ -148,7 +151,7 @@ describe("PipelineView（分层布局与节点卡，任务 2.1）", () => {
 
   it("节点卡信息与徽标：名称/行数/更新时间、kind 标注、tier 徽标、调度徽标", async () => {
     install({ pipelineGraph: CHAIN });
-    render(<PipelineView onOpenDataset={() => {}} />);
+    render(<PipelineGraphView onOpenDataset={() => {}} />);
 
     const card = await findNode("ds-2");
     const node = within(card);
@@ -185,7 +188,7 @@ describe("PipelineView（分层布局与节点卡，任务 2.1）", () => {
 
   it("SVG 连线父→子：两条边、from/to 指向正确（Bearer 登录身份请求）", async () => {
     const backend = install({ pipelineGraph: CHAIN });
-    render(<PipelineView onOpenDataset={() => {}} />);
+    render(<PipelineGraphView onOpenDataset={() => {}} />);
 
     const edges = await screen.findAllByTestId("pipeline-edge");
     expect(edges).toHaveLength(2);
@@ -211,7 +214,7 @@ describe("PipelineView（分层布局与节点卡，任务 2.1）", () => {
         truncated: false,
       },
     });
-    render(<PipelineView onOpenDataset={() => {}} />);
+    render(<PipelineGraphView onOpenDataset={() => {}} />);
 
     const hint = await screen.findByTestId("pipeline-empty-hint");
     expect(hint.textContent).toContain("尚无派生数据集");
@@ -224,7 +227,7 @@ describe("PipelineView（分层布局与节点卡，任务 2.1）", () => {
   it("节点点击跳数据集详情（onOpenDataset 携带 dataset_id）", async () => {
     install({ pipelineGraph: CHAIN });
     const onOpen = vi.fn();
-    render(<PipelineView onOpenDataset={onOpen} />);
+    render(<PipelineGraphView onOpenDataset={onOpen} />);
 
     fireEvent.click(await findNode("ds-2"));
     expect(onOpen).toHaveBeenCalledWith("ds-2");
@@ -236,7 +239,7 @@ describe("PipelineView（分层布局与节点卡，任务 2.1）", () => {
     install({
       pipelineGraph: { ...CHAIN, truncated: true, anomalies: 2 },
     });
-    render(<PipelineView onOpenDataset={() => {}} />);
+    render(<PipelineGraphView onOpenDataset={() => {}} />);
 
     expect(await screen.findByTestId("pipeline-truncated")).toBeTruthy();
     expect(screen.getByTestId("pipeline-truncated").textContent).toContain("500");
@@ -251,7 +254,7 @@ describe("PipelineView（分层布局与节点卡，任务 2.1）", () => {
       failPipelineGraphStatus: 503,
       failPipelineGraphDetail: "管线图暂不可用（引擎元数据超时）",
     });
-    render(<PipelineView onOpenDataset={() => {}} />);
+    render(<PipelineGraphView onOpenDataset={() => {}} />);
 
     const error = await screen.findByTestId("pipeline-error");
     expect(error.textContent).toContain("管线图加载失败");
@@ -264,7 +267,7 @@ describe("PipelineView（分层布局与节点卡，任务 2.1）", () => {
 
   it("加载中文案可见（请求未返回前）", () => {
     install({ pipelineGraph: CHAIN });
-    render(<PipelineView onOpenDataset={() => {}} />);
+    render(<PipelineGraphView onOpenDataset={() => {}} />);
     expect(screen.getByTestId("pipeline-loading").textContent).toBe(
       "管线图加载中…",
     );
@@ -276,7 +279,7 @@ describe("PipelineView 窄屏退化（<768px，任务 2.1/2.3）", () => {
     stubMatchMedia(true);
     install({ pipelineGraph: CHAIN });
     const onOpen = vi.fn();
-    render(<PipelineView onOpenDataset={onOpen} />);
+    render(<PipelineGraphView onOpenDataset={onOpen} />);
 
     const list = await screen.findByTestId("pipeline-list");
     const groups = within(list).getAllByTestId("pipeline-depth-group");
@@ -300,5 +303,46 @@ describe("PipelineView 窄屏退化（<768px，任务 2.1/2.3）", () => {
     expect(screen.queryByTestId("pipeline-graph")).toBeNull();
     expect(screen.queryByTestId("pipeline-edges")).toBeNull();
     expect(screen.queryByTestId("pipeline-column")).toBeNull();
+  });
+});
+
+// ── 双页签容器（wire-transform-pipelines 任务 5.1）──────────────────────────
+// 「管线」工作台为默认页签，「图谱」只读视图保留为第二页签；图谱数据在
+// 切到图谱页签时才拉取（工作台不预取）。
+describe("PipelineView 双页签容器（wire-transform-pipelines 5.1）", () => {
+  it("默认「管线」工作台；图谱未拉取；切「图谱」拉图并渲染，工作台让位", async () => {
+    const backend = install({ pipelineGraph: CHAIN });
+    render(<PipelineView onOpenDataset={() => {}} />);
+
+    // 默认工作台页签：管线列表空态在场（无种子管线），图谱未请求
+    expect(await screen.findByTestId("pipeline-workbench")).toBeTruthy();
+    expect(screen.getByTestId("pipeline-tab-workbench").getAttribute("aria-selected")).toBe("true");
+    expect(
+      backend.calls.filter((c) => c.url.pathname === "/api/v1/pipeline/graph"),
+    ).toEqual([]);
+    expect(screen.queryByTestId("pipeline-graph-view")).toBeNull();
+
+    // 切「图谱」：拉图（Bearer）并渲染列与节点；工作台让位
+    fireEvent.click(screen.getByTestId("pipeline-tab-graph"));
+    expect(await screen.findByTestId("pipeline-graph-view")).toBeTruthy();
+    const graphCalls = backend.calls.filter(
+      (c) => c.url.pathname === "/api/v1/pipeline/graph",
+    );
+    expect(graphCalls).toHaveLength(1);
+    expect(graphCalls[0]!.headers["authorization"]).toMatch(/^Bearer /);
+    expect(
+      screen
+        .getAllByTestId("pipeline-column")
+        .map((el) => el.getAttribute("data-depth")),
+    ).toEqual(["0", "1", "2"]);
+    expect(screen.queryByTestId("pipeline-workbench")).toBeNull();
+
+    // 切回「管线」：工作台复现（图谱请求不重复）
+    fireEvent.click(screen.getByTestId("pipeline-tab-workbench"));
+    expect(await screen.findByTestId("pipeline-workbench")).toBeTruthy();
+    expect(screen.queryByTestId("pipeline-graph-view")).toBeNull();
+    expect(
+      backend.calls.filter((c) => c.url.pathname === "/api/v1/pipeline/graph"),
+    ).toHaveLength(1);
   });
 });
