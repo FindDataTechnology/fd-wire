@@ -173,6 +173,31 @@ const zh = {
       "吊销后重配对：控制台吊销即时生效（连接器收到 401）；重新生成配对令牌、重跑 pair 即可，数据集与白名单保留。",
     consoleLink: "前往控制台「我的数据」→",
   },
+  assets: {
+    // 资产目录与数据质量（wire-asset-catalog）：自动登记与元数据补全 /
+    // 「我的数据」筛选 / 质量快照如实口径（原句「指示性检查，非质量认证」）/
+    // 质量指标在专属引擎内计算——信任点按客户口径措辞，不谈内部架构。
+    title: "资产目录与数据质量",
+    intro:
+      "数据集自动进入资产目录、质量快照自动生成——你只需补全业务信息，其余交给平台。",
+    assetTitle: "资产信息",
+    assetDesc:
+      "每个数据集自动出现在资产目录中，无需注册。可为数据集补全业务域、标签、描述、期望更新节奏、责任人与敏感度（常规 / 内部 / 敏感），修改全程留痕。敏感度只用于标注与筛选，不影响数据的存储位置。",
+    filterTitle: "目录筛选",
+    filterDesc:
+      "在「我的数据」页按业务域、标签、敏感度、来源类型与新鲜度筛选，或用关键字搜索，快速定位目标数据集。",
+    qualityTitle: "数据质量",
+    qualityDesc:
+      "每个数据集在创建、同步、派生后自动生成质量快照：行数、主键唯一性与按列空值率（基于最多 10,000 行抽样）；也可随时手动「立即检查」，并查看历史趋势。质量快照为指示性检查，非质量认证。",
+    qualityStates:
+      "状态如实呈现四种：正常 / 最近一次快照失败（不显示旧值）/ 引擎暂不支持（旧版本）/ 暂无快照。",
+    qualityFreshness:
+      "新鲜度：仅对声明了期望更新节奏的数据集判定「过期」，未声明的显示「未知」。",
+    computeTitle: "计算位置",
+    computeDesc:
+      "质量指标在你的专属数据引擎内计算，平台只保存聚合数字、不接触你的数据内容——数据始终留在你的范围内。",
+    consoleLink: "前往控制台「我的数据」→",
+  },
   forms: {
     // 表单产物客户教程（wire-form-builder 任务 5.1）：创建→绑定→配字段→试填
     // →发布→分享→数据落修正历史的全流程（照 docs.localData 的步骤 key 组织）。
@@ -1285,6 +1310,112 @@ const zh = {
             cellLifecycle: "cell 生命周期",
             epochSealed: "锚定封存",
           },
+        },
+        // 资产信息（wire-asset-catalog 5.2）：六字段补全 + 生效节奏提示 +
+        // 最近修改留痕（可折叠）；403（viewer 只读）切只读态如实呈现。
+        asset: {
+          title: "资产信息",
+          hint: "补全业务域、标签与敏感度后，资产目录即可按这些维度检索到该数据集；每次修改留痕可查。",
+          loading: "资产信息加载中…",
+          loadError: "资产信息加载失败",
+          domainLabel: "业务域",
+          domainPlaceholder: "如：销售",
+          tagsLabel: "标签",
+          tagsPlaceholder: "多个标签用逗号分隔，如：销售, 月度",
+          descriptionLabel: "描述",
+          descriptionPlaceholder: "一句话说明这份数据的口径与用途",
+          cadenceLabel: "期望更新节奏",
+          cadenceValues: {
+            undeclared: "未声明",
+            daily: "日更",
+            weekly: "周更",
+            monthly: "月更",
+          },
+          effectiveHint: "当前生效节奏（来自指标目录）：{{cadence}}",
+          ownerLabel: "责任人",
+          ownerPlaceholder: "如：张三",
+          sensitivityLabel: "敏感度",
+          save: "保存",
+          saving: "保存中…",
+          saved: "已保存，目录即时生效。",
+          error: "资产元数据保存失败",
+          readonlyNote: "当前身份为只读席位（viewer），资产元数据不可修改。",
+          eventsShow: "最近修改留痕",
+          eventsHide: "收起留痕",
+          eventChanged: "变更字段",
+          eventFields: {
+            domain: "业务域",
+            tags: "标签",
+            description: "描述",
+            cadence_hint: "期望更新节奏",
+            owner_note: "责任人",
+            sensitivity: "敏感度",
+          },
+        },
+        // 数据质量（wire-dataset-quality 5.3）：口径标注常驻 + 四种如实态
+        //（正常指标 / 快照失败只示原因 / 引擎不支持 / 暂无快照）+ 手动检查。
+        quality: {
+          title: "数据质量",
+          caption: "指示性检查，非质量认证",
+          loading: "质量信息加载中…",
+          loadError: "质量信息加载失败",
+          refresh: "立即检查",
+          refreshing: "检查中…",
+          refreshError: "质量检查触发失败",
+          freshness: {
+            fresh: "正常",
+            stale: "过期",
+            unknown: "未知",
+          },
+          lastRefreshLabel: "最近刷新",
+          lastRefreshNone: "—",
+          emptyTitle: "暂无快照",
+          emptyHint: "首次上传 / 同步 / 派生完成后会自动生成质量快照；也可点「立即检查」手动触发。",
+          unsupportedTitle: "引擎暂不支持质量快照",
+          unsupportedHint: "该数据集所在 cell 的引擎版本尚不支持质量计算——升级引擎后可用；在此之前不显示任何估计值。",
+          failedTitle: "最近一次快照失败",
+          failedHint: "失败期间不展示历史旧值冒充当前值；可点「立即检查」重试。",
+          rowsLabel: "行数",
+          pkLabel: "主键唯一性",
+          pkUndeclared: "未声明键列",
+          nullRatesColumn: "列",
+          nullRatesRate: "空值率",
+          nullRatesSampled: "抽样行数",
+          sampleNote: "基于抽样（上限 10,000 行）",
+          computedAtLabel: "计算于",
+          triggeredByLabel: "触发方式",
+          triggeredBy: {
+            manual: "手动",
+            sync: "同步",
+            create: "建集",
+            derive: "派生",
+          },
+          trendTitle: "行数趋势",
+        },
+      },
+      // 资产目录筛选栏与质量徽章（wire-asset-catalog 5.1 / wire-dataset-quality）：
+      // 目录=本页升级（D5 不另建资产页）；筛选/搜索/分页联动 GET /api/v1/assets，
+      // 徽章随质量汇总态变化（正常/过期/未知；缺失或端点失败不渲染）。
+      assets: {
+        searchPlaceholder: "搜索名称 / 描述",
+        domainPlaceholder: "业务域",
+        tagPlaceholder: "标签",
+        sensitivityLabel: "敏感度",
+        sensitivityAll: "全部敏感度",
+        sourceKindLabel: "来源类型",
+        sourceKindAll: "全部来源",
+        freshnessLabel: "新鲜度",
+        freshnessAll: "全部新鲜度",
+        apply: "筛选",
+        reset: "重置",
+        filteredEmpty: "没有符合当前筛选条件的数据集。",
+        pagination: "共 {{total}} 个数据集 · 第 {{page}} / {{pages}} 页",
+        prev: "上一页",
+        next: "下一页",
+        qualityBadge: {
+          fresh: "正常",
+          stale: "过期",
+          unknown: "未知",
         },
       },
       // 管线子视图（wire-transform-pipeline-view 任务 2.1/2.2）：数据页内

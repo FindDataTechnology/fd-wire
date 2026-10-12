@@ -384,6 +384,56 @@ export function DocsView() {
         </a>
       </section>
 
+      {/* 五b、资产目录与数据质量（wire-asset-catalog）：数据集自动进目录
+          无需注册 / 「我的数据」筛选 / 质量快照如实口径（指示性检查，
+          非质量认证）/ 质量指标在专属引擎内计算——信任点按客户口径措辞。 */}
+      <section id="assets" data-testid="docs-assets" className="space-y-4">
+        <h2 className="text-xl font-semibold">{t("docs.assets.title")}</h2>
+        <p className="max-w-3xl text-sm text-slate-500">
+          {t("docs.assets.intro")}
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="rounded-lg border border-slate-200 p-5">
+            <h3 className="font-medium">{t("docs.assets.assetTitle")}</h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.assets.assetDesc")}
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-200 p-5">
+            <h3 className="font-medium">{t("docs.assets.filterTitle")}</h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.assets.filterDesc")}
+            </p>
+          </div>
+          <div
+            data-testid="docs-assets-quality"
+            className="rounded-lg border border-slate-200 p-5"
+          >
+            <h3 className="font-medium">{t("docs.assets.qualityTitle")}</h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.assets.qualityDesc")}
+            </p>
+            <ul className="mt-3 space-y-1.5 text-sm text-slate-500">
+              <li>{t("docs.assets.qualityStates")}</li>
+              <li>{t("docs.assets.qualityFreshness")}</li>
+            </ul>
+          </div>
+          <div className="rounded-lg border border-slate-200 p-5">
+            <h3 className="font-medium">{t("docs.assets.computeTitle")}</h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.assets.computeDesc")}
+            </p>
+          </div>
+        </div>
+        <a
+          href="#/console/datasets"
+          data-testid="docs-assets-console-link"
+          className="inline-block text-sm text-slate-600 underline hover:text-slate-900"
+        >
+          {t("docs.assets.consoleLink")}
+        </a>
+      </section>
+
       {/* 六、表单（wire-form-builder 任务 5.1）：把「收数据」做成成熟表单分享
           给他人填写的全流程教程——创建/绑定/配字段/试填/发布分享/修正历史
           回滚，面向客户的口径（照 docs.localData 的步骤条组织）。 */}

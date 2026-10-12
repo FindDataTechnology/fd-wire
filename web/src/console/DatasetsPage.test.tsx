@@ -1165,3 +1165,277 @@ describe("DatasetsPage 管线子视图（wire-transform-pipeline-view 2.2/2.3）
     );
   });
 });
+
+// ── 资产目录（wire-asset-catalog 任务 5.1 / wire-dataset-quality 列表徽章）──
+// 目录=本页升级（D5）：筛选/搜索/分页联动 GET /api/v1/assets；徽章按本页
+// id 批量拉 GET /api/v1/quality/summary（fresh/stale/unknown；缺失键或端点
+// 失败=无徽章，绝不断列表）。假后端语义见 testing.ts assets/quality 路由。
+describe("DatasetsPage 资产目录（筛选/搜索/分页 + 质量徽章，任务 5.1）", () => {
+  function assetsCalls(
+    backend: ReturnType<typeof installConsoleBackend>,
+  ): FetchCall[] {
+    return backend.calls.filter(
+      (call) => call.method === "GET" && call.url.pathname === "/api/v1/assets",
+    );
+  }
+
+  it("筛选与搜索联动 GET /api/v1/assets：下拉即席、文本经「筛选」提交、参数完整（Bearer）", async () => {
+    const backend = install({
+      datasets: [
+        makeDataset({ id: "ds-1", name: "门店销量" }),
+        makeDataset({ id: "ds-2", name: "ERP 订单", source_kind: "connector" }),
+      ],
+      assetMeta: {
+        "ds-1": { domain: "销售", tags: ["月度"], description: "门店月度销量" },
+        "ds-2": { domain: "供应链", sensitivity: "内部" },
+      },
+    });
+    render(<DatasetsPage planCode="basic" />);
+    await screen.findAllByTestId("dataset-card");
+    expect(assetsCalls(backend)).toHaveLength(1);
+
+    // 下拉即席提交（页码回 1）：敏感度 / 来源类型 / 新鲜度
+    fireEvent.change(screen.getByTestId("assets-filter-sensitivity"), {
+      target: { value: "内部" },
+    });
+    await waitFor(() => expect(assetsCalls(backend)).toHaveLength(2));
+    let call = assetsCalls(backend)[1]!;
+    expect(call.url.searchParams.get("sensitivity")).toBe("内部");
+    expect(call.url.searchParams.get("page")).toBe("1");
+    expect(call.headers["authorization"]).toMatch(/^Bearer /);
+
+    fireEvent.change(screen.getByTestId("assets-filter-source-kind"), {
+      target: { value: "connector" },
+    });
+    await waitFor(() => expect(assetsCalls(backend)).toHaveLength(3));
+    fireEvent.change(screen.getByTestId("assets-filter-freshness"), {
+      target: { value: "stale" },
+    });
+    await waitFor(() => expect(assetsCalls(backend)).toHaveLength(4));
+    expect(assetsCalls(backend)[2]!.url.searchParams.get("source_kind")).toBe(
+      "connector",
+    );
+    expect(assetsCalls(backend)[3]!.url.searchParams.get("freshness")).toBe(
+      "stale",
+    );
+
+    // 文本草稿：不提交不发请求；点「筛选」后 domain/tag/q 进 query
+    fireEvent.change(screen.getByTestId("assets-filter-domain"), {
+      target: { value: "销售" },
+    });
+    fireEvent.change(screen.getByTestId("assets-filter-tag"), {
+      target: { value: "月度" },
+    });
+    fireEvent.change(screen.getByTestId("assets-filter-q"), {
+      target: { value: "门店" },
+    });
+    expect(assetsCalls(backend)).toHaveLength(4);
+    fireEvent.click(screen.getByTestId("assets-filter-apply"));
+    await waitFor(() => expect(assetsCalls(backend)).toHaveLength(5));
+    call = assetsCalls(backend)[4]!;
+    expect(call.url.searchParams.get("domain")).toBe("销售");
+    expect(call.url.searchParams.get("tag")).toBe("月度");
+    expect(call.url.searchParams.get("q")).toBe("门店");
+    expect(call.url.searchParams.get("sensitivity")).toBe("内部");
+    expect(call.url.searchParams.get("source_kind")).toBe("connector");
+    expect(call.url.searchParams.get("freshness")).toBe("stale");
+
+    // 重置：清空全部筛选（无过滤参数），列表回到全量
+    fireEvent.click(screen.getByTestId("assets-filter-reset"));
+    await waitFor(() => expect(assetsCalls(backend)).toHaveLength(6));
+    call = assetsCalls(backend)[5]!;
+    expect(call.url.searchParams.get("domain")).toBeNull();
+    expect(call.url.searchParams.get("sensitivity")).toBeNull();
+    expect(call.url.searchParams.get("q")).toBeNull();
+    expect(await screen.findAllByTestId("dataset-card")).toHaveLength(2);
+  });
+
+  it("服务端过滤语义：组合筛选（域+敏感度）与搜索（名称/描述）只命中满足条件的数据集", async () => {
+    install({
+      datasets: [
+        makeDataset({ id: "ds-1", name: "门店销量" }),
+        makeDataset({ id: "ds-2", name: "ERP 订单", source_kind: "connector" }),
+        makeDataset({ id: "ds-3", name: "门店库存" }),
+      ],
+      assetMeta: {
+        "ds-1": { domain: "销售", sensitivity: "内部", description: "门店月度销量" },
+        "ds-2": { domain: "销售", sensitivity: "敏感" },
+        "ds-3": { domain: "供应链" },
+      },
+    });
+    render(<DatasetsPage planCode="basic" />);
+    await screen.findAllByTestId("dataset-card");
+
+    // 组合筛选：业务域=销售 且 敏感度=内部 → 仅 ds-1
+    fireEvent.change(screen.getByTestId("assets-filter-domain"), {
+      target: { value: "销售" },
+    });
+    fireEvent.click(screen.getByTestId("assets-filter-apply"));
+    await waitFor(() =>
+      expect(screen.getAllByTestId("dataset-card")).toHaveLength(2),
+    );
+    fireEvent.change(screen.getByTestId("assets-filter-sensitivity"), {
+      target: { value: "内部" },
+    });
+    await waitFor(() =>
+      expect(screen.getAllByTestId("dataset-card")).toHaveLength(1),
+    );
+    expect(screen.getByTestId("dataset-name").textContent).toBe("门店销量");
+
+    // 搜索命中描述关键字：重置后按「月度销量」检索 → ds-1
+    fireEvent.click(screen.getByTestId("assets-filter-reset"));
+    await waitFor(() =>
+      expect(screen.getAllByTestId("dataset-card")).toHaveLength(3),
+    );
+    fireEvent.change(screen.getByTestId("assets-filter-q"), {
+      target: { value: "月度销量" },
+    });
+    fireEvent.click(screen.getByTestId("assets-filter-apply"));
+    await waitFor(() =>
+      expect(screen.getAllByTestId("dataset-card")).toHaveLength(1),
+    );
+    expect(screen.getByTestId("dataset-name").textContent).toBe("门店销量");
+
+    // 筛选无命中：filtered 空态 + 一键重置
+    fireEvent.change(screen.getByTestId("assets-filter-domain"), {
+      target: { value: "不存在域" },
+    });
+    fireEvent.click(screen.getByTestId("assets-filter-apply"));
+    expect(await screen.findByTestId("assets-filtered-empty")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("assets-filtered-reset"));
+    await waitFor(() =>
+      expect(screen.getAllByTestId("dataset-card")).toHaveLength(3),
+    );
+  });
+
+  it("卡片资产元数据：业务域/标签呈现，内部与敏感带标注（常规不占位）", async () => {
+    install({
+      datasets: [
+        makeDataset({ id: "ds-1", name: "门店销量" }),
+        makeDataset({ id: "ds-2", name: "ERP 订单" }),
+        makeDataset({ id: "ds-3", name: "客服工单" }),
+      ],
+      assetMeta: {
+        "ds-1": { domain: "销售", tags: ["月度", "门店"] },
+        "ds-2": { sensitivity: "内部" },
+        "ds-3": { sensitivity: "敏感" },
+      },
+    });
+    render(<DatasetsPage planCode="basic" />);
+    await screen.findAllByTestId("dataset-card");
+
+    expect(screen.getByTestId("dataset-asset-domain").textContent).toBe("销售");
+    expect(
+      screen.getAllByTestId("dataset-asset-tag").map((el) => el.textContent),
+    ).toEqual(["#月度", "#门店"]);
+    const sensitivityBadges = screen.getAllByTestId("dataset-sensitivity-badge");
+    expect(
+      sensitivityBadges.map((el) => el.getAttribute("data-sensitivity")),
+    ).toEqual(["内部", "敏感"]);
+    // 常规（默认）不渲染敏感度标注
+    expect(sensitivityBadges).toHaveLength(2);
+  });
+
+  it("质量徽章：fresh=正常 / stale=过期 / unknown=未知，summary 缺失键无徽章", async () => {
+    const backend = install({
+      datasets: [
+        makeDataset({ id: "ds-1", name: "新鲜集" }),
+        makeDataset({ id: "ds-2", name: "过期集" }),
+        makeDataset({ id: "ds-3", name: "未知集" }),
+        makeDataset({ id: "ds-4", name: "无种子集" }),
+      ],
+      quality: {
+        "ds-1": { freshness: { freshness: "fresh", last_refresh_at: NOW } },
+        "ds-2": { freshness: { freshness: "stale", last_refresh_at: NOW } },
+        "ds-3": { freshness: "unknown" },
+      },
+    });
+    render(<DatasetsPage planCode="basic" />);
+    await screen.findAllByTestId("dataset-card");
+
+    // 汇总请求带本页全部 dataset ids（逗号拼接）
+    const summaryCall = backend.calls.find(
+      (call) => call.url.pathname === "/api/v1/quality/summary",
+    );
+    expect(summaryCall?.url.searchParams.get("dataset_ids")).toBe(
+      "ds-1,ds-2,ds-3,ds-4",
+    );
+
+    const badges = await screen.findAllByTestId("dataset-quality-badge");
+    expect(badges.map((el) => el.getAttribute("data-freshness"))).toEqual([
+      "fresh",
+      "stale",
+      "unknown",
+    ]);
+    expect(badges.map((el) => el.textContent)).toEqual(["正常", "过期", "未知"]);
+    // 无质量种子的条目（summary 缺失键）不渲染徽章
+    expect(badges).toHaveLength(3);
+  });
+
+  it("summary 端点失败：徽章静默缺席，列表照常渲染（不报错不断页）", async () => {
+    install({
+      datasets: [makeDataset({ id: "ds-1", name: "门店销量" })],
+      quality: { "ds-1": { freshness: "fresh" } },
+      failQualitySummaryStatus: 500,
+    });
+    render(<DatasetsPage planCode="basic" />);
+
+    expect(await screen.findByTestId("dataset-card")).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByTestId("dataset-card")
+          .filter((el) =>
+            el.querySelector('[data-testid="dataset-quality-badge"]'),
+          ).length,
+      ).toBe(0),
+    );
+    expect(screen.queryByTestId("datasets-error")).toBeNull();
+  });
+
+  it("分页：超页大小出分页条，翻页带 page 参数且只渲染当页条目", async () => {
+    const backend = install({
+      datasets: Array.from({ length: 21 }, (_, i) =>
+        makeDataset({ id: `ds-${i + 1}`, name: `数据集 ${i + 1}` }),
+      ),
+    });
+    render(<DatasetsPage planCode="basic" />);
+    await screen.findAllByTestId("dataset-card");
+
+    // 首页：20 条 + 分页信息（1/2 页）
+    expect(screen.getAllByTestId("dataset-card")).toHaveLength(20);
+    expect(screen.getByTestId("assets-pagination-info").textContent).toContain(
+      "21",
+    );
+    expect(screen.getByTestId("assets-pagination-info").textContent).toContain(
+      "1 / 2",
+    );
+    expect(
+      (screen.getByTestId("assets-prev-page") as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    // 翻页：page=2 → 第二页仅 1 条；next 禁用
+    fireEvent.click(screen.getByTestId("assets-next-page"));
+    await waitFor(() =>
+      expect(screen.getAllByTestId("dataset-card")).toHaveLength(1),
+    );
+    const paged = backend.calls
+      .filter(
+        (call) =>
+          call.method === "GET" && call.url.pathname === "/api/v1/assets",
+      )
+      .at(-1)!;
+    expect(paged.url.searchParams.get("page")).toBe("2");
+    expect(
+      (screen.getByTestId("assets-next-page") as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it("目录端点失败：错误态 + 重试（既有错误面语义）", async () => {
+    install({ datasets: [], failAssetsStatus: 500 });
+    render(<DatasetsPage planCode="basic" />);
+
+    expect(await screen.findByTestId("datasets-error")).toBeTruthy();
+    expect(screen.queryByTestId("dataset-card")).toBeNull();
+  });
+});

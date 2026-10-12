@@ -49,6 +49,7 @@ from fd_wire_api.datasets.ingest import (
     TOOL_WRITE_BATCH,
     get_engine_client_factory,
 )
+from fd_wire_api.quality.service import TOOL_QUALITY
 
 from console_fixture import bearer, install_fake_jwks, make_console_env, mint_id_token
 
@@ -115,6 +116,16 @@ class FakeEngine:
                 "reverted_at": None,
             }
         ]
+        #: 质量工具返回（wire-asset-catalog 4：建档/同步/派生钩子自动触发
+        # customer_dataset_quality——聚合计数与比率，无任何数据值）
+        self.quality_result: dict = {
+            "row_count": 2,
+            "computed_at": "2026-10-06T00:00:00Z",
+            "pk_uniqueness": {"columns": ["id"], "unique_ratio": 1.0},
+            "pk_declared": True,
+            "null_rates": [{"column": "id", "null_rate": 0.0, "sampled_rows": 2}],
+            "sample_limit_hit": False,
+        }
 
     @property
     def tools(self) -> list[str]:
@@ -206,6 +217,8 @@ class FakeEngine:
             return dict(self.lineage_result)
         if tool == TOOL_OVERVIEW:
             return {**self.overview_result, "key": arguments["dataset_key"]}
+        if tool == TOOL_QUALITY:
+            return {"success": True, **dict(self.quality_result)}
         raise AssertionError(f"FakeEngine 未实现的工具: {tool}")
 
 

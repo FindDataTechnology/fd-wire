@@ -318,9 +318,22 @@ class MaterializationRunner:
                 error=f"引擎拒绝: {result['error']}", now=now,
             )
         rows = int((result or {}).get("rows") or 0)
-        return self._record(
+        run_result = self._record(
             artifact, status=STATUS_SUCCESS, rows=rows, now=now
         )
+        # 质量快照钩子（wire-asset-catalog 4.3）：派生重算成功——触发一次
+        # 质量快照（triggered_by=materialize）；失败隔离，快照失败绝不影响
+        # 物化主流程（结果已在头顶落库）。dataset 为脱离会话的登记行，
+        # 钩子只取 id/key/customer_id。
+        try:
+            from ..quality import service as quality_service  # noqa: PLC0415
+
+            quality_service.notify_dataset_changed(
+                dataset, "materialize", client=client
+            )
+        except Exception:  # noqa: BLE001 - 双保险：主流程绝不因快照中断
+            pass
+        return run_result
 
     def run(
         self,

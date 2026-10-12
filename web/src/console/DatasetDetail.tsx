@@ -16,25 +16,48 @@
 // 显示两节——「重派生」（级联开关默认开+逐级结果呈现+完成后详情刷新）与
 // 「定时重派生」（五字段 cron 登记/更新/态呈现/删除+naive UTC 诚实注记）；
 // api 档（免费档）与上传集不渲染入口（端点侧 403/400 闸兜底）。
+// 资产信息（wire-asset-catalog 5.2）：六字段元数据编辑（域/标签/描述/期望
+// 节奏/责任人/敏感度三选）+ 生效节奏提示（api 层来自指标目录）+ 最近修改
+// 留痕（可折叠）；保存走 PATCH，422 字段级回显、403 切只读态（viewer 席位
+// ——前端无独立角色源，以服务端 403 为准如实降级）。
+// 数据质量（wire-dataset-quality 5.3）：五项指标 + 行数趋势（echarts SVG）+
+// 「指示性检查，非质量认证」口径标注常驻 + 四种如实态（正常指标 / 快照失败
+// 只示原因 / 引擎不支持 / 暂无快照——绝不用旧值冒充当前值）+ 手动「立即检查」。
 // 契约：openspec/changes/wire-customer-local-data/reports/interfaces.md §3.3/§4、
-// openspec/changes/wire-provenance-ledger /api/v1/provenance/*。
-import { useCallback, useEffect, useState } from "react";
+// openspec/changes/wire-provenance-ledger /api/v1/provenance/*、
+// wire-asset-catalog / wire-dataset-quality /api/v1/assets|quality/*。
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import * as echarts from "echarts";
 import {
   addCorrection,
   apiErrorText,
   deleteDataset,
   deleteDatasetSchedule,
   exportDatasetCsv,
+  fetchAssetMetaEvents,
   fetchCorrections,
   fetchDataset,
+  fetchDatasetAssetMeta,
+  fetchDatasetQuality,
   fetchDatasetRows,
   getDatasetSchedule,
   putDatasetSchedule,
   queryDataset,
   refreshDataset,
+  refreshDatasetQuality,
+  updateDatasetAssetMeta,
+  ConsoleApiError,
+  type AssetCadenceHint,
+  type AssetMetaEvent,
+  type AssetSensitivity,
+  type DatasetAssetMeta,
+  type DatasetQuality,
   type DatasetRefreshCascadeEntry,
   type DatasetSchedule,
+  type QualityFreshnessValue,
+  type QualityHistoryEntry,
+  type QualitySnapshot,
   type QueryFilterOp,
   fetchEvidencePackage,
   fetchProvenanceEvents,
@@ -401,6 +424,13 @@ export function DatasetDetail({
           </div>
         </div>
       )}
+
+      {/* 资产信息（wire-asset-catalog 5.2）：六字段元数据补全 + 留痕；403 时
+          切只读态（viewer 席位——前端无独立角色源，以服务端口径为准）。 */}
+      <AssetMetaSection datasetId={datasetId} />
+      {/* 数据质量（wire-dataset-quality 5.3）：口径标注常驻 + 四种如实态 +
+          行数趋势 + 手动「立即检查」。 */}
+      <QualityPanel datasetId={datasetId} />
 
       <PreviewGrid
         datasetId={datasetId}
@@ -2591,6 +2621,793 @@ function ProvenancePanel({
             ? t("console.datasets.detail.provenance.loadingEarlier")
             : t("console.datasets.detail.provenance.loadEarlier")}
         </button>
+      )}
+    </section>
+  );
+}
+// ── 资产信息（wire-asset-catalog 任务 5.2）──────────────────────────────
+
+/** 留痕变更字段（before/after 键面；展示标签走 eventFields i18n）。 */
+const ASSET_META_FIELD_KEYS = [
+  "domain",
+  "tags",
+  "description",
+  "cadence_hint",
+  "owner_note",
+  "sensitivity",
+] as const;
+
+/** 留痕条目的变更字段清单（前后值不同的键；坏/缺失值按无变更跳过）。 */
+export function assetMetaChangedFields(event: {
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
+}): string[] {
+  return ASSET_META_FIELD_KEYS.filter(
+    (field) =>
+      event.before != null &&
+      event.after != null &&
+      event.before[field] !== event.after[field],
+  );
+}
+
+/** 标签输入草稿 → 数组（中英逗号分隔、去空白、去空项）。 */
+export function parseTagsInput(text: string): string[] {
+  return text
+    .split(/[,，]/)
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+function AssetMetaSection({ datasetId }: { datasetId: string }) {
+  const { t } = useTranslation();
+  const [meta, setMeta] = useState<DatasetAssetMeta | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  // 六字段草稿（cadence 空串=未声明；tags 以逗号文本编辑，提交时拆数组）。
+  const [domain, setDomain] = useState("");
+  const [tagsText, setTagsText] = useState("");
+  const [description, setDescription] = useState("");
+  const [cadence, setCadence] = useState<"" | AssetCadenceHint>("");
+  const [owner, setOwner] = useState("");
+  const [sensitivity, setSensitivity] = useState<AssetSensitivity>("常规");
+  const [saving, setSaving] = useState(false);
+  const [opError, setOpError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [saved, setSaved] = useState(false);
+  // 403（viewer 只读）后置只读：控制台无独立角色端点（团队总览 owner-only），
+  // 前端以服务端 PATCH 403 裁决为准如实降级，不预判角色。
+  const [readOnly, setReadOnly] = useState(false);
+  const [events, setEvents] = useState<AssetMetaEvent[] | null>(null);
+  const [eventsOpen, setEventsOpen] = useState(false);
+
+  const applyMeta = useCallback((next: DatasetAssetMeta) => {
+    setMeta(next);
+    setDomain(next.domain ?? "");
+    setTagsText(next.tags.join(", "));
+    setDescription(next.description ?? "");
+    setCadence(next.cadence_hint ?? "");
+    setOwner(next.owner_note ?? "");
+    setSensitivity(next.sensitivity);
+  }, []);
+
+  const load = useCallback(async () => {
+    setLoadError(false);
+    try {
+      applyMeta(await fetchDatasetAssetMeta(datasetId));
+    } catch {
+      setMeta(null);
+      setLoadError(true);
+    }
+  }, [datasetId, applyMeta]);
+
+  const loadEvents = useCallback(async () => {
+    try {
+      const page = await fetchAssetMetaEvents(datasetId);
+      setEvents(page.items);
+    } catch {
+      // 留痕端点不可用（旧后端/故障）→ 留痕区静默不渲染，不阻塞编辑面。
+      setEvents(null);
+    }
+  }, [datasetId]);
+
+  useEffect(() => {
+    setMeta(null);
+    setEvents(null);
+    setReadOnly(false);
+    setOpError(null);
+    setFieldErrors({});
+    void load();
+    void loadEvents();
+  }, [load, loadEvents]);
+
+  const save = async () => {
+    if (saving || readOnly) return;
+    setSaving(true);
+    setOpError(null);
+    setFieldErrors({});
+    setSaved(false);
+    try {
+      const next = await updateDatasetAssetMeta(datasetId, {
+        domain: domain.trim() || null,
+        tags: parseTagsInput(tagsText),
+        description: description.trim() || null,
+        cadence_hint: cadence || null,
+        owner_note: owner.trim() || null,
+        sensitivity,
+      });
+      applyMeta(next);
+      setSaved(true);
+      void loadEvents();
+    } catch (err) {
+      if (err instanceof ConsoleApiError && err.status === 403) {
+        // viewer 只读：切只读态（字段禁用、保存收起、提示如实），不报错条。
+        setReadOnly(true);
+        setOpError(null);
+      } else if (
+        err instanceof ConsoleApiError &&
+        err.status === 422 &&
+        err.detailItems?.length
+      ) {
+        // FastAPI 422 数组：按 loc 定位字段逐条回显（如非法敏感度合法清单）。
+        const errors: Record<string, string> = {};
+        for (const item of err.detailItems) {
+          const field = item.loc?.[1];
+          if (typeof field === "string" && !errors[field]) {
+            errors[field] = item.msg ?? "";
+          }
+        }
+        setFieldErrors(errors);
+        setOpError(t("console.datasets.detail.asset.error"));
+      } else {
+        setOpError(apiErrorText(err, t("console.datasets.detail.asset.error")));
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const fieldError = (field: string) =>
+    fieldErrors[field] ? (
+      <span
+        data-testid="asset-meta-field-error"
+        data-field={field}
+        className="text-[11px] text-red-600"
+      >
+        {fieldErrors[field]}
+      </span>
+    ) : null;
+
+  const inputClass =
+    "rounded border border-slate-300 px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-slate-100";
+
+  return (
+    <section data-testid="asset-meta-section" className="mt-6">
+      <h2 className="text-base font-semibold">
+        {t("console.datasets.detail.asset.title")}
+      </h2>
+      <p className="mt-1 max-w-2xl text-xs text-slate-500">
+        {t("console.datasets.detail.asset.hint")}
+      </p>
+
+      {loadError && (
+        <div data-testid="asset-meta-load-error" className="mt-2">
+          <p className="text-xs text-red-600">
+            {t("console.datasets.detail.asset.loadError")}
+          </p>
+          <button
+            type="button"
+            data-testid="asset-meta-retry"
+            onClick={() => void load()}
+            className="mt-1 rounded border border-red-300 px-2 py-0.5 text-xs text-red-700 hover:bg-red-100"
+          >
+            {t("console.datasets.retry")}
+          </button>
+        </div>
+      )}
+
+      {meta == null && !loadError && (
+        <p
+          data-testid="asset-meta-loading"
+          className="mt-2 text-xs text-slate-400"
+        >
+          {t("console.datasets.detail.asset.loading")}
+        </p>
+      )}
+
+      {meta != null && !loadError && (
+        <div
+          data-testid="asset-meta-form"
+          data-readonly={readOnly ? "true" : "false"}
+          className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-3 text-xs"
+        >
+          <div className="flex flex-wrap items-start gap-3">
+            <label className="flex w-56 flex-col gap-1">
+              <span className="text-slate-500">
+                {t("console.datasets.detail.asset.domainLabel")}
+              </span>
+              <input
+                data-testid="asset-meta-domain"
+                value={domain}
+                disabled={readOnly || saving}
+                onChange={(e) => setDomain(e.target.value)}
+                placeholder={t("console.datasets.detail.asset.domainPlaceholder")}
+                className={inputClass}
+              />
+              {fieldError("domain")}
+            </label>
+            <label className="flex w-64 flex-col gap-1">
+              <span className="text-slate-500">
+                {t("console.datasets.detail.asset.tagsLabel")}
+              </span>
+              <input
+                data-testid="asset-meta-tags"
+                value={tagsText}
+                disabled={readOnly || saving}
+                onChange={(e) => setTagsText(e.target.value)}
+                placeholder={t("console.datasets.detail.asset.tagsPlaceholder")}
+                className={inputClass}
+              />
+              {fieldError("tags")}
+            </label>
+            <label className="flex w-40 flex-col gap-1">
+              <span className="text-slate-500">
+                {t("console.datasets.detail.asset.cadenceLabel")}
+              </span>
+              <select
+                data-testid="asset-meta-cadence"
+                value={cadence}
+                disabled={readOnly || saving}
+                onChange={(e) =>
+                  setCadence(e.target.value as "" | AssetCadenceHint)
+                }
+                className={inputClass}
+              >
+                <option value="">
+                  {t("console.datasets.detail.asset.cadenceValues.undeclared")}
+                </option>
+                {(["daily", "weekly", "monthly"] as AssetCadenceHint[]).map(
+                  (value) => (
+                    <option key={value} value={value}>
+                      {t(`console.datasets.detail.asset.cadenceValues.${value}`)}
+                    </option>
+                  ),
+                )}
+              </select>
+              {fieldError("cadence_hint")}
+            </label>
+            <label className="flex w-40 flex-col gap-1">
+              <span className="text-slate-500">
+                {t("console.datasets.detail.asset.ownerLabel")}
+              </span>
+              <input
+                data-testid="asset-meta-owner"
+                value={owner}
+                disabled={readOnly || saving}
+                onChange={(e) => setOwner(e.target.value)}
+                placeholder={t("console.datasets.detail.asset.ownerPlaceholder")}
+                className={inputClass}
+              />
+              {fieldError("owner_note")}
+            </label>
+            <label className="flex w-36 flex-col gap-1">
+              <span className="text-slate-500">
+                {t("console.datasets.detail.asset.sensitivityLabel")}
+              </span>
+              <select
+                data-testid="asset-meta-sensitivity"
+                value={sensitivity}
+                disabled={readOnly || saving}
+                onChange={(e) =>
+                  setSensitivity(e.target.value as AssetSensitivity)
+                }
+                className={inputClass}
+              >
+                {(["常规", "内部", "敏感"] as AssetSensitivity[]).map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+              {fieldError("sensitivity")}
+            </label>
+            <label className="flex min-w-64 flex-1 flex-col gap-1">
+              <span className="text-slate-500">
+                {t("console.datasets.detail.asset.descriptionLabel")}
+              </span>
+              <textarea
+                data-testid="asset-meta-description"
+                value={description}
+                disabled={readOnly || saving}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder={t(
+                  "console.datasets.detail.asset.descriptionPlaceholder",
+                )}
+                rows={2}
+                className={`${inputClass} w-full`}
+              />
+              {fieldError("description")}
+            </label>
+          </div>
+
+          {/* 生效节奏提示：api 层数据集自动取自指标注册表；客户未声明时展示。 */}
+          {meta.cadence_effective && !cadence && (
+            <p
+              data-testid="asset-meta-effective-hint"
+              className="mt-2 text-[11px] text-slate-400"
+            >
+              {t("console.datasets.detail.asset.effectiveHint", {
+                cadence: t(
+                  `console.datasets.detail.asset.cadenceValues.${meta.cadence_effective}`,
+                ),
+              })}
+            </p>
+          )}
+
+          {opError && (
+            <p
+              data-testid="asset-meta-error"
+              className="mt-2 text-xs text-red-600"
+            >
+              {opError}
+            </p>
+          )}
+          {saved && !opError && (
+            <p
+              data-testid="asset-meta-saved"
+              className="mt-2 text-xs text-emerald-600"
+            >
+              {t("console.datasets.detail.asset.saved")}
+            </p>
+          )}
+          {readOnly && (
+            <p
+              data-testid="asset-meta-readonly"
+              className="mt-2 text-xs text-amber-700"
+            >
+              {t("console.datasets.detail.asset.readonlyNote")}
+            </p>
+          )}
+          {!readOnly && (
+            <button
+              type="button"
+              data-testid="asset-meta-save"
+              disabled={saving}
+              onClick={() => void save()}
+              className="mt-2 rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {saving
+                ? t("console.datasets.detail.asset.saving")
+                : t("console.datasets.detail.asset.save")}
+            </button>
+          )}
+
+          {/* 最近修改留痕（append-only；最近 3 条，默认折叠）。 */}
+          {events != null && events.length > 0 && (
+            <div
+              data-testid="asset-meta-events"
+              className="mt-3 border-t border-slate-100 pt-2"
+            >
+              <button
+                type="button"
+                data-testid="asset-meta-events-toggle"
+                onClick={() => setEventsOpen((open) => !open)}
+                className="text-[11px] text-slate-500 underline-offset-2 hover:underline"
+              >
+                {eventsOpen
+                  ? t("console.datasets.detail.asset.eventsHide")
+                  : t("console.datasets.detail.asset.eventsShow")}
+              </button>
+              {eventsOpen && (
+                <ul className="mt-1.5 space-y-1">
+                  {events.slice(0, 3).map((event, index) => {
+                    const changed = assetMetaChangedFields(event);
+                    return (
+                      <li
+                        key={`${event.at}-${index}`}
+                        data-testid="asset-meta-event"
+                        className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500"
+                      >
+                        <span>{formatServerDate(event.at)}</span>
+                        <span>·</span>
+                        <span className="font-mono">{event.actor_sub}</span>
+                        {changed.length > 0 && (
+                          <>
+                            <span>·</span>
+                            <span data-testid="asset-meta-event-changes">
+                              {t(
+                                "console.datasets.detail.asset.eventChanged",
+                              )}
+                             ：
+                              {changed
+                                .map((field) =>
+                                  t(
+                                    `console.datasets.detail.asset.eventFields.${field}`,
+                                  ),
+                                )
+                                .join("、")}
+                            </span>
+                          </>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ── 数据质量（wire-dataset-quality 任务 5.3）────────────────────────────
+
+const QUALITY_FRESHNESS_CLASS: Record<QualityFreshnessValue, string> = {
+  fresh: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  stale: "bg-amber-50 text-amber-700 ring-amber-200",
+  unknown: "bg-slate-100 text-slate-600 ring-slate-200",
+};
+
+/** 详情响应 freshness 容错解析：对象 {freshness,last_refresh_at} 或裸枚举
+ *  字符串两种下发形态都收（并行后端形态差异不前端崩）。 */
+export function parseQualityFreshness(raw: unknown): {
+  freshness: QualityFreshnessValue;
+  last_refresh_at: string | null;
+} {
+  if (raw === "fresh" || raw === "stale" || raw === "unknown") {
+    return { freshness: raw, last_refresh_at: null };
+  }
+  if (raw && typeof raw === "object") {
+    const record = raw as { freshness?: unknown; last_refresh_at?: unknown };
+    const value = record.freshness;
+    return {
+      freshness:
+        value === "fresh" || value === "stale" || value === "unknown"
+          ? value
+          : "unknown",
+      last_refresh_at:
+        typeof record.last_refresh_at === "string" && record.last_refresh_at
+          ? record.last_refresh_at
+          : null,
+    };
+  }
+  return { freshness: "unknown", last_refresh_at: null };
+}
+
+/** 比率 → 百分比文本（0..1 乘 100；异常值原样保守呈现一位小数）。 */
+export function formatRatePercent(rate: number): string {
+  const percent = rate >= 0 && rate <= 1 ? rate * 100 : rate;
+  return `${percent.toFixed(1)}%`;
+}
+
+/** 行数趋势图（echarts SVG 渲染器——测试环境无 canvas 也能跑，与
+ *  DashboardRenderer.EChartBox 同生命周期纪律：init/dispose/option 重画）。 */
+function QualityTrendChart({ history }: { history: QualityHistoryEntry[] }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<echarts.ECharts | null>(null);
+  const option = useMemo<echarts.EChartsOption>(
+    () => ({
+      grid: { left: 8, right: 8, top: 8, bottom: 8, containLabel: true },
+      xAxis: {
+        type: "category",
+        data: history.map((entry) => entry.computed_at.slice(0, 10)),
+        show: false,
+      },
+      yAxis: { type: "value", show: false },
+      series: [
+        {
+          type: "line",
+          data: history.map((entry) => entry.row_count),
+          showSymbol: false,
+          lineStyle: { width: 1.5, color: "#334155" },
+          areaStyle: { opacity: 0.08 },
+        },
+      ],
+    }),
+    [history],
+  );
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const chart = echarts.init(containerRef.current, undefined, {
+      renderer: "svg",
+    });
+    chartRef.current = chart;
+    return () => {
+      chart.dispose();
+      chartRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    chartRef.current?.setOption(option, true);
+  }, [option]);
+
+  return <div ref={containerRef} data-testid="quality-trend" style={{ height: 72 }} />;
+}
+
+/** 触发方式已知值（未知值原样呈现——服务端口径如实）。 */
+const QUALITY_TRIGGER_KEYS = ["manual", "sync", "create", "derive"] as const;
+
+function QualityPanel({ datasetId }: { datasetId: string }) {
+  const { t } = useTranslation();
+  const [data, setData] = useState<DatasetQuality | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoadError(false);
+    try {
+      setData(await fetchDatasetQuality(datasetId));
+    } catch {
+      setData(null);
+      setLoadError(true);
+    }
+  }, [datasetId]);
+
+  useEffect(() => {
+    setData(null);
+    void load();
+  }, [load]);
+
+  /** 手动「立即检查」：POST refresh 后重拉详情——新快照或如实失败记录都以
+   *  详情区为准呈现；触发失败（如 viewer 403 / 引擎不可达）如实报错误条。 */
+  const refresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshError(null);
+    try {
+      await refreshDatasetQuality(datasetId);
+      await load();
+    } catch (err) {
+      setRefreshError(
+        apiErrorText(err, t("console.datasets.detail.quality.refreshError")),
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const freshness = data ? parseQualityFreshness(data.freshness) : null;
+  const latest: QualitySnapshot | null = data?.latest ?? null;
+
+  return (
+    <section data-testid="quality-section" className="mt-6">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-base font-semibold">
+          {t("console.datasets.detail.quality.title")}
+        </h2>
+        {/* 口径标注常驻（呈现如实：任何质量信息界面都含该标注）。 */}
+        <span
+          data-testid="quality-caption"
+          className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500"
+        >
+          {t("console.datasets.detail.quality.caption")}
+        </span>
+        <button
+          type="button"
+          data-testid="quality-refresh"
+          disabled={refreshing}
+          onClick={() => void refresh()}
+          className="ml-auto rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {refreshing
+            ? t("console.datasets.detail.quality.refreshing")
+            : t("console.datasets.detail.quality.refresh")}
+        </button>
+      </div>
+
+      {refreshError && (
+        <p
+          data-testid="quality-refresh-error"
+          className="mt-2 text-xs text-red-600"
+        >
+          {refreshError}
+        </p>
+      )}
+
+      {loadError && (
+        <div data-testid="quality-error" className="mt-2">
+          <p className="text-xs text-red-600">
+            {t("console.datasets.detail.quality.loadError")}
+          </p>
+          <button
+            type="button"
+            data-testid="quality-retry"
+            onClick={() => void load()}
+            className="mt-1 rounded border border-red-300 px-2 py-0.5 text-xs text-red-700 hover:bg-red-100"
+          >
+            {t("console.datasets.retry")}
+          </button>
+        </div>
+      )}
+
+      {data == null && !loadError && (
+        <p
+          data-testid="quality-loading"
+          className="mt-2 text-xs text-slate-400"
+        >
+          {t("console.datasets.detail.quality.loading")}
+        </p>
+      )}
+
+      {data != null && freshness != null && (
+        <>
+          {/* 新鲜度 chip：按声明节奏判定（未声明=未知，不误判为过期）。 */}
+          <span
+            data-testid="quality-freshness"
+            data-freshness={freshness.freshness}
+            className={`mt-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs ring-1 ${
+              QUALITY_FRESHNESS_CLASS[freshness.freshness]
+            }`}
+          >
+            {t(`console.datasets.detail.quality.freshness.${freshness.freshness}`)}
+            <span className="ml-1.5 text-[10px] opacity-70">
+              {t("console.datasets.detail.quality.lastRefreshLabel")}：
+              {freshness.last_refresh_at
+                ? formatServerDate(freshness.last_refresh_at)
+                : t("console.datasets.detail.quality.lastRefreshNone")}
+            </span>
+          </span>
+
+          {/* 暂无快照（与引擎不支持分开呈现——都绝不显示估计值）。 */}
+          {latest == null && (
+            <div
+              data-testid="quality-empty"
+              data-state="empty"
+              className="mt-2 rounded-lg border border-dashed border-slate-300 bg-slate-50/60 px-3 py-4 text-xs text-slate-500"
+            >
+              <p className="font-medium text-slate-600">
+                {t("console.datasets.detail.quality.emptyTitle")}
+              </p>
+              <p className="mt-1">
+                {t("console.datasets.detail.quality.emptyHint")}
+              </p>
+            </div>
+          )}
+
+          {/* 引擎暂不支持（滚动版本窗口的降级态）。 */}
+          {latest?.status === "unsupported" && (
+            <div
+              data-testid="quality-unsupported"
+              data-state="unsupported"
+              className="mt-2 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-4 text-xs text-slate-500"
+            >
+              <p className="font-medium text-slate-600">
+                {t("console.datasets.detail.quality.unsupportedTitle")}
+              </p>
+              <p className="mt-1">
+                {t("console.datasets.detail.quality.unsupportedHint")}
+              </p>
+            </div>
+          )}
+
+          {/* 最近一次快照失败：只示原因摘要，不显示旧指标冒充当前值。 */}
+          {latest?.status === "failed" && (
+            <div
+              data-testid="quality-failed"
+              data-state="failed"
+              className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-4 text-xs"
+            >
+              <p className="font-medium text-red-700">
+                {t("console.datasets.detail.quality.failedTitle")}
+              </p>
+              {latest.error_text && (
+                <p
+                  data-testid="quality-failed-error"
+                  className="mt-1 break-all font-mono text-[11px] text-red-500"
+                >
+                  {truncate(latest.error_text, 160)}
+                </p>
+              )}
+              <p className="mt-1 text-[11px] text-red-400">
+                {t("console.datasets.detail.quality.failedHint")}
+              </p>
+            </div>
+          )}
+
+          {/* ok：五项指标如实呈现（键列未声明标「未声明键列」、抽样标注）。 */}
+          {latest?.status === "ok" && (
+            <div
+              data-testid="quality-metrics"
+              data-state="ok"
+              className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-3 text-xs"
+            >
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <span data-testid="quality-rows" className="text-slate-600">
+                  <span className="text-slate-400">
+                    {t("console.datasets.detail.quality.rowsLabel")}：
+                  </span>
+                  {latest.row_count.toLocaleString("en-US")}
+                </span>
+                <span
+                  data-testid="quality-pk"
+                  data-declared={latest.pk_declared ? "true" : "false"}
+                  className="text-slate-600"
+                >
+                  <span className="text-slate-400">
+                    {t("console.datasets.detail.quality.pkLabel")}：
+                  </span>
+                  {latest.pk_declared && latest.pk_unique_ratio != null
+                    ? formatRatePercent(latest.pk_unique_ratio)
+                    : t("console.datasets.detail.quality.pkUndeclared")}
+                </span>
+                <span data-testid="quality-computed" className="text-slate-500">
+                  {t("console.datasets.detail.quality.computedAtLabel")}：
+                  {formatServerDate(latest.computed_at)}
+                </span>
+                <span data-testid="quality-trigger" className="text-slate-500">
+                  {t("console.datasets.detail.quality.triggeredByLabel")}：
+                  {(QUALITY_TRIGGER_KEYS as readonly string[]).includes(
+                    latest.triggered_by,
+                  )
+                    ? t(
+                        `console.datasets.detail.quality.triggeredBy.${latest.triggered_by}`,
+                      )
+                    : latest.triggered_by}
+                </span>
+              </div>
+
+              {latest.null_rates.length > 0 && (
+                <div className="mt-2 overflow-x-auto">
+                  <table data-testid="quality-null-rates" className="text-xs">
+                    <thead>
+                      <tr className="bg-slate-50">
+                        <th className="border-b border-slate-200 px-2 py-1 text-left font-medium text-slate-500">
+                          {t("console.datasets.detail.quality.nullRatesColumn")}
+                        </th>
+                        <th className="border-b border-slate-200 px-2 py-1 text-left font-medium text-slate-500">
+                          {t("console.datasets.detail.quality.nullRatesRate")}
+                        </th>
+                        <th className="border-b border-slate-200 px-2 py-1 text-left font-medium text-slate-500">
+                          {t(
+                            "console.datasets.detail.quality.nullRatesSampled",
+                          )}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {latest.null_rates.map((entry) => (
+                        <tr key={entry.column} data-testid="quality-null-rate">
+                          <td className="border-b border-slate-100 px-2 py-1 font-mono text-slate-700">
+                            {entry.column}
+                          </td>
+                          <td className="border-b border-slate-100 px-2 py-1 text-slate-700">
+                            {formatRatePercent(entry.null_rate)}
+                          </td>
+                          <td className="border-b border-slate-100 px-2 py-1 text-slate-500">
+                            {entry.sampled_rows.toLocaleString("en-US")}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {latest.sample_limit_hit && (
+                <p
+                  data-testid="quality-sample-note"
+                  className="mt-2 text-[11px] text-slate-400"
+                >
+                  {t("console.datasets.detail.quality.sampleNote")}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* 行数趋势（≥2 个历史点才画；快照失败/暂无时不画——不用旧值冒充）。 */}
+          {(latest?.status === "ok" || latest == null) &&
+            data.history.length >= 2 && (
+              <div className="mt-3">
+                <p className="text-xs font-medium text-slate-600">
+                  {t("console.datasets.detail.quality.trendTitle")}
+                </p>
+                <QualityTrendChart history={data.history} />
+              </div>
+            )}
+        </>
       )}
     </section>
   );

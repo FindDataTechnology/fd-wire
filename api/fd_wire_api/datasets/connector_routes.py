@@ -588,6 +588,15 @@ def commit_sync(
             "请删除数据集或提高配额",
         )
     db.commit()
+    # 质量快照钩子（wire-asset-catalog 4.3）：同步数据刚落引擎——触发一次
+    # 质量快照（triggered_by=sync，快照时间不早于同步完成）；失败隔离，
+    # 快照失败绝不影响同步主流程（结果已在头顶 commit 落定）。
+    try:
+        from ..quality import service as quality_service  # noqa: PLC0415 - 惰性防环
+
+        quality_service.notify_dataset_changed(dataset, "sync", client=client)
+    except Exception:  # noqa: BLE001 - 双保险：主流程绝不因快照中断
+        pass
     return CommitOut(rows=rows)
 
 

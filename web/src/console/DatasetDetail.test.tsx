@@ -19,6 +19,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import "../i18n";
 import i18n from "../i18n";
@@ -31,6 +32,7 @@ import {
 } from "./editQueue";
 import { formatServerDate } from "./util";
 import type {
+  ApiDetailItem,
   Correction,
   CorrectionInput,
   Dataset,
@@ -186,6 +188,44 @@ function install(options: {
   /** 强制 PATCH /datasets/{id}/sync-settings 返回该状态（422 回显测试）。 */
   failSyncSettingsStatus?: number;
   failSyncSettingsDetail?: string;
+  /** 资产元数据种子（wire-asset-catalog 5.2；缺省全默认：常规/无域无标签）。 */
+  assetMeta?: {
+    domain?: string | null;
+    tags?: string[];
+    description?: string | null;
+    cadence_hint?: "daily" | "weekly" | "monthly" | null;
+    owner_note?: string | null;
+    sensitivity?: "常规" | "内部" | "敏感";
+    cadence_effective?: "daily" | "weekly" | "monthly" | null;
+  };
+  /** 种子资产元数据留痕（最近在前；PATCH 会续记在最前）。 */
+  assetMetaEvents?: Array<{
+    at: string;
+    actor_sub: string;
+    before: Record<string, unknown> | null;
+    after: Record<string, unknown> | null;
+  }>;
+  /** 强制 GET /datasets/{id}/asset-meta 返回该状态。 */
+  failAssetMetaStatus?: number;
+  /** 强制 PATCH /datasets/{id}/asset-meta 返回该状态（422/403 注入；detail
+   *  可为字符串或 FastAPI 校验数组形状）。 */
+  failAssetMetaPatchStatus?: number;
+  failAssetMetaPatchDetail?: string | ApiDetailItem[];
+  /** 数据集质量种子（wire-dataset-quality 5.3；缺省=暂无快照诚实空态）。 */
+  quality?: {
+    latest?: Record<string, unknown> | null;
+    history?: Array<Record<string, unknown>>;
+    /** 对象 {freshness,last_refresh_at} 或裸枚举字符串。 */
+    freshness?: unknown;
+    cadence_hint?: "daily" | "weekly" | "monthly" | null;
+  };
+  /** 强制 GET /datasets/{id}/quality 返回该状态。 */
+  failQualityStatus?: number;
+  /** 强制 POST /datasets/{id}/quality/refresh 返回该状态。 */
+  failQualityRefreshStatus?: number;
+  failQualityRefreshDetail?: string;
+  /** 质量刷新请求悬挂至该 promise 完成（进行中禁用测试）。 */
+  holdQualityRefresh?: Promise<void>;
 }) {
   const dataset = options.dataset ?? makeDataset();
   let rows = (options.rows ?? [
@@ -217,6 +257,48 @@ function install(options: {
         last_rows: options.scheduleSeed.last_rows ?? null,
       }
     : null;
+
+  // ── 资产元数据 + 质量假后端状态（wire-asset-catalog 5.2 /
+  //    wire-dataset-quality 5.3）：元数据懒合并（PATCH 全量六字段）、留痕
+  //    append-only（续记最前）、质量种子直存（refresh 追加 ok 快照）。──
+  type AssetMetaRow = {
+    domain: string | null;
+    tags: string[];
+    description: string | null;
+    cadence_hint: "daily" | "weekly" | "monthly" | null;
+    owner_note: string | null;
+    sensitivity: "常规" | "内部" | "敏感";
+    cadence_effective: "daily" | "weekly" | "monthly" | null;
+  };
+  let assetMeta: AssetMetaRow = {
+    domain: options.assetMeta?.domain ?? null,
+    tags: options.assetMeta?.tags ? [...options.assetMeta.tags] : [],
+    description: options.assetMeta?.description ?? null,
+    cadence_hint: options.assetMeta?.cadence_hint ?? null,
+    owner_note: options.assetMeta?.owner_note ?? null,
+    sensitivity: options.assetMeta?.sensitivity ?? "常规",
+    cadence_effective: options.assetMeta?.cadence_effective ?? null,
+  };
+  const assetEvents: Array<{
+    at: string;
+    actor_sub: string;
+    before: Record<string, unknown> | null;
+    after: Record<string, unknown> | null;
+  }> = [...(options.assetMetaEvents ?? [])];
+  let qualityState: {
+    latest: Record<string, unknown> | null;
+    history: Array<Record<string, unknown>>;
+    freshness: unknown;
+    cadence_hint: "daily" | "weekly" | "monthly" | null;
+  } = {
+    latest: options.quality?.latest ?? null,
+    history: options.quality?.history ? [...options.quality.history] : [],
+    freshness: options.quality?.freshness ?? {
+      freshness: "unknown",
+      last_refresh_at: null,
+    },
+    cadence_hint: options.quality?.cadence_hint ?? null,
+  };
 
   const fetchImpl = ((_input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(_input), "http://console.test");
@@ -428,6 +510,140 @@ function install(options: {
       }
       return jsonResponse(dataset);
     }
+    // ── 资产元数据（wire-asset-catalog 5.2 契约镜像）：GET/PATCH /asset-meta
+    //    + GET /asset-meta/events——敏感度三值 422 回合法清单、PATCH 续留痕。──
+    if (path === "/api/v1/datasets/ds-1/asset-meta" && method === "GET") {
+      if (options.failAssetMetaStatus) {
+        return jsonResponse(
+          { detail: `asset meta ${options.failAssetMetaStatus}` },
+          options.failAssetMetaStatus,
+        );
+      }
+      return jsonResponse({ dataset_id: "ds-1", ...assetMeta });
+    }
+    if (path === "/api/v1/datasets/ds-1/asset-meta" && method === "PATCH") {
+      if (options.failAssetMetaPatchStatus) {
+        return jsonResponse(
+          {
+            detail:
+              options.failAssetMetaPatchDetail ??
+              `asset meta ${options.failAssetMetaPatchStatus}`,
+          },
+          options.failAssetMetaPatchStatus,
+        );
+      }
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        domain?: string | null;
+        tags?: string[];
+        description?: string | null;
+        cadence_hint?: string | null;
+        owner_note?: string | null;
+        sensitivity?: string;
+      };
+      if (
+        payload.sensitivity !== undefined &&
+        !["常规", "内部", "敏感"].includes(payload.sensitivity)
+      ) {
+        return jsonResponse(
+          { detail: "敏感度只能是：常规 / 内部 / 敏感" },
+          422,
+        );
+      }
+      const before: Record<string, unknown> = { ...assetMeta };
+      assetMeta = {
+        domain: payload.domain !== undefined ? payload.domain : assetMeta.domain,
+        tags: payload.tags !== undefined ? payload.tags : assetMeta.tags,
+        description:
+          payload.description !== undefined
+            ? payload.description
+            : assetMeta.description,
+        cadence_hint:
+          payload.cadence_hint !== undefined
+            ? (payload.cadence_hint as AssetMetaRow["cadence_hint"])
+            : assetMeta.cadence_hint,
+        owner_note:
+          payload.owner_note !== undefined
+            ? payload.owner_note
+            : assetMeta.owner_note,
+        sensitivity:
+          payload.sensitivity !== undefined
+            ? (payload.sensitivity as AssetMetaRow["sensitivity"])
+            : assetMeta.sensitivity,
+        cadence_effective: assetMeta.cadence_effective,
+      };
+      assetEvents.unshift({
+        at: "2026-10-13T09:00:00",
+        actor_sub: "demo-customer",
+        before,
+        after: { ...assetMeta },
+      });
+      return jsonResponse({ dataset_id: "ds-1", ...assetMeta });
+    }
+    if (
+      path === "/api/v1/datasets/ds-1/asset-meta/events" &&
+      method === "GET"
+    ) {
+      return jsonResponse({ items: assetEvents });
+    }
+
+    // ── 数据质量（wire-dataset-quality 5.3 契约镜像）：GET /quality（种子或
+    //    暂无快照空态）+ POST /quality/refresh（追加 ok 快照，可悬挂/失败注入）。──
+    if (path === "/api/v1/datasets/ds-1/quality" && method === "GET") {
+      if (options.failQualityStatus) {
+        return jsonResponse(
+          { detail: `quality ${options.failQualityStatus}` },
+          options.failQualityStatus,
+        );
+      }
+      return jsonResponse(qualityState);
+    }
+    if (path === "/api/v1/datasets/ds-1/quality/refresh" && method === "POST") {
+      const respond = () => {
+        if (options.failQualityRefreshStatus) {
+          return jsonResponse(
+            {
+              detail:
+                options.failQualityRefreshDetail ??
+                `quality refresh ${options.failQualityRefreshStatus}`,
+            },
+            options.failQualityRefreshStatus,
+          );
+        }
+        const snapshot: Record<string, unknown> = {
+          computed_at: "2026-10-13T10:00:00",
+          triggered_by: "manual",
+          status: "ok",
+          row_count: dataset.row_count,
+          pk_declared: false,
+          pk_unique_ratio: null,
+          null_rates: [],
+          sample_limit_hit: false,
+          error_text: null,
+        };
+        const history = [...qualityState.history];
+        if (qualityState.latest) {
+          history.push({
+            computed_at: qualityState.latest.computed_at,
+            row_count: qualityState.latest.row_count,
+            null_rates: qualityState.latest.null_rates ?? [],
+          });
+        }
+        history.push({
+          computed_at: snapshot.computed_at,
+          row_count: snapshot.row_count,
+          null_rates: [],
+        });
+        qualityState = { ...qualityState, latest: snapshot, history };
+        return jsonResponse(snapshot, 201);
+      };
+      if (options.holdQualityRefresh) {
+        return options.holdQualityRefresh.then(
+          respond,
+        ) as unknown as Response;
+      }
+      return respond();
+    }
+
     return jsonResponse({ detail: "not found" }, 404);
   }) as unknown as typeof fetch;
   vi.stubGlobal("fetch", fetchImpl);
@@ -1475,5 +1691,481 @@ describe("编辑器纯逻辑 editQueue（任务 2.1：队列归约/顺序保存�
     expect(outcomes.map((outcome) => outcome.ok)).toEqual([true, false, true]);
     expect(outcomes[1]!.error).toBe(boom);
     expect(outcomes[0]!.error).toBeUndefined();
+  });
+});
+
+// ── 资产信息编辑区（wire-asset-catalog 任务 5.2）──────────────────────────
+// 六字段呈现与保存 PATCH 载荷、生效节奏提示（来自指标目录）、422 字段级回显、
+// 403（viewer 只读）切只读态、最近修改留痕（可折叠、续记最前）。
+describe("DatasetDetail 资产信息（wire-asset-catalog 5.2）", () => {
+  const ASSET_META_PATH = "/api/v1/datasets/ds-1/asset-meta";
+  const ASSET_EVENTS_PATH = `${ASSET_META_PATH}/events`;
+
+  it("六字段呈现种子值；改标签与敏感度保存 → PATCH 全量六字段载荷 + 已保存提示", async () => {
+    const backend = install({
+      assetMeta: {
+        domain: "销售",
+        tags: ["月度"],
+        description: "门店月度销量",
+        cadence_hint: "monthly",
+        owner_note: "张三",
+        sensitivity: "常规",
+      },
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+
+    const form = await screen.findByTestId("asset-meta-form");
+    expect(form.getAttribute("data-readonly")).toBe("false");
+    expect(
+      (within(form).getByTestId("asset-meta-domain") as HTMLInputElement).value,
+    ).toBe("销售");
+    expect(
+      (within(form).getByTestId("asset-meta-tags") as HTMLInputElement).value,
+    ).toBe("月度");
+    expect(
+      (within(form).getByTestId("asset-meta-description") as HTMLTextAreaElement)
+        .value,
+    ).toBe("门店月度销量");
+    expect(
+      (within(form).getByTestId("asset-meta-cadence") as HTMLSelectElement).value,
+    ).toBe("monthly");
+    expect(
+      (within(form).getByTestId("asset-meta-owner") as HTMLInputElement).value,
+    ).toBe("张三");
+    expect(
+      (within(form).getByTestId("asset-meta-sensitivity") as HTMLSelectElement)
+        .value,
+    ).toBe("常规");
+
+    // 改标签（逗号拆数组）与敏感度（三选）→ 保存
+    fireEvent.change(screen.getByTestId("asset-meta-tags"), {
+      target: { value: "月度, 门店" },
+    });
+    fireEvent.change(screen.getByTestId("asset-meta-sensitivity"), {
+      target: { value: "敏感" },
+    });
+    fireEvent.click(screen.getByTestId("asset-meta-save"));
+
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "PATCH", ASSET_META_PATH)).toHaveLength(1),
+    );
+    const patch = callsOf(backend.calls, "PATCH", ASSET_META_PATH)[0]!;
+    expect(patch.body).toEqual({
+      domain: "销售",
+      tags: ["月度", "门店"],
+      description: "门店月度销量",
+      cadence_hint: "monthly",
+      owner_note: "张三",
+      sensitivity: "敏感",
+    });
+    expect(await screen.findByTestId("asset-meta-saved")).toBeTruthy();
+  });
+
+  it("生效节奏提示：cadence_hint 未声明但指标目录带节奏时展示（声明后隐藏）", async () => {
+    install({
+      assetMeta: { cadence_hint: null, cadence_effective: "weekly" },
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+
+    const hint = await screen.findByTestId("asset-meta-effective-hint");
+    expect(hint.textContent).toContain("来自指标目录");
+    expect(hint.textContent).toContain("周更");
+
+    // 声明期望节奏后提示退位（客户口径优先于目录口径）。
+    fireEvent.change(screen.getByTestId("asset-meta-cadence"), {
+      target: { value: "daily" },
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId("asset-meta-effective-hint")).toBeNull(),
+    );
+  });
+
+  it("422 非法敏感度：后端合法清单 detail 如实回显，仍可编辑重试", async () => {
+    install({
+      assetMeta: { sensitivity: "常规" },
+      failAssetMetaPatchStatus: 422,
+      failAssetMetaPatchDetail: "敏感度只能是：常规 / 内部 / 敏感",
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("asset-meta-form");
+
+    fireEvent.click(screen.getByTestId("asset-meta-save"));
+    const error = await screen.findByTestId("asset-meta-error");
+    expect(error.textContent).toContain("常规 / 内部 / 敏感");
+    // 未切只读：仍可改值重试
+    expect(screen.getByTestId("asset-meta-form").getAttribute("data-readonly")).toBe(
+      "false",
+    );
+    expect(screen.queryByTestId("asset-meta-readonly")).toBeNull();
+  });
+
+  it("422 FastAPI 数组形状：按 loc 定位到敏感度字段旁回显", async () => {
+    install({
+      assetMeta: { sensitivity: "常规" },
+      failAssetMetaPatchStatus: 422,
+      failAssetMetaPatchDetail: [
+        {
+          type: "enum",
+          loc: ["body", "sensitivity"],
+          msg: "敏感度只能是：常规 / 内部 / 敏感",
+        },
+      ] as ApiDetailItem[],
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("asset-meta-form");
+
+    fireEvent.click(screen.getByTestId("asset-meta-save"));
+    const fieldError = await screen.findByTestId("asset-meta-field-error");
+    expect(fieldError.getAttribute("data-field")).toBe("sensitivity");
+    expect(fieldError.textContent).toContain("常规 / 内部 / 敏感");
+  });
+
+  it("403（viewer 只读）：保存被拒后切只读态——字段禁用、保存收起、提示如实", async () => {
+    const backend = install({
+      assetMeta: { domain: "销售" },
+      failAssetMetaPatchStatus: 403,
+      failAssetMetaPatchDetail: "团队成员权限不足（viewer 只读）",
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("asset-meta-form");
+
+    fireEvent.click(screen.getByTestId("asset-meta-save"));
+    await waitFor(() =>
+      expect(
+        callsOf(backend.calls, "PATCH", ASSET_META_PATH).length,
+      ).toBe(1),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("asset-meta-readonly")).toBeTruthy(),
+    );
+    const form = screen.getByTestId("asset-meta-form");
+    expect(form.getAttribute("data-readonly")).toBe("true");
+    expect(
+      (screen.getByTestId("asset-meta-domain") as HTMLInputElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByTestId("asset-meta-sensitivity") as HTMLSelectElement).disabled,
+    ).toBe(true);
+    expect(screen.queryByTestId("asset-meta-save")).toBeNull();
+  });
+
+  it("留痕：种子留痕折叠态默认不展开，展开显最近 3 条；保存后新留痕续记最前", async () => {
+    const backend = install({
+      assetMeta: { domain: "销售" },
+      assetMetaEvents: [
+        {
+          at: "2026-10-12T08:00:00",
+          actor_sub: "editor-sub-1",
+          before: { sensitivity: "常规" },
+          after: { sensitivity: "内部" },
+        },
+        {
+          at: "2026-10-11T08:00:00",
+          actor_sub: "owner-sub-1",
+          before: { domain: null },
+          after: { domain: "销售" },
+        },
+      ],
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("asset-meta-form");
+
+    // 折叠默认：留痕区在、条目不展开
+    expect(screen.getByTestId("asset-meta-events")).toBeTruthy();
+    expect(screen.queryByTestId("asset-meta-event")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("asset-meta-events-toggle"));
+    const events = screen.getAllByTestId("asset-meta-event");
+    expect(events).toHaveLength(2);
+    expect(
+      screen.getAllByTestId("asset-meta-event-changes").map((el) => el.textContent),
+    ).toEqual(
+      expect.arrayContaining([expect.stringContaining("敏感度")]),
+    );
+
+    // 保存（改业务域）→ 新留痕续记最前，变更字段含业务域
+    fireEvent.change(screen.getByTestId("asset-meta-domain"), {
+      target: { value: "供应链" },
+    });
+    fireEvent.click(screen.getByTestId("asset-meta-save"));
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "PATCH", ASSET_META_PATH)).toHaveLength(1),
+    );
+    await waitFor(() =>
+      expect(screen.getAllByTestId("asset-meta-event").length).toBe(3),
+    );
+    expect(
+      screen.getAllByTestId("asset-meta-event-changes")[0]!.textContent,
+    ).toContain("业务域");
+    // 留痕端点被查询（保存后重拉）
+    expect(
+      callsOf(backend.calls, "GET", ASSET_EVENTS_PATH).length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ── 数据质量面板（wire-dataset-quality 任务 5.3）──────────────────────────
+// 口径标注常驻 + 四种如实态（ok 指标 / failed 只示原因 / unsupported / 暂无
+// 快照）+ 手动「立即检查」（POST refresh → 重拉；进行中禁用；失败如实）。
+describe("DatasetDetail 数据质量（wire-dataset-quality 5.3）", () => {
+  const QUALITY_PATH = "/api/v1/datasets/ds-1/quality";
+  const QUALITY_REFRESH_PATH = `${QUALITY_PATH}/refresh`;
+
+  /** ok 态种子：五项指标 + 三点历史（趋势）+ 过期新鲜度。 */
+  function okSeed() {
+    return {
+      latest: {
+        computed_at: "2026-10-12T09:00:00",
+        triggered_by: "sync",
+        status: "ok",
+        row_count: 1200,
+        pk_declared: true,
+        pk_unique_ratio: 0.987,
+        null_rates: [
+          { column: "id", null_rate: 0, sampled_rows: 10000 },
+          { column: "amount", null_rate: 0.0234, sampled_rows: 10000 },
+        ],
+        sample_limit_hit: true,
+        error_text: null,
+      },
+      history: [
+        { computed_at: "2026-10-10T09:00:00", row_count: 900, null_rates: [] },
+        { computed_at: "2026-10-11T09:00:00", row_count: 1000, null_rates: [] },
+        { computed_at: "2026-10-12T09:00:00", row_count: 1200, null_rates: [] },
+      ],
+      freshness: { freshness: "stale", last_refresh_at: "2026-10-09T03:00:00" },
+      cadence_hint: "daily" as const,
+    };
+  }
+
+  it("ok 态：五项指标 + 空值率表 + 抽样标注 + 新鲜度 chip + 趋势图 + 口径标注", async () => {
+    install({ quality: okSeed() });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+
+    // 口径标注常驻（任何质量信息界面都在场）
+    expect(await screen.findByTestId("quality-caption")).toBeTruthy();
+    expect(screen.getByTestId("quality-caption").textContent).toBe(
+      "指示性检查，非质量认证",
+    );
+
+    // ok 指标先行落位（避免与常驻口径标注的加载态竞态），再验新鲜度 chip。
+    const metrics = await screen.findByTestId("quality-metrics");
+    expect(metrics.getAttribute("data-state")).toBe("ok");
+
+    // 新鲜度 chip：stale=过期 + 最近刷新时间
+    const chip = screen.getByTestId("quality-freshness");
+    expect(chip.getAttribute("data-freshness")).toBe("stale");
+    expect(chip.textContent).toContain("过期");
+    expect(chip.textContent).toContain("最近刷新");
+
+    // ok 指标：行数（本地化千分位）/ 主键唯一性百分比 / 计算时间 / 触发方式
+    expect(screen.getByTestId("quality-rows").textContent).toContain("1,200");
+    expect(screen.getByTestId("quality-pk").getAttribute("data-declared")).toBe(
+      "true",
+    );
+    expect(screen.getByTestId("quality-pk").textContent).toContain("98.7%");
+    expect(screen.getByTestId("quality-computed").textContent).toContain(
+      "2026",
+    );
+    expect(screen.getByTestId("quality-trigger").textContent).toContain("同步");
+
+    // 按列空值率表 + 抽样行数
+    const nullRows = screen.getAllByTestId("quality-null-rate");
+    expect(nullRows).toHaveLength(2);
+    expect(nullRows[1]!.textContent).toContain("amount");
+    expect(nullRows[1]!.textContent).toContain("2.3%");
+    expect(nullRows[1]!.textContent).toContain("10,000");
+
+    // 抽样上限标注（sample_limit_hit=true）
+    expect(screen.getByTestId("quality-sample-note").textContent).toBe(
+      "基于抽样（上限 10,000 行）",
+    );
+
+    // 行数趋势（≥2 历史点 → echarts SVG 容器）
+    expect(screen.getByTestId("quality-trend")).toBeTruthy();
+  });
+
+  it("未声明键列：主键唯一性标「未声明键列」，不给比例值", async () => {
+    install({
+      quality: {
+        ...okSeed(),
+        latest: {
+          ...okSeed().latest,
+          pk_declared: false,
+          pk_unique_ratio: null,
+        },
+      },
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+
+    await screen.findByTestId("quality-metrics");
+    const pk = screen.getByTestId("quality-pk");
+    expect(pk.getAttribute("data-declared")).toBe("false");
+    expect(pk.textContent).toContain("未声明键列");
+    expect(pk.textContent).not.toContain("%");
+  });
+
+  it("failed 态：只示「最近一次快照失败」+原因摘要，不渲染指标冒充当前值", async () => {
+    install({
+      quality: {
+        ...okSeed(),
+        latest: {
+          computed_at: "2026-10-12T09:00:00",
+          triggered_by: "sync",
+          status: "failed",
+          row_count: 1200,
+          pk_declared: true,
+          pk_unique_ratio: 0.987,
+          null_rates: [],
+          sample_limit_hit: false,
+          error_text: "engine timeout: quality tool exceeded 30s budget",
+        },
+      },
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+
+    const failed = await screen.findByTestId("quality-failed");
+    expect(failed.getAttribute("data-state")).toBe("failed");
+    expect(failed.textContent).toContain("最近一次快照失败");
+    expect(screen.getByTestId("quality-failed-error").textContent).toContain(
+      "engine timeout",
+    );
+    // 口径标注仍常驻；ok 指标区绝不出现（旧值不冒充当前值）
+    expect(screen.getByTestId("quality-caption")).toBeTruthy();
+    expect(screen.queryByTestId("quality-metrics")).toBeNull();
+    expect(screen.queryByTestId("quality-pk")).toBeNull();
+  });
+
+  it("unsupported 态：「引擎暂不支持质量快照」降级显示，无指标值", async () => {
+    install({
+      quality: {
+        ...okSeed(),
+        latest: {
+          computed_at: "2026-10-12T09:00:00",
+          triggered_by: "create",
+          status: "unsupported",
+          row_count: 0,
+          pk_declared: false,
+          pk_unique_ratio: null,
+          null_rates: [],
+          sample_limit_hit: false,
+          error_text: null,
+        },
+      },
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+
+    const unsupported = await screen.findByTestId("quality-unsupported");
+    expect(unsupported.getAttribute("data-state")).toBe("unsupported");
+    expect(unsupported.textContent).toContain("引擎暂不支持质量快照");
+    expect(screen.getByTestId("quality-caption")).toBeTruthy();
+    expect(screen.queryByTestId("quality-metrics")).toBeNull();
+  });
+
+  it("暂无快照态：与 unsupported 分开呈现（空态引导 + 无指标）", async () => {
+    const backend = install({ quality: { latest: null } });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+
+    const empty = await screen.findByTestId("quality-empty");
+    expect(empty.getAttribute("data-state")).toBe("empty");
+    expect(empty.textContent).toContain("暂无快照");
+    expect(screen.getByTestId("quality-caption")).toBeTruthy();
+    expect(screen.queryByTestId("quality-metrics")).toBeNull();
+    expect(screen.queryByTestId("quality-unsupported")).toBeNull();
+    // 暂无快照时新鲜度=未知（未声明节奏不误判）
+    expect(screen.getByTestId("quality-freshness").getAttribute("data-freshness")).toBe(
+      "unknown",
+    );
+    // 未发过刷新请求
+    expect(callsOf(backend.calls, "POST", QUALITY_REFRESH_PATH)).toHaveLength(0);
+  });
+
+  it("手动「立即检查」：POST refresh 后重拉详情出新快照", async () => {
+    const backend = install({ quality: { latest: null } });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("quality-empty");
+
+    fireEvent.click(screen.getByTestId("quality-refresh"));
+    await waitFor(() =>
+      expect(
+        callsOf(backend.calls, "POST", QUALITY_REFRESH_PATH),
+      ).toHaveLength(1),
+    );
+    // 重拉详情（GET 至少两次：首载 + 刷新后）
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "GET", QUALITY_PATH).length).toBeGreaterThanOrEqual(2),
+    );
+    // 新快照呈现：ok 指标出现、空态消失
+    await waitFor(() =>
+      expect(screen.getByTestId("quality-metrics").getAttribute("data-state")).toBe(
+        "ok",
+      ),
+    );
+    expect(screen.queryByTestId("quality-empty")).toBeNull();
+    expect(screen.getByTestId("quality-trigger").textContent).toContain("手动");
+  });
+
+  it("手动「立即检查」失败（如 viewer 403）：错误如实呈现，按钮回可用", async () => {
+    const failing = install({
+      quality: { latest: null },
+      failQualityRefreshStatus: 403,
+      failQualityRefreshDetail: "团队成员权限不足（viewer 只读）",
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("quality-empty");
+    fireEvent.click(screen.getByTestId("quality-refresh"));
+    const error = await screen.findByTestId("quality-refresh-error");
+    expect(error.textContent).toContain("viewer 只读");
+    expect(
+      (screen.getByTestId("quality-refresh") as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(callsOf(failing.calls, "POST", QUALITY_REFRESH_PATH)).toHaveLength(1);
+  });
+
+  it("手动检查进行中禁用防重复（悬挂请求期间按钮 disabled）", async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const backend = install({
+      quality: { latest: null },
+      holdQualityRefresh: hold,
+    });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+    await screen.findByTestId("quality-empty");
+
+    fireEvent.click(screen.getByTestId("quality-refresh"));
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId("quality-refresh") as HTMLButtonElement).disabled,
+      ).toBe(true),
+    );
+    // 悬挂期间不重复发请求
+    fireEvent.click(screen.getByTestId("quality-refresh"));
+    expect(
+      callsOf(backend.calls, "POST", QUALITY_REFRESH_PATH),
+    ).toHaveLength(1);
+
+    release();
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId("quality-refresh") as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    await screen.findByTestId("quality-metrics");
+  });
+
+  it("质量详情加载失败：错误态 + 重试（既有错误面语义）", async () => {
+    const backend = install({ failQualityStatus: 500 });
+    render(<DatasetDetail datasetId="ds-1" onBack={() => {}} />);
+
+    expect(await screen.findByTestId("quality-error")).toBeTruthy();
+    // 口径标注只在数据面渲染（错误面走重试，不呈现指标）
+    expect(screen.queryByTestId("quality-metrics")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("quality-retry"));
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "GET", QUALITY_PATH).length).toBe(2),
+    );
   });
 });

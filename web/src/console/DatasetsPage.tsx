@@ -6,18 +6,35 @@
 // - 免费档放行（wire-free-tier-data-gate 4.1-4.3）：页面完整渲染（列表/上传/
 //   配额条内联）；升级墙退役为限额触达（建集超限/行数超限）时的内联升档提示；
 //   连接器区可见但标注付费。付费档渲染零变化。
-// 契约：openspec/changes/wire-customer-local-data/reports/interfaces.md §3.3/§4。
+// - 资产目录升级（wire-asset-catalog D5：升级本页、不另建资产页）：列表改经
+//   GET /api/v1/assets（域/标签/敏感度/来源类型/新鲜度组合筛选 + 名称描述
+//   搜索 + 分页），与 GET /api/v1/datasets 详情按 id 连接补齐卡片既有字段
+//   （同步状态/大小等——两查询各自失败互不拖垮）；页内质量徽章按本页 id 批量
+//   拉 GET /api/v1/quality/summary（fresh=正常/stale=过期 amber/unknown=未知
+//   中性；缺失键不渲染徽章；端点失败静默无徽章——绝不断列表）。
+// 契约：openspec/changes/wire-customer-local-data/reports/interfaces.md §3.3/§4、
+// wire-asset-catalog / wire-dataset-quality specs。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   apiErrorText,
   ConsoleApiError,
   createDataset,
-  fetchDatasets,
+  fetchAssetCatalog,
   fetchDatasetQuota,
+  fetchDatasets,
+  fetchQualitySummary,
   uploadDataset,
+  type AssetCatalogFilters,
+  type AssetCatalogItem,
+  type AssetCatalogPage,
+  type AssetSensitivity,
   type Dataset,
   type DatasetQuota,
+  type DatasetSourceKind,
+  type QualityFreshnessValue,
+  type QualitySummaryEntry,
+  type QualitySummaryMap,
   type SyncStatus,
   type UploadPreview,
 } from "./api";
@@ -35,6 +52,27 @@ const SYNC_BADGE_CLASS: Record<SyncStatus, string> = {
   paused_drift: "bg-amber-50 text-amber-700 ring-amber-200",
   paused_quota: "bg-rose-50 text-rose-700 ring-rose-200",
 };
+
+/** 质量徽章三态视觉（stale=过期 warning 调、unknown=未知中性）。 */
+const QUALITY_BADGE_CLASS: Record<QualityFreshnessValue, string> = {
+  fresh: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  stale: "bg-amber-50 text-amber-700 ring-amber-200",
+  unknown: "bg-slate-100 text-slate-600 ring-slate-200",
+};
+
+/** 资产目录分页页大小（列表页固定；详情分页另有口径）。 */
+const ASSET_PAGE_SIZE = 20;
+
+/** 来源类型筛选项（与 DatasetSourceKind 同词汇，标签复用 source.* i18n）。 */
+const SOURCE_KIND_OPTIONS: DatasetSourceKind[] = [
+  "upload",
+  "connector",
+  "declared",
+  "derived",
+];
+
+/** 新鲜度筛选项（fresh/stale/unknown——unknown 含未声明节奏的数据集）。 */
+const FRESHNESS_OPTIONS: QualityFreshnessValue[] = ["fresh", "stale", "unknown"];
 
 /**
  * 配额语义识别（wire-free-tier-data-gate D3）：api 对建集/上传超限返回
@@ -76,18 +114,45 @@ export function DatasetsPage({ planCode }: { planCode: string }) {
   // 详情态（selectedId）优先于两者，返回后回到切换前的子视图。
   const [view, setView] = useState<"list" | "pipeline">("list");
 
+  // ── 资产目录态（wire-asset-catalog 5.1）──
+  // catalog=GET /assets 当前页（筛选+搜索+分页的请求面）；datasets=详情连接
+  // 用全量索引（卡片同步状态/大小等既有字段经 id 连接补齐）；filters=已提交
+  // 筛选（请求依据），draft=文本输入草稿（「筛选」/回车才提交，与查询条同款
+  // 交互）；summary=本页数据集的质量徽章汇总（缺失键/失败=无徽章）。
+  const [catalog, setCatalog] = useState<AssetCatalogPage | null>(null);
+  const [filters, setFilters] = useState<AssetCatalogFilters>({});
+  const [draft, setDraft] = useState({ domain: "", tag: "", q: "" });
+  const [page, setPage] = useState(1);
+  const [summary, setSummary] = useState<QualitySummaryMap | null>(null);
+
   // 免费档放行（wire-free-tier-data-gate）：不再整页门禁，数据面请求照常发起。
   const free = planCode === "free";
 
   const load = useCallback(async () => {
     setError(false);
+    setSummary(null);
     try {
-      setDatasets(await fetchDatasets());
+      // 目录为主源（筛选/搜索/分页在服务端）；详情列表并行拉取做卡片连接，
+      // 失败不拖垮目录（卡片字段容错缺省）。
+      const [catalogPage, detailList] = await Promise.all([
+        fetchAssetCatalog({ ...filters, page, page_size: ASSET_PAGE_SIZE }),
+        fetchDatasets().catch(() => null),
+      ]);
+      setCatalog(catalogPage);
+      setDatasets(detailList ?? []);
+      // 质量徽章：按本页 id 批量拉汇总；失败/缺失键一律无徽章（静默降级）。
+      const ids = catalogPage.items.map((item) => item.id);
+      if (ids.length > 0) {
+        fetchQualitySummary(ids)
+          .then((result) => setSummary(result.statuses))
+          .catch(() => setSummary(null));
+      }
     } catch {
+      setCatalog(null);
       setDatasets([]);
       setError(true);
     }
-  }, []);
+  }, [filters, page]);
 
   const loadQuota = useCallback(async () => {
     // 仅免费档取配额；端点未就绪/失败 → 配额条静默隐藏，绝不阻塞页面。
@@ -103,9 +168,47 @@ export function DatasetsPage({ planCode }: { planCode: string }) {
     // 管线子视图自取图数据；列表/配额仅在列表视图加载（切回时重取）。
     if (view !== "list") return;
     setDatasets(null);
+    setCatalog(null);
     void load();
     void loadQuota();
   }, [view, load, loadQuota]);
+
+  // ── 筛选交互：下拉即席提交（页码回 1），文本经「筛选」/回车提交 ──
+  const filtersActive =
+    Boolean(filters.domain) ||
+    Boolean(filters.tag) ||
+    Boolean(filters.sensitivity) ||
+    Boolean(filters.source_kind) ||
+    Boolean(filters.freshness) ||
+    Boolean(filters.q);
+
+  const applyDraft = () => {
+    setFilters((prev) => ({
+      ...prev,
+      domain: draft.domain.trim() || undefined,
+      tag: draft.tag.trim() || undefined,
+      q: draft.q.trim() || undefined,
+    }));
+    setPage(1);
+  };
+
+  const resetFilters = () => {
+    setDraft({ domain: "", tag: "", q: "" });
+    setFilters({});
+    setPage(1);
+  };
+
+  const setSelectFilter = (
+    key: "sensitivity" | "source_kind" | "freshness",
+    value: string,
+  ) => {
+    setFilters((prev) => ({ ...prev, [key]: value || undefined }));
+    setPage(1);
+  };
+
+  const datasetById = new Map((datasets ?? []).map((d) => [d.id, d]));
+  const total = catalog?.total ?? 0;
+  const pages = Math.max(1, Math.ceil(total / ASSET_PAGE_SIZE));
 
   if (selectedId != null) {
     return (
@@ -171,6 +274,112 @@ export function DatasetsPage({ planCode }: { planCode: string }) {
         <>
           {free && quota != null && <QuotaBar quota={quota} />}
 
+          {/* 资产目录筛选栏（wire-asset-catalog 5.1）：域/标签/敏感度/来源
+              类型/新鲜度 + 名称描述搜索；下拉即席、文本回车或「筛选」提交、
+              「重置」清空——全部联动 GET /api/v1/assets（服务端过滤）。 */}
+          <div
+            data-testid="assets-filter-bar"
+            className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/60 p-2 text-xs"
+          >
+            <input
+              data-testid="assets-filter-q"
+              value={draft.q}
+              onChange={(e) => setDraft((d) => ({ ...d, q: e.target.value }))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") applyDraft();
+              }}
+              placeholder={t("console.datasets.assets.searchPlaceholder")}
+              aria-label={t("console.datasets.assets.searchPlaceholder")}
+              className="w-44 rounded border border-slate-300 px-2 py-1"
+            />
+            <input
+              data-testid="assets-filter-domain"
+              value={draft.domain}
+              onChange={(e) => setDraft((d) => ({ ...d, domain: e.target.value }))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") applyDraft();
+              }}
+              placeholder={t("console.datasets.assets.domainPlaceholder")}
+              aria-label={t("console.datasets.assets.domainPlaceholder")}
+              className="w-28 rounded border border-slate-300 px-2 py-1"
+            />
+            <input
+              data-testid="assets-filter-tag"
+              value={draft.tag}
+              onChange={(e) => setDraft((d) => ({ ...d, tag: e.target.value }))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") applyDraft();
+              }}
+              placeholder={t("console.datasets.assets.tagPlaceholder")}
+              aria-label={t("console.datasets.assets.tagPlaceholder")}
+              className="w-24 rounded border border-slate-300 px-2 py-1"
+            />
+            <select
+              data-testid="assets-filter-sensitivity"
+              value={filters.sensitivity ?? ""}
+              onChange={(e) => setSelectFilter("sensitivity", e.target.value)}
+              aria-label={t("console.datasets.assets.sensitivityLabel")}
+              className="rounded border border-slate-300 px-1.5 py-1"
+            >
+              <option value="">
+                {t("console.datasets.assets.sensitivityAll")}
+              </option>
+              {(["常规", "内部", "敏感"] as AssetSensitivity[]).map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+            <select
+              data-testid="assets-filter-source-kind"
+              value={filters.source_kind ?? ""}
+              onChange={(e) => setSelectFilter("source_kind", e.target.value)}
+              aria-label={t("console.datasets.assets.sourceKindLabel")}
+              className="rounded border border-slate-300 px-1.5 py-1"
+            >
+              <option value="">
+                {t("console.datasets.assets.sourceKindAll")}
+              </option>
+              {SOURCE_KIND_OPTIONS.map((value) => (
+                <option key={value} value={value}>
+                  {t(`console.datasets.source.${value}`)}
+                </option>
+              ))}
+            </select>
+            <select
+              data-testid="assets-filter-freshness"
+              value={filters.freshness ?? ""}
+              onChange={(e) => setSelectFilter("freshness", e.target.value)}
+              aria-label={t("console.datasets.assets.freshnessLabel")}
+              className="rounded border border-slate-300 px-1.5 py-1"
+            >
+              <option value="">
+                {t("console.datasets.assets.freshnessAll")}
+              </option>
+              {FRESHNESS_OPTIONS.map((value) => (
+                <option key={value} value={value}>
+                  {t(`console.datasets.assets.qualityBadge.${value}`)}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              data-testid="assets-filter-apply"
+              onClick={applyDraft}
+              className="rounded bg-slate-900 px-2.5 py-1 text-white hover:bg-slate-700"
+            >
+              {t("console.datasets.assets.apply")}
+            </button>
+            <button
+              type="button"
+              data-testid="assets-filter-reset"
+              onClick={resetFilters}
+              className="rounded border border-slate-300 px-2.5 py-1 text-slate-600 hover:bg-slate-100"
+            >
+              {t("console.datasets.assets.reset")}
+            </button>
+          </div>
+
           {error && (
             <div
               data-testid="datasets-error"
@@ -190,7 +399,7 @@ export function DatasetsPage({ planCode }: { planCode: string }) {
             </div>
           )}
 
-          {datasets == null && !error && (
+          {catalog == null && !error && (
             <p
               className="mt-6 text-xs text-slate-400"
               data-testid="datasets-loading"
@@ -199,7 +408,26 @@ export function DatasetsPage({ planCode }: { planCode: string }) {
             </p>
           )}
 
-          {datasets != null && datasets.length === 0 && !error && (
+          {catalog != null && catalog.total === 0 && !error && filtersActive && (
+            <div
+              data-testid="assets-filtered-empty"
+              className="mt-6 rounded-lg border border-dashed border-slate-300 p-8 text-center"
+            >
+              <p className="text-sm text-slate-600">
+                {t("console.datasets.assets.filteredEmpty")}
+              </p>
+              <button
+                type="button"
+                data-testid="assets-filtered-reset"
+                onClick={resetFilters}
+                className="mt-3 rounded border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:bg-slate-50"
+              >
+                {t("console.datasets.assets.reset")}
+              </button>
+            </div>
+          )}
+
+          {catalog != null && catalog.total === 0 && !error && !filtersActive && (
             <div
               data-testid="datasets-empty"
               className="mt-6 rounded-lg border border-dashed border-slate-300 p-8 text-center"
@@ -213,16 +441,52 @@ export function DatasetsPage({ planCode }: { planCode: string }) {
             </div>
           )}
 
-          {datasets != null && datasets.length > 0 && (
-            <ul data-testid="dataset-list" className="mt-4 space-y-2">
-              {datasets.map((dataset) => (
-                <DatasetCard
-                  key={dataset.id}
-                  dataset={dataset}
-                  onOpen={() => setSelectedId(dataset.id)}
-                />
-              ))}
-            </ul>
+          {catalog != null && catalog.items.length > 0 && (
+            <>
+              <ul data-testid="dataset-list" className="mt-4 space-y-2">
+                {catalog.items.map((item) => (
+                  <DatasetCard
+                    key={item.id}
+                    item={item}
+                    dataset={datasetById.get(item.id)}
+                    freshness={summary?.[item.id]}
+                    onOpen={() => setSelectedId(item.id)}
+                  />
+                ))}
+              </ul>
+              {total > ASSET_PAGE_SIZE && (
+                <div
+                  data-testid="assets-pagination"
+                  className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-500"
+                >
+                  <span data-testid="assets-pagination-info">
+                    {t("console.datasets.assets.pagination", {
+                      total,
+                      page,
+                      pages,
+                    })}
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="assets-prev-page"
+                    disabled={page <= 1}
+                    onClick={() => setPage((current) => Math.max(1, current - 1))}
+                    className="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {t("console.datasets.assets.prev")}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="assets-next-page"
+                    disabled={page >= pages}
+                    onClick={() => setPage((current) => current + 1)}
+                    className="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {t("console.datasets.assets.next")}
+                  </button>
+                </div>
+              )}
+            </>
           )}
 
           <UploadPanel
@@ -286,21 +550,36 @@ function QuotaBar({ quota }: { quota: DatasetQuota }) {
 }
 
 function DatasetCard({
+  item,
   dataset,
+  freshness,
   onOpen,
 }: {
-  dataset: Dataset;
+  /** 目录条目（/assets 响应项——名称/来源/行数/存储层/资产元数据）。 */
+  item: AssetCatalogItem;
+  /** 详情连接（/datasets 响应按 id 匹配；目录先到时容错缺省——同步状态/
+   *  大小等卡片既有字段逐项守卫渲染）。 */
+  dataset?: Dataset;
+  /** 质量徽章汇总条目（缺失=无徽章）。 */
+  freshness?: QualitySummaryEntry;
   onOpen: () => void;
 }) {
   const { t } = useTranslation();
   // 存储层徽标（wire-free-tier-data-gate）：api 层与 cell 层数据集同列表，
   // 响应带 storage_tier 才显示（容错——api 侧未下发时不渲染）。
-  const storageTier = (dataset as { storage_tier?: string }).storage_tier;
+  const storageTier = item.storage_tier;
   const showTierBadge = storageTier === "api" || storageTier === "cell";
+  const sensitivity = item.asset.sensitivity;
+  // 敏感度默认常规不占位；内部（amber）/敏感（rose）如实标注。
+  const showSensitivity = sensitivity === "内部" || sensitivity === "敏感";
+  const showAssetMeta =
+    Boolean(item.asset.domain) ||
+    item.asset.tags.length > 0 ||
+    showSensitivity;
   return (
     <li
       data-testid="dataset-card"
-      data-status={dataset.sync_status}
+      data-status={dataset?.sync_status}
       className="rounded-lg border border-slate-200 bg-white p-4"
     >
       <div className="flex flex-wrap items-center gap-2">
@@ -308,29 +587,45 @@ function DatasetCard({
           data-testid="dataset-name"
           className="text-sm font-medium text-slate-800"
         >
-          {dataset.name}
+          {item.name}
         </span>
         <span
           data-testid="dataset-source-badge"
-          data-kind={dataset.source_kind}
+          data-kind={item.source_kind}
           className={`rounded-full px-2 py-0.5 text-xs ring-1 ${
-            dataset.source_kind === "connector"
+            item.source_kind === "connector"
               ? "bg-indigo-50 text-indigo-700 ring-indigo-200"
               : "bg-teal-50 text-teal-700 ring-teal-200"
           }`}
         >
-          {t(`console.datasets.source.${dataset.source_kind}`)}
+          {t(`console.datasets.source.${item.source_kind}`)}
         </span>
-        <span
-          data-testid="dataset-sync-status"
-          data-status={dataset.sync_status}
-          className={`rounded-full px-2 py-0.5 text-xs ring-1 ${
-            SYNC_BADGE_CLASS[dataset.sync_status] ??
-            "bg-slate-100 text-slate-600 ring-slate-200"
-          }`}
-        >
-          {t(`console.datasets.syncStatus.${dataset.sync_status}`)}
-        </span>
+        {dataset && (
+          <span
+            data-testid="dataset-sync-status"
+            data-status={dataset.sync_status}
+            className={`rounded-full px-2 py-0.5 text-xs ring-1 ${
+              SYNC_BADGE_CLASS[dataset.sync_status] ??
+              "bg-slate-100 text-slate-600 ring-slate-200"
+            }`}
+          >
+            {t(`console.datasets.syncStatus.${dataset.sync_status}`)}
+          </span>
+        )}
+        {/* 质量徽章（wire-dataset-quality）：fresh=正常 / stale=过期（warning）
+            / unknown=未知（中性）；summary 缺失键不渲染。 */}
+        {freshness && (
+          <span
+            data-testid="dataset-quality-badge"
+            data-freshness={freshness.freshness}
+            className={`rounded-full px-2 py-0.5 text-xs ring-1 ${
+              QUALITY_BADGE_CLASS[freshness.freshness] ??
+              "bg-slate-100 text-slate-600 ring-slate-200"
+            }`}
+          >
+            {t(`console.datasets.assets.qualityBadge.${freshness.freshness}`)}
+          </span>
+        )}
         {showTierBadge && (
           <span
             data-testid="dataset-tier-badge"
@@ -340,8 +635,8 @@ function DatasetCard({
             {t(`console.datasets.tierBadge.${storageTier}`)}
           </span>
         )}
-        {dataset.source_kind === "connector" &&
-          (dataset.source_name || dataset.source_ref) && (
+        {item.source_kind === "connector" &&
+          (dataset?.source_name || dataset?.source_ref) && (
             <span
               data-testid="dataset-source-ref"
               className="font-mono text-[11px] text-slate-400"
@@ -352,7 +647,45 @@ function DatasetCard({
             </span>
           )}
       </div>
-      {dataset.paused_reason && (
+      {/* 资产元数据行（wire-asset-catalog）：业务域 / 标签 / 敏感度标注。 */}
+      {showAssetMeta && (
+        <div
+          data-testid="dataset-asset-meta"
+          className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]"
+        >
+          {item.asset.domain && (
+            <span
+              data-testid="dataset-asset-domain"
+              className="rounded bg-sky-50 px-1.5 py-0.5 text-sky-700"
+            >
+              {item.asset.domain}
+            </span>
+          )}
+          {item.asset.tags.map((tag) => (
+            <span
+              key={tag}
+              data-testid="dataset-asset-tag"
+              className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600"
+            >
+              #{tag}
+            </span>
+          ))}
+          {showSensitivity && (
+            <span
+              data-testid="dataset-sensitivity-badge"
+              data-sensitivity={sensitivity}
+              className={`rounded px-1.5 py-0.5 ${
+                sensitivity === "敏感"
+                  ? "bg-rose-50 text-rose-700"
+                  : "bg-amber-50 text-amber-700"
+              }`}
+            >
+              {sensitivity}
+            </span>
+          )}
+        </div>
+      )}
+      {dataset?.paused_reason && (
         <p
           data-testid="dataset-paused-reason"
           className="mt-1.5 text-[11px] text-amber-700"
@@ -362,16 +695,21 @@ function DatasetCard({
       )}
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
         <span data-testid="dataset-rows">
-          {t("console.datasets.rowCount", { count: dataset.row_count })}
+          {t("console.datasets.rowCount", { count: item.row_count })}
         </span>
-        <span>·</span>
-        <span data-testid="dataset-size">
-          {t("console.datasets.sizeLabel")} {formatBytes(dataset.size_bytes)}
-        </span>
-        <span>·</span>
-        <span data-testid="dataset-updated">
-          {t("console.datasets.updatedLabel")} {formatServerDate(dataset.updated_at)}
-        </span>
+        {dataset && (
+          <>
+            <span>·</span>
+            <span data-testid="dataset-size">
+              {t("console.datasets.sizeLabel")} {formatBytes(dataset.size_bytes)}
+            </span>
+            <span>·</span>
+            <span data-testid="dataset-updated">
+              {t("console.datasets.updatedLabel")}{" "}
+              {formatServerDate(dataset.updated_at)}
+            </span>
+          </>
+        )}
         <button
           type="button"
           data-testid="dataset-open"

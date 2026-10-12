@@ -2447,3 +2447,246 @@ export async function testAlertRule(
     wouldFire: record.would_fire === true,
   };
 }
+
+// ── 资产目录与数据集质量（wire-asset-catalog / wire-dataset-quality web 面）──
+// 契约（api 仓 assets/quality 路由，Bearer 登录身份，跨客户 404 不泄露）：
+// - GET /api/v1/assets?domain=&tag=&sensitivity=&source_kind=&freshness=&q=
+//   &page=&page_size= → {items:[{id,name,source_kind,row_count,storage_tier,
+//   created_at,asset:{domain,tags,description,cadence_hint,owner_note,
+//   sensitivity,cadence_effective}}],total,page}——数据集生而入目录（零手工
+//   注册），未补全条目 LEFT JOIN+COALESCE 默认值（敏感度=常规）；
+// - GET  /api/v1/datasets/{id}/asset-meta → 六字段全量（未补全=默认值；
+//   cadence_effective=生效节奏，api 层数据集自动取自指标注册表，可 null）；
+// - PATCH 同路径：body 部分字段；敏感度三值枚举（422 回合法清单）、viewer
+//   只读 403（统一依赖 require_console_customer 的 viewer 写拒绝）；每次
+//   修改留痕（append-only asset_meta_events）；
+// - GET /api/v1/datasets/{id}/asset-meta/events → {items:[{at,actor_sub,
+//   before,after}]}（最近在前）；
+// - GET /api/v1/quality/summary?dataset_ids=a,b,c → {statuses:{<id>:
+//   {freshness:'fresh'|'stale'|'unknown',last_refresh_at,row_count,status}}}
+//   （列表徽章用；缺失键=无徽章，端点失败前端静默不渲染徽章）；
+// - GET /api/v1/datasets/{id}/quality → {latest:{computed_at,triggered_by,
+//   status:'ok'|'failed'|'unsupported',row_count,pk_declared,
+//   pk_unique_ratio,null_rates:[{column,null_rate,sampled_rows}],
+//   sample_limit_hit,error_text}|null,history:[{computed_at,row_count,
+//   null_rates}],freshness,cadence_hint}——呈现如实：失败/不支持/暂无三种
+//   诚实态，绝不用旧值冒充当前值；
+// - POST /api/v1/datasets/{id}/quality/refresh → 手动触发（快照或如实失败
+//   记录，形状同 latest；owner/editor 可触发，viewer 403）。
+
+/** 敏感度三级固定（D3：刻意不含「公开」——避免与公开目录红线撞车）。 */
+export const ASSET_SENSITIVITIES = ["常规", "内部", "敏感"] as const;
+
+export type AssetSensitivity = (typeof ASSET_SENSITIVITIES)[number];
+
+/** 期望更新节奏三档（未声明=null——新鲜度不误判，显示「未知」）。 */
+export const ASSET_CADENCE_HINTS = ["daily", "weekly", "monthly"] as const;
+
+export type AssetCadenceHint = (typeof ASSET_CADENCE_HINTS)[number];
+
+/** 资产元数据六字段（wire snake_case 直存——与 datasets 段同风格）。 */
+export interface DatasetAssetMeta {
+  dataset_id: string;
+  domain: string | null;
+  tags: string[];
+  description: string | null;
+  cadence_hint: AssetCadenceHint | null;
+  owner_note: string | null;
+  sensitivity: AssetSensitivity;
+  /** 生效节奏（api 层数据集自动取自指标注册表更新频率；取不到 null）。 */
+  cadence_effective: AssetCadenceHint | null;
+}
+
+/** 元数据部分更新入参（缺键不动；六字段任意子集）。 */
+export interface DatasetAssetMetaPatch {
+  domain?: string | null;
+  tags?: string[];
+  description?: string | null;
+  cadence_hint?: AssetCadenceHint | null;
+  owner_note?: string | null;
+  sensitivity?: AssetSensitivity;
+}
+
+/** 目录条目（数据集投影 + asset 元数据段）。 */
+export interface AssetCatalogItem {
+  id: string;
+  name: string;
+  source_kind: DatasetSourceKind;
+  row_count: number;
+  /** api（免费档轻量存储）/ cell（引擎物化）；未下发给 null。 */
+  storage_tier: string | null;
+  created_at: string;
+  asset: {
+    domain: string | null;
+    tags: string[];
+    description: string | null;
+    cadence_hint: AssetCadenceHint | null;
+    owner_note: string | null;
+    sensitivity: AssetSensitivity;
+    cadence_effective: AssetCadenceHint | null;
+  };
+}
+
+/** 目录筛选入参（全部可选；组合条件 AND）。 */
+export interface AssetCatalogFilters {
+  domain?: string;
+  tag?: string;
+  sensitivity?: AssetSensitivity;
+  source_kind?: DatasetSourceKind;
+  freshness?: QualityFreshnessValue;
+  /** 名称与描述关键字搜索（服务端执行）。 */
+  q?: string;
+  page?: number;
+  page_size?: number;
+}
+
+/** 目录分页结果（page 从 1 起）。 */
+export interface AssetCatalogPage {
+  items: AssetCatalogItem[];
+  total: number;
+  page: number;
+}
+
+/** 资产目录列表（多维筛选 + 搜索 + 分页；Bearer 客户隔离）。 */
+export function fetchAssetCatalog(
+  filters: AssetCatalogFilters = {},
+): Promise<AssetCatalogPage> {
+  const params = new URLSearchParams();
+  if (filters.domain) params.set("domain", filters.domain);
+  if (filters.tag) params.set("tag", filters.tag);
+  if (filters.sensitivity) params.set("sensitivity", filters.sensitivity);
+  if (filters.source_kind) params.set("source_kind", filters.source_kind);
+  if (filters.freshness) params.set("freshness", filters.freshness);
+  if (filters.q) params.set("q", filters.q);
+  if (filters.page != null) params.set("page", String(filters.page));
+  if (filters.page_size != null) {
+    params.set("page_size", String(filters.page_size));
+  }
+  const query = params.size > 0 ? `?${params}` : "";
+  return requestJson(`${API_BASE}/v1/assets${query}`, {
+    method: "GET",
+  }) as Promise<AssetCatalogPage>;
+}
+
+/** 单数据集资产元数据（未补全=全默认值：敏感度常规、无标签无域）。 */
+export function fetchDatasetAssetMeta(
+  datasetId: string,
+): Promise<DatasetAssetMeta> {
+  return requestJson(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/asset-meta`,
+    { method: "GET" },
+  ) as Promise<DatasetAssetMeta>;
+}
+
+/** 补全/修改资产元数据（六字段任意子集；422 非法敏感度、403 viewer 只读
+ *  如实上抛——ConsoleApiError 带 detail）。 */
+export function updateDatasetAssetMeta(
+  datasetId: string,
+  patch: DatasetAssetMetaPatch,
+): Promise<DatasetAssetMeta> {
+  return requestJsonAnyMethod(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/asset-meta`,
+    "PATCH",
+    { body: patch },
+  ) as Promise<DatasetAssetMeta>;
+}
+
+/** 元数据修改留痕条目（append-only；最近在前）。 */
+export interface AssetMetaEvent {
+  at: string;
+  actor_sub: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+}
+
+/** 最近修改留痕（最近在前）。 */
+export function fetchAssetMetaEvents(
+  datasetId: string,
+): Promise<{ items: AssetMetaEvent[] }> {
+  return requestJson(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/asset-meta/events`,
+    { method: "GET" },
+  ) as Promise<{ items: AssetMetaEvent[] }>;
+}
+
+/** 新鲜度三态（wire-dataset-quality：按声明节奏判定；未声明=unknown 不误判）。 */
+export type QualityFreshnessValue = "fresh" | "stale" | "unknown";
+
+/** 列表徽章的汇总条目（summary 端点 statuses 值）。 */
+export interface QualitySummaryEntry {
+  freshness: QualityFreshnessValue;
+  last_refresh_at: string | null;
+  row_count: number;
+  status: string;
+}
+
+/** dataset_id → 新鲜度汇总（缺失键=无徽章）。 */
+export type QualitySummaryMap = Record<string, QualitySummaryEntry>;
+
+/** 批量新鲜度汇总（列表徽章用；ids 逗号拼接）。 */
+export function fetchQualitySummary(
+  datasetIds: string[],
+): Promise<{ statuses: QualitySummaryMap }> {
+  const ids = datasetIds.filter(Boolean).join(",");
+  const query = ids ? `?dataset_ids=${encodeURIComponent(ids)}` : "";
+  return requestJson(`${API_BASE}/v1/quality/summary${query}`, {
+    method: "GET",
+  }) as Promise<{ statuses: QualitySummaryMap }>;
+}
+
+/** 单列样本空值率（null_rate 为 0..1 比率；sampled_rows=抽样行数）。 */
+export interface QualityNullRate {
+  column: string;
+  null_rate: number;
+  sampled_rows: number;
+}
+
+/** 质量快照（ok 携带五项指标；failed/unsupported 如实不带值冒充）。 */
+export interface QualitySnapshot {
+  computed_at: string;
+  triggered_by: string;
+  status: "ok" | "failed" | "unsupported";
+  row_count: number;
+  pk_declared: boolean;
+  /** 0..1 唯一比例；未声明键列为 null（呈现「未声明键列」）。 */
+  pk_unique_ratio: number | null;
+  null_rates: QualityNullRate[];
+  sample_limit_hit: boolean;
+  error_text: string | null;
+}
+
+/** 历史条目（趋势用最小投影）。 */
+export interface QualityHistoryEntry {
+  computed_at: string;
+  row_count: number;
+  null_rates: QualityNullRate[];
+}
+
+/** 详情质量响应（freshness 容错解析：对象 {freshness,last_refresh_at} 或
+ *  裸枚举字符串——并行后端两种下发形态都收）。 */
+export interface DatasetQuality {
+  latest: QualitySnapshot | null;
+  history: QualityHistoryEntry[];
+  freshness: { freshness: QualityFreshnessValue; last_refresh_at: string | null };
+  cadence_hint: AssetCadenceHint | null;
+}
+
+/** 详情质量区数据（latest=null 即「暂无快照」诚实态）。 */
+export function fetchDatasetQuality(
+  datasetId: string,
+): Promise<DatasetQuality> {
+  return requestJson(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/quality`,
+    { method: "GET" },
+  ) as Promise<DatasetQuality>;
+}
+
+/** 手动触发质量快照（返回新快照或如实失败记录，形状同 latest）。 */
+export function refreshDatasetQuality(
+  datasetId: string,
+): Promise<QualitySnapshot> {
+  return requestJson(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/quality/refresh`,
+    { method: "POST" },
+  ) as Promise<QualitySnapshot>;
+}

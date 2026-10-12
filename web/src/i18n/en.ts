@@ -185,6 +185,33 @@ const en: Translation = {
       "After revocation: revoking takes effect immediately (the connector gets a 401); generate a new pairing token and run pair again — datasets and allowlists are kept.",
     consoleLink: "Open Console → My data →",
   },
+  assets: {
+    // Asset catalog & data quality (wire-asset-catalog): auto-registration and
+    // metadata enrichment / "My data" filters / quality snapshots stated as
+    // they are ("an indicative check, not a quality certification") / quality
+    // computed inside your dedicated engine — a trust point phrased for
+    // customers, not as internal architecture.
+    title: "Asset catalog & data quality",
+    intro:
+      "Datasets enter the asset catalog automatically and quality snapshots are generated for you — you only enrich the business information; the platform does the rest.",
+    assetTitle: "Asset information",
+    assetDesc:
+      "Every dataset appears in the asset catalog automatically — no registration needed. Enrich it with a business domain, tags, a description, an expected refresh cadence, an owner and a sensitivity level (General / Internal / Sensitive); every change is kept in history. Sensitivity is for labeling and filtering only — it never changes where your data is stored.",
+    filterTitle: "Catalog filters",
+    filterDesc:
+      "On the “My data” page, filter by domain, tag, sensitivity, source type or freshness, or search by keyword to quickly find the dataset you need.",
+    qualityTitle: "Data quality",
+    qualityDesc:
+      "Every dataset gets a quality snapshot automatically after creation, sync or derivation: row count, primary-key uniqueness and per-column null rates (based on a sample of up to 10,000 rows). You can also run “Check now” manually and browse the history trend. Quality snapshots are an indicative check, not a quality certification.",
+    qualityStates:
+      "Four states are shown as they are: OK / latest snapshot failed (stale values are not shown) / engine not supported yet (older versions) / no snapshot yet.",
+    qualityFreshness:
+      "Freshness: “stale” is judged only for datasets that declare an expected refresh cadence; undeclared ones show “unknown”.",
+    computeTitle: "Where quality is computed",
+    computeDesc:
+      "Quality metrics are computed inside your dedicated data engine; the platform keeps only the aggregate numbers and never touches your data content — your data stays within your scope.",
+    consoleLink: "Open Console → My data →",
+  },
   forms: {
     // Form-artifact customer tutorial (wire-form-builder task 5.1): the full
     // flow of create → bind → configure fields → try it → publish → share →
@@ -1354,6 +1381,115 @@ const en: Translation = {
             cellLifecycle: "Cell lifecycle",
             epochSealed: "Epoch sealed",
           },
+        },
+        // Asset metadata (wire-asset-catalog 5.2): six-field completion +
+        // effective-cadence hint + recent change trail (collapsible);
+        // 403 (viewer read-only) flips to an honest read-only state.
+        asset: {
+          title: "Asset info",
+          hint: "Once you fill in domain, tags, and sensitivity, the asset catalog can surface this dataset via those dimensions; every change is recorded in an append-only trail.",
+          loading: "Loading asset info…",
+          loadError: "Failed to load asset info",
+          domainLabel: "Business domain",
+          domainPlaceholder: "e.g. Sales",
+          tagsLabel: "Tags",
+          tagsPlaceholder: "Comma-separated, e.g. sales, monthly",
+          descriptionLabel: "Description",
+          descriptionPlaceholder: "One line on what this data covers",
+          cadenceLabel: "Expected cadence",
+          cadenceValues: {
+            undeclared: "Undeclared",
+            daily: "Daily",
+            weekly: "Weekly",
+            monthly: "Monthly",
+          },
+          effectiveHint: "Effective cadence (from indicator catalog): {{cadence}}",
+          ownerLabel: "Owner",
+          ownerPlaceholder: "e.g. Jane Zhang",
+          sensitivityLabel: "Sensitivity",
+          save: "Save",
+          saving: "Saving…",
+          saved: "Saved — effective in the catalog immediately.",
+          error: "Failed to save asset metadata",
+          readonlyNote: "Your seat is read-only (viewer); asset metadata cannot be modified.",
+          eventsShow: "Recent changes",
+          eventsHide: "Hide changes",
+          eventChanged: "Changed fields",
+          eventFields: {
+            domain: "Business domain",
+            tags: "Tags",
+            description: "Description",
+            cadence_hint: "Expected cadence",
+            owner_note: "Owner",
+            sensitivity: "Sensitivity",
+          },
+        },
+        // Data quality (wire-dataset-quality 5.3): standing disclaimer + four
+        // honest states (metrics / failed with cause only / engine unsupported /
+        // no snapshot yet) + manual check.
+        quality: {
+          title: "Data quality",
+          caption: "Indicative check, not a quality certification",
+          loading: "Loading quality info…",
+          loadError: "Failed to load quality info",
+          refresh: "Check now",
+          refreshing: "Checking…",
+          refreshError: "Failed to trigger quality check",
+          freshness: {
+            fresh: "Fresh",
+            stale: "Stale",
+            unknown: "Unknown",
+          },
+          lastRefreshLabel: "Last refresh",
+          lastRefreshNone: "—",
+          emptyTitle: "No snapshot yet",
+          emptyHint: "A quality snapshot is generated automatically after the first upload / sync / derivation; you can also trigger one with “Check now”.",
+          unsupportedTitle: "Engine does not support quality snapshots yet",
+          unsupportedHint: "The engine version on this dataset's cell does not support quality computation yet — available after the engine is upgraded; no estimated values are shown in the meantime.",
+          failedTitle: "Latest snapshot failed",
+          failedHint: "While failing, no historical values are shown as current; retry with “Check now”.",
+          rowsLabel: "Rows",
+          pkLabel: "PK uniqueness",
+          pkUndeclared: "No key column declared",
+          nullRatesColumn: "Column",
+          nullRatesRate: "Null rate",
+          nullRatesSampled: "Sampled rows",
+          sampleNote: "Sample-based (cap 10,000 rows)",
+          computedAtLabel: "Computed at",
+          triggeredByLabel: "Triggered by",
+          triggeredBy: {
+            manual: "Manual",
+            sync: "Sync",
+            create: "Creation",
+            derive: "Derivation",
+          },
+          trendTitle: "Row count trend",
+        },
+      },
+      // Asset catalog filter bar and quality badges (wire-asset-catalog 5.1 /
+      // wire-dataset-quality): the catalog upgrades this page (D5 — no separate
+      // assets page); filters/search/pagination drive GET /api/v1/assets; badges
+      // follow quality summary state (fresh/stale/unknown; missing or failed → no badge).
+      assets: {
+        searchPlaceholder: "Search name / description",
+        domainPlaceholder: "Domain",
+        tagPlaceholder: "Tag",
+        sensitivityLabel: "Sensitivity",
+        sensitivityAll: "All sensitivities",
+        sourceKindLabel: "Source kind",
+        sourceKindAll: "All sources",
+        freshnessLabel: "Freshness",
+        freshnessAll: "All freshness",
+        apply: "Filter",
+        reset: "Reset",
+        filteredEmpty: "No datasets match the current filters.",
+        pagination: "{{total}} datasets · page {{page}} / {{pages}}",
+        prev: "Previous page",
+        next: "Next page",
+        qualityBadge: {
+          fresh: "Fresh",
+          stale: "Stale",
+          unknown: "Unknown",
         },
       },
       // Pipeline sub-view (wire-transform-pipeline-view tasks 2.1/2.2): the

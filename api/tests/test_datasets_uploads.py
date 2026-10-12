@@ -37,6 +37,7 @@ from fd_wire_api.datasets.uploads import infer_type
 from fd_wire_api.provenance import envelope
 from fd_wire_api.provenance.ledger import verify_chain
 from fd_wire_api.provenance.models import LedgerEvent
+from fd_wire_api.quality.service import TOOL_QUALITY
 from test_datasets_common import (
     CUSTOMER_A,
     CUSTOMER_B,
@@ -215,10 +216,12 @@ def test_upload_excel_preview_and_create(datasets_env) -> None:
     ]
     created = create_upload_dataset(datasets_env, body["upload_id"], name="Cities")
     assert created.status_code == 201, created.text
+    # 末位 customer_dataset_quality：建档成功的质量快照自动钩子（4.3）
     assert datasets_env.fake.tools == [
         TOOL_INGEST_BEGIN,
         TOOL_INGEST_CHUNK,
         TOOL_INGEST_COMMIT,
+        TOOL_QUALITY,
     ]
     assert _csv_rows_arg(datasets_env)[0] == {"city": "Beijing", "pop": 21540000}
 
@@ -275,7 +278,13 @@ def test_create_from_csv_upload_ingests_engine_and_consumes(datasets_env) -> Non
     assert body["columns"][0] == {"name": "id", "type": "INTEGER"}
 
     fake = datasets_env.fake
-    assert fake.tools == [TOOL_INGEST_BEGIN, TOOL_INGEST_CHUNK, TOOL_INGEST_COMMIT]
+    # 末位 customer_dataset_quality：建档成功的质量快照自动钩子（4.3）
+    assert fake.tools == [
+        TOOL_INGEST_BEGIN,
+        TOOL_INGEST_CHUNK,
+        TOOL_INGEST_COMMIT,
+        TOOL_QUALITY,
+    ]
     begin = fake.calls_for(TOOL_INGEST_BEGIN)[0]
     assert begin["dataset_key"] == "sales_2026"
     assert begin["pk_columns"] == []

@@ -510,6 +510,16 @@ def _create_from_upload(
     db.add(dataset)
     db.commit()
     db.refresh(dataset)
+    # 质量快照钩子（wire-asset-catalog 4.3）：上传建档数据刚落引擎——首提
+    # 即触发一次快照（triggered_by=create）；失败隔离，快照失败绝不影响
+    # 建档主流程（结果已在头顶 commit 落定）。api 层建档不挂钩（引擎侧无
+    # 其数据表，见 quality.service.notify_dataset_changed）。
+    try:
+        from ..quality import service as quality_service  # noqa: PLC0415 - 惰性防环
+
+        quality_service.notify_dataset_changed(dataset, "create", client=client)
+    except Exception:  # noqa: BLE001 - 双保险：主流程绝不因快照中断
+        pass
     return DatasetOut.from_dataset(dataset)
 
 

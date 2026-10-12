@@ -208,8 +208,9 @@ def test_chain_head_is_provenance_foundation(migrated_sqlite) -> None:
         version = conn.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
         ).scalar()
-    # 链头断言随最新迁移前进（0029_member_preferences：个人偏好，单链线性追加）
-    assert version == "0029_member_preferences"
+    # 链头断言随最新迁移前进（0031_dataset_quality：质量快照表；0030 资产
+    # 目录两表在其前——wire-asset-catalog 任务组 1/4，单链线性追加）
+    assert version == "0031_dataset_quality"
     engine.dispose()
 
 

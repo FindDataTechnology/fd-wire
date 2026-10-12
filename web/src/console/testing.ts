@@ -234,6 +234,29 @@ export interface ConsoleBackendOptions {
   workbench?: WorkbenchSummary;
   /** 强制 GET /api/v1/workbench 返回该状态（工作台错误态测试）。 */
   failWorkbenchStatus?: number;
+  /** 种子资产元数据（wire-asset-catalog 5.x；键 = dataset id，未种子条目
+   *  LEFT JOIN+COALESCE 默认值：敏感度常规、无域无标签）。 */
+  assetMeta?: Record<string, FakeAssetMetaSeed>;
+  /** 种子资产元数据留痕（键 = dataset id；最近在前——PATCH 会续记在最前）。 */
+  assetMetaEvents?: Record<string, FakeAssetMetaEventSeed[]>;
+  /** 强制 GET /api/v1/assets 返回该状态（目录端点故障态）。 */
+  failAssetsStatus?: number;
+  /** 强制 GET /api/v1/datasets/{id}/asset-meta 返回该状态。 */
+  failAssetMetaStatus?: number;
+  /** 强制 PATCH /api/v1/datasets/{id}/asset-meta 返回该状态（422 非法敏感度
+   *  / 403 viewer 只读等注入；detail 可为字符串或 FastAPI 校验数组形状）。 */
+  failAssetMetaPatchStatus?: number;
+  failAssetMetaPatchDetail?: string | ApiDetailItem[];
+  /** 种子数据集质量（wire-dataset-quality；键 = dataset id，缺省=暂无快照
+   *  诚实空态 latest=null）。 */
+  quality?: Record<string, FakeQualitySeed>;
+  /** 强制 GET /api/v1/quality/summary 返回该状态（徽章静默降级测试）。 */
+  failQualitySummaryStatus?: number;
+  /** 强制 GET /api/v1/datasets/{id}/quality 返回该状态。 */
+  failQualityStatus?: number;
+  /** 强制 POST /api/v1/datasets/{id}/quality/refresh 返回该状态。 */
+  failQualityRefreshStatus?: number;
+  failQualityRefreshDetail?: string;
 }
 
 /** 源包种子（wire-source-packs）：假后端按 indicators 分页切片出详情。 */
@@ -373,11 +396,42 @@ export type FakeAlertEventSeed = {
 };
 
 /** 个人偏好种子（wire-personal-preferences）：wire snake_case 形状直存
- * （键面冻结，不做 camel 翻译）；缺省键 = null（未设）。 */
+ *  （键面冻结，不做 camel 翻译）；缺省键 = null（未设）。 */
 export type FakePreferencesSeed = {
   ui_locale?: "zh" | "en" | null;
   landing_tab?: string | null;
   pinned_dashboard_id?: number | null;
+};
+
+/** 资产元数据种子（wire-asset-catalog）：未补全字段按默认值（常规/无标签）。 */
+export type FakeAssetMetaSeed = {
+  domain?: string | null;
+  tags?: string[];
+  description?: string | null;
+  cadence_hint?: "daily" | "weekly" | "monthly" | null;
+  owner_note?: string | null;
+  sensitivity?: "常规" | "内部" | "敏感";
+  /** 生效节奏（api 层数据集来自指标注册表）。 */
+  cadence_effective?: "daily" | "weekly" | "monthly" | null;
+  customer_id?: string;
+};
+
+/** 资产元数据留痕种子（wire 形状：at/actor_sub/before/after）。 */
+export type FakeAssetMetaEventSeed = {
+  at: string;
+  actor_sub: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+};
+
+/** 数据集质量种子（wire-dataset-quality）：latest/history/freshness 按契约
+ *  形状直存（latest=null 即「暂无快照」诚实态）。 */
+export type FakeQualitySeed = {
+  latest?: Record<string, unknown> | null;
+  history?: Array<Record<string, unknown>>;
+  /** 对象 {freshness,last_refresh_at} 或裸枚举字符串（两种下发形态都收）。 */
+  freshness?: unknown;
+  cadence_hint?: "daily" | "weekly" | "monthly" | null;
 };
 
 /** 安装假后端为 global fetch；返回调用记录与状态注入接口。 */
@@ -405,6 +459,8 @@ export function installConsoleBackend(
   addSync: (sync: SyncRecord) => void;
   addRefreshSchedule: (seed: RefreshSchedule & { customer_id?: string }) => void;
   getDatasets: () => Dataset[];
+  getAssetMeta: (datasetId: string) => Record<string, unknown>;
+  getAssetMetaEvents: (datasetId: string) => FakeAssetMetaEventSeed[];
   getCorrections: (datasetId: string) => Correction[];
   getPackSubscriptions: (customerId?: string) => string[];
     getEntities: () => FakeEntityRow[];
@@ -573,6 +629,58 @@ export function installConsoleBackend(
       pinned_dashboard_id: seed.pinned_dashboard_id ?? null,
     });
   }
+
+  // ── 资产目录/质量假后端状态（wire-asset-catalog / wire-dataset-quality）：
+  //    元数据懒建行（首次 PATCH 才落行，GET 缺行回默认值——LEFT JOIN+COALESCE
+  //    同语义）；留痕 append-only（PATCH 续记最前）；质量种子直存。──
+  type StoredAssetMeta = Required<
+    Omit<FakeAssetMetaSeed, "customer_id">
+  > & { customer_id?: string };
+  const assetMetaStore = new Map<string, StoredAssetMeta>();
+  for (const [id, seed] of Object.entries(options.assetMeta ?? {})) {
+    assetMetaStore.set(id, {
+      customer_id: seed.customer_id,
+      domain: seed.domain ?? null,
+      tags: seed.tags ? [...seed.tags] : [],
+      description: seed.description ?? null,
+      cadence_hint: seed.cadence_hint ?? null,
+      owner_note: seed.owner_note ?? null,
+      sensitivity: seed.sensitivity ?? "常规",
+      cadence_effective: seed.cadence_effective ?? null,
+    });
+  }
+  const assetEventsStore = new Map<string, FakeAssetMetaEventSeed[]>();
+  for (const [id, seeds] of Object.entries(options.assetMetaEvents ?? {})) {
+    assetEventsStore.set(id, seeds.map((event) => ({ ...event })));
+  }
+  const qualityStore = new Map<string, FakeQualitySeed>();
+  for (const [id, seed] of Object.entries(options.quality ?? {})) {
+    qualityStore.set(id, { ...seed });
+  }
+  /** 新鲜度收窄（缺省 unknown——未声明节奏不误判）。 */
+  const freshnessOf = (
+    datasetId: string,
+  ): { freshness: "fresh" | "stale" | "unknown"; last_refresh_at: string | null } => {
+    const raw = qualityStore.get(datasetId)?.freshness;
+    if (raw === "fresh" || raw === "stale" || raw === "unknown") {
+      return { freshness: raw, last_refresh_at: null };
+    }
+    if (raw && typeof raw === "object") {
+      const record = raw as { freshness?: unknown; last_refresh_at?: unknown };
+      const value = record.freshness;
+      return {
+        freshness:
+          value === "fresh" || value === "stale" || value === "unknown"
+            ? value
+            : "unknown",
+        last_refresh_at:
+          typeof record.last_refresh_at === "string" && record.last_refresh_at
+            ? record.last_refresh_at
+            : null,
+      };
+    }
+    return { freshness: "unknown", last_refresh_at: null };
+  };
 
   /** 追加告警事件（刷新/评估推进断言面：列表重拉后可见）。 */
   function addAlertEvent(seed: Omit<FakeAlertEventSeed, "created_at"> &
@@ -1336,6 +1444,24 @@ export function installConsoleBackend(
       return dataset.customer_id && dataset.customer_id !== customerId
         ? undefined
         : dataset;
+    };
+
+    /** 数据集的资产元数据（缺行=默认值；带 customer_id 的种子仅同客户可见
+     *  ——与数据集可见性同纪律）。 */
+    const assetMetaOf = (datasetId: string): StoredAssetMeta => {
+      const row = assetMetaStore.get(datasetId);
+      if (!row || (row.customer_id && row.customer_id !== customerId)) {
+        return {
+          domain: null,
+          tags: [],
+          description: null,
+          cadence_hint: null,
+          owner_note: null,
+          sensitivity: "常规",
+          cadence_effective: null,
+        };
+      }
+      return row;
     };
 
     // ── 实体语义层（wire-entity-layer 3.1/3.2 + wire-entity-link 3.2）：
@@ -2968,6 +3094,319 @@ export function installConsoleBackend(
       );
     }
 
+    // ── 资产目录（wire-asset-catalog 2.1）：GET /api/v1/assets——域/标签/
+    //    敏感度/来源类型/新鲜度组合筛选 + 名称描述搜索 + 分页；条目 = 数据集
+    //    投影 + 资产元数据段（未补全=默认值）；仅本客户数据集（隔离纪律）。──
+    if (path === "/api/v1/assets" && method === "GET") {
+      if (options.failAssetsStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `assets ${options.failAssetsStatus}` },
+            options.failAssetsStatus,
+          ),
+        );
+      }
+      const mine = [...datasets.values()].filter(
+        (d) => !d.customer_id || d.customer_id === customerId,
+      );
+      const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+      const domain = url.searchParams.get("domain") ?? "";
+      const tag = url.searchParams.get("tag") ?? "";
+      const sensitivity = url.searchParams.get("sensitivity") ?? "";
+      const sourceKind = url.searchParams.get("source_kind") ?? "";
+      const freshness = url.searchParams.get("freshness") ?? "";
+      const rawPage = Number(url.searchParams.get("page") ?? "1");
+      const rawSize = Number(url.searchParams.get("page_size") ?? "20");
+      const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+      const pageSize = Number.isFinite(rawSize) && rawSize > 0 ? rawSize : 20;
+      let rows = mine;
+      if (domain) {
+        rows = rows.filter((d) => (assetMetaOf(d.id).domain ?? "") === domain);
+      }
+      if (tag) rows = rows.filter((d) => assetMetaOf(d.id).tags.includes(tag));
+      if (sensitivity) {
+        rows = rows.filter((d) => assetMetaOf(d.id).sensitivity === sensitivity);
+      }
+      if (sourceKind) rows = rows.filter((d) => d.source_kind === sourceKind);
+      if (freshness) {
+        rows = rows.filter((d) => freshnessOf(d.id).freshness === freshness);
+      }
+      if (q) {
+        rows = rows.filter(
+          (d) =>
+            d.name.toLowerCase().includes(q) ||
+            (assetMetaOf(d.id).description ?? "").toLowerCase().includes(q),
+        );
+      }
+      const total = rows.length;
+      const items = rows
+        .slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize)
+        .map((d) => {
+          const meta = assetMetaOf(d.id);
+          return {
+            id: d.id,
+            name: d.name,
+            source_kind: d.source_kind,
+            row_count: d.row_count,
+            storage_tier: (d as DatasetWithTier).storage_tier ?? null,
+            created_at: d.created_at,
+            asset: {
+              domain: meta.domain,
+              tags: meta.tags,
+              description: meta.description,
+              cadence_hint: meta.cadence_hint,
+              owner_note: meta.owner_note,
+              sensitivity: meta.sensitivity,
+              cadence_effective: meta.cadence_effective,
+            },
+          };
+        });
+      return Promise.resolve(jsonResponse({ items, total, page }));
+    }
+
+    // ── 质量汇总（wire-dataset-quality）：GET /api/v1/quality/summary?
+    //    dataset_ids=a,b,c——只回有种子的 id（缺失键=无徽章）；条目带
+    //    freshness/last_refresh_at/row_count/status。──
+    if (path === "/api/v1/quality/summary" && method === "GET") {
+      if (options.failQualitySummaryStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `quality summary ${options.failQualitySummaryStatus}` },
+            options.failQualitySummaryStatus,
+          ),
+        );
+      }
+      const ids = (url.searchParams.get("dataset_ids") ?? "")
+        .split(",")
+        .filter(Boolean);
+      const statuses: Record<string, unknown> = {};
+      for (const id of ids) {
+        const seed = qualityStore.get(id);
+        if (!seed) continue;
+        const fresh = freshnessOf(id);
+        const latest = seed.latest as
+          | { status?: unknown; row_count?: unknown }
+          | null
+          | undefined;
+        statuses[id] = {
+          freshness: fresh.freshness,
+          last_refresh_at: fresh.last_refresh_at,
+          row_count:
+            typeof latest?.row_count === "number" ? latest.row_count : 0,
+          status:
+            typeof latest?.status === "string"
+              ? latest.status
+              : latest == null
+                ? "empty"
+                : "ok",
+        };
+      }
+      return Promise.resolve(jsonResponse({ statuses }));
+    }
+
+    // ── 资产元数据（wire-asset-catalog 1.2-1.5）：GET/PATCH
+    //    /api/v1/datasets/{id}/asset-meta + GET /asset-meta/events——懒建行、
+    //    敏感度三值 422 回合法清单、viewer 只读 403（变更类方法统一拒绝）、
+    //    留痕 append-only（PATCH 续记最近在前）。──
+    const assetMetaOut = (dataset: Dataset): Record<string, unknown> => {
+      const meta = assetMetaOf(dataset.id);
+      return {
+        dataset_id: dataset.id,
+        domain: meta.domain,
+        tags: meta.tags,
+        description: meta.description,
+        cadence_hint: meta.cadence_hint,
+        owner_note: meta.owner_note,
+        sensitivity: meta.sensitivity,
+        cadence_effective: meta.cadence_effective,
+      };
+    };
+    match = path.match(/^\/api\/v1\/datasets\/([^/]+)\/asset-meta$/);
+    if (match) {
+      const dataset = ownDataset(match[1]);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      if (method === "GET") {
+        if (options.failAssetMetaStatus) {
+          return Promise.resolve(
+            jsonResponse(
+              { detail: `asset meta ${options.failAssetMetaStatus}` },
+              options.failAssetMetaStatus,
+            ),
+          );
+        }
+        return Promise.resolve(jsonResponse(assetMetaOut(dataset)));
+      }
+      if (method === "PATCH") {
+        if (options.failAssetMetaPatchStatus) {
+          return Promise.resolve(
+            jsonResponse(
+              {
+                detail:
+                  options.failAssetMetaPatchDetail ??
+                  `asset meta ${options.failAssetMetaPatchStatus}`,
+              },
+              options.failAssetMetaPatchStatus,
+            ),
+          );
+        }
+        // viewer 只读（统一依赖 VIEWER_DENIED_METHODS 语义）。
+        if (teamMembersStore.get(customerId)?.role === "viewer") {
+          return Promise.resolve(
+            jsonResponse({ detail: "团队成员权限不足（viewer 只读）" }, 403),
+          );
+        }
+        const payload = (calls[calls.length - 1]!.body ?? {}) as {
+          domain?: string | null;
+          tags?: string[];
+          description?: string | null;
+          cadence_hint?: string | null;
+          owner_note?: string | null;
+          sensitivity?: string;
+        };
+        if (
+          payload.sensitivity !== undefined &&
+          !["常规", "内部", "敏感"].includes(payload.sensitivity)
+        ) {
+          return Promise.resolve(
+            jsonResponse(
+              { detail: "敏感度只能是：常规 / 内部 / 敏感" },
+              422,
+            ),
+          );
+        }
+        const before = assetMetaOut(dataset);
+        const row: StoredAssetMeta = { ...assetMetaOf(dataset.id) };
+        delete row.customer_id;
+        if (payload.domain !== undefined) row.domain = payload.domain;
+        if (payload.tags !== undefined) {
+          row.tags = Array.isArray(payload.tags)
+            ? payload.tags.filter((tag): tag is string => typeof tag === "string")
+            : [];
+        }
+        if (payload.description !== undefined) row.description = payload.description;
+        if (payload.cadence_hint !== undefined) {
+          row.cadence_hint =
+            payload.cadence_hint === "daily" ||
+            payload.cadence_hint === "weekly" ||
+            payload.cadence_hint === "monthly"
+              ? payload.cadence_hint
+              : null;
+        }
+        if (payload.owner_note !== undefined) row.owner_note = payload.owner_note;
+        if (payload.sensitivity !== undefined) {
+          row.sensitivity = payload.sensitivity as StoredAssetMeta["sensitivity"];
+        }
+        assetMetaStore.set(dataset.id, row);
+        const after = assetMetaOut(dataset);
+        const trail = assetEventsStore.get(dataset.id) ?? [];
+        trail.unshift({
+          at: "2026-10-13T09:00:00",
+          actor_sub: customerId,
+          before,
+          after,
+        });
+        assetEventsStore.set(dataset.id, trail);
+        return Promise.resolve(jsonResponse(after));
+      }
+    }
+    match = path.match(/^\/api\/v1\/datasets\/([^/]+)\/asset-meta\/events$/);
+    if (match && method === "GET") {
+      const dataset = ownDataset(match[1]);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      return Promise.resolve(
+        jsonResponse({ items: assetEventsStore.get(dataset.id) ?? [] }),
+      );
+    }
+
+    // ── 数据集质量（wire-dataset-quality 4.5/4.6）：GET
+    //    /api/v1/datasets/{id}/quality（latest/history/freshness/cadence_hint）
+    //    + POST /quality/refresh（手动触发追加 ok 快照，viewer 403）。──
+    match = path.match(/^\/api\/v1\/datasets\/([^/]+)\/quality$/);
+    if (match && method === "GET") {
+      const dataset = ownDataset(match[1]);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      if (options.failQualityStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `quality ${options.failQualityStatus}` },
+            options.failQualityStatus,
+          ),
+        );
+      }
+      const seed = qualityStore.get(dataset.id) ?? {};
+      return Promise.resolve(
+        jsonResponse({
+          latest: seed.latest ?? null,
+          history: seed.history ?? [],
+          freshness:
+            seed.freshness ?? { freshness: "unknown", last_refresh_at: null },
+          cadence_hint: seed.cadence_hint ?? assetMetaOf(dataset.id).cadence_hint,
+        }),
+      );
+    }
+    match = path.match(/^\/api\/v1\/datasets\/([^/]+)\/quality\/refresh$/);
+    if (match && method === "POST") {
+      const dataset = ownDataset(match[1]);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      if (options.failQualityRefreshStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failQualityRefreshDetail ??
+                `quality refresh ${options.failQualityRefreshStatus}`,
+            },
+            options.failQualityRefreshStatus,
+          ),
+        );
+      }
+      // 手动触发受角色门禁（owner/editor；viewer 403——api 侧同口径）。
+      if (teamMembersStore.get(customerId)?.role === "viewer") {
+        return Promise.resolve(
+          jsonResponse({ detail: "团队成员权限不足（viewer 只读）" }, 403),
+        );
+      }
+      const snapshot = {
+        computed_at: "2026-10-13T10:00:00",
+        triggered_by: "manual",
+        status: "ok",
+        row_count: dataset.row_count,
+        pk_declared: false,
+        pk_unique_ratio: null,
+        null_rates: [],
+        sample_limit_hit: false,
+        error_text: null,
+      };
+      const seed = qualityStore.get(dataset.id) ?? {};
+      const history = [...(seed.history ?? [])];
+      const prior = seed.latest as
+        | { computed_at?: unknown; row_count?: unknown; null_rates?: unknown }
+        | null
+        | undefined;
+      if (prior && typeof prior === "object") {
+        history.push({
+          computed_at: prior.computed_at ?? "",
+          row_count: prior.row_count ?? 0,
+          null_rates: prior.null_rates ?? [],
+        });
+      }
+      history.push({
+        computed_at: snapshot.computed_at,
+        row_count: snapshot.row_count,
+        null_rates: [],
+      });
+      qualityStore.set(dataset.id, { ...seed, latest: snapshot, history });
+      return Promise.resolve(jsonResponse(snapshot, 201));
+    }
+
     return Promise.resolve(jsonResponse({ detail: "not found" }, 404));
   }) as unknown as typeof fetch;
 
@@ -2984,6 +3423,22 @@ export function installConsoleBackend(
     addSync,
     addRefreshSchedule,
     getDatasets: () => [...datasets.values()],
+    getAssetMeta: (datasetId: string) => {
+      const row = assetMetaStore.get(datasetId);
+      return row
+        ? ({ ...row } as Record<string, unknown>)
+        : {
+            domain: null,
+            tags: [],
+            description: null,
+            cadence_hint: null,
+            owner_note: null,
+            sensitivity: "常规",
+            cadence_effective: null,
+          };
+    },
+    getAssetMetaEvents: (datasetId: string) =>
+      (assetEventsStore.get(datasetId) ?? []).map((event) => ({ ...event })),
     getCorrections: (datasetId: string) => corrections.get(datasetId) ?? [],
     getPackSubscriptions: (customerId = "demo-customer") =>
       [...(packSubscriptions.get(customerId) ?? [])],

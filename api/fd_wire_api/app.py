@@ -44,6 +44,12 @@ from .pipeline import router as pipeline_router
 # 图谱；图谱紧凑块注入 AI 构建上下文见 ai/routes）
 from .entities import init_db as init_entities_db
 from .entities import router as entities_router
+# 资产目录（wire-asset-catalog）：数据集资产元数据 + 目录浏览端点
+# （表挂 DatasetsBase 走 datasets 库；生产迁移 alembic 0030）
+from .assets import router as assets_router
+# 数据集质量快照（wire-asset-catalog 任务组 4）：快照通道 + 新鲜度徽章
+# （表挂 DatasetsBase；生产迁移 alembic 0031）
+from .quality import router as quality_router
 from .demands import admin_router as demands_admin_router
 from .demands import init_db as init_demands_db
 from .demands import pipeline_router as demands_pipeline_router
@@ -238,6 +244,14 @@ app.include_router(packs_router)
 # 实体语义层（wire-entity-layer）：实体/关系声明 + 同源图谱（console 身份；
 # 免费档全功能——零引擎调用的元数据层，AI 上下文注入走 ai/routes）
 app.include_router(entities_router)
+# 资产目录（wire-asset-catalog）：/api/v1/assets 浏览筛选 +
+# /api/v1/datasets/{id}/asset-meta 元数据读写与留痕（console 身份；
+# 元数据绝不出公开面——红线 3 的资产维度延伸）
+app.include_router(assets_router)
+# 数据集质量快照（wire-asset-catalog 任务组 4）：/api/v1/quality/summary
+# 徽章聚合 + /api/v1/datasets/{id}/quality 详情与手动 refresh
+# （计算在 cell 引擎侧，平台侧只收聚合计数——红线 2）
+app.include_router(quality_router)
 # 溯源账本（wire-provenance-ledger 任务组 2）：客户面概览/时间线/状态/调档
 # （Bearer 身份，4.5）+ 内部 ingest 入账端点（X-Provenance-Token）
 app.include_router(provenance_router)

@@ -130,6 +130,52 @@ describe("DocsView（文档三节 · 如实呈现）", () => {
     i18n.changeLanguage("zh");
   });
 
+  // 资产目录与数据质量章节（wire-asset-catalog）：自动登记与元数据补全 /
+  // 「我的数据」筛选 / 质量快照如实口径（原句「指示性检查，非质量认证」
+  // 必须在场）/ 质量指标在专属引擎内计算（信任点）+ 双语。
+  it("「资产目录与数据质量」章节：自动登记 / 筛选 / 质量快照口径 / 计算位置", () => {
+    render(<DocsView />);
+
+    const section = screen.getByTestId("docs-assets");
+    expect(section.getAttribute("id")).toBe("assets");
+    expect(section.textContent).toContain("资产目录与数据质量");
+    // 资产信息：自动登记、元数据补全、敏感度只是标注与筛选
+    expect(section.textContent).toContain("无需注册");
+    expect(section.textContent).toContain("业务域");
+    expect(section.textContent).toContain("敏感度");
+    expect(section.textContent).toContain("不影响数据的存储位置");
+    // 目录筛选：维度 + 关键字搜索
+    expect(section.textContent).toContain("目录筛选");
+    expect(section.textContent).toContain("关键字搜索");
+    // 数据质量：快照内容 / 手动检查 / 原句口径 / 四状态 / 新鲜度判定
+    const quality = screen.getByTestId("docs-assets-quality");
+    expect(quality.textContent).toContain("10,000 行抽样");
+    expect(quality.textContent).toContain("立即检查");
+    expect(quality.textContent).toContain("指示性检查，非质量认证");
+    expect(quality.textContent).toContain("暂无快照");
+    expect(quality.textContent).toContain("未声明的显示「未知」");
+    // 计算位置：信任点措辞（专属引擎内计算，平台只保存聚合数字）
+    expect(section.textContent).toContain("专属数据引擎");
+    expect(section.textContent).toContain("不接触你的数据内容");
+    // 文档 → 控制台入口
+    const link = screen.getByTestId("docs-assets-console-link");
+    expect(link.getAttribute("href")).toBe("#/console/datasets");
+  });
+
+  it("资产目录章节英文同步（docs.assets 双语键齐备）", () => {
+    i18n.changeLanguage("en");
+    render(<DocsView />);
+
+    const section = screen.getByTestId("docs-assets");
+    expect(section.textContent).toContain("Asset catalog & data quality");
+    const quality = screen.getByTestId("docs-assets-quality");
+    expect(quality.textContent).toContain(
+      "an indicative check, not a quality certification",
+    );
+    expect(section.textContent).toContain("dedicated data engine");
+    i18n.changeLanguage("zh");
+  });
+
   // 表单教程（wire-form-builder 任务 5.1）：五步全流程 + 控制台互链 + 双语。
   it("「表单」章节：建表单五步（创建/绑定配字段/试填/发布分享/收集回滚）+ 控制台互链", () => {
     render(<DocsView />);

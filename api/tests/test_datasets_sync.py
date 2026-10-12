@@ -29,6 +29,7 @@ from fd_wire_api.datasets.ingest import (
     get_engine_client_factory,
 )
 from fd_wire_api.datasets.models import Dataset, DatasetSync
+from fd_wire_api.quality.service import TOOL_QUALITY
 from test_datasets_common import (
     CUSTOMER_A,
     connector_headers,
@@ -80,7 +81,14 @@ def test_push_three_phases_calls_engine_in_order(datasets_env) -> None:
     assert result["commit"].json() == {"status": "ok", "rows": 2}
 
     fake = datasets_env.fake
-    assert fake.tools == [TOOL_INGEST_BEGIN, TOOL_INGEST_CHUNK, TOOL_INGEST_COMMIT]
+    # 末位 customer_dataset_quality：同步成功的质量快照自动钩子
+    # （wire-asset-catalog 4.3——失败隔离，不影响同步结果）
+    assert fake.tools == [
+        TOOL_INGEST_BEGIN,
+        TOOL_INGEST_CHUNK,
+        TOOL_INGEST_COMMIT,
+        TOOL_QUALITY,
+    ]
     begin_args = fake.calls_for(TOOL_INGEST_BEGIN)[0]
     assert begin_args["dataset_key"] == dataset["key"]
     assert begin_args["columns"] == COLUMNS

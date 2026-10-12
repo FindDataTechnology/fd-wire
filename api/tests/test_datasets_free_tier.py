@@ -203,8 +203,15 @@ def test_paid_tier_regression_cell_zero_change(free_env) -> None:
         TOOL_INGEST_CHUNK,
         TOOL_INGEST_COMMIT,
     )
+    from fd_wire_api.quality.service import TOOL_QUALITY
 
-    assert free_env.fake.tools == [TOOL_INGEST_BEGIN, TOOL_INGEST_CHUNK, TOOL_INGEST_COMMIT]
+    # 末位 customer_dataset_quality：cell 档建档成功的质量快照自动钩子（4.3）
+    assert free_env.fake.tools == [
+        TOOL_INGEST_BEGIN,
+        TOOL_INGEST_CHUNK,
+        TOOL_INGEST_COMMIT,
+        TOOL_QUALITY,
+    ]
     begin = free_env.fake.calls_for(TOOL_INGEST_BEGIN)[0]
     assert begin["dataset_key"] == "paid_data"
     # 同列表共存、tier 徽标区分（免费集与付费集）
