@@ -367,6 +367,7 @@ const en: Translation = {
     chartTitle: "Dashboard placeholder",
     chartEmpty: "No data yet",
     nav: {
+      workbench: "Workbench",
       chat: "AI Build",
       artifacts: "Artifacts",
       datasets: "My data",
@@ -424,6 +425,75 @@ const en: Translation = {
         "Wire's conversational build capability will be provided through this entrance; data trials run on Base — the demo page carries the published test account and a guided tour.",
       tryCta: "Try it on Base",
       haveAccount: "Already have a Base account? Enter directly",
+    },
+    // Personal workbench (wire-personal-workbench tasks 2.1/2.3): six aggregate
+    // section cards + a compact Base entry card. Counts and recent items come
+    // from the aggregate endpoint only (no fabricated counts); tier badges /
+    // artifact kinds / statuses reuse the existing page keys.
+    workbench: {
+      title: "Workbench",
+      subtitle:
+        "Your information assets at a glance — data, packs, artifacts, rules and demands.",
+      loading: "Loading the workbench…",
+      errorTitle: "Failed to load the workbench",
+      retry: "Retry",
+      openAll: "View all",
+      datasets: {
+        title: "My data",
+        totalLabel: "{{count}} datasets",
+        apiTier: "api tier {{count}}",
+        cellTier: "cell tier {{count}}",
+        rowsLabel: "{{count}} rows",
+        updatedLabel: "Updated",
+        empty: "No datasets yet",
+        emptyCta: "Upload a CSV",
+      },
+      packs: {
+        title: "My packs",
+        subscribedLabel: "{{count}} packs subscribed",
+        empty: "No pack subscriptions yet",
+        emptyCta: "Browse packs",
+      },
+      artifacts: {
+        title: "Dashboards & artifacts",
+        activeLabel: "{{count}} active artifacts",
+        updatedLabel: "Updated",
+        empty: "No artifacts yet",
+        emptyCta: "Build with AI",
+      },
+      alerts: {
+        title: "My rules",
+        rulesLabel: "Alert rules {{count}}",
+        firingLabel: "Firing {{count}}",
+        eventsLabel: "Events in 24h {{count}}",
+        empty: "No alert rules yet",
+      },
+      demands: {
+        title: "My demands",
+        openLabel: "Open {{count}}",
+        latestLabel: "Latest demand",
+        updatedLabel: "Updated",
+        empty: "No demands yet",
+      },
+      // Free-tier quota bar (same visual language as the My-data QuotaBar;
+      // hitting the limit shows an inline upgrade hint, never a page wall).
+      quota: {
+        bar:
+          "Free-tier quota: {{used}}/{{max}} datasets used · up to {{rows}} rows each",
+        exhausted:
+          "Dataset count has reached the free-tier limit ({{max}}) — delete unneeded datasets to free slots, or upgrade for more.",
+        cta: "Contact us to upgrade",
+      },
+      // Compact Base entry card: same link semantics as the AI Build guide card
+      // (primary = official demo page, secondary = Base platform); never repeats
+      // the published test-account credentials in plaintext.
+      yizuo: {
+        title: "AI Build · Base",
+        body:
+          "Build dashboards and composite indicators by chat — trials run on the Base demo page (published test account and tour included).",
+        tryCta: "Try it on Base",
+        haveAccount: "Already have a Base account? Enter directly",
+      },
     },
     artifacts: {
       title: "Artifacts",

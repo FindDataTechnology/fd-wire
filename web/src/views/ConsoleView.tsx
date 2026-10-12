@@ -34,6 +34,7 @@ import {
 } from "../console/api";
 import i18nInstance, { switchLanguage } from "../i18n";
 import { ChatPage } from "../console/ChatPage";
+import { WorkbenchPage } from "../console/WorkbenchPage";
 import { ArtifactsPage } from "../console/ArtifactsPage";
 import { DatasetsPage } from "../console/DatasetsPage";
 import { EntitiesPage } from "../console/EntitiesPage";
@@ -438,6 +439,7 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
           </p>
         </div>
       )}
+      {tab === "workbench" && <WorkbenchPage />}
       {tab === "chat" && <ChatPage />}
       {tab === "artifacts" && (
         <ArtifactsPage

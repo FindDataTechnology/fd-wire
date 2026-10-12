@@ -64,10 +64,9 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: database_url }
-            # datasets 模块库：sqlite 落持久卷 PVC fd-wire-datasets-data
-            # （wire-provenance-ledger D8.1 迁出 /tmp——登记与同步历史随 pod
-            # 重建存续；sqlite URL 非敏感，走清单字面值。迁移/回滚见
-            # deploy/README.md「datasets 迁出 /tmp」）
+            # datasets 模块库：cheap-3 wire-postgres PG（2026-10-11 凌晨生产
+            # 实迁 82ccf0c；此前 sqlite-on-PVC 形态已归档 *.pre-pg-archive，
+            # 回退配方见 deploy/wire-postgres/CUTOVER-2026-10-11.md）
             - name: FD_WIRE_DATASETS_DATABASE_URL
               value: postgresql+psycopg://wire:df56635229d61a5b26b5ae24af19beefcccde49b5228cdee@100.64.0.12:5433/wire_datasets
             # 上传原件暂存目录：同一 PVC（原件哈希登记后文件即证据，不在 /tmp）

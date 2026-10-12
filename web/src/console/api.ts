@@ -2350,6 +2350,92 @@ export async function getAlertEvents(
   });
 }
 
+// ── 个人工作台聚合（wire-personal-workbench 任务 2.1 web 面）──────────────────
+// 契约：GET /api/v1/workbench（Bearer 登录身份，只读，免费档可用零计量）→
+// 六 section 单往返聚合；字段名逐字冻结（wire snake_case 原样保留，与
+// CustomerDemand 同款直存风格——聚合面仅供工作台页呈现消费，不做 camel 翻译）。
+// 边界：free_quota 仅免费档非 null（付费档 null）；demands.latest 无单为
+// null；各 recent 列表 ≤5 条、可为空数组。响应仅含本客户数据（跨客户隔离
+// 由服务端保证，与既有端点同纪律）。
+
+/** 最近数据集行（datasets.recent 条目；storage_tier 为 "api" | "cell"）。 */
+export interface WorkbenchDatasetRecent {
+  id: string;
+  name: string;
+  storage_tier: string;
+  row_count: number;
+  size_bytes: number;
+  updated_at: string;
+}
+
+/** 免费档数据集配额（与 GET /v1/datasets/quota 同语义嵌入；付费档 null）。 */
+export interface WorkbenchFreeQuota {
+  used_datasets: number;
+  max_datasets: number;
+  max_rows_per_dataset: number;
+}
+
+/** 最近订阅源包行（packs.recent 条目；名称双语由静态定义下发）。 */
+export interface WorkbenchPackRecent {
+  pack_id: string;
+  name_zh: string;
+  name_en: string;
+  subscribed_at: string;
+}
+
+/** 最近产物行（artifacts.recent 条目；status 为 draft/published/archived）。 */
+export interface WorkbenchArtifactRecent {
+  id: number;
+  kind: string;
+  title: string;
+  status: string;
+  updated_at: string;
+}
+
+/** 工作台聚合响应（字段名逐字冻结，见模块头注释）。 */
+export interface WorkbenchSummary {
+  datasets: {
+    total: number;
+    api_tier: number;
+    cell_tier: number;
+    recent: WorkbenchDatasetRecent[];
+  };
+  /** 免费档真实配额；付费档 null（呈现侧 null 即不渲染配额条）。 */
+  free_quota: WorkbenchFreeQuota | null;
+  packs: {
+    subscribed: number;
+    recent: WorkbenchPackRecent[];
+  };
+  artifacts: {
+    active_total: number;
+    by_kind: {
+      dashboard: number;
+      composite_indicator: number;
+      research_report: number;
+      alert_rule: number;
+      refresh_schedule: number;
+    };
+    recent: WorkbenchArtifactRecent[];
+  };
+  alerts: {
+    alert_rules: number;
+    firing: number;
+    events_24h: number;
+  };
+  demands: {
+    open: number;
+    /** 最新一单摘要；无单为 null。 */
+    latest: { code: string; status: string; updated_at: string } | null;
+  };
+}
+
+/** 个人工作台聚合（六 section 单往返；错误走 ConsoleApiError 语义）。 */
+export function fetchWorkbench(): Promise<WorkbenchSummary> {
+  return requestJson(`${API_BASE}/v1/workbench`, {
+    method: "GET",
+  }) as Promise<WorkbenchSummary>;
+}
+
 /** 试运行（POST /artifacts/{id}/alert/test；零副作用——不落事件不改状态）。
  *  错误走既有 ConsoleApiError 语义：422 spec 非法 / 400 查询失败 / 404 非
  *  alert_rule——后端 detail 如实呈现。 */

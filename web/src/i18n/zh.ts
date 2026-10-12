@@ -345,6 +345,7 @@ const zh = {
     chartTitle: "仪表盘占位",
     chartEmpty: "暂无数据",
     nav: {
+      workbench: "工作台",
       chat: "AI 构建",
       artifacts: "产物",
       datasets: "我的数据",
@@ -399,6 +400,70 @@ const zh = {
       body: "柏讯的对话构建能力将经此入口提供；数据试用在壹座进行——演示页含公示测试账号与使用导览。",
       tryCta: "去壹座试用",
       haveAccount: "已有壹座账号？直接进入",
+    },
+    // 个人工作台（wire-personal-workbench 任务 2.1/2.3）：六段聚合卡片 +
+    // 壹座入口紧凑卡。计数与最近条目一律来自聚合端点（不呈现虚构计数）；
+    // 存储层徽标/产物类型/产物状态/需求状态复用各既有页的键。
+    workbench: {
+      title: "工作台",
+      subtitle: "一屏看全你的信息资产——数据、源包、产物、规则与需求单。",
+      loading: "工作台加载中…",
+      errorTitle: "工作台加载失败",
+      retry: "重试",
+      openAll: "查看全部",
+      datasets: {
+        title: "我的数据",
+        totalLabel: "共 {{count}} 个数据集",
+        apiTier: "api 层 {{count}}",
+        cellTier: "cell 层 {{count}}",
+        rowsLabel: "{{count}} 行",
+        updatedLabel: "更新于",
+        empty: "还没有数据集",
+        emptyCta: "上传 CSV",
+      },
+      packs: {
+        title: "我的源包",
+        subscribedLabel: "已订阅 {{count}} 个源包",
+        empty: "还没有订阅任何源包",
+        emptyCta: "浏览源包",
+      },
+      artifacts: {
+        title: "看板与产物",
+        activeLabel: "{{count}} 个活跃产物",
+        updatedLabel: "更新于",
+        empty: "还没有产物",
+        emptyCta: "去 AI 构建",
+      },
+      alerts: {
+        title: "我的规则",
+        rulesLabel: "告警规则 {{count}}",
+        firingLabel: "触发中 {{count}}",
+        eventsLabel: "24 小时事件 {{count}}",
+        empty: "还没有告警规则",
+      },
+      demands: {
+        title: "我的需求",
+        openLabel: "进行中 {{count}}",
+        latestLabel: "最新一单",
+        updatedLabel: "更新于",
+        empty: "还没有需求单",
+      },
+      // 免费档配额条（与「我的数据」页 QuotaBar 同视觉语言；限额触达为
+      // 内联升档提示，绝不整页拦截）。
+      quota: {
+        bar: "免费档配额：已用 {{used}}/{{max}} 个数据集 · 每集 ≤{{rows}} 行",
+        exhausted:
+          "数据集数量已达免费档上限（{{max}} 个）——删除不需要的数据集可腾出名额，或升档解锁更多。",
+        cta: "联系开通升档",
+      },
+      // 壹座入口紧凑卡：与「AI 构建」引导卡同链接语义（主入口官网 demo 页、
+      // 次级壹座正式入口）；绝不复述测试账号邮箱/口令明文。
+      yizuo: {
+        title: "AI 构建 · 壹座",
+        body: "对话构建看板与组合指标——试用入口在壹座演示页（含公示测试账号与导览）。",
+        tryCta: "去壹座试用",
+        haveAccount: "已有壹座账号？直接进入",
+      },
     },
     artifacts: {
       title: "产物",

@@ -1,5 +1,7 @@
-// 控制台布局：左侧栏（AI 构建 / 产物 / 我的数据 / 实体 / 源包 / 我的需求 /
-// 用量 / 数据面 Key）+ 顶栏（登录客户标识 + 当前档位 + 登出）+ 内容区。
+// 控制台布局：左侧栏（工作台 / AI 构建 / 产物 / 我的数据 / 实体 / 源包 /
+// 我的需求 / 用量 / 数据面 Key）+ 顶栏（登录客户标识 + 当前档位 + 登出）+
+// 内容区。工作台为首位聚合主页（wire-personal-workbench 任务 2.2）；默认
+// 落地仍是「我的数据」（landing_tab 值域新增 workbench 仅作候选）。
 // chat tab 显示名「AI 构建」，id 保持 chat 不变（路由兼容，任务 2.2）；
 // 页面为壹座试用引导卡（ChatPage）。
 // demands tab 已转正（wire-ux-consolidation 任务 4.3）：「我的需求」只读列表
@@ -10,6 +12,7 @@ import { type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 export type ConsoleTab =
+  | "workbench"
   | "chat"
   | "artifacts"
   | "datasets"
@@ -26,6 +29,14 @@ export const CONSOLE_TABS: ReadonlyArray<{
   labelKey: string;
   placeholder?: boolean;
 }> = [
+  // 工作台（wire-personal-workbench 任务 2.2）：侧栏首位——聚合各页信息
+  // 资产的单屏主页；默认落地不变（仍是「我的数据」，landing_tab 值域新增
+  // workbench 仅作为候选）。
+  {
+    id: "workbench",
+    href: "#/console/workbench",
+    labelKey: "console.nav.workbench",
+  },
   { id: "chat", href: "#/console/chat", labelKey: "console.nav.chat" },
   { id: "artifacts", href: "#/console/artifacts", labelKey: "console.nav.artifacts" },
   {

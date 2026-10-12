@@ -25,6 +25,7 @@ import type {
   RefreshSchedule,
   SyncRecord,
   UploadPreview,
+  WorkbenchSummary,
 } from "./api";
 import { saveSession, type ConsoleSession } from "./auth";
 
@@ -228,6 +229,11 @@ export interface ConsoleBackendOptions {
    *  控制台启动不阻塞、置顶操作行内报错）。 */
   failPreferencesStatus?: number;
   failPreferencesDetail?: string;
+  /** 工作台聚合响应体覆盖（wire-personal-workbench 任务 2.4）：缺省空聚合
+   *  （各段零值、free_quota=null、demands.latest=null——「无数据」如实呈现）。 */
+  workbench?: WorkbenchSummary;
+  /** 强制 GET /api/v1/workbench 返回该状态（工作台错误态测试）。 */
+  failWorkbenchStatus?: number;
 }
 
 /** 源包种子（wire-source-packs）：假后端按 indicators 分页切片出详情。 */
@@ -292,6 +298,27 @@ export type FakeTeamMemberSeed = {
   createdAt?: string;
   /** 邀请人 sub（owner 首建行为 null）。 */
   invitedBySub?: string | null;
+};
+
+/** 工作台空聚合缺省体（wire-personal-workbench）：各段零值、recent 空数组、
+ *  free_quota / demands.latest 为 null——「无数据」如实呈现，绝不编造计数。 */
+const EMPTY_WORKBENCH: WorkbenchSummary = {
+  datasets: { total: 0, api_tier: 0, cell_tier: 0, recent: [] },
+  free_quota: null,
+  packs: { subscribed: 0, recent: [] },
+  artifacts: {
+    active_total: 0,
+    by_kind: {
+      dashboard: 0,
+      composite_indicator: 0,
+      research_report: 0,
+      alert_rule: 0,
+      refresh_schedule: 0,
+    },
+    recent: [],
+  },
+  alerts: { alert_rules: 0, firing: 0, events_24h: 0 },
+  demands: { open: 0, latest: null },
 };
 
 /** 待用邀请种子（缺省码 wsi-seed{id}、24 小时后过期）。 */
@@ -869,6 +896,23 @@ export function installConsoleBackend(
       );
     }
 
+    // ── 工作台聚合（wire-personal-workbench 任务 2.4）：GET /api/v1/workbench
+    //    → 六 section 单往返；缺省空聚合（各段零值如实），响应体可整体注入；
+    //    Bearer 登录身份（无会话 401，语义对齐 api 侧 require_console_customer_id）。──
+    if (path === "/api/v1/workbench" && method === "GET") {
+      if (options.failWorkbenchStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `workbench ${options.failWorkbenchStatus}` },
+            options.failWorkbenchStatus,
+          ),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse(options.workbench ?? EMPTY_WORKBENCH),
+      );
+    }
+
     // ── 源包订阅面（wire-source-packs 2.2：登录；重复订阅/退订幂等 200；
     //    未知包 404；按 Bearer 客户隔离）──
     const packSubMatch = path.match(/^\/api\/v1\/packs\/([^/]+)\/(subscribe|unsubscribe)$/);
@@ -981,6 +1025,7 @@ export function installConsoleBackend(
         pinned_dashboard_id?: unknown;
       };
       const CONSOLE_TAB_IDS = [
+        "workbench",
         "chat",
         "artifacts",
         "datasets",
@@ -1009,7 +1054,7 @@ export function installConsoleBackend(
       ) {
         return Promise.resolve(
           jsonResponse(
-            { detail: `landing_tab 必须是九个控制台页签之一（当前 ${String(payload.landing_tab)}）` },
+            { detail: `landing_tab 必须是十个控制台页签之一（当前 ${String(payload.landing_tab)}）` },
             422,
           ),
         );

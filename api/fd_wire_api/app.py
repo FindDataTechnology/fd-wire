@@ -73,6 +73,10 @@ from .routes import example
 from .schedules import init_db as init_schedules_db
 from .schedules import router as schedules_router
 from .schedules import start_refresh_scheduler, stop_refresh_scheduler
+# 工作台聚合页（wire-personal-workbench 任务 1.2）：GET /api/v1/workbench——
+# 登录客户信息资产全貌单次往返（packs/datasets/ai/demands 四切片纯读聚合；
+# 无新表无 init_db，未配置 lifespan 兜底）
+from .workbench import router as workbench_router
 
 
 @asynccontextmanager
@@ -237,6 +241,9 @@ app.include_router(entities_router)
 # 溯源账本（wire-provenance-ledger 任务组 2）：客户面概览/时间线/状态/调档
 # （Bearer 身份，4.5）+ 内部 ingest 入账端点（X-Provenance-Token）
 app.include_router(provenance_router)
+# 工作台聚合页（wire-personal-workbench 任务 1.2）：控制台首屏六段一次返回
+# （datasets/配额/packs/artifacts/alerts/demands；纯读、四切片库独立会话）
+app.include_router(workbench_router)
 
 
 @app.get("/health")

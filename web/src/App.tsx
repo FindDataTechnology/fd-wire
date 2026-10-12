@@ -47,6 +47,7 @@ export type Route =
 /** 控制台二级段 → tab（未知段回落默认 datasets）。 */
 function parseConsoleTab(segment: string | undefined): ConsoleTab {
   if (
+    segment === "workbench" ||
     segment === "chat" ||
     segment === "artifacts" ||
     segment === "datasets" ||
