@@ -306,6 +306,12 @@ sha256sum fd-wire-connector-linux-amd64   # 对照 manifest.json 的 platforms[]
   - 真实生成单回执实测 ~109s（agent 会真建单元并开 PR）；读超时
     `WANXING_A2A_TIMEOUT` 首版 120s 不够（首弹即超时 502 如实留档），
     已改 **300s**——调大须同步评估网关/代理空闲超时。
+  - **nginx 读超时（2026-10-13 UI 目检实弹抓出）**：`/internal/` 反代
+    默认 `proxy_read_timeout` 60s < 直连实测 ~109s——浏览器在回执前被
+    网关掐断、只显示兜底文案（服务端仍跑完并如实落 `wanxing_dispatched`/
+    `_failed`，**界面与事实脱节**）。修：`/internal/` 读/写超时 320s
+    （≥ 后端 A2A 300s 上限）。**判据：UI 报错但事件流有对应留档 = 网关层
+    掐断，查 nginx/边缘代理超时，别怀疑后端。**
   - 验证向量两假（wire-postgres 轮换时同踩）：容器内 `psql -h 127.0.0.1`
     走 **trust 免密**（任何口令都过）；容器 → 宿主发布口
     `100.64.0.12:5433` 是**断 hairpin**（任何口令都拒）。口令生死判别
