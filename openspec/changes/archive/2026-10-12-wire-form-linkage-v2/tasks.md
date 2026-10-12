@@ -16,15 +16,15 @@
 
 ## 3. 卫生件（主代理）
 
-- [ ] 3.1 wire 库密码轮换：ALTER ROLE（cheap3 wire-postgres）→ fd-wire-env `database_url`+`datasets_database_url` 同批更新 → 清单 datasets URL 改 secretKeyRef → 滚 api（消费者仅 api pod）
-- [ ] 3.2 deploy/README 记录（凭据轮换配方+消费者清单）
+- [x] 3.1 wire 库密码轮换：ALTER ROLE（cheap3 wire-postgres）→ fd-wire-env `database_url`+`datasets_database_url` 同批更新 → 清单 datasets URL 改 secretKeyRef → 滚 api（消费者仅 api pod）
+- [x] 3.2 deploy/README 记录（凭据轮换配方+消费者清单）
 
 ## 4. 门禁与发布
 
 - [x] 4.1 api pytest 全绿 / web vitest+tsc 0 / `openspec validate wire-form-linkage-v2 --strict`
-- [ ] 4.2 双推→快照仓→CI→relay→滚版→ArgoCD
+- [x] 4.2 双推→快照仓→CI→relay→滚版→ArgoCD
 
 ## 5. 冒烟与归档
 
-- [ ] 5.1 生产冒烟：构建器造真表单（组条件+省→市映射）→ 公开提交正例入库 + 伪造非选项值 422 + 控制值切换清值；演练表单清理
-- [ ] 5.2 `openspec archive wire-form-linkage-v2 -y` + `validate --specs` + ROADMAP 方向 B 标注 + 记忆 + 快照仓同步
+- [x] 5.1 生产冒烟：构建器造真表单（组条件+省→市映射）→ 公开提交正例入库 + 伪造非选项值 422 + 控制值切换清值；演练表单清理
+- [x] 5.2 `openspec archive wire-form-linkage-v2 -y` + `validate --specs` + ROADMAP 方向 B 标注 + 记忆 + 快照仓同步
