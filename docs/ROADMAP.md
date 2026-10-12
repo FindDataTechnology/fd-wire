@@ -121,10 +121,15 @@ panel 爬虫平台 = **客户获取信息的桥梁** + **自身项目目标信�
   终态必附理由）交付时自动开私有 scope（失败可重试；**wire-demand-visibility 已补
   管理台路径同语义**——此前管理台流转漏钩子，运营主路径交付不开 scope，真缺陷已修）；
   fleet + 万星生成/自愈双链 + 指标注册（verified 双闸）+ conformance 门全部在役。
-  **中间段编排已在役**（工单 YAML→舰队拉取→萬星生成→PR→回流，生产实证）——纯手动
-  的只剩「触发出单」这一步（等合规门）。运营侧进度面（七阶段时间线+gate+交付状态）
-  与客户侧交付就绪面已上产。
+  **中间段编排已在役**（工单 YAML→舰队拉取→萬星生成→PR→回流，生产实证）——
+  **「触发出单」也已自动化（2026-10-12，wire-demand-auto-export）**：受理
+  （submitted→in_progress）后后台补扫 60s 内自动出单入拉取队列（trigger=auto
+  标注），被拒如实落 auto_export_failed 留痕由运营面呈现、人工入口可重试——
+  「客户提单到 agent 开工」之间零人工点击。运营侧进度面（七阶段时间线+gate+
+  交付状态）与客户侧交付就绪面已上产。
 - 目标编排：需求单 in_progress 段从人工变 agent 驱动（萬星对话即生成）+ 人工抽审。
+  **现已达成**：受理即触发自动出单，编排中间段+触发段全自动，人工只在
+  合规审查（受理动作本身）与 PR 人审两个把关点介入。
 - **飞轮**：客户需求 → 采到的数据进共享指标目录 → 所有客户可用 → 目录越厚平台
   越值得买。每次代客采数都是对平台资产的永久投资——Bloomberg（数据壁垒）与
   Palantir（平台能力）的合体。
@@ -183,7 +188,8 @@ web。规模验证后再考虑轻量个人 cell。
   **个人侧 MVP：免费档放行 + 源包订阅视图 + 薄工作台 web（共享面+个人产物区）**。
 - **中期**：
   cell 数据根迁 PG（新 cell 先行、存量逐户）；看板渲染器+编辑器（B/D 共用）；
-  需求单→爬取编排自动化 + 合规门；变换管线化；连接器发布页后的增量同步；
+  需求单→爬取编排自动化 + 合规门（**已上产 2026-10-12**：wire-demand-auto-export
+  受理即自动出单；合规门首条规则=禁爬清单双闸）；变换管线化；连接器发布页后的增量同步；
   个人侧迭代深化（**偏好持久化已上产**——分享链接、规则持久化（wire-alert-evaluation 告警引擎）与**个人偏好持久化（wire-personal-preferences：per-sub 语言/落地页/置顶看板跨端同步）三件全落**）。
 - **远期决策点**：
   表单构建器与分享 web（团队空间 / 子域托管形态）；轻量实体层；
@@ -208,8 +214,9 @@ web。规模验证后再考虑轻量个人 cell。
 - 客户接入契约：`docs/customer-onboarding-integration.md`；凭据操作：`docs/service-credentials.md`
 - 各能力 spec：`openspec/specs/`（wire-local-connector / wire-data-plane / provenance 等）
 - 候选 change 名（未立项）：`wire-dedicated-postgres`（方向 A）、产物转正与看板
-  （方向 B）、`demand-to-crawl-orchestration`（方向 C，**中间段已上产**——剩自动
-  触发等合规门（用户件）；可见性面已由 wire-demand-visibility 落）、`wire-personal-workbench`
+  （方向 B）、`demand-to-crawl-orchestration`（方向 C，**中间段+触发段均已上产**——
+  受理即自动出单（wire-demand-auto-export），合规门首条规则与商务口径已落；
+  剩余=合规规则集继续扩充（用户件））、`wire-personal-workbench`
   （方向 D，C 端 MVP）
 
 ---
