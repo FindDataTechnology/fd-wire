@@ -121,6 +121,11 @@ panel 爬虫平台 = **客户获取信息的桥梁** + **自身项目目标信�
   终态必附理由）交付时自动开私有 scope（失败可重试；**wire-demand-visibility 已补
   管理台路径同语义**——此前管理台流转漏钩子，运营主路径交付不开 scope，真缺陷已修）；
   fleet + 万星生成/自愈双链 + 指标注册（verified 双闸）+ conformance 门全部在役。
+  **交付私有 scope 已点亮（2026-10-12，wire-scope-delivery-live + 上游
+  fd-open-data-mcp scope-rest-api）**：交付即自动建 demand-<code> 私有 scope
+  并逐指标 grant（生产实弹 ok）；delivered+pending 单可经内网/管理台「重试开
+  scope」补课（支持 indicators 覆盖）；此机制此前因上游无 REST 面+wire 无
+  重试端点而恒 pending——最后一环补齐。
   **中间段编排已在役**（工单 YAML→舰队拉取→萬星生成→PR→回流，生产实证）——
   **「触发出单」也已自动化（2026-10-12，wire-demand-auto-export）**：受理
   （submitted→in_progress）后后台补扫 60s 内自动出单入拉取队列（trigger=auto
