@@ -22,8 +22,8 @@
 ## 4. 门禁与发布
 
 - [x] 4.1 api pytest 全绿 + web vitest 全绿 + tsc 0 + `openspec validate wire-personal-workbench --strict`
-- [ ] 4.2 发布：双推 → 快照仓 → CI 绿 → relay → 双清单滚版 → ArgoCD
-- [ ] 4.3 生产冒烟：真账号工作台渲染（各段计数对真库可验）+ 免费档配额条 + 裸进落地不变回归
+- [x] 4.2 发布：双推 → 快照仓 → CI 绿 → relay → 双清单滚版 → ArgoCD
+- [x] 4.3 生产冒烟：真账号工作台渲染（各段计数对真库可验）+ 免费档配额条 + 裸进落地不变回归
 
 ## 5. 归档
 
