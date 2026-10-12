@@ -1,11 +1,15 @@
 // 「我的需求」只读列表测试（wire-ux-consolidation 任务 4.3；
-// wire-demand-generation-orchestration 任务 4.2/4.3 追加编排时间线）：
+// wire-demand-generation-orchestration 任务 4.2/4.3 追加编排时间线；
+// wire-demand-visibility 任务 3.2 追加交付就绪与内部细节零泄露）：
 // - 展示：三态徽章 + rejected「未承接」+ 理由摘要 + 提交时间 + 需求摘要；
 //   无任何迁移操作控件；
 // - 隔离口径：调用层带 Bearer 且不传任何他企参数（跨客户隔离由服务端
 //   /api/v1/demands 列表端点按映射客户保证，本测试 mock 该端点响应）；
 // - 编排时间线：有 orchestration 则渲染阶段标签+PR 外链；旧单缺省字段
 //   （或空数组）不渲染区块；
+// - 交付就绪：delivered 单且 delivery 有 scope 信号才渲染（ok=已就绪/
+//   pending=准备中 + 公开授权态）；非 delivered 单与无信号旧单不渲染；
+//   delivery 携带内部字段（错误串/事件全文）绝不进页面；
 // - 空态/加载失败文案自然。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -283,5 +287,213 @@ describe("MyDemandsPage（我的需求 · 只读列表）", () => {
     expect(items.length).toBe(2);
     expect(screen.queryByTestId("demand-orchestration")).toBeNull();
     expect(screen.queryByTestId("demand-orchestration-entry")).toBeNull();
+  });
+
+  // ── 交付就绪（wire-demand-visibility 任务 3.2 客户面）────────────────────
+
+  it("交付就绪：delivered + scope ok 渲染「私有数据面已就绪」+ scope 名 + 已授权转公开", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installConsoleBackend([], {
+        demands: [
+          demand({
+            id: 11,
+            status: "delivered",
+            delivery: {
+              scope_name: "demand-DE-20261012-01",
+              scope_status: "ok",
+              publish_authorized: true,
+            },
+          }),
+        ],
+      }).fetchImpl,
+    );
+    render(<MyDemandsPage />);
+
+    const block = await screen.findByTestId("demand-delivery");
+    expect(block.getAttribute("data-status")).toBe("ok");
+    expect(block.textContent).toContain("数据交付");
+    expect(block.textContent).toContain("私有数据面已就绪");
+    expect(block.textContent).toContain("已授权转公开");
+    expect(screen.getByTestId("demand-delivery-scope-name").textContent).toBe(
+      "demand-DE-20261012-01",
+    );
+  });
+
+  it("交付就绪：scope pending 渲染准备中 + 重试提示，不渲染 scope 名", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installConsoleBackend([], {
+        demands: [
+          demand({
+            id: 12,
+            status: "delivered",
+            delivery: {
+              scope_name: null,
+              scope_status: "pending",
+              publish_authorized: null,
+            },
+          }),
+        ],
+      }).fetchImpl,
+    );
+    render(<MyDemandsPage />);
+
+    const block = await screen.findByTestId("demand-delivery");
+    expect(block.getAttribute("data-status")).toBe("pending");
+    expect(block.textContent).toContain("数据交付准备中");
+    expect(block.textContent).toContain("交付挂起，正在重试");
+    expect(screen.queryByTestId("demand-delivery-scope-name")).toBeNull();
+    // 未授权（null）：公开授权两态文案都不出现
+    expect(block.textContent).not.toContain("已授权转公开");
+    expect(block.textContent).not.toContain("公开授权已撤回");
+  });
+
+  it("交付就绪：公开授权已撤回呈现撤回次行（非「已授权转公开」）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installConsoleBackend([], {
+        demands: [
+          demand({
+            id: 13,
+            status: "delivered",
+            delivery: {
+              scope_name: "demand-DE-20261012-13",
+              scope_status: "ok",
+              publish_authorized: false,
+            },
+          }),
+        ],
+      }).fetchImpl,
+    );
+    render(<MyDemandsPage />);
+
+    const block = await screen.findByTestId("demand-delivery");
+    expect(block.textContent).toContain("私有数据面已就绪");
+    expect(block.textContent).toContain("公开授权已撤回");
+    expect(block.textContent).not.toContain("已授权转公开");
+  });
+
+  it("交付就绪：delivered 旧单 delivery 为 null / 缺省字段 → 不渲染交付区块", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installConsoleBackend([], {
+        demands: [
+          // 旧单：响应 delivery 为 null（交付未发起，无信号可呈）
+          demand({ id: 14, status: "delivered", delivery: null }),
+          // 更旧的响应形态：字段整体缺省
+          demand({ id: 15, status: "delivered" }),
+        ],
+      }).fetchImpl,
+    );
+    render(<MyDemandsPage />);
+
+    const items = await screen.findAllByTestId("my-demand-item");
+    expect(items.length).toBe(2);
+    expect(screen.queryByTestId("demand-delivery")).toBeNull();
+    expect(screen.queryByTestId("demand-delivery-scope-name")).toBeNull();
+  });
+
+  it("交付就绪：非 delivered 单即使载荷携带 delivery 也不渲染（submitted/in_progress）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installConsoleBackend([], {
+        demands: [
+          demand({
+            id: 16,
+            status: "submitted",
+            delivery: {
+              scope_name: "demand-DE-20261012-16",
+              scope_status: "ok",
+              publish_authorized: true,
+            },
+          }),
+          demand({
+            id: 17,
+            status: "in_progress",
+            delivery: {
+              scope_name: null,
+              scope_status: "pending",
+              publish_authorized: null,
+            },
+          }),
+        ],
+      }).fetchImpl,
+    );
+    render(<MyDemandsPage />);
+
+    const items = await screen.findAllByTestId("my-demand-item");
+    expect(items.length).toBe(2);
+    expect(screen.queryByTestId("demand-delivery")).toBeNull();
+    expect(screen.queryByTestId("demand-delivery-scope-name")).toBeNull();
+  });
+
+  it("交付就绪：rejected 单不渲染交付区块（即使载荷带 delivery）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installConsoleBackend([], {
+        demands: [
+          demand({
+            id: 18,
+            status: "rejected",
+            rejection_reason: "数据源不公开",
+            delivery: {
+              scope_name: "demand-DE-20261012-18",
+              scope_status: "ok",
+              publish_authorized: null,
+            },
+          }),
+        ],
+      }).fetchImpl,
+    );
+    render(<MyDemandsPage />);
+
+    await screen.findByTestId("my-demand-item");
+    expect(screen.queryByTestId("demand-delivery")).toBeNull();
+    expect(screen.queryByTestId("demand-delivery-scope-name")).toBeNull();
+  });
+
+  it("泄露防护：delivery 混入内部字段（错误串/事件全文）→ 页面零泄露，仅三个安全子字段呈现", async () => {
+    // 后端契约绝不随 delivery 下发这些字段；前端防御性只读三个已知安全
+    // 子字段——即便响应被污染，错误串与事件全文也不进任何渲染分支。
+    const tainted = {
+      scope_status: "ok",
+      scope_name: "demand-DE-20261012-19",
+      publish_authorized: null,
+      error: "scope API 不可达：connection refused",
+      delivery_events: [
+        {
+          type: "scope_create_failed",
+          error: "scope API down",
+          grant_errors: { "IND-0001": "boom" },
+        },
+      ],
+    } as unknown as CustomerDemand["delivery"];
+    vi.stubGlobal(
+      "fetch",
+      installConsoleBackend([], {
+        demands: [demand({ id: 19, status: "delivered", delivery: tainted })],
+      }).fetchImpl,
+    );
+    render(<MyDemandsPage />);
+
+    const block = await screen.findByTestId("demand-delivery");
+    expect(block.getAttribute("data-status")).toBe("ok");
+    expect(screen.getByTestId("demand-delivery-scope-name").textContent).toBe(
+      "demand-DE-20261012-19",
+    );
+    // 页面全文扫描：三个安全子字段之外的一切（内部字段名/错误串/事件
+    // 全文）零出现
+    const pageText = screen.getByTestId("my-demands-page").textContent ?? "";
+    for (const leak of [
+      "connection refused",
+      "scope API down",
+      "scope_create_failed",
+      "grant_errors",
+      "delivery_events",
+      "IND-0001",
+    ]) {
+      expect(pageText).not.toContain(leak);
+    }
   });
 });

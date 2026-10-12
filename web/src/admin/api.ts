@@ -121,6 +121,22 @@ export interface AdminDemand {
   rejection_reason: string | null;
   quote_amount: string | null;
   quote_note: string | null;
+  /** 流水线事件全文（append-only 内部留档；at=落库盖章的 ISO 时间戳，
+   *  type 见 api 仓 demands/orchestration.py 与 orchestration_sync.py）。 */
+  pipeline_events: Array<Record<string, unknown>>;
+  /** 交付事件全文（append-only 内部留档；进度面只呈现 scope 状态，不渲染全文）。 */
+  delivery_events: Array<Record<string, unknown>>;
+  /** gate 门禁摘要（Demand.gate 计算属性：通过/尝试/流水线运行数/最近一次）。 */
+  gate: {
+    passed: boolean;
+    attempts: number;
+    pipeline_runs: number;
+    latest: unknown;
+  } | null;
+  /** 私有 scope 交付状态：null=未发起 / "ok"=已就绪 / "pending"=挂起待重试。 */
+  scope_status: string | null;
+  /** 已建客户私有 scope 名（如 demand-<code>）。 */
+  scope_name: string | null;
   created_at: string;
   updated_at: string;
 }

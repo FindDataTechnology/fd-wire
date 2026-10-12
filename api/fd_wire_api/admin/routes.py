@@ -12,7 +12,10 @@
    credential_track=customer × caller=billing_customers.sub2api_user_id——v1
    身份映射由该列承载）、GET ``/ledger``（billing_ledger_entries 只读）。
 4. **需求单派发台**：GET ``/demands``（全客户）、POST ``/demands/{id}/transition``
-   ——转发既有内部 transition 端点语义（直接调 service 层，无 HTTP 自调）。
+   ——转发既有内部 transition 端点语义（直接调 service 层，无 HTTP 自调）；
+   迁入 delivered 时补调 ``maybe_auto_deliver`` 自动开客户私有 scope
+   （wire-demand-visibility：与内部端点逐字同语义，scope 失败只落
+   pending、绝不打断迁移）。
 5. **目录治理**：GET ``/catalog/pending``（读镜像表）、POST
    ``/catalog/{indicator_id}/verify-note``——不改镜像数据（仅同步管道可写），
    审核意见只记 admin 自己的 catalog_review_notes（append-only）。
@@ -44,6 +47,8 @@ from ..billing.sub2api import Sub2ApiError, Sub2ApiClient, sub2api_client_dep
 from ..catalog.db import readonly_session
 from ..catalog.models import IndicatorSnapshot
 from ..dbcompat import period_expression
+from ..delivery.scope_client import ScopeClient, scope_client_dep
+from ..demands import delivery as delivery_service
 from ..demands import service as demands_service
 from ..demands.db import get_db as get_demands_db
 from ..demands.models import Demand
@@ -395,12 +400,17 @@ def transition_demand(
     demand_id: int,
     payload: TransitionIn,
     db: Session = Depends(get_demands_db),
+    scope_client: ScopeClient | None = Depends(scope_client_dep),
 ) -> DemandInternalOut:
     """派发操作：转发既有内部 transition 端点语义（直调 service 层）。
 
     - 非法迁移/前置不满足 → 409（三态白名单裁决，与内部端点一致）；
     - 合法目标仅 in_progress / delivered / rejected（带理由）——废除态
-      迁入一律 409 如实回显（wire-ux-consolidation 3.1）。
+      迁入一律 409 如实回显（wire-ux-consolidation 3.1）；
+    - 迁入 ``delivered`` 成功后补调 ``delivery_service.maybe_auto_deliver``
+      （wire-demand-visibility）：自动发起客户私有 scope 交付，与内部端点
+      逐字同语义——scope 面失败只落 ``scope_status=pending`` 留档，绝不
+      打断迁移响应。
     """
     try:
         demand = demands_service.get_demand(db, demand_id)
@@ -417,6 +427,8 @@ def transition_demand(
         )
     except TransitionError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if payload.target_status is DemandStatus.delivered:
+        demand = delivery_service.maybe_auto_deliver(db, demand, scope_client=scope_client)
     return DemandInternalOut.model_validate(demand)
 
 

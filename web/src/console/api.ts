@@ -971,6 +971,17 @@ export interface CustomerDemand {
   status_history: DemandHistoryEvent[];
   /** 编排进度时间线（新单有、旧单缺省——UI 有则渲染区块，无则不渲染）。 */
   orchestration?: OrchestrationEntry[];
+  /** 交付就绪视图（wire-demand-visibility 任务 3.1 客户面）：后端
+   *  DemandOut.delivery 的客户安全子集——只有三个子字段，delivery_events
+   *  全文与失败错误串绝不在此；旧单缺省该字段（delivered 无信号时不渲染）。 */
+  delivery?: {
+    /** 私有 scope 名（如 demand-DE-20261011-99）；未发起/挂起为 null。 */
+    scope_name: string | null;
+    /** null=未发起 / "ok"=私有 scope 已就绪 / "pending"=交付挂起重试中。 */
+    scope_status: string | null;
+    /** null=未授权 / true=已授权转公开 / false=已撤回。 */
+    publish_authorized: boolean | null;
+  } | null;
   rejection_reason: string | null;
   created_at: string;
   updated_at: string;

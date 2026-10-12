@@ -22,12 +22,63 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
   rejected: "bg-rose-50 text-rose-700 ring-rose-200",
 };
 
+/** 进度面阶段全集（wire-demand-visibility 任务 2.2 冻结七类）。
+ * gate_result 由 gate 摘要覆盖不重复渲染；未知类型静默跳过，绝不猜状态。 */
+const PROGRESS_STAGES = [
+  "workorder_exported",
+  "pipeline_run",
+  "workorder_submitted",
+  "pr_open",
+  "merged",
+  "blocked",
+  "workorder_lost",
+] as const;
+type ProgressStage = (typeof PROGRESS_STAGES)[number];
+
+/** 阶段圆点配色：受阻/丢失红、待审琥珀、点亮绿、其余中性灰。 */
+const PROGRESS_DOT_CLASS: Record<ProgressStage, string> = {
+  workorder_exported: "bg-slate-400",
+  pipeline_run: "bg-slate-400",
+  workorder_submitted: "bg-slate-400",
+  pr_open: "bg-amber-500",
+  merged: "bg-emerald-500",
+  blocked: "bg-rose-500",
+  workorder_lost: "bg-rose-500",
+};
+
+function isProgressStage(value: unknown): value is ProgressStage {
+  return (
+    typeof value === "string" &&
+    (PROGRESS_STAGES as readonly string[]).includes(value)
+  );
+}
+
+/** 事件时间戳格式化（与「我的需求」页同款口径；坏值原样回显）。 */
+function formatEventAt(iso: unknown, language: string): string | null {
+  if (typeof iso !== "string" || !iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const locale = language === "zh" ? "zh-CN" : "en-US";
+  try {
+    return date.toLocaleString(locale, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
 export function DemandsPage() {
   const { t } = useTranslation();
   const [demands, setDemands] = useState<AdminDemand[] | null>(null);
   const [statusFilter, setStatusFilter] = useState<DemandStatus | "all">("all");
   const [error, setError] = useState<{ status?: number; message: string; detail?: string } | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
+  const [progressId, setProgressId] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -119,13 +170,26 @@ export function DemandsPage() {
                 </span>
                 <button
                   type="button"
+                  data-testid="admin-demand-progress-toggle"
+                  aria-expanded={progressId === demand.id}
+                  onClick={() =>
+                    setProgressId(progressId === demand.id ? null : demand.id)
+                  }
+                  className="ml-auto rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                >
+                  {progressId === demand.id
+                    ? t("admin.demands.progress.collapse")
+                    : t("admin.demands.progress.expand")}
+                </button>
+                <button
+                  type="button"
                   data-testid="admin-demand-dispatch-toggle"
                   onClick={() => {
                     setOpenId(openId === demand.id ? null : demand.id);
                     setActionError(null);
                   }}
                   disabled={allowedTargets(demand.status).length === 0}
-                  className="ml-auto rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                   title={
                     allowedTargets(demand.status).length === 0
                       ? t("admin.demands.terminalHint")
@@ -174,6 +238,7 @@ export function DemandsPage() {
                   )}
                 </>
               )}
+              {progressId === demand.id && <ProgressSection demand={demand} />}
             </li>
           ))}
           </ul>
@@ -299,8 +364,142 @@ function DispatchPanel({
   );
 }
 
-/** 「转生成工单」区（wire-workorder-console-action）：仅 in_progress 单渲染。
+/** 编排进度面（wire-demand-visibility 任务 2.2）：每单可展开的全事件时间线。
 
+ * 数据源 = 列表端点已返回的 pipeline_events/gate/scope_status（不新增聚合
+ * 端点）；事件按落库顺序映射七类人类阶段（含时间、ticket_path、PR 链接），
+ * 未发生即不渲染；未出单如实占位「尚未出单」，绝不虚构进度（spec 红线）。
+ * gate_result 不重复渲染（gate 摘要覆盖）；未知事件类型静默跳过不崩溃。
+ */
+function ProgressSection({ demand }: { demand: AdminDemand }) {
+  const { t, i18n } = useTranslation();
+
+  // 七类阶段事件按序过滤；其余（gate_result 等）不进时间线。
+  const entries = demand.pipeline_events.flatMap((event) => {
+    const type = event.type;
+    if (!isProgressStage(type)) return [];
+    return [{ type, event }];
+  });
+
+  const scopeStatus = demand.scope_status;
+  const scopeKey =
+    scopeStatus === "ok"
+      ? "ready"
+      : scopeStatus === "pending"
+        ? "pending"
+        : "none";
+
+  return (
+    <div
+      data-testid="admin-demand-progress"
+      className="mt-3 rounded-md border border-slate-200 bg-slate-50/60 p-4"
+    >
+      <h3 className="text-sm font-medium text-slate-800">
+        {t("admin.demands.progress.title")}
+      </h3>
+      {entries.length === 0 ? (
+        <p
+          data-testid="admin-demand-progress-empty"
+          className="mt-2 text-xs text-slate-400"
+        >
+          {t("admin.demands.progress.empty")}
+        </p>
+      ) : (
+        <ol className="mt-2 space-y-1.5">
+          {entries.map(({ type, event }, index) => {
+            const at = formatEventAt(event.at, i18n.language);
+            const ticketPath =
+              typeof event.ticket_path === "string" ? event.ticket_path : null;
+            const pipelineRunId =
+              typeof event.pipeline_run_id === "string"
+                ? event.pipeline_run_id
+                : null;
+            const prUrl = typeof event.pr_url === "string" ? event.pr_url : null;
+            return (
+              <li
+                key={index}
+                data-testid="admin-demand-progress-entry"
+                data-stage={type}
+                className="flex flex-wrap items-center gap-2 text-xs text-slate-700"
+              >
+                <span
+                  aria-hidden
+                  className={`h-1.5 w-1.5 rounded-full ${PROGRESS_DOT_CLASS[type]}`}
+                />
+                <span className="font-medium">
+                  {t(`admin.demands.progress.stages.${type}`)}
+                </span>
+                {at && <span className="text-slate-400">{at}</span>}
+                {ticketPath && (
+                  <span className="font-mono text-[11px] text-slate-400">
+                    {ticketPath}
+                  </span>
+                )}
+                {pipelineRunId && (
+                  <span className="font-mono text-[11px] text-slate-400">
+                    {pipelineRunId}
+                  </span>
+                )}
+                {prUrl && (
+                  <a
+                    href={prUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    data-testid="admin-demand-progress-pr"
+                    className="text-sky-600 underline hover:text-sky-800"
+                  >
+                    {t("admin.demands.progress.prLink")}
+                  </a>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+      {demand.gate && (
+        <p
+          data-testid="admin-demand-gate"
+          data-passed={demand.gate.passed ? "true" : "false"}
+          className={`mt-2 text-xs ${
+            demand.gate.passed ? "text-emerald-700" : "text-slate-500"
+          }`}
+        >
+          {t(
+            demand.gate.passed
+              ? "admin.demands.progress.gatePassed"
+              : "admin.demands.progress.gateNotPassed",
+          )}
+          {" · "}
+          {t("admin.demands.progress.gateCounts", {
+            attempts: demand.gate.attempts,
+            runs: demand.gate.pipeline_runs,
+          })}
+        </p>
+      )}
+      <p
+        data-testid="admin-demand-scope"
+        data-scope-status={scopeStatus ?? "none"}
+        className={`mt-1 text-xs ${
+          scopeKey === "ready"
+            ? "text-emerald-700"
+            : scopeKey === "pending"
+              ? "text-amber-700"
+              : "text-slate-400"
+        }`}
+      >
+        {t(`admin.demands.progress.scope.${scopeKey}`)}
+        {scopeKey === "ready" && demand.scope_name && (
+          <span className="ml-1 font-mono text-[11px] text-slate-500">
+            {demand.scope_name}
+          </span>
+        )}
+      </p>
+    </div>
+  );
+}
+
+/** 「转生成工单」区（wire-workorder-console-action）：仅 in_progress 单渲染。
+ *
  * 出单入舰队拉取队列，出单不迁移状态；成功必须展示工单全文（人工推送
  * 降级）与「未投递」诚实文案——绝不呈现自动化投递成功假象（spec 红线）。
  */

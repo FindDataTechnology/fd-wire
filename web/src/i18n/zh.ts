@@ -1238,6 +1238,16 @@ const zh = {
           blocked: "生成受阻·运营跟进中",
         },
       },
+      // 交付就绪（wire-demand-visibility 任务 3.1 客户面）：delivered 单且
+      // delivery 有信号才渲染；非 delivered 单整个区块不出现。
+      delivery: {
+        title: "数据交付",
+        ready: "私有数据面已就绪",
+        pending: "数据交付准备中",
+        pendingHint: "交付挂起，正在重试",
+        publishAuthorized: "已授权转公开",
+        publishRevoked: "公开授权已撤回",
+      },
     },
     usage: {
       title: "用量",
@@ -1574,6 +1584,33 @@ const zh = {
         yamlSummary: "工单全文（人工推送降级用）",
         undelivered: "已入队未投递——等待舰队拉取器（约 30 分钟）或人工推送。",
         errorDefault: "出单失败——服务端口径回显见上方提示，稍后可重试。",
+      },
+      // 编排进度面（wire-demand-visibility 任务 2.2 运营面）：事件时间线
+      // （七类阶段+时间+ticket_path+PR 链接）+ gate 摘要 + 交付状态；
+      // workorder_submitted/pr_open/merged/blocked 复用客户面冻结文案。
+      progress: {
+        expand: "生成进度",
+        collapse: "收起进度",
+        title: "生成进度",
+        empty: "尚未出单",
+        prLink: "查看 PR",
+        stages: {
+          workorder_exported: "已出单",
+          pipeline_run: "已投递（拉取器已落仓）",
+          workorder_submitted: "已进入生成流水线",
+          pr_open: "爬虫已生成·待人工审核",
+          merged: "审核通过·部署点亮",
+          blocked: "生成受阻·运营跟进中",
+          workorder_lost: "工单丢失·需人工处理",
+        },
+        gatePassed: "门禁通过",
+        gateNotPassed: "门禁未通过",
+        gateCounts: "尝试 {{attempts}} 次 · 流水线运行 {{runs}} 次",
+        scope: {
+          ready: "私有数据面已就绪",
+          pending: "交付挂起·重试中",
+          none: "交付未发起",
+        },
       },
     },
     catalog: {

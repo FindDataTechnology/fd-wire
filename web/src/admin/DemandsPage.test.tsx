@@ -26,6 +26,11 @@ function demand(partial: Partial<AdminDemand> & { id: number; status: AdminDeman
     rejection_reason: null,
     quote_amount: null,
     quote_note: null,
+    pipeline_events: [],
+    delivery_events: [],
+    gate: null,
+    scope_status: null,
+    scope_name: null,
     created_at: "2026-10-04T09:00:00",
     updated_at: "2026-10-04T09:00:00",
     ...partial,
@@ -61,6 +66,20 @@ function openPanel(itemId: number) {
   fireEvent.click(
     screen.getAllByTestId("admin-demand-dispatch-toggle")[
       screen.getAllByTestId("admin-demand-item").indexOf(item)
+    ]!,
+  );
+  return item;
+}
+
+/** 展开某单的编排进度面（wire-demand-visibility 任务 2.2）。 */
+function expandProgress(itemId: number) {
+  const items = screen.getAllByTestId("admin-demand-item");
+  const item = items.find((el) =>
+    el.textContent!.includes(`DE-20261004-0${itemId}`),
+  )!;
+  fireEvent.click(
+    screen.getAllByTestId("admin-demand-progress-toggle")[
+      items.indexOf(item)
     ]!,
   );
   return item;
@@ -332,6 +351,259 @@ describe("DemandsPage（需求单派发台）", () => {
     const slug = await screen.findByTestId("admin-workorder-slug");
     expect(slug.textContent).toContain("探测通道不可达");
     expect(slug.textContent).not.toContain("已确证空闲");
+  });
+});
+
+describe("DemandsPage 编排进度面（wire-demand-visibility 任务 2.2）", () => {
+  it("在途单：各阶段按序渲染 + 时间 + ticket_path + PR 链接", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [
+          demand({
+            id: 2,
+            status: "in_progress",
+            pipeline_events: [
+              {
+                at: "2026-10-04T10:00:00+00:00",
+                type: "workorder_exported",
+                ticket_path: "reports/health-tickets/20261004-wire-DE-20261004-02.yaml",
+                ticket_yaml: "kind: generate\n",
+                sha256: "abc123",
+              },
+              {
+                at: "2026-10-04T10:30:00+00:00",
+                type: "pipeline_run",
+                pipeline_run_id: "20261004-wire-DE-20261004-02.yaml",
+                ticket_path: "reports/health-tickets/20261004-wire-DE-20261004-02.yaml",
+                pr_url: null,
+              },
+              { at: "2026-10-04T11:00:00+00:00", type: "workorder_submitted" },
+              {
+                at: "2026-10-04T12:00:00+00:00",
+                type: "pr_open",
+                pr_url: "https://github.com/finddata/industry/pull/42",
+              },
+            ],
+          }),
+        ],
+        bearerToken: TOKEN,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    expandProgress(2);
+    const entries = screen.getAllByTestId("admin-demand-progress-entry");
+    expect(entries.map((el) => el.getAttribute("data-stage"))).toEqual([
+      "workorder_exported",
+      "pipeline_run",
+      "workorder_submitted",
+      "pr_open",
+    ]);
+    // 阶段文案 + 时间戳在场（顺序即事件顺序）
+    const text = entries.map((el) => el.textContent!).join("\n");
+    expect(text).toContain("已出单");
+    expect(text).toContain("已投递（拉取器已落仓）");
+    expect(text).toContain("已进入生成流水线");
+    expect(text).toContain("爬虫已生成·待人工审核");
+    expect(text).toContain(
+      "reports/health-tickets/20261004-wire-DE-20261004-02.yaml",
+    );
+    expect(text).toContain("20261004-wire-DE-20261004-02.yaml");
+    // 时间戳：本地化日期时间在场（格式断言避免时区脆弱）
+    expect(text).toMatch(/\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}/);
+    // PR 外链
+    const pr = screen.getByTestId("admin-demand-progress-pr") as HTMLAnchorElement;
+    expect(pr.getAttribute("href")).toBe(
+      "https://github.com/finddata/industry/pull/42",
+    );
+    // 后续阶段未发生即不渲染
+    expect(screen.queryByTestId("admin-demand-progress-empty")).toBeNull();
+  });
+
+  it("未出单：如实占位「尚未出单」，零阶段条目（不虚构进度）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [demand({ id: 1, status: "submitted" })],
+        bearerToken: TOKEN,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    expandProgress(1);
+    expect(
+      screen.getByTestId("admin-demand-progress-empty").textContent,
+    ).toContain("尚未出单");
+    expect(screen.queryAllByTestId("admin-demand-progress-entry").length).toBe(0);
+  });
+
+  it("merged + scope ok：点亮阶段与「私有数据面已就绪」+ scope 名", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [
+          demand({
+            id: 3,
+            status: "delivered",
+            pipeline_events: [
+              { at: "2026-10-04T10:00:00+00:00", type: "workorder_exported" },
+              { at: "2026-10-04T12:00:00+00:00", type: "workorder_submitted" },
+              { at: "2026-10-04T13:00:00+00:00", type: "pr_open" },
+              {
+                at: "2026-10-04T14:00:00+00:00",
+                type: "merged",
+                pr_url: "https://github.com/finddata/industry/pull/42",
+              },
+            ],
+            scope_status: "ok",
+            scope_name: "demand-DE-20261004-03",
+          }),
+        ],
+        bearerToken: TOKEN,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    expandProgress(3);
+    const merged = screen
+      .getAllByTestId("admin-demand-progress-entry")
+      .find((el) => el.getAttribute("data-stage") === "merged")!;
+    expect(merged.textContent).toContain("审核通过·部署点亮");
+    // merged 绿点（客户面同款配色）
+    expect(merged.querySelector(".bg-emerald-500")).not.toBeNull();
+    const scope = screen.getByTestId("admin-demand-scope");
+    expect(scope.getAttribute("data-scope-status")).toBe("ok");
+    expect(scope.textContent).toContain("私有数据面已就绪");
+    expect(scope.textContent).toContain("demand-DE-20261004-03");
+  });
+
+  it("scope pending：交付挂起·重试中", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [
+          demand({
+            id: 3,
+            status: "delivered",
+            pipeline_events: [
+              { at: "2026-10-04T10:00:00+00:00", type: "workorder_exported" },
+            ],
+            scope_status: "pending",
+          }),
+        ],
+        bearerToken: TOKEN,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    expandProgress(3);
+    const scope = screen.getByTestId("admin-demand-scope");
+    expect(scope.getAttribute("data-scope-status")).toBe("pending");
+    expect(scope.textContent).toContain("交付挂起·重试中");
+    expect(scope.textContent).not.toContain("已就绪");
+  });
+
+  it("blocked：红点受阻阶段渲染（运营跟进语义）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [
+          demand({
+            id: 2,
+            status: "in_progress",
+            pipeline_events: [
+              { at: "2026-10-04T10:00:00+00:00", type: "workorder_exported" },
+              {
+                at: "2026-10-04T11:00:00+00:00",
+                type: "blocked",
+                note: "工单提交连续 3 次未成功",
+              },
+            ],
+          }),
+        ],
+        bearerToken: TOKEN,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    expandProgress(2);
+    const blocked = screen
+      .getAllByTestId("admin-demand-progress-entry")
+      .find((el) => el.getAttribute("data-stage") === "blocked")!;
+    expect(blocked.textContent).toContain("生成受阻·运营跟进中");
+    expect(blocked.querySelector(".bg-rose-500")).not.toBeNull();
+    // note 等内部字段不倾倒进进度面
+    expect(blocked.textContent).not.toContain("工单提交连续 3 次未成功");
+  });
+
+  it("未知事件类型静默跳过：其余事件照常渲染、页面不崩", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [
+          demand({
+            id: 2,
+            status: "in_progress",
+            pipeline_events: [
+              { at: "2026-10-04T10:00:00+00:00", type: "workorder_exported" },
+              { at: "2026-10-04T10:15:00+00:00", type: "some_future_event", foo: 1 },
+              { at: "2026-10-04T10:30:00+00:00", type: "pipeline_run" },
+              { at: "2026-10-04T10:45:00+00:00", type: "gate_result", passed: true },
+            ],
+          }),
+        ],
+        bearerToken: TOKEN,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    expandProgress(2);
+    const stages = screen
+      .getAllByTestId("admin-demand-progress-entry")
+      .map((el) => el.getAttribute("data-stage"));
+    // 未知类型与 gate_result 均不进时间线；已知两类照常
+    expect(stages).toEqual(["workorder_exported", "pipeline_run"]);
+    expect(screen.getByTestId("admin-demand-progress")).toBeDefined();
+  });
+
+  it("gate 摘要：通过/未通过 + 尝试/流水线运行数（无 gate 则省略）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [
+          demand({
+            id: 2,
+            status: "in_progress",
+            pipeline_events: [
+              { at: "2026-10-04T10:00:00+00:00", type: "pipeline_run" },
+            ],
+            gate: {
+              passed: false,
+              attempts: 2,
+              pipeline_runs: 1,
+              latest: { passed: false },
+            },
+          }),
+        ],
+        bearerToken: TOKEN,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    expandProgress(2);
+    const gate = screen.getByTestId("admin-demand-gate");
+    expect(gate.getAttribute("data-passed")).toBe("false");
+    expect(gate.textContent).toContain("门禁未通过");
+    expect(gate.textContent).toContain("尝试 2 次");
+    expect(gate.textContent).toContain("流水线运行 1 次");
   });
 });
 

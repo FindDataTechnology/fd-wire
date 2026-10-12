@@ -1304,6 +1304,16 @@ const en: Translation = {
           blocked: "Generation blocked · operations following up",
         },
       },
+      // Delivery readiness (wire-demand-visibility 3.1, customer-facing):
+      // rendered only for delivered demands carrying a delivery signal.
+      delivery: {
+        title: "Data delivery",
+        ready: "Private data plane ready",
+        pending: "Data delivery in progress",
+        pendingHint: "Delivery pending, retrying",
+        publishAuthorized: "Approved for public catalog",
+        publishRevoked: "Public approval revoked",
+      },
     },
     usage: {
       title: "Usage",
@@ -1655,6 +1665,35 @@ const en: Translation = {
         undelivered:
           "Queued but not delivered — awaiting the fleet puller (~30 min) or a manual push.",
         errorDefault: "Workorder export failed — see the server message above; retry later.",
+      },
+      // Orchestration progress panel (wire-demand-visibility task 2.2,
+      // operator-facing): event timeline (seven stages + timestamps +
+      // ticket_path + PR links) + gate summary + delivery status;
+      // workorder_submitted/pr_open/merged/blocked reuse the customer-facing
+      // frozen wording.
+      progress: {
+        expand: "Generation progress",
+        collapse: "Hide progress",
+        title: "Generation progress",
+        empty: "Not exported yet",
+        prLink: "View PR",
+        stages: {
+          workorder_exported: "Workorder exported",
+          pipeline_run: "Delivered (puller committed it)",
+          workorder_submitted: "Entered the generation pipeline",
+          pr_open: "Crawler generated · pending human review",
+          merged: "Review passed · deployment live",
+          blocked: "Generation blocked · operations following up",
+          workorder_lost: "Workorder lost · manual handling needed",
+        },
+        gatePassed: "Gate passed",
+        gateNotPassed: "Gate not passed",
+        gateCounts: "{{attempts}} attempts · {{runs}} pipeline runs",
+        scope: {
+          ready: "Private data plane ready",
+          pending: "Delivery pending · retrying",
+          none: "Delivery not initiated",
+        },
       },
     },
     catalog: {

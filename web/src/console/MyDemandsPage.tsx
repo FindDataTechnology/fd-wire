@@ -7,6 +7,11 @@
 // - 编排时间线（wire-demand-generation-orchestration 任务 4.2 客户面）：
 //   demand.orchestration 有则渲染「生成进度」区块（阶段中文标签 + 时间 +
 //   PR 外链），旧单缺省该字段则整个区块不渲染。
+// - 交付就绪（wire-demand-visibility 任务 3.1 客户面）：delivered 单且
+//   demand.delivery 有信号时渲染「数据交付」区块（scope 已就绪/准备中 +
+//   公开授权态）；只读 delivery 的三个安全子字段（scope_name/scope_status/
+//   publish_authorized），delivery_events 全文与错误串绝不进客户面；非
+//   delivered 单与旧单（delivery 缺省）整个区块不渲染。
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -66,6 +71,71 @@ function formatSubmittedAt(iso: string, language: string): string {
   } catch {
     return iso;
   }
+}
+
+/** 交付就绪区块（wire-demand-visibility 任务 3.1 客户面）：delivered 单的
+ *  scope 交付信号——已就绪（绿）/准备中（琥珀）；公开授权态作次行。
+ *  只读 delivery 的三个安全子字段（scope_name/scope_status/
+ *  publish_authorized），delivery_events 全文与失败错误串绝不出现；
+ *  scope_status 非 ok/pending（null/缺省/未知）不渲染任何壳——不虚构。 */
+function DeliveryBlock({
+  delivery,
+}: {
+  delivery: NonNullable<CustomerDemand["delivery"]>;
+}) {
+  const { t } = useTranslation();
+  const status = delivery.scope_status;
+  if (status !== "ok" && status !== "pending") return null;
+  const ready = status === "ok";
+  return (
+    <div
+      data-testid="demand-delivery"
+      data-status={status}
+      className={`mt-3 rounded-md border px-3 py-2 ${
+        ready
+          ? "border-emerald-100 bg-emerald-50/70"
+          : "border-amber-100 bg-amber-50/70"
+      }`}
+    >
+      <p className="text-xs font-medium text-slate-600">
+        {t("console.demands.delivery.title")}
+      </p>
+      <p
+        className={`mt-1 text-xs font-medium ${
+          ready ? "text-emerald-700" : "text-amber-700"
+        }`}
+      >
+        {t(
+          ready
+            ? "console.demands.delivery.ready"
+            : "console.demands.delivery.pending",
+        )}
+      </p>
+      {ready && delivery.scope_name && (
+        <p
+          data-testid="demand-delivery-scope-name"
+          className="mt-1 font-mono text-[11px] text-slate-500"
+        >
+          {delivery.scope_name}
+        </p>
+      )}
+      {ready && delivery.publish_authorized === true && (
+        <p className="mt-0.5 text-xs text-emerald-600">
+          {t("console.demands.delivery.publishAuthorized")}
+        </p>
+      )}
+      {ready && delivery.publish_authorized === false && (
+        <p className="mt-0.5 text-xs text-amber-700">
+          {t("console.demands.delivery.publishRevoked")}
+        </p>
+      )}
+      {!ready && (
+        <p className="mt-0.5 text-xs text-amber-600">
+          {t("console.demands.delivery.pendingHint")}
+        </p>
+      )}
+    </div>
+  );
 }
 
 export function MyDemandsPage() {
@@ -238,6 +308,9 @@ export function MyDemandsPage() {
                     ))}
                   </ol>
                 </div>
+              )}
+              {demand.status === "delivered" && demand.delivery && (
+                <DeliveryBlock delivery={demand.delivery} />
               )}
             </li>
           ))}
