@@ -71,13 +71,17 @@ def list_alert_states(
     )
     if not states:
         return {"states": {}}
-    # 最近一条 error 事件的 created_at（last_error_at；无 error 事件为 None）
+    # 最近一条 error 事件的 created_at（last_error_at；无 error 事件为 None）。
+    # GROUP BY artifact_id 必须显式——sqlite 对裸列+聚合宽容、PG 严格拒绝
+    # （GroupingError，2026-10-12 生产实弹抓出）。
     last_error_ids = dict(
         db.execute(
-            select(AlertEvent.artifact_id, func.max(AlertEvent.id)).where(
+            select(AlertEvent.artifact_id, func.max(AlertEvent.id))
+            .where(
                 AlertEvent.artifact_id.in_(artifact_ids),
                 AlertEvent.kind == "error",
             )
+            .group_by(AlertEvent.artifact_id)
         ).all()
     )
     error_times: dict[int, object] = {}
