@@ -1777,6 +1777,29 @@ const en: Translation = {
           "Queued but not delivered — awaiting the fleet puller (~30 min) or a manual push.",
         errorDefault: "Workorder export failed — see the server message above; retry later.",
       },
+      // Wanxing direct dispatch (wire-wanxing-direct-dispatch task 3): the
+      // second channel — export handed to Wanxing over A2A immediately.
+      // Success shows the synchronous receipt; 502 delivery failure carries
+      // the full workorder in the response (manual push or fall back to the
+      // fleet pull channel).
+      wanxing: {
+        submit: "Wanxing direct dispatch",
+        hint: "Export and hand the workorder to Wanxing over A2A immediately (synchronous receipt); not queued for the fleet puller. Re-sending the same demand reuses the idempotency key.",
+        delivered: "Delivered to Wanxing — synchronous A2A receipt:",
+        replyLabel: "Wanxing reply",
+        messageIdLabel: "Message ID",
+        idempotencyLabel: "Idempotency key",
+        slugLabel: "slug",
+        yamlSummary: "Full workorder YAML (manual-push fallback)",
+        fallback:
+          "You can push this workorder manually, or fall back to the fleet pull channel (Generate workorder).",
+        errorDefault:
+          "Wanxing direct dispatch failed — see the server message above; retry later.",
+        factDelivered:
+          "Dispatched to Wanxing (reply: {{reply}})",
+        factFailed:
+          "Last Wanxing direct dispatch failed: {{error}}",
+      },
       // Orchestration progress panel (wire-demand-visibility task 2.2,
       // operator-facing): event timeline (seven stages + timestamps +
       // ticket_path + PR links) + gate summary + delivery status;

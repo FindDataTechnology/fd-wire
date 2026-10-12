@@ -21,6 +21,11 @@
 - ``POST /api/v1/demands/{id}/workorder``     生成 health-loop 工单入拉取队列
                                       （操作员/内部身份；仅 in_progress、出单
                                       不迁移状态；响应带全文供人工推送降级）
+- ``POST /api/v1/demands/{id}/wanxing-dispatch``
+                                      萬星直连调度（wire-wanxing-direct-dispatch）：
+                                      同映射同红线构造工单 → A2A message/send
+                                      直连 spider-heal；事件留档
+                                      ``wanxing_dispatched``（不进拉取队列）
 - ``GET  /internal/demands/workorders/pending`` 舰队拉取器取待投递工单
                                       （每单至多一条最新未 ack 导出、仅
                                       in_progress 单；design D1 舰队拉取通道）
@@ -44,6 +49,7 @@ from . import delivery as delivery_service
 from . import notifications, orchestration, service
 from .db import get_db
 from .orchestration import (
+    WanxingDispatchFailure,
     WorkorderAckIn,
     WorkorderExportError,
     WorkorderIn,
@@ -293,6 +299,38 @@ def export_workorder(
         return orchestration.export_workorder_service(
             db, demand, slug_override=payload.slug if payload is not None else None
         )
+    except WorkorderExportError as exc:
+        raise HTTPException(
+            status_code=exc.status_code, detail=exc.detail
+        ) from exc
+
+
+@router.post(
+    "/api/v1/demands/{demand_id}/wanxing-dispatch",
+    dependencies=[Depends(_require_internal)],
+)
+def dispatch_wanxing(
+    demand_id: int,
+    payload: WorkorderIn | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """萬星直连调度（wire-wanxing-direct-dispatch）：A2A 快车道投递。
+
+    业务实现在 ``orchestration.dispatch_wanxing_service``——与 admin
+    控制台端点 ``/internal/admin/demands/{id}/wanxing-dispatch`` 共用同一
+    service，语义与拒绝口径完全一致。502 时 detail 是 dict（message +
+    工单全文等 payload）：失败降级红线要求人工推送通道始终可用。
+    """
+    demand = _demand_or_404(db, demand_id)
+    try:
+        return orchestration.dispatch_wanxing_service(
+            db, demand, slug_override=payload.slug if payload is not None else None
+        )
+    except WanxingDispatchFailure as exc:
+        # 子类先捕：502 带工单全文（FastAPI 的 detail 合法可为 dict）。
+        raise HTTPException(
+            status_code=exc.status_code, detail={"message": exc.detail, **exc.payload}
+        ) from exc
     except WorkorderExportError as exc:
         raise HTTPException(
             status_code=exc.status_code, detail=exc.detail

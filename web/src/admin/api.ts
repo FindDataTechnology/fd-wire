@@ -205,12 +205,21 @@ export class AdminApiError extends Error {
   readonly status: number | undefined;
   /** 后端 error body 的 detail 文案（如 401/403 的鉴权说明），无则 undefined。 */
   readonly detail: string | undefined;
+  /** detail 为对象时的原样载荷（如萬星直连 502 投递失败随响应附带的
+   *  message + 工单全文——人工降级用），无则 undefined。 */
+  readonly detailPayload: Record<string, unknown> | undefined;
 
-  constructor(message: string, status?: number, detail?: string) {
+  constructor(
+    message: string,
+    status?: number,
+    detail?: string,
+    detailPayload?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = "AdminApiError";
     this.status = status;
     this.detail = detail;
+    this.detailPayload = detailPayload;
   }
 }
 
@@ -244,14 +253,17 @@ async function requestJson<T>(path: string, options: RequestOptions): Promise<T>
   }
   if (!response.ok) {
     let detail: string | undefined;
+    let detailPayload: Record<string, unknown> | undefined;
     try {
       const data: unknown = await response.json();
-      if (
-        data &&
-        typeof data === "object" &&
-        typeof (data as { detail?: unknown }).detail === "string"
-      ) {
-        detail = (data as { detail: string }).detail;
+      if (data && typeof data === "object") {
+        const raw = (data as { detail?: unknown }).detail;
+        if (typeof raw === "string") {
+          detail = raw;
+        } else if (raw && typeof raw === "object") {
+          // 对象 detail 原样保留（如萬星直连 502 的 message + 工单全文）
+          detailPayload = raw as Record<string, unknown>;
+        }
       }
     } catch {
       /* 无 JSON body：保留 undefined */
@@ -260,6 +272,7 @@ async function requestJson<T>(path: string, options: RequestOptions): Promise<T>
       `admin api ${response.status} for ${url}`,
       response.status,
       detail,
+      detailPayload,
     );
   }
   try {
@@ -347,6 +360,40 @@ export function exportDemandWorkorder(
   return requestJson(`/internal/admin/demands/${demandId}/workorder`, {
     method: "POST",
     ...(body ? { body } : {}),
+  });
+}
+
+/** 「萬星直连」结果（wire-wanxing-direct-dispatch 契约冻结）：出单即时直投
+ *  萬星 A2A（同步回执），不入舰队拉取队列——delivered/queued_for_pull
+ *  如实分轨，绝无「入队未投递」歧义。 */
+export interface AdminWanxingResult {
+  ticket_yaml: string;
+  ticket_path: string;
+  slug: string;
+  sha256: string;
+  delivered: boolean;
+  queued_for_pull: boolean;
+  a2a: {
+    http_status: number;
+    message_id: string;
+    idempotency_key: string;
+    reply_excerpt: string;
+  };
+}
+
+/**
+ * 「萬星直连」：出单即时直投萬星 A2A（不迁移状态、不入拉取队列）。失败
+ * 形状（契约冻结）：409/422/503 的 detail 为字符串；502 投递失败的 detail
+ * 为对象（message + ticket_yaml 等工单全文随响应给人工降级——经
+ * AdminApiError.detailPayload 原样上抛，UI 展示 detail.message 与全文）。
+ */
+export function dispatchDemandWanxing(
+  demandId: number,
+  body: { slug?: string } = {},
+): Promise<AdminWanxingResult> {
+  return requestJson(`/internal/admin/demands/${demandId}/wanxing-dispatch`, {
+    method: "POST",
+    body,
   });
 }
 

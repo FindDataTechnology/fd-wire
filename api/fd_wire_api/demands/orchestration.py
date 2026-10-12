@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 from .models import Demand
 from .source_policy import BLOCKED_SOURCE_REASON, blocked_source_domain
 from .statemachine import DemandStatus
+from .wanxing import HttpWanxingClient, WanxingInvokeError, get_wanxing_client
 
 # ---------------------------------------------------------------- 常量（契约冻结）
 
@@ -65,6 +66,10 @@ DEFAULT_CADENCE = "daily"
 #: pipeline_events 事件类型（与 pipeline.py 的常量口径一致）。
 EVENT_WORKORDER_EXPORTED = "workorder_exported"
 EVENT_PIPELINE_RUN = "pipeline_run"
+#: 萬星直连投递事实事件（wire-wanxing-direct-dispatch）：与
+#: ``workorder_exported`` 通道互斥——拉取队列只认后者，直连单零收录。
+EVENT_WANXING_DISPATCHED = "wanxing_dispatched"
+EVENT_WANXING_DISPATCH_FAILED = "wanxing_dispatch_failed"
 #: ack 记录的 pipeline_run 事件备注（投递事实由对方仓拉取器回 ack 确认）。
 WORKORDER_DELIVERED_NOTE = "workorder delivered"
 
@@ -96,6 +101,23 @@ class WorkorderExportError(Exception):
         super().__init__(detail)
         self.status_code = status_code
         self.detail = detail
+
+
+class WanxingDispatchFailure(WorkorderExportError):
+    """萬星直连投递失败（502 专用）——携带工单全文等 ``payload`` 随响应。
+
+    ``WorkorderExportError`` 只有 detail 文案，装不下工单全文；而失败降级
+    红线要求 502 响应**也**带全文（人工推送通道始终可用，design D2）。
+    路由层捕获本类时把 ``detail`` 组装成 dict：
+    ``{"message": exc.detail, **exc.payload}``（FastAPI 的 detail 合法
+    可为 dict）。
+    """
+
+    def __init__(
+        self, status_code: int, detail: str, *, payload: dict | None = None
+    ) -> None:
+        super().__init__(status_code, detail)
+        self.payload = payload or {}
 
 
 # ---------------------------------------------------------------- slug 与文件名
@@ -281,32 +303,17 @@ def check_slug_free(slug: str, *, http_client: httpx.Client | None = None) -> Sl
 # ---------------------------------------------------------------- 出单 service（端点共用）
 
 
-def export_workorder_service(
-    db: Session,
-    demand: Demand,
-    *,
-    slug_override: str | None = None,
-    trigger: str | None = None,
-) -> dict:
-    """出单 service：确定性映射 + append-only 留档入队（端点唯一实现）。
+def _workorder_admission(
+    demand: Demand, *, slug_override: str | None = None
+) -> tuple[str, SlugStatus]:
+    """出单闸（export 与萬星直连 dispatch 共用的唯一实现，design D2）。
 
-    ``/api/v1/demands/{id}/workorder``（内部令牌）与
-    ``/internal/admin/demands/{id}/workorder``（admin 双闸）共用本函数——
-    语义、响应形状、拒绝口径（:class:`WorkorderExportError`）完全一致：
-
-    - 仅 ``in_progress`` 可出单（409 如实回绝，文案照状态机风格）；
-    - 无 source_urls 的存量单 422（生成流只承接带合法源地址的新单）；
-    - slug 三态探测：occupied → 409 转人工；free/unverified 放行
-      （unverified=探测通道不可达如实放行，占用复检在拉取器本地
-      checkout 权威执行）；
-    - 出单 → ``workorder_exported`` 全文+哈希 append-only 留档即入队，
-      同一需求单可重出新工单、历史不改写、状态不迁移；
-    - 响应恒带工单全文供人工推送降级——出单时刻未投递（``delivered``
-      =false），绝不展示自动化投递成功假象。
-
-    ``trigger``（wire-demand-auto-export）：自动补扫出单传 ``"auto"``，
-    导出事件带 ``trigger`` 键供运营面标注来源；缺省 None 时事件形状与
-    人工出单路径逐字节一致（零漂移）。
+    逐条照搬自 ``export_workorder_service`` 原文（零漂移重构）：状态门
+    409 → 无 source_urls 422 → 禁爬源复检 409 → ``derive_slug`` 422 →
+    ``check_slug_free`` occupied 409。返回 ``(slug, slug_status)``——
+    export 响应要回报 ``slug_check``，一次探测两用，绝不二次探测（行为
+    与抽取前逐字节一致）；失败形态一律 :class:`WorkorderExportError`、
+    零留档（闸拒绝时连事件都不追加）。
     """
     current = DemandStatus(demand.status)
     if current is not DemandStatus.in_progress:
@@ -344,6 +351,34 @@ def export_workorder_service(
             f"slug {slug} 在 {INDUSTRY_REPO_NAME} 仓内已占用——"
             "非 greenfield 不走生成流，请转人工处理",
         )
+    return slug, slug_status
+
+
+def export_workorder_service(
+    db: Session,
+    demand: Demand,
+    *,
+    slug_override: str | None = None,
+    trigger: str | None = None,
+) -> dict:
+    """出单 service：确定性映射 + append-only 留档入队（端点唯一实现）。
+
+    ``/api/v1/demands/{id}/workorder``（内部令牌）与
+    ``/internal/admin/demands/{id}/workorder``（admin 双闸）共用本函数——
+    语义、响应形状、拒绝口径（:class:`WorkorderExportError`）完全一致：
+
+    - 出单闸（状态门/无源地址/禁爬复检/slug 三态探测）在
+      :func:`_workorder_admission` ——与萬星直连 dispatch 同一拒绝口径；
+    - 出单 → ``workorder_exported`` 全文+哈希 append-only 留档即入队，
+      同一需求单可重出新工单、历史不改写、状态不迁移；
+    - 响应恒带工单全文供人工推送降级——出单时刻未投递（``delivered``
+      =false），绝不展示自动化投递成功假象。
+
+    ``trigger``（wire-demand-auto-export）：自动补扫出单传 ``"auto"``，
+    导出事件带 ``trigger`` 键供运营面标注来源；缺省 None 时事件形状与
+    人工出单路径逐字节一致（零漂移）。
+    """
+    slug, slug_status = _workorder_admission(demand, slug_override=slug_override)
     try:
         ticket_yaml, ticket_path = build_workorder(demand, slug=slug)
     except ValueError as exc:
@@ -367,6 +402,115 @@ def export_workorder_service(
         "queued_for_pull": True,  # 已入队：等待拉取器（~30min）或人工推送
         "slug_check": slug_status,  # free=已确证空闲；unverified=探测通道
         # 不可达如实放行，占用复检在拉取器本地 checkout 权威执行
+    }
+
+
+# ---------------------------------------------------------------- 萬星直连调度 service（design D2）
+
+
+def dispatch_wanxing_service(
+    db: Session,
+    demand: Demand,
+    *,
+    slug_override: str | None = None,
+) -> dict:
+    """萬星直连调度 service：同映射同红线 → A2A message/send → 留痕可审。
+
+    ``/api/v1/demands/{id}/wanxing-dispatch``（内部令牌）与
+    ``/internal/admin/demands/{id}/wanxing-dispatch``（admin 双闸）共用
+    本函数（双闸唯一实现）。与舰队拉取通道（export→拉取器→ack）互斥：
+    操作员显式选通道，事件类型天然区分，直连单绝不进拉取队列。
+
+    - 出单闸复用 :func:`_workorder_admission`——与「转生成工单」同一
+      拒绝口径（409/422、零留档）；
+    - 工单由同一 ``build_workorder`` 纯映射产出（脱敏红线同源保证：
+      直连发送的就是工单 YAML 全文，里面本无邮箱/公司名）；
+    - 幂等键 ``wire-{code}-{sha256(yaml)[:16]}``（同工单内容重发同键，
+      wanxing 侧去重口径）、rpc_id ``wire-{code}-{sha[:8]}``；
+    - 未配置（键缺席）→ 503 如实回绝、零留档（纯配置错误，无投递事实
+      可记）；调用失败 → ``wanxing_dispatch_failed`` 事件（error/reason/
+      全文随档）+ :class:`WanxingDispatchFailure`（502 响应也带全文）；
+    - 成功 → ``wanxing_dispatched`` 事件（路径/全文/哈希/幂等键/
+      message_id/http_status/reply_excerpt）append-only 留档，状态不迁移；
+      **绝不追加** ``workorder_exported``（拉取队列只认它）。
+    """
+    slug, _slug_status = _workorder_admission(demand, slug_override=slug_override)
+    ticket_yaml, ticket_path = build_workorder(demand, slug=slug)
+    sha256 = hashlib.sha256(ticket_yaml.encode("utf-8")).hexdigest()
+    idempotency_key = f"wire-{demand.code}-{sha256[:16]}"
+    rpc_id = f"wire-{demand.code}-{sha256[:8]}"
+
+    client = get_wanxing_client()
+    if client is None:
+        # 未配置不是投递事实：零留档，明示走舰队通道或补配置。
+        raise WorkorderExportError(
+            503,
+            "萬星直连未配置（WANXING_CALLER_KEY 缺席）——"
+            "请走舰队拉取通道或配置调用键",
+        )
+    try:
+        receipt = client.send_message(
+            ticket_yaml, idempotency_key=idempotency_key, rpc_id=rpc_id
+        )
+    except WanxingInvokeError as exc:
+        # 失败留档（与 scope 交付失败同哲学：时间线是审计事实流）——
+        # 全文随档，人工推送降级通道始终可用。
+        demand.append_pipeline_event(
+            {
+                "type": EVENT_WANXING_DISPATCH_FAILED,
+                "ticket_path": ticket_path,
+                "ticket_yaml": ticket_yaml,
+                "sha256": sha256,
+                "slug": slug,
+                "error": str(exc)[:500],
+                "reason": exc.reason,
+            }
+        )
+        db.commit()
+        db.refresh(demand)
+        raise WanxingDispatchFailure(
+            502,
+            f"萬星直连投递失败（{exc.reason or exc.status_code}）：{exc}",
+            payload={
+                "ticket_yaml": ticket_yaml,
+                "ticket_path": ticket_path,
+                "sha256": sha256,
+                "slug": slug,
+            },
+        ) from exc
+    finally:
+        if isinstance(client, HttpWanxingClient):
+            client.close()  # per-request 客户端用完即弃（对齐 HttpScopeClient）
+
+    reply_text = str(receipt.get("reply_text") or "")
+    demand.append_pipeline_event(
+        {
+            "type": EVENT_WANXING_DISPATCHED,
+            "ticket_path": ticket_path,
+            "ticket_yaml": ticket_yaml,
+            "sha256": sha256,
+            "slug": slug,
+            "idempotency_key": idempotency_key,
+            "message_id": receipt.get("message_id"),
+            "http_status": receipt.get("http_status"),
+            "reply_excerpt": reply_text[:500],
+        }
+    )
+    db.commit()  # 投递事实不丢：dispatched 事件落库即审计留痕
+    db.refresh(demand)
+    return {
+        "ticket_path": ticket_path,
+        "ticket_yaml": ticket_yaml,  # 全文恒随响应（与 export 同降级哲学）
+        "slug": slug,
+        "sha256": sha256,
+        "delivered": True,  # A2A 同步回执 2xx 即投递事实
+        "queued_for_pull": False,  # 直连单不进舰队拉取队列（事件类型互斥）
+        "a2a": {
+            "http_status": receipt.get("http_status"),
+            "message_id": receipt.get("message_id"),
+            "idempotency_key": idempotency_key,
+            "reply_excerpt": reply_text[:500],
+        },
     }
 
 

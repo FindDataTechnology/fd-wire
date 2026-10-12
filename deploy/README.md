@@ -259,6 +259,55 @@ sha256sum fd-wire-connector-linux-amd64   # 对照 manifest.json 的 platforms[]
 - **演练记录位**：交付即 scope ok 的全链证据记入 change
   `wire-scope-delivery-live` 归档说明（2026-10-12 首次点亮）。
 
+## 萬星直连调度（wire-wanxing-direct-dispatch）
+
+工单出站直发萬星 A2A 的接线与运维口径（操作员显式选通道，绕过舰队拉取队列）：
+
+- **通道语义**：与舰队拉取通道互为替代——复用同一出单闸（状态门 / 无源
+  422 / 禁爬复检 / slug 三态探测）后，经
+  `POST {WANXING_A2A_BASE}/api/wanxing/v1/a2a/{WANXING_AGENT_SLUG}`
+  （message/send 同步回执）直发。直连成功/失败只追加
+  `wanxing_dispatched` / `wanxing_dispatch_failed` 事件，**不追加
+  `workorder_exported`——直连单不进拉取队列**（`pending_workorders`
+  只认 exported 事件，天然互斥，无锁无去重）。
+- **env 四件**（`deploy/k8s/fd-wire-api.yaml`）：
+
+| env | 取值 | 形态 / 归属 |
+|---|---|---|
+| `WANXING_A2A_BASE` | `https://wanxing.finddatatech.cloud` | 清单字面值（新域，非密） |
+| `WANXING_AGENT_SLUG` | `packs-kkcie7nlrhluo4likpnn0w-spider-heal` | 清单字面值（非密） |
+| `WANXING_A2A_TIMEOUT` | `"120"`（秒；agent 生成为长调用） | 清单字面值 |
+| `WANXING_CALLER_KEY` | sk- 调用键 | Secret `fd-wire-env` 键 `wanxing_caller_key`（集群已存在，2026-10-12 核验非空） |
+
+- **端点**：`POST /api/v1/demands/{id}/wanxing-dispatch`（`X-Internal-Token`
+  闸，body 复用 `WorkorderIn`——slug 可覆写）与
+  `POST /internal/admin/demands/{id}/wanxing-dispatch`（admin 双闸）。
+- **冒烟（发布后）**——须待主代理统一 bump image tag 滚动完成（旧镜像无
+  该端点 → 404）：
+
+  ```bash
+  # 1) 无令牌 → 预期 401（内部令牌闸生效）
+  curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+    https://wire.finddatatech.cloud/api/v1/demands/<demand_id>/wanxing-dispatch
+  # 2) 带令牌 → 判读
+  curl -s -X POST https://wire.finddatatech.cloud/api/v1/demands/<demand_id>/wanxing-dispatch \
+    -H "X-Internal-Token: $FD_WIRE_INTERNAL_TOKEN" -H 'Content-Type: application/json' \
+    -d '{}' | jq .
+  # 200 = 直发成功（a2a.http_status / message_id / idempotency_key / reply_excerpt；
+  #        queued_for_pull 恒 false——直连单不进拉取队列）
+  # 503 = WANXING_CALLER_KEY 未注入（客户端 None 的明示口径，零留档）
+  # 502 = 万星侧调用失败（wanxing_dispatch_failed 事件全文留档，人工推送降级）
+  ```
+
+  控制台按钮路径：DemandsPage（需求单）in_progress 单 →「转生成工单」区旁
+  「萬星直连」按钮（testid `admin-demand-wanxing-dispatch`）；成功面板
+  （`admin-wanxing-result`）出回执摘要，失败面板（`admin-wanxing-error`）
+  出错误文案 + 工单全文折叠（人工推送降级指引）。
+- **红线**：键值绝不入日志/异常文案/事件（错误只带状态码与萬星回传的
+  error 码）；调用域必须是 `wanxing.finddatatech.cloud` 新域——**禁调**
+  `platform.finddatatech.cloud/api/wanxing/*` 旧 facade（双部署两份
+  SQLite，白名单/幂等互不相通）。
+
 ## wire 库凭据轮换配方（wire-form-linkage-v2 卫生件，2026-10-12 首次执行）
 
 背景：datasets PG 连接串密码曾以明文落在清单（10-11 实迁遗留、存于 git 历史）。

@@ -1687,6 +1687,23 @@ const zh = {
         undelivered: "已入队未投递——等待舰队拉取器（约 30 分钟）或人工推送。",
         errorDefault: "出单失败——服务端口径回显见上方提示，稍后可重试。",
       },
+      // 萬星直连（wire-wanxing-direct-dispatch 任务 3）：出单即时直投萬星
+      // A2A 的第二通道——成功同步回执面 / 502 投递失败时工单全文随响应
+      // 呈现（人工推送或改走舰队拉取通道降级）。
+      wanxing: {
+        submit: "萬星直连",
+        hint: "出单即时直投萬星 A2A（同步回执），不入舰队拉取队列；同单重发同幂等键。",
+        delivered: "已直投萬星——A2A 同步回执：",
+        replyLabel: "萬星回执",
+        messageIdLabel: "消息 ID",
+        idempotencyLabel: "幂等键",
+        slugLabel: "slug",
+        yamlSummary: "工单全文（人工推送降级用）",
+        fallback: "可人工推送该工单，或改走舰队拉取通道（转生成工单）。",
+        errorDefault: "萬星直连失败——服务端口径回显见上方，稍后可重试。",
+        factDelivered: "萬星直连已投递（回执：{{reply}}）",
+        factFailed: "萬星直连上次投递失败：{{error}}",
+      },
       // 编排进度面（wire-demand-visibility 任务 2.2 运营面）：事件时间线
       // （七类阶段+时间+ticket_path+PR 链接）+ gate 摘要 + 交付状态；
       // workorder_submitted/pr_open/merged/blocked 复用客户面冻结文案。

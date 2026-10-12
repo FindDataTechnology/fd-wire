@@ -6,11 +6,13 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AdminErrorBox, AdminStates } from "./AdminLayout";
 import {
+  dispatchDemandWanxing,
   exportDemandWorkorder,
   fetchDemands,
   retryDemandScope,
   transitionDemand,
   type AdminDemand,
+  type AdminWanxingResult,
   type AdminWorkorderResult,
   type DemandStatus,
 } from "./api";
@@ -238,6 +240,7 @@ export function DemandsPage() {
                     <WorkorderSection
                       demandId={demand.id}
                       onConflict={(message) => setActionError(message)}
+                      wanxingFact={latestWanxingFact(demand.pipeline_events)}
                     />
                   )}
                 </>
@@ -603,17 +606,63 @@ function ProgressSection({ demand }: { demand: AdminDemand }) {
  *
  * 出单入舰队拉取队列，出单不迁移状态；成功必须展示工单全文（人工推送
  * 降级）与「未投递」诚实文案——绝不呈现自动化投递成功假象（spec 红线）。
+ * 萬星直连（wire-wanxing-direct-dispatch 任务 3）：同区第二通道按钮——
+ * 出单即时直投萬星 A2A（同步回执，不入拉取队列）；成功呈现回执面，502
+ * 投递失败时工单全文随响应呈现（人工推送/改走拉取通道降级），闸拒绝
+ * （409/422/503 字符串 detail）照实回显，绝不虚构投递成功。
  */
+/** 直连留痕（wire-wanxing-direct-dispatch）：时间线只认冻结的舰队阶段集，
+ * 直连事件被静默跳过——通道事实在此独立呈现，刷新/重进后仍可见。 */
+interface WanxingFact {
+  type: "wanxing_dispatched" | "wanxing_dispatch_failed";
+  replyExcerpt: string | null;
+  error: string | null;
+}
+
+function latestWanxingFact(
+  events: Array<Record<string, unknown>>,
+): WanxingFact | null {
+  let fact: WanxingFact | null = null;
+  for (const event of events) {
+    if (event.type === "wanxing_dispatched") {
+      const reply = event.reply_excerpt;
+      fact = {
+        type: "wanxing_dispatched",
+        replyExcerpt: typeof reply === "string" ? reply : null,
+        error: null,
+      };
+    } else if (event.type === "wanxing_dispatch_failed") {
+      const error = event.error;
+      fact = {
+        type: "wanxing_dispatch_failed",
+        replyExcerpt: null,
+        error: typeof error === "string" ? error : null,
+      };
+    }
+  }
+  return fact;
+}
+
 function WorkorderSection({
   demandId,
   onConflict,
+  wanxingFact,
 }: {
   demandId: number;
   onConflict: (message: string) => void;
+  wanxingFact: WanxingFact | null;
 }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<AdminWorkorderResult | null>(null);
+  const [wanxingBusy, setWanxingBusy] = useState(false);
+  const [wanxingResult, setWanxingResult] = useState<AdminWanxingResult | null>(
+    null,
+  );
+  const [wanxingError, setWanxingError] = useState<{
+    message: string;
+    ticketYaml: string | null;
+  } | null>(null);
 
   const submit = async () => {
     setBusy(true);
@@ -624,6 +673,39 @@ function WorkorderSection({
       onConflict(apiErr.detail ?? t("admin.demands.workorder.errorDefault"));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const dispatchWanxing = async () => {
+    setWanxingBusy(true);
+    setWanxingResult(null);
+    setWanxingError(null);
+    try {
+      setWanxingResult(await dispatchDemandWanxing(demandId));
+    } catch (err) {
+      const apiErr = err as {
+        status?: number;
+        detail?: string;
+        detailPayload?: Record<string, unknown>;
+        message: string;
+      };
+      // 502 投递失败：detail 是对象（message + 工单全文随响应——人工降级红线）
+      const payload = apiErr.detailPayload;
+      const payloadMessage =
+        payload && typeof payload.message === "string" ? payload.message : null;
+      const payloadYaml =
+        payload && typeof payload.ticket_yaml === "string"
+          ? payload.ticket_yaml
+          : null;
+      setWanxingError({
+        message:
+          payloadMessage ??
+          apiErr.detail ??
+          t("admin.demands.wanxing.errorDefault"),
+        ticketYaml: payloadYaml,
+      });
+    } finally {
+      setWanxingBusy(false);
     }
   };
 
@@ -641,16 +723,53 @@ function WorkorderSection({
             {t("admin.demands.workorder.hint")}
           </p>
         </div>
-        <button
-          type="button"
-          data-testid="admin-workorder-submit"
-          disabled={busy}
-          onClick={() => void submit()}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {busy ? t("admin.common.working") : t("admin.demands.workorder.submit")}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            data-testid="admin-workorder-submit"
+            disabled={busy}
+            onClick={() => void submit()}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {busy ? t("admin.common.working") : t("admin.demands.workorder.submit")}
+          </button>
+          <button
+            type="button"
+            data-testid="admin-demand-wanxing-dispatch"
+            disabled={wanxingBusy}
+            onClick={() => void dispatchWanxing()}
+            title={t("admin.demands.wanxing.hint")}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {wanxingBusy
+              ? t("admin.common.working")
+              : t("admin.demands.wanxing.submit")}
+          </button>
+        </div>
       </div>
+
+      {wanxingFact && (
+        <p
+          data-testid={
+            wanxingFact.type === "wanxing_dispatched"
+              ? "admin-wanxing-fact"
+              : "admin-wanxing-fact-failed"
+          }
+          className={
+            wanxingFact.type === "wanxing_dispatched"
+              ? "mt-2 text-[11px] text-emerald-700"
+              : "mt-2 text-[11px] text-rose-600"
+          }
+        >
+          {wanxingFact.type === "wanxing_dispatched"
+            ? t("admin.demands.wanxing.factDelivered", {
+                reply: wanxingFact.replyExcerpt ?? "",
+              })
+            : t("admin.demands.wanxing.factFailed", {
+                error: wanxingFact.error ?? "",
+              })}
+        </p>
+      )}
 
       {result && (
         <div
@@ -687,6 +806,83 @@ function WorkorderSection({
               {result.ticket_yaml}
             </pre>
           </details>
+        </div>
+      )}
+
+      {wanxingResult && (
+        <div
+          data-testid="admin-wanxing-result"
+          className="mt-3 rounded border border-emerald-200 bg-emerald-50/60 px-3 py-2.5 text-xs text-slate-600"
+        >
+          <p
+            data-testid="admin-wanxing-delivered"
+            className="text-emerald-700"
+          >
+            {t("admin.demands.wanxing.delivered")}
+          </p>
+          <p className="mt-1">
+            <span className="text-slate-500">
+              {t("admin.demands.wanxing.replyLabel")}：
+            </span>
+            <span
+              data-testid="admin-wanxing-reply"
+              className="font-mono text-[11px]"
+            >
+              {wanxingResult.a2a.reply_excerpt}
+            </span>
+          </p>
+          <p className="mt-1">
+            <span className="text-slate-500">
+              {t("admin.demands.wanxing.messageIdLabel")}：
+            </span>
+            <span data-testid="admin-wanxing-message-id" className="font-mono">
+              {wanxingResult.a2a.message_id}
+            </span>
+          </p>
+          <p className="mt-1">
+            <span className="text-slate-500">
+              {t("admin.demands.wanxing.idempotencyLabel")}：
+            </span>
+            <span
+              data-testid="admin-wanxing-idempotency-key"
+              className="font-mono"
+            >
+              {wanxingResult.a2a.idempotency_key}
+            </span>
+          </p>
+          <p className="mt-1">
+            <span className="text-slate-500">
+              {t("admin.demands.wanxing.slugLabel")}：
+            </span>
+            <span data-testid="admin-wanxing-slug" className="font-mono">
+              {wanxingResult.slug}
+            </span>
+          </p>
+        </div>
+      )}
+
+      {wanxingError && (
+        <div
+          data-testid="admin-wanxing-error"
+          className="mt-3 rounded border border-rose-200 bg-rose-50/60 px-3 py-2.5 text-xs text-rose-700"
+        >
+          <p data-testid="admin-wanxing-error-message">{wanxingError.message}</p>
+          {wanxingError.ticketYaml && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-slate-500">
+                {t("admin.demands.wanxing.yamlSummary")}
+              </summary>
+              <pre
+                data-testid="admin-wanxing-error-yaml"
+                className="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded bg-white p-2 font-mono text-[11px] text-slate-700"
+              >
+                {wanxingError.ticketYaml}
+              </pre>
+            </details>
+          )}
+          <p className="mt-1 text-slate-500">
+            {t("admin.demands.wanxing.fallback")}
+          </p>
         </div>
       )}
     </div>

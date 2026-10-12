@@ -69,6 +69,20 @@ spec:
             - name: SCOPE_API_TOKEN
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: scope_api_token }
+            # 萬星直连调度（wire-wanxing-direct-dispatch）：出站 A2A 直发工单
+            # （message/send 同步回执，120s 超时——agent 生成为长调用）；与
+            # 舰队拉取通道互为替代，直连单不进拉取队列。调用域=wanxing 新域，
+            # 绝不调 platform 旧 facade（双部署 SQLite 互不相通）。键未配置时
+            # 端点 503 明示未配置（零留档）。
+            - name: WANXING_A2A_BASE
+              value: https://wanxing.finddatatech.cloud
+            - name: WANXING_AGENT_SLUG
+              value: packs-kkcie7nlrhluo4likpnn0w-spider-heal
+            - name: WANXING_A2A_TIMEOUT
+              value: "120"
+            - name: WANXING_CALLER_KEY
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: wanxing_caller_key }
             # wire 账本数据库（平台库，外部实例；非本 pod 卷）
             - name: DATABASE_URL
               valueFrom:

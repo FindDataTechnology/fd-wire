@@ -17,7 +17,10 @@
    （wire-demand-visibility：与内部端点逐字同语义，scope 失败只落
    pending、绝不打断迁移）；POST ``/demands/{id}/scope-retry``——对
    delivered+pending 单重试开 scope（wire-scope-delivery-live：与内部
-   端点同语义，前置闸 409 如实回显）。
+   端点同语义，前置闸 409 如实回显）；POST ``/demands/{id}/workorder``
+   与 ``/demands/{id}/wanxing-dispatch``——出单入舰队拉取队列 / 萬星
+   直连 A2A 快车道（wire-wanxing-direct-dispatch：与内部端点共用同一
+   service，拒绝口径与响应形状完全一致）。
 5. **目录治理**：GET ``/catalog/pending``（读镜像表）、POST
    ``/catalog/{indicator_id}/verify-note``——不改镜像数据（仅同步管道可写），
    审核意见只记 admin 自己的 catalog_review_notes（append-only）。
@@ -54,8 +57,8 @@ from ..demands import delivery as delivery_service
 from ..demands import service as demands_service
 from ..demands.db import get_db as get_demands_db
 from ..demands.models import Demand
-from ..demands.orchestration import WorkorderExportError, WorkorderIn
-from ..demands.orchestration import export_workorder_service
+from ..demands.orchestration import WanxingDispatchFailure, WorkorderExportError, WorkorderIn
+from ..demands.orchestration import dispatch_wanxing_service, export_workorder_service
 from ..demands.schemas import DemandInternalOut, ScopeRetryIn, TransitionIn
 from ..demands.statemachine import DemandStatus, TransitionError
 from ..metering.db import to_utc
@@ -490,6 +493,39 @@ def export_demand_workorder(
         return export_workorder_service(
             db, demand, slug_override=payload.slug if payload is not None else None
         )
+    except WorkorderExportError as exc:
+        raise HTTPException(
+            status_code=exc.status_code, detail=exc.detail
+        ) from exc
+
+
+@router.post("/demands/{demand_id}/wanxing-dispatch", response_model=None)
+def dispatch_demand_wanxing(
+    demand_id: int,
+    payload: WorkorderIn | None = None,
+    db: Session = Depends(get_demands_db),
+) -> dict:
+    """「萬星直连」操作员控制台动作（wire-wanxing-direct-dispatch）。
+
+    与内部端点 ``POST /api/v1/demands/{id}/wanxing-dispatch`` 共用同一
+    service（``dispatch_wanxing_service``）——同映射同脱敏红线、同一出单
+    闸、``wanxing_dispatched`` 留档、直连单不进拉取队列，语义与拒绝口径
+    完全一致；502 时 detail 是 dict（message + 工单全文等 payload）——
+    失败降级红线：人工推送通道始终可用。
+    """
+    try:
+        demand = demands_service.get_demand(db, demand_id)
+    except demands_service.DemandNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        return dispatch_wanxing_service(
+            db, demand, slug_override=payload.slug if payload is not None else None
+        )
+    except WanxingDispatchFailure as exc:
+        # 子类先捕：502 带工单全文（FastAPI 的 detail 合法可为 dict）。
+        raise HTTPException(
+            status_code=exc.status_code, detail={"message": exc.detail, **exc.payload}
+        ) from exc
     except WorkorderExportError as exc:
         raise HTTPException(
             status_code=exc.status_code, detail=exc.detail

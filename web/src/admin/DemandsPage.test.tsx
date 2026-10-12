@@ -354,6 +354,132 @@ describe("DemandsPage（需求单派发台）", () => {
   });
 });
 
+describe("DemandsPage 萬星直连（wire-wanxing-direct-dispatch 任务 3）", () => {
+  it("in_progress 单：点击直连 → POST wanxing-dispatch + 回执面（reply/message_id/幂等键/slug）", async () => {
+    const backend = installAdminBackend({
+      demands: [demand({ id: 2, status: "in_progress" })],
+      bearerToken: TOKEN,
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    openPanel(2);
+    // 直连按钮与转生成工单并列在场（仅 in_progress 单渲染该区）
+    fireEvent.click(screen.getByTestId("admin-demand-wanxing-dispatch"));
+
+    // 成功回执面：萬星回执摘要在场（同步 A2A 回执）
+    const result = await screen.findByTestId("admin-wanxing-result");
+    expect(result.textContent).toContain("收到工单");
+    expect(screen.getByTestId("admin-wanxing-message-id").textContent).toContain(
+      "9f2c7e41-a7b3-4c8d-9e55-1f0a2b3c4d5e",
+    );
+    expect(
+      screen.getByTestId("admin-wanxing-idempotency-key").textContent,
+    ).toContain("wire-DE-20261004-02-9af3c1d2e4b56708");
+    expect(screen.getByTestId("admin-wanxing-slug").textContent).toContain(
+      "guangfu-zhuangji",
+    );
+    // 成功即无失败面
+    expect(screen.queryByTestId("admin-wanxing-error")).toBeNull();
+
+    // 调用形状：POST 管理端点 + 登录 Bearer（双闸 web 半边）
+    const call = backend.calls
+      .filter((c) => c.method === "POST")
+      .find(
+        (c) => c.url.pathname === "/internal/admin/demands/2/wanxing-dispatch",
+      )!;
+    expect(call).toBeDefined();
+    expect(call.headers["authorization"]).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("502 投递失败（detail 对象）：错误面显示 message + 工单全文 + 降级指引，无成功面", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [demand({ id: 2, status: "in_progress" })],
+        bearerToken: TOKEN,
+        failWanxingStatus: 502,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    openPanel(2);
+    fireEvent.click(screen.getByTestId("admin-demand-wanxing-dispatch"));
+
+    const error = await screen.findByTestId("admin-wanxing-error");
+    expect(error.textContent).toContain("投递失败");
+    // 工单全文随响应在场（人工推送降级红线，折叠 pre 形态照既有 yaml 展示）
+    expect(screen.getByTestId("admin-wanxing-error-yaml").textContent).toContain(
+      "kind: generate",
+    );
+    // 降级指引：人工推送或改走舰队拉取通道
+    expect(error.textContent).toContain("舰队拉取");
+    expect(screen.queryByTestId("admin-wanxing-result")).toBeNull();
+  });
+
+  it("非 in_progress 单不渲染直连按钮（submitted 面板展开亦无）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [demand({ id: 1, status: "submitted" })],
+        bearerToken: TOKEN,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    openPanel(1);
+    expect(screen.getByTestId("admin-dispatch-panel")).toBeDefined();
+    expect(screen.queryByTestId("admin-demand-wanxing-dispatch")).toBeNull();
+  });
+
+  it("直连留痕：pipeline_events 带已投递/失败事件 → 通道事实行在场（刷新后仍可见）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [
+          demand({
+            id: 2,
+            status: "in_progress",
+            pipeline_events: [
+              {
+                type: "wanxing_dispatched",
+                reply_excerpt: "收到，开始处理",
+                at: "2026-10-12T08:00:00+00:00",
+              },
+            ],
+          }),
+          demand({
+            id: 4,
+            status: "in_progress",
+            pipeline_events: [
+              {
+                type: "wanxing_dispatch_failed",
+                error: "403: CALLER_NOT_AUTHORIZED",
+                at: "2026-10-12T08:10:00+00:00",
+              },
+            ],
+          }),
+        ],
+        bearerToken: TOKEN,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    openPanel(2);
+    const fact = screen.getByTestId("admin-wanxing-fact");
+    expect(fact.textContent).toContain("已投递");
+    expect(fact.textContent).toContain("收到，开始处理");
+
+    openPanel(4);
+    const failedFact = screen.getByTestId("admin-wanxing-fact-failed");
+    expect(failedFact.textContent).toContain("CALLER_NOT_AUTHORIZED");
+  });
+});
+
 describe("DemandsPage 编排进度面（wire-demand-visibility 任务 2.2）", () => {
   it("在途单：各阶段按序渲染 + 时间 + ticket_path + PR 链接", async () => {
     vi.stubGlobal(

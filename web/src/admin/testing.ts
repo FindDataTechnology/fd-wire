@@ -6,6 +6,7 @@ import type {
   AdminCustomer,
   AdminDemand,
   AdminPlan,
+  AdminWanxingResult,
   AdminWorkorderResult,
   AggRow,
   CatalogPendingResponse,
@@ -79,6 +80,11 @@ export interface AdminBackendOptions {
   workorderResult?: AdminWorkorderResult;
   /** 强制 workorder 端点返回该状态（如 422 无源地址回显测试）。 */
   failWorkorderStatus?: number;
+  /** 「萬星直连」成功响应覆盖（缺省用 DEFAULT_WANXING_RESULT）。 */
+  wanxingResult?: AdminWanxingResult;
+  /** 强制 wanxing-dispatch 端点返回该状态（502 时 detail 为对象——契约冻结：
+   *  message + 工单全文随响应给人工降级；其余状态 detail 为字符串）。 */
+  failWanxingStatus?: number;
   /** 「重试开 scope」结果（wire-scope-delivery-live）：ok（缺省，建 scope
    *  成功）/ fail（上游仍不可用——200 但仍 pending，留档 scope_create_failed）。 */
   scopeRetryOutcome?: "ok" | "fail";
@@ -101,6 +107,24 @@ const DEFAULT_WORKORDER_RESULT: AdminWorkorderResult = {
   delivered: false,
   queued_for_pull: true,
   slug_check: "free",
+};
+
+/** 「萬星直连」缺省成功响应（形状按 wire-wanxing-direct-dispatch 冻结契约：
+ *  delivered=true + a2a 同步回执，不入拉取队列）。 */
+const DEFAULT_WANXING_RESULT: AdminWanxingResult = {
+  ticket_yaml:
+    "kind: generate\nunit: spiders/stats-gov-cn/\ncategory: null\nbrief:\n  source_urls:\n  - https://www.stats.gov.cn/sj/zxfb/\n  expectations: 需要光伏装机相关数据\n  cadence: daily\n  notes: wire 需求单 DE-20261004-02；客户代号 cust-002\ngolden:\n- spiders/stats-gov-cn/golden/\nverify:\n  commands:\n  - python3 scripts/health_verify.py --ticket reports/health-tickets/20261004-wire-DE-20261004-02.yaml\n",
+  ticket_path: "reports/health-tickets/20261004-wire-DE-20261004-02.yaml",
+  slug: "guangfu-zhuangji",
+  sha256: "9af3c1d2e4b5670812345678abcdef0123456789abcdef0123456789abcdef01",
+  delivered: true,
+  queued_for_pull: false,
+  a2a: {
+    http_status: 200,
+    message_id: "9f2c7e41-a7b3-4c8d-9e55-1f0a2b3c4d5e",
+    idempotency_key: "wire-DE-20261004-02-9af3c1d2e4b56708",
+    reply_excerpt: "收到工单，已进入生成流水线（预估 5 分钟内回传成果）。",
+  },
 };
 
 function jsonResponse(body: unknown, status = 200): FakeResponse {
@@ -326,6 +350,45 @@ export function installAdminBackend(options: AdminBackendOptions = {}): {
       }
       return Promise.resolve(
         jsonResponse(options.workorderResult ?? DEFAULT_WORKORDER_RESULT),
+      );
+    }
+
+    match = path.match(/^\/internal\/admin\/demands\/(\d+)\/wanxing-dispatch$/);
+    if (match && method === "POST") {
+      const id = Number(match[1]);
+      if (options.failWanxingStatus) {
+        // 契约冻结：502 投递失败 detail 为对象（message + 工单全文随响应
+        // ——人工降级红线）；409/422/503 等其余状态 detail 为字符串。
+        const detail =
+          options.failWanxingStatus === 502
+            ? {
+                message: "萬星 A2A 投递失败（upstream 502）",
+                ticket_yaml: DEFAULT_WANXING_RESULT.ticket_yaml,
+                ticket_path: DEFAULT_WANXING_RESULT.ticket_path,
+                sha256: DEFAULT_WANXING_RESULT.sha256,
+                slug: DEFAULT_WANXING_RESULT.slug,
+              }
+            : "萬星直连未配置（WANXING_CALLER_KEY 缺失）";
+        return Promise.resolve(
+          jsonResponse({ detail }, options.failWanxingStatus),
+        );
+      }
+      const demand = demands.find((d) => d.id === id);
+      if (!demand) {
+        return Promise.resolve(jsonResponse({ detail: `demand ${id} 不存在` }, 404));
+      }
+      if (demand.status !== "in_progress") {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail: `萬星直连只能在 in_progress 状态发起（当前 ${demand.status}）`,
+            },
+            409,
+          ),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse(options.wanxingResult ?? DEFAULT_WANXING_RESULT),
       );
     }
 
