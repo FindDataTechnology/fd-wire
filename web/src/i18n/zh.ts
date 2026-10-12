@@ -1575,7 +1575,7 @@ const zh = {
       machineNote: "客户端只禁用非法项；服务端状态机是唯一裁决面（409 如实回显）。",
       workorder: {
         title: "转生成工单",
-        hint: "生成 health-loop 生成工单并加入舰队拉取队列（约 30 分钟一轮）；出单不迁移状态，同一单可重出、历史不改写。",
+        hint: "生成 health-loop 生成工单并加入舰队拉取队列（约 30 分钟一轮）；出单不迁移状态，同一单可重出、历史不改写。受理后系统会自动出单；被拒时进度面留痕，可在此人工重试。",
         submit: "转生成工单",
         pathLabel: "工单路径",
         slugFree: "slug 已确证空闲（目标仓探测 404）。",
@@ -1588,14 +1588,19 @@ const zh = {
       // 编排进度面（wire-demand-visibility 任务 2.2 运营面）：事件时间线
       // （七类阶段+时间+ticket_path+PR 链接）+ gate 摘要 + 交付状态；
       // workorder_submitted/pr_open/merged/blocked 复用客户面冻结文案。
+      // wire-demand-auto-export 任务 2.2：增 auto_export_failed 阶段
+      // （含 reason 呈现）与自动触发徽标文案。
       progress: {
         expand: "生成进度",
         collapse: "收起进度",
         title: "生成进度",
         empty: "尚未出单",
         prLink: "查看 PR",
+        autoTrigger: "自动",
+        reasonLabel: "原因：",
         stages: {
           workorder_exported: "已出单",
+          auto_export_failed: "自动出单被拒·需人工处置",
           pipeline_run: "已投递（拉取器已落仓）",
           workorder_submitted: "已进入生成流水线",
           pr_open: "爬虫已生成·待人工审核",

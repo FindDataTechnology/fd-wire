@@ -1655,7 +1655,7 @@ const en: Translation = {
       machineNote: "The client only disables illegal options; the server state machine is the single arbiter (409 shown as-is).",
       workorder: {
         title: "Generate workorder",
-        hint: "Produce a health-loop generate workorder and queue it for the fleet puller (~every 30 min); exporting does not change demand status, re-export allowed with history preserved.",
+        hint: "Produce a health-loop generate workorder and queue it for the fleet puller (~every 30 min); exporting does not change demand status, re-export allowed with history preserved. After acceptance the system exports automatically; on rejection the progress panel records it and you can retry manually here.",
         submit: "Generate workorder",
         pathLabel: "Ticket path",
         slugFree: "Slug confirmed free (target repo probe returned 404).",
@@ -1670,15 +1670,20 @@ const en: Translation = {
       // operator-facing): event timeline (seven stages + timestamps +
       // ticket_path + PR links) + gate summary + delivery status;
       // workorder_submitted/pr_open/merged/blocked reuse the customer-facing
-      // frozen wording.
+      // frozen wording. wire-demand-auto-export task 2.2: adds the
+      // auto_export_failed stage (with reason rendering) and the auto-trigger
+      // badge wording.
       progress: {
         expand: "Generation progress",
         collapse: "Hide progress",
         title: "Generation progress",
         empty: "Not exported yet",
         prLink: "View PR",
+        autoTrigger: "auto",
+        reasonLabel: "Reason: ",
         stages: {
           workorder_exported: "Workorder exported",
+          auto_export_failed: "Auto export rejected · manual action needed",
           pipeline_run: "Delivered (puller committed it)",
           workorder_submitted: "Entered the generation pipeline",
           pr_open: "Crawler generated · pending human review",

@@ -22,10 +22,12 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
   rejected: "bg-rose-50 text-rose-700 ring-rose-200",
 };
 
-/** 进度面阶段全集（wire-demand-visibility 任务 2.2 冻结七类）。
+/** 进度面阶段全集（wire-demand-visibility 任务 2.2 冻结七类；
+ * wire-demand-auto-export 任务 2.1 增第八类 auto_export_failed）。
  * gate_result 由 gate 摘要覆盖不重复渲染；未知类型静默跳过，绝不猜状态。 */
 const PROGRESS_STAGES = [
   "workorder_exported",
+  "auto_export_failed",
   "pipeline_run",
   "workorder_submitted",
   "pr_open",
@@ -35,9 +37,10 @@ const PROGRESS_STAGES = [
 ] as const;
 type ProgressStage = (typeof PROGRESS_STAGES)[number];
 
-/** 阶段圆点配色：受阻/丢失红、待审琥珀、点亮绿、其余中性灰。 */
+/** 阶段圆点配色：受阻/丢失/自动出单被拒红、待审琥珀、点亮绿、其余中性灰。 */
 const PROGRESS_DOT_CLASS: Record<ProgressStage, string> = {
   workorder_exported: "bg-slate-400",
+  auto_export_failed: "bg-rose-500",
   pipeline_run: "bg-slate-400",
   workorder_submitted: "bg-slate-400",
   pr_open: "bg-amber-500",
@@ -367,19 +370,28 @@ function DispatchPanel({
 /** 编排进度面（wire-demand-visibility 任务 2.2）：每单可展开的全事件时间线。
 
  * 数据源 = 列表端点已返回的 pipeline_events/gate/scope_status（不新增聚合
- * 端点）；事件按落库顺序映射七类人类阶段（含时间、ticket_path、PR 链接），
+ * 端点）；事件按落库顺序映射人类阶段（含时间、ticket_path、PR 链接），
  * 未发生即不渲染；未出单如实占位「尚未出单」，绝不虚构进度（spec 红线）。
+ * 自动出单（wire-demand-auto-export 任务 2.1）：trigger=auto 的
+ * workorder_exported 带自动徽标；auto_export_failed 渲染失败原因，且
+ * 有任一尝试留档（含失败）即不再显示「尚未出单」占位。
  * gate_result 不重复渲染（gate 摘要覆盖）；未知事件类型静默跳过不崩溃。
  */
 function ProgressSection({ demand }: { demand: AdminDemand }) {
   const { t, i18n } = useTranslation();
 
-  // 七类阶段事件按序过滤；其余（gate_result 等）不进时间线。
+  // 阶段事件按序过滤；其余（gate_result 等）不进时间线。
   const entries = demand.pipeline_events.flatMap((event) => {
     const type = event.type;
     if (!isProgressStage(type)) return [];
     return [{ type, event }];
   });
+
+  // 「尚未出单」占位语义（wire-demand-auto-export 任务 2.1）：只在无任何
+  // 出单尝试留档时显示——有 auto_export_failed 即视为已有尝试，不占位。
+  const hasExportAttempt =
+    entries.length > 0 ||
+    demand.pipeline_events.some((event) => event.type === "auto_export_failed");
 
   const scopeStatus = demand.scope_status;
   const scopeKey =
@@ -397,7 +409,7 @@ function ProgressSection({ demand }: { demand: AdminDemand }) {
       <h3 className="text-sm font-medium text-slate-800">
         {t("admin.demands.progress.title")}
       </h3>
-      {entries.length === 0 ? (
+      {!hasExportAttempt ? (
         <p
           data-testid="admin-demand-progress-empty"
           className="mt-2 text-xs text-slate-400"
@@ -415,6 +427,14 @@ function ProgressSection({ demand }: { demand: AdminDemand }) {
                 ? event.pipeline_run_id
                 : null;
             const prUrl = typeof event.pr_url === "string" ? event.pr_url : null;
+            // 自动出单标注：仅 workorder_exported 带 trigger=auto（人工不带此键）。
+            const autoTrigger =
+              type === "workorder_exported" && event.trigger === "auto";
+            // 自动出单被拒：如实呈现服务端拒绝文案（非字符串不猜）。
+            const failReason =
+              type === "auto_export_failed" && typeof event.reason === "string"
+                ? event.reason
+                : null;
             return (
               <li
                 key={index}
@@ -429,6 +449,14 @@ function ProgressSection({ demand }: { demand: AdminDemand }) {
                 <span className="font-medium">
                   {t(`admin.demands.progress.stages.${type}`)}
                 </span>
+                {autoTrigger && (
+                  <span
+                    data-testid="admin-demand-progress-auto"
+                    className="rounded bg-sky-50 px-1.5 py-0.5 text-[11px] text-sky-700 ring-1 ring-sky-200"
+                  >
+                    {t("admin.demands.progress.autoTrigger")}
+                  </span>
+                )}
                 {at && <span className="text-slate-400">{at}</span>}
                 {ticketPath && (
                   <span className="font-mono text-[11px] text-slate-400">
@@ -450,6 +478,15 @@ function ProgressSection({ demand }: { demand: AdminDemand }) {
                   >
                     {t("admin.demands.progress.prLink")}
                   </a>
+                )}
+                {failReason && (
+                  <span
+                    data-testid="admin-demand-progress-reason"
+                    className="text-slate-400"
+                  >
+                    {t("admin.demands.progress.reasonLabel")}
+                    {failReason}
+                  </span>
                 )}
               </li>
             );

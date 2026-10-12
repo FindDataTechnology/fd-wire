@@ -605,6 +605,166 @@ describe("DemandsPage 编排进度面（wire-demand-visibility 任务 2.2）", (
     expect(gate.textContent).toContain("尝试 2 次");
     expect(gate.textContent).toContain("流水线运行 1 次");
   });
+
+  // 自动出单进度面（wire-demand-auto-export 任务 2.3）：失败阶段+原因、
+  // 自动徽标、占位语义。
+  it("自动出单被拒：失败阶段+原因渲染、红点，且不再显示「尚未出单」占位", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [
+          demand({
+            id: 2,
+            status: "in_progress",
+            pipeline_events: [
+              {
+                at: "2026-10-04T10:00:00+00:00",
+                type: "auto_export_failed",
+                reason: "需求单 DE-20261004-02 没有 source_urls（存量单无源地址）",
+                status_code: 422,
+                trigger: "auto",
+              },
+            ],
+          }),
+        ],
+        bearerToken: TOKEN,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    expandProgress(2);
+    const failed = screen
+      .getAllByTestId("admin-demand-progress-entry")
+      .find((el) => el.getAttribute("data-stage") === "auto_export_failed")!;
+    expect(failed.textContent).toContain("自动出单被拒·需人工处置");
+    expect(failed.querySelector(".bg-rose-500")).not.toBeNull();
+    // 失败原因以次要文本如实呈现
+    const reason = screen.getByTestId("admin-demand-progress-reason");
+    expect(reason.textContent).toContain("原因：");
+    expect(reason.textContent).toContain("没有 source_urls");
+    // 有失败留痕即不显示「尚未出单」占位
+    expect(screen.queryByTestId("admin-demand-progress-empty")).toBeNull();
+  });
+
+  it("auto_export_failed 的 reason 非字符串：不猜不渲染原因", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [
+          demand({
+            id: 2,
+            status: "in_progress",
+            pipeline_events: [
+              {
+                at: "2026-10-04T10:00:00+00:00",
+                type: "auto_export_failed",
+                reason: 422,
+                status_code: 422,
+              },
+            ],
+          }),
+        ],
+        bearerToken: TOKEN,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    expandProgress(2);
+    expect(
+      screen
+        .getAllByTestId("admin-demand-progress-entry")
+        .find((el) => el.getAttribute("data-stage") === "auto_export_failed"),
+    ).toBeDefined();
+    expect(screen.queryByTestId("admin-demand-progress-reason")).toBeNull();
+  });
+
+  it("自动出单成功：trigger=auto 带自动徽标；人工出单（无 trigger）不带", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [
+          demand({
+            id: 2,
+            status: "in_progress",
+            pipeline_events: [
+              {
+                at: "2026-10-04T10:00:00+00:00",
+                type: "workorder_exported",
+                ticket_path:
+                  "reports/health-tickets/20261004-wire-DE-20261004-02.yaml",
+                trigger: "auto",
+              },
+            ],
+          }),
+          demand({
+            id: 3,
+            status: "delivered",
+            pipeline_events: [
+              { at: "2026-10-04T10:00:00+00:00", type: "workorder_exported" },
+            ],
+          }),
+        ],
+        bearerToken: TOKEN,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    expandProgress(2);
+    const badge = screen.getByTestId("admin-demand-progress-auto");
+    expect(badge.textContent).toBe("自动");
+    // 徽标挂在「已出单」阶段行上
+    expect(
+      badge
+        .closest('[data-testid="admin-demand-progress-entry"]')!
+        .getAttribute("data-stage"),
+    ).toBe("workorder_exported");
+
+    // 人工出单（事件不带 trigger 键）：同一时间线零自动徽标
+    expandProgress(3);
+    expect(screen.queryAllByTestId("admin-demand-progress-auto").length).toBe(0);
+  });
+
+  it("占位语义：仅 auto_export_failed 留痕时不显示「尚未出单」", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installAdminBackend({
+        demands: [
+          demand({ id: 1, status: "submitted" }),
+          demand({
+            id: 2,
+            status: "in_progress",
+            pipeline_events: [
+              {
+                at: "2026-10-04T10:00:00+00:00",
+                type: "auto_export_failed",
+                reason: "slug 已被占用",
+                status_code: 409,
+                trigger: "auto",
+              },
+            ],
+          }),
+        ],
+        bearerToken: TOKEN,
+      }).fetchImpl,
+    );
+    render(<DemandsPage />);
+    await screen.findAllByTestId("admin-demand-item");
+
+    // 无任何尝试留档：占位在场、零阶段条目
+    expandProgress(1);
+    expect(
+      screen.getByTestId("admin-demand-progress-empty").textContent,
+    ).toContain("尚未出单");
+    expect(screen.queryAllByTestId("admin-demand-progress-entry").length).toBe(0);
+
+    // 仅失败留痕：占位退场，失败阶段在场
+    expandProgress(2);
+    expect(screen.queryByTestId("admin-demand-progress-empty")).toBeNull();
+    expect(screen.getAllByTestId("admin-demand-progress-entry").length).toBe(1);
+  });
 });
 
 describe("demandsMachine 镜像（wire-ux-consolidation 任务 3.5）", () => {
