@@ -42,8 +42,8 @@ spec:
       containers:
         - name: api
           # 不可变标签纪律（mcp-service-deploy spec：禁 latest/浮动标签）。
-          # 出片 tag=law-ai-official 快照仓 sha（fd-wire-images 4c9e4ef = 真 dff833b（禁爬源清单：淘宝/拼多多双闸硬拒））。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-4c9e4ef
+          # 出片 tag=law-ai-official 快照仓 sha（fd-wire-images 647fe01 = 真 ed59a57（受理后自动出单：补扫+trigger=auto+失败留痕））。
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-647fe01
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

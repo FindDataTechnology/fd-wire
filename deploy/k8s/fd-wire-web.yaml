@@ -28,8 +28,8 @@ spec:
       containers:
         - name: web
           # TODO(go-live): 首次构建后回填实际 sha- tag。
-          # 出片 tag=law-ai-official 快照仓 sha（fd-wire-images 7b94036 = 真 b49a0c6（需求单可见性：运营进度面+客户交付就绪面））。
-          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-7b94036
+          # 出片 tag=law-ai-official 快照仓 sha（fd-wire-images 647fe01 = 真 ed59a57（受理后自动出单：进度面失败阶段+自动徽标））。
+          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-647fe01
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
