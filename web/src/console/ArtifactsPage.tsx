@@ -16,6 +16,12 @@
 //   draft/archived/非 dashboard 不出现该入口。
 //   wire-share-ttl-options：弹层内有效期三选一（7/30/90 天，缺省 30）——
 //   改选即按新 ttl_days 重新生成，到期时间随选联动（响应覆盖本地预览）。
+// - alert_rule 行告警执行面（wire-alert-evaluation 任务 5）：状态徽标
+//   （firing 红/ok 绿/错误琥珀/未评估灰，来自 GET /alerts/states 一次性
+//   map；拉取失败静默降级为全「未评估」不阻塞页面）+ 最近评估时间；
+//   行展开（查看 spec）时附「告警事件」小节（最近 10 条 + 手动刷新）与
+//   「试运行」按钮（POST /artifacts/{id}/alert/test——成功展示归约值与
+//   触发判定，失败后端 detail 如实红条）。非 alert_rule 行零变化。
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -32,10 +38,17 @@ import {
   fetchConversations,
   fetchLifecycleArtifact,
   fetchLifecycleArtifacts,
+  getAlertEvents,
+  getAlertStates,
   publishArtifact,
   restoreArtifact,
   saveArtifactSpec,
   SHARE_TTL_DAYS,
+  testAlertRule,
+  type AlertEvent,
+  type AlertStatesMap,
+  type AlertStateSummary,
+  type AlertTestResult,
   type Artifact,
   type ArtifactDetail,
   type ArtifactKind,
@@ -46,7 +59,7 @@ import {
   type DashboardShareLink,
   type ShareTtlDays,
 } from "./api";
-import { formatServerDate } from "./util";
+import { formatServerDate, truncate } from "./util";
 import { DashboardPane } from "./dashboard/DashboardPane";
 import { FormPane } from "./form/FormPane";
 
@@ -66,6 +79,35 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
   published: "bg-emerald-100 text-emerald-700",
   archived: "bg-slate-200 text-slate-600",
 };
+
+// 告警执行态徽标四态（wire-alert-evaluation）：firing 红 / ok 绿 / 错误
+// 琥珀 / 未评估灰。
+const ALERT_STATE_BADGE_CLASS: Record<AlertBadgeState, string> = {
+  firing: "bg-red-100 text-red-700",
+  ok: "bg-emerald-100 text-emerald-700",
+  error: "bg-amber-100 text-amber-700",
+  unevaluated: "bg-slate-200 text-slate-600",
+};
+
+// 告警事件 kind 徽标四枚举（firing 红 / resolved 绿 / error 琥珀 /
+// notify_failed 灰）。
+const ALERT_EVENT_KIND_CLASS: Record<AlertEvent["kind"], string> = {
+  firing: "bg-red-100 text-red-700",
+  resolved: "bg-emerald-100 text-emerald-700",
+  error: "bg-amber-100 text-amber-700",
+  notify_failed: "bg-slate-200 text-slate-600",
+};
+
+/** 行内告警徽标态：states map 命中且 firing → firing；ok 且带最近错误 →
+ *  error（琥珀，完整文案「错误（最近 N 时）」走 title）；ok → ok；无键 →
+ *  unevaluated（从未评估）。 */
+type AlertBadgeState = "firing" | "ok" | "error" | "unevaluated";
+
+function alertBadgeOf(state: AlertStateSummary | undefined): AlertBadgeState {
+  if (state == null) return "unevaluated";
+  if (state.state === "firing") return "firing";
+  return state.lastErrorAt != null ? "error" : "ok";
+}
 
 type StatusAction = "publish" | "archive" | "restore";
 
@@ -94,10 +136,15 @@ export function ArtifactsPage() {
   // 刚空白创建的产物 id：其看板/表单展开区直接进编辑态（创建即跳编辑器）。
   const [freshlyCreatedId, setFreshlyCreatedId] = useState<number | null>(null);
   const [freshlyFormId, setFreshlyFormId] = useState<number | null>(null);
+  // 告警评估状态（wire-alert-evaluation）：进页对 alert_rule 行取一次的
+  // map；null = 尚未到达（徽标暂不渲染），{} = 已到达或失败降级（无键即
+  // 「未评估」——拉取失败静默降级，绝不阻塞页面）。
+  const [alertStates, setAlertStates] = useState<AlertStatesMap | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
     setArtifacts(null);
+    setAlertStates(null);
     try {
       const [rows, convs] = await Promise.all([
         fetchLifecycleArtifacts(),
@@ -105,6 +152,13 @@ export function ArtifactsPage() {
       ]);
       setArtifacts(rows);
       setConversations(convs);
+      // states 只为 alert_rule 行取一次（进页即拉；列表里一条告警规则都
+      // 没有则不请求）；失败静默降级为全「未评估」。
+      if (rows.some((a) => a.kind === "alert_rule")) {
+        getAlertStates()
+          .then((states) => setAlertStates(states))
+          .catch(() => setAlertStates({}));
+      }
     } catch {
       setError("artifacts");
     }
@@ -306,6 +360,13 @@ export function ArtifactsPage() {
               artifact.origin_conversation_id != null
                 ? conversationById.get(artifact.origin_conversation_id)
                 : undefined;
+            // 告警评估态（wire-alert-evaluation）：仅 alert_rule 行查 map；
+            // 非 alert_rule 行零变化（不渲染告警面）。
+            const alertState =
+              artifact.kind === "alert_rule"
+                ? alertStates?.[String(artifact.id)]
+                : undefined;
+            const alertBadge = alertBadgeOf(alertState);
             return (
               <li
                 key={artifact.id}
@@ -333,6 +394,26 @@ export function ArtifactsPage() {
                   >
                     {t(`console.artifacts.statuses.${artifact.status}`, artifact.status)}
                   </span>
+                  {artifact.kind === "alert_rule" && alertStates != null && (
+                    // 告警执行态徽标：states map 命中四态分色；错误态完整
+                    // 文案（最近出错时间）走 title，简短文案即「错误」。
+                    <span
+                      data-testid="alert-state-badge"
+                      data-state={alertBadge}
+                      title={
+                        alertBadge === "error" && alertState?.lastErrorAt != null
+                          ? t("console.artifacts.alert.states.errorAt", {
+                              time: formatServerDate(alertState.lastErrorAt),
+                            })
+                          : undefined
+                      }
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                        ALERT_STATE_BADGE_CLASS[alertBadge]
+                      }`}
+                    >
+                      {t(`console.artifacts.alert.states.${alertBadge}`)}
+                    </span>
+                  )}
                   <span className="text-sm font-medium text-slate-800" data-testid="artifact-title">
                     {artifact.title}
                   </span>
@@ -455,6 +536,17 @@ export function ArtifactsPage() {
                   <span data-testid="artifact-updated">
                     {t("console.artifacts.updatedLabel")} {formatServerDate(artifact.updated_at)}
                   </span>
+                  {artifact.kind === "alert_rule" &&
+                    alertState?.lastEvaluatedAt != null && (
+                      // 最近评估时间（照页内既有时间惯例 formatServerDate）。
+                      <>
+                        <span>·</span>
+                        <span data-testid="alert-last-evaluated">
+                          {t("console.artifacts.alert.lastEvaluated")}{" "}
+                          {formatServerDate(alertState.lastEvaluatedAt)}
+                        </span>
+                      </>
+                    )}
                   {artifact.origin_conversation_id != null ? (
                     <>
                       <span>·</span>
@@ -477,6 +569,11 @@ export function ArtifactsPage() {
                     artifactId={artifact.id}
                     onSaved={replaceArtifact}
                   />
+                )}
+                {artifact.id === selectedId && artifact.kind === "alert_rule" && (
+                  // 告警执行面（wire-alert-evaluation）：alert_rule 行展开
+                  // （查看 spec）时随 spec 编辑器一并呈现——事件列表 + 试运行。
+                  <AlertPane key={`alert-${artifact.id}`} artifactId={artifact.id} />
                 )}
                 {artifact.id === dashboardFor && (
                   <DashboardPane
@@ -1237,6 +1334,145 @@ function ShareLinkDialog({
           </p>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 告警执行面（wire-alert-evaluation 任务 5）：alert_rule 行展开时的
+ * 「告警事件」小节——最近 10 条（kind 徽标四色 + 值/阈值/时间/detail
+ * 摘要）带手动刷新；「试运行」按钮调 POST /artifacts/{id}/alert/test
+ * （零副作用）——成功展示「归约值 X · 将触发/不触发」，失败后端 detail
+ * 如实红条（422 spec 非法 / 400 查询失败等语义由服务端裁决）。
+ */
+function AlertPane({ artifactId }: { artifactId: number }) {
+  const { t } = useTranslation();
+  const [events, setEvents] = useState<AlertEvent[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<AlertTestResult | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
+
+  const loadEvents = useCallback(() => {
+    setEvents(null);
+    setFailed(false);
+    getAlertEvents(artifactId, 10)
+      .then((rows) => setEvents(rows))
+      .catch(() => setFailed(true));
+  }, [artifactId]);
+
+  useEffect(() => {
+    setTestResult(null);
+    setTestError(null);
+    loadEvents();
+  }, [loadEvents]);
+
+  const runTest = async () => {
+    if (testing) return;
+    setTesting(true);
+    setTestResult(null);
+    setTestError(null);
+    try {
+      setTestResult(await testAlertRule(artifactId));
+    } catch (err) {
+      setTestError(apiErrorText(err, t("console.artifacts.alert.test.failed")));
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <div data-testid="alert-pane" className="mt-3 rounded-md border border-rose-200 bg-rose-50/40 p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-sm font-semibold">
+          {t("console.artifacts.alert.events.title")}
+        </h2>
+        <button
+          type="button"
+          data-testid="alert-events-refresh"
+          onClick={loadEvents}
+          className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-100"
+        >
+          {t("console.artifacts.alert.events.refresh")}
+        </button>
+        <button
+          type="button"
+          data-testid="alert-test-button"
+          disabled={testing}
+          onClick={() => void runTest()}
+          className="ml-auto rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {testing
+            ? t("console.artifacts.alert.test.running")
+            : t("console.artifacts.alert.test.button")}
+        </button>
+      </div>
+
+      {testResult != null && (
+        <p data-testid="alert-test-result" className="mt-2 text-[11px] text-emerald-700">
+          {t("console.artifacts.alert.test.result", {
+            value: testResult.value,
+            verdict: t(
+              testResult.wouldFire
+                ? "console.artifacts.alert.test.wouldFire"
+                : "console.artifacts.alert.test.wouldNotFire",
+            ),
+          })}
+        </p>
+      )}
+      {testError != null && (
+        <p data-testid="alert-test-error" className="mt-2 text-[11px] text-red-600">
+          {testError}
+        </p>
+      )}
+
+      {failed && (
+        <p data-testid="alert-events-error" className="mt-2 text-xs text-red-600">
+          {t("console.artifacts.alert.events.fetchError")}
+        </p>
+      )}
+      {events == null && !failed && (
+        <p data-testid="alert-events-loading" className="mt-2 text-xs text-slate-400">
+          {t("console.artifacts.alert.events.loading")}
+        </p>
+      )}
+      {events != null && events.length === 0 && (
+        <p data-testid="alert-events-empty" className="mt-2 text-xs text-slate-400">
+          {t("console.artifacts.alert.events.empty")}
+        </p>
+      )}
+      <ul data-testid="alert-events-list" className="mt-2 space-y-1.5">
+        {events?.map((event) => (
+          <li
+            key={event.id}
+            data-testid="alert-event-item"
+            data-event-id={event.id}
+            className="flex flex-wrap items-center gap-2 rounded border border-slate-200 bg-white px-2.5 py-1.5 text-[11px]"
+          >
+            <span
+              data-testid="alert-event-kind"
+              data-kind={event.kind}
+              className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                ALERT_EVENT_KIND_CLASS[event.kind]
+              }`}
+            >
+              {t(`console.artifacts.alert.kinds.${event.kind}`)}
+            </span>
+            <span className="font-mono text-slate-600">
+              {t("console.artifacts.alert.events.valueLabel")} {event.value ?? "-"}
+            </span>
+            <span className="font-mono text-slate-600">
+              {t("console.artifacts.alert.events.thresholdLabel")} {event.threshold ?? "-"}
+            </span>
+            <span className="text-slate-400">{formatServerDate(event.createdAt)}</span>
+            {event.detail != null && (
+              <span data-testid="alert-event-detail" className="text-slate-500">
+                {truncate(event.detail, 60)}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

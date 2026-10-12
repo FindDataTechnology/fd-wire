@@ -52,6 +52,14 @@ def validate_spec(spec: object) -> str | None:
 #: form 产物 kind 短名（spec 校验按 kind 分派追加 form 结构层的依据）
 FORM_KIND = "form"
 
+#: alert_rule 产物 kind 短名（保存时追加规则契约层的依据）
+ALERT_KIND = "alert_rule"
+
+
+class InvalidAlertArtifactSpec(InvalidArtifactSpec):
+    """alert_rule 规则契约未过校验（alerts.spec_validate）——路由层转 400
+    （告警规则是机读调试面，契约文案如实定位字段；与 form 的 422 面分置）。"""
+
 
 def validate_kind_spec(kind: str, spec: object) -> str | None:
     """按 kind 分派 spec 校验（wire-form-builder design D1）：
@@ -66,6 +74,24 @@ def validate_kind_spec(kind: str, spec: object) -> str | None:
     if kind == FORM_KIND and isinstance(spec, dict):
         return validate_form_spec(spec.get("spec"))
     return None
+
+
+def _validate_alert_spec(spec: object) -> None:
+    """alert_rule 保存路径的规则契约层（wire-alert-evaluation）。
+
+    对信封内层 ``spec.spec`` 跑 ``alerts.spec_validate.validate_alert_spec``
+    （query 过 parse_panel_query / 聚合与条件枚举 / 区间 / webhook 前缀）；
+    不过抛 :class:`InvalidAlertArtifactSpec`（路由层 400 detail=文案）。
+    只在**新版本保存**时裁决——存量不合形 spec 不回溯（评估器对存量记
+    error 事件受冷却约束，绝不崩溃）。
+    """
+    if not isinstance(spec, dict):  # pragma: no cover - 前置校验已保证
+        return
+    from ..alerts.spec_validate import validate_alert_spec
+
+    error = validate_alert_spec(spec.get("spec"))
+    if error is not None:
+        raise InvalidAlertArtifactSpec(error)
 
 
 def _require_form_dataset(
@@ -174,8 +200,9 @@ def update_spec(
     form 产物在通用校验之上追加两层（wire-form-builder design D1，全部在
     版本行落库前——任何拒绝**零半写**）：结构层（validate_form_spec）+
     datasetId 属主层（``datasets_db``=datasets 库会话，datasetId 非空时验
-    存在且属本企业，见 _require_form_dataset）。dashboard 及其余 kind 仅
-    走通用层（语义零漂移，``datasets_db`` 不参与）。
+    存在且属本企业，见 _require_form_dataset）。alert_rule 产物追加规则
+    契约层（_validate_alert_spec，InvalidAlertArtifactSpec→路由层 400）。
+    dashboard 及其余 kind 仅走通用层（语义零漂移，``datasets_db`` 不参与）。
     """
     if artifact.status == ArtifactStatus.archived.value:
         raise ArtifactLocked(
@@ -188,6 +215,8 @@ def update_spec(
         _require_form_dataset(
             spec, datasets_db=datasets_db, customer_id=artifact.customer_id
         )
+    if artifact.kind == ALERT_KIND:
+        _validate_alert_spec(spec)
     spec = dict(spec)  # type: ignore[arg-type]
     artifact.version += 1
     db.add(

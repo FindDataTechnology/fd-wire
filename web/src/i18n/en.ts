@@ -503,6 +503,41 @@ const en: Translation = {
         copied: "Copied to clipboard.",
         close: "Close",
       },
+      // Alert evaluation surface (wire-alert-evaluation task 5): alert_rule
+      // row state badge + detail-area event list + test run.
+      alert: {
+        lastEvaluated: "Last evaluated",
+        states: {
+          firing: "Firing",
+          ok: "OK",
+          error: "Error",
+          errorAt: "Error (last {{time}})",
+          unevaluated: "Not evaluated",
+        },
+        kinds: {
+          firing: "Firing",
+          resolved: "Resolved",
+          error: "Error",
+          notify_failed: "Notify failed",
+        },
+        events: {
+          title: "Alert events",
+          refresh: "Refresh",
+          loading: "Loading events…",
+          fetchError: "Failed to load alert events.",
+          empty: "No events",
+          valueLabel: "Value",
+          thresholdLabel: "Threshold",
+        },
+        test: {
+          button: "Test run",
+          running: "Testing…",
+          result: "Reduced value {{value}} · {{verdict}}",
+          wouldFire: "would fire",
+          wouldNotFire: "would not fire",
+          failed: "Test run failed, please retry later.",
+        },
+      },
     },
     // Dashboard renderer + basic editor (wire-dashboard-renderer): the
     // dashboard-kind view entry, snapshot-caliber note, legacy compat and

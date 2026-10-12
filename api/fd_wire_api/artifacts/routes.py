@@ -135,6 +135,10 @@ def update_artifact(
         )
     except service.ArtifactLocked as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except service.InvalidAlertArtifactSpec as exc:
+        # alert_rule 规则契约层（wire-alert-evaluation）：400 detail=校验文案
+        # （须先于父类 InvalidArtifactSpec 捕获——子类）。
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except service.InvalidArtifactSpec as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return artifact_detail(artifact, service.current_spec(db, artifact))

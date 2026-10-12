@@ -2153,3 +2153,154 @@ export function removeTeamMember(
     { method: "DELETE" },
   ) as Promise<{ deleted: boolean }>;
 }
+
+// ── 告警执行：状态/事件/试运行（wire-alert-evaluation 任务 5 web 面）──────
+// 契约（api 仓 alerts 路由，冻结形状；Bearer 登录身份，客户隔离）：
+// - GET /api/v1/alerts/states → {"states": {"<artifact_id>": {state,
+//   last_value, last_evaluated_at, last_error_at}}}——评估引擎按周期维护的
+//   规则当前态（ok/firing）；从未评估的规则无键（前端按「未评估」呈现）；
+// - GET /api/v1/alerts/events?artifact_id=&limit= → {"events":[{id,
+//   artifact_id, kind, value, threshold, detail, created_at}]}——id 倒序，
+//   kind 四枚举 firing/resolved/error/notify_failed；
+// - POST /api/v1/artifacts/{id}/alert/test → 200 {value, would_fire}（试运行
+//   零副作用：只算归约值与触发判定、不落事件不改状态）；422=spec 非法、
+//   400=查询失败、非 alert_rule 404——detail 如实上抛（ConsoleApiError）。
+// 边界翻译纪律与 team 段同：wire snake_case、TS camelCase，翻译收口在本文件。
+
+/** 单条 alert_rule 的评估态（states map 值；snake→camel 已译）。 */
+export interface AlertStateSummary {
+  state: "ok" | "firing";
+  /** 最近一次归约值（首评估前为 null）。 */
+  lastValue: number | null;
+  /** 最近评估时间（naive UTC ISO；未评估为 null）。 */
+  lastEvaluatedAt: string | null;
+  /** 最近评估出错时间（发生过 error 事件后非空；ok 态也可能带——如实呈现）。 */
+  lastErrorAt: string | null;
+}
+
+/** artifact_id（字符串化）→ 评估态（从未评估的规则无键）。 */
+export type AlertStatesMap = Record<string, AlertStateSummary>;
+
+/** 告警事件（wire snake_case 已译 camelCase）。 */
+export interface AlertEvent {
+  id: number;
+  artifactId: number;
+  kind: "firing" | "resolved" | "error" | "notify_failed";
+  value: number | null;
+  threshold: number | null;
+  /** 失败原因等补充说明（无则 null）。 */
+  detail: string | null;
+  createdAt: string;
+}
+
+/** 试运行结果：归约值 + 按当前阈值是否会触发（零副作用）。 */
+export interface AlertTestResult {
+  value: number;
+  wouldFire: boolean;
+}
+
+/** wire 可空数值收窄（null/缺失/非有限数 → null）。 */
+function asOptionalNumber(raw: unknown): number | null {
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : null;
+}
+
+/** wire 可空时间串收窄（空串/缺失 → null）。 */
+function asOptionalIso(raw: unknown): string | null {
+  return typeof raw === "string" && raw ? raw : null;
+}
+
+/** wire 事件 kind 四枚举收窄。 */
+function asAlertEventKind(
+  raw: unknown,
+): AlertEvent["kind"] | undefined {
+  return raw === "firing" || raw === "resolved" || raw === "error" ||
+    raw === "notify_failed"
+    ? raw
+    : undefined;
+}
+
+/** states map 单值收窄翻译（snake→camel；坏条目跳过）。 */
+function parseAlertStateEntry(raw: unknown): AlertStateSummary | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const record = raw as Record<string, unknown>;
+  if (record.state !== "ok" && record.state !== "firing") return undefined;
+  return {
+    state: record.state,
+    lastValue: asOptionalNumber(record.last_value),
+    lastEvaluatedAt: asOptionalIso(record.last_evaluated_at),
+    lastErrorAt: asOptionalIso(record.last_error_at),
+  };
+}
+
+/** 全量告警评估态（键保持 artifact_id 字符串、值译 camelCase）。 */
+export async function getAlertStates(): Promise<AlertStatesMap> {
+  const body = await requestJson(`${API_BASE}/v1/alerts/states`, {
+    method: "GET",
+  });
+  const record = (body ?? {}) as Record<string, unknown>;
+  const out: AlertStatesMap = {};
+  if (record.states && typeof record.states === "object") {
+    for (const [key, value] of Object.entries(
+      record.states as Record<string, unknown>,
+    )) {
+      const parsed = parseAlertStateEntry(value);
+      if (parsed) out[key] = parsed;
+    }
+  }
+  return out;
+}
+
+/** 单条规则告警事件（id 倒序；解 {events:[…]} 信封并译 camelCase）。 */
+export async function getAlertEvents(
+  artifactId: number,
+  limit?: number,
+): Promise<AlertEvent[]> {
+  const params = new URLSearchParams({ artifact_id: String(artifactId) });
+  if (limit != null) params.set("limit", String(limit));
+  const body = await requestJson(`${API_BASE}/v1/alerts/events?${params}`, {
+    method: "GET",
+  });
+  const record = (body ?? {}) as Record<string, unknown>;
+  const list = record.events;
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((entry): AlertEvent[] => {
+    if (!entry || typeof entry !== "object") return [];
+    const row = entry as Record<string, unknown>;
+    const kind = asAlertEventKind(row.kind);
+    if (
+      typeof row.id !== "number" ||
+      typeof row.artifact_id !== "number" ||
+      !kind
+    ) {
+      return [];
+    }
+    return [
+      {
+        id: row.id,
+        artifactId: row.artifact_id,
+        kind,
+        value: asOptionalNumber(row.value),
+        threshold: asOptionalNumber(row.threshold),
+        detail: asOptionalIso(row.detail),
+        createdAt: asOptionalIso(row.created_at) ?? "",
+      },
+    ];
+  });
+}
+
+/** 试运行（POST /artifacts/{id}/alert/test；零副作用——不落事件不改状态）。
+ *  错误走既有 ConsoleApiError 语义：422 spec 非法 / 400 查询失败 / 404 非
+ *  alert_rule——后端 detail 如实呈现。 */
+export async function testAlertRule(
+  artifactId: number,
+): Promise<AlertTestResult> {
+  const body = await requestJsonAnyMethod(
+    `${API_BASE}/v1/artifacts/${artifactId}/alert/test`,
+    "POST",
+  );
+  const record = (body ?? {}) as Record<string, unknown>;
+  return {
+    value: asOptionalNumber(record.value) ?? 0,
+    wouldFire: record.would_fire === true,
+  };
+}

@@ -205,6 +205,22 @@ export interface ConsoleBackendOptions {
   /** 强制 GET /api/console/team 返回该状态（403 无权态 / 故障态注入）。 */
   failTeamStatus?: number;
   failTeamDetail?: string;
+  /** 种子告警评估状态（wire-alert-evaluation 任务 5）：键 = artifact_id
+   *  字符串化，仅对同客户可见的 alert_rule 产物生效。 */
+  alertStates?: Record<string, FakeAlertStateSeed>;
+  /** 种子告警事件（wire snake_case 形状；artifact_id 引用种子产物）。 */
+  alertEvents?: FakeAlertEventSeed[];
+  /** 试运行返回值（POST /artifacts/{id}/alert/test；缺省 {value:1,
+   *  would_fire:false}——试运行零副作用，不写 states/events）。 */
+  alertTest?: { value: number; would_fire: boolean };
+  /** 强制 GET /api/v1/alerts/states 返回该状态（徽标降级态测试）。 */
+  failAlertStatesStatus?: number;
+  /** 强制 GET /api/v1/alerts/events 返回该状态（事件列表失败态）。 */
+  failAlertEventsStatus?: number;
+  /** 强制 POST /api/v1/artifacts/{id}/alert/test 返回该状态（422 spec 非法 /
+   *  400 查询失败——detail 如实上抛）。 */
+  failAlertTestStatus?: number;
+  failAlertTestDetail?: string;
 }
 
 /** 源包种子（wire-source-packs）：假后端按 indicators 分页切片出详情。 */
@@ -298,6 +314,30 @@ export type FakeTeamInviteRow = {
   createdAt: string;
 };
 
+/** 告警评估状态种子（wire-alert-evaluation）：wire snake_case 形状直存。 */
+export type FakeAlertStateSeed = {
+  state: "ok" | "firing";
+  last_value?: number | null;
+  last_evaluated_at?: string | null;
+  last_error_at?: string | null;
+  /** 带 customer_id 的仅同客户可见。 */
+  customer_id?: string;
+};
+
+/** 告警事件种子（wire-alert-evaluation）：wire snake_case 形状，
+ *  artifact_id 引用种子产物（须 kind=alert_rule 才会被端点放行）。 */
+export type FakeAlertEventSeed = {
+  id: number;
+  artifact_id: number;
+  kind: "firing" | "resolved" | "error" | "notify_failed";
+  value?: number | null;
+  threshold?: number | null;
+  detail?: string | null;
+  created_at?: string;
+  /** 带 customer_id 的仅同客户可见。 */
+  customer_id?: string;
+};
+
 /** 安装假后端为 global fetch；返回调用记录与状态注入接口。 */
 export function installConsoleBackend(
   conversations: Conversation[],
@@ -329,6 +369,9 @@ export function installConsoleBackend(
     getEntityRelationships: () => FakeEntityRelationshipRow[];
     getTeamMembers: () => FakeTeamMemberRow[];
     getTeamInvites: () => FakeTeamInviteRow[];
+    getAlertEvents: () => FakeAlertEventSeed[];
+    getAlertStates: () => Record<string, FakeAlertStateSeed>;
+    addAlertEvent: (seed: FakeAlertEventSeed) => void;
   } {
   const store = new Map<number, StoredConversation>();
   let nextConversationId = 1;
@@ -458,6 +501,30 @@ export function installConsoleBackend(
       createdAt: seed.createdAt ?? "2026-10-12T08:00:00",
     });
     nextTeamInviteId = Math.max(nextTeamInviteId, seed.id + 1);
+  }
+
+  // ── 告警执行假后端状态（wire-alert-evaluation 任务 5）：states map /
+  //    事件列表 snake_case wire 形状直存；试运行返回可配置（零副作用——
+  //    不回写 states/events，语义对齐 api 侧 test 端点）。──
+  const alertStatesStore = new Map<string, FakeAlertStateSeed>();
+  for (const [key, seed] of Object.entries(options.alertStates ?? {})) {
+    alertStatesStore.set(key, { ...seed });
+  }
+  const alertEventsStore = new Map<number, FakeAlertEventSeed>();
+  let nextAlertEventId = 1;
+  for (const seed of options.alertEvents ?? []) {
+    alertEventsStore.set(seed.id, { ...seed });
+    nextAlertEventId = Math.max(nextAlertEventId, seed.id + 1);
+  }
+
+  /** 追加告警事件（刷新/评估推进断言面：列表重拉后可见）。 */
+  function addAlertEvent(seed: Omit<FakeAlertEventSeed, "created_at"> &
+    Partial<Pick<FakeAlertEventSeed, "created_at">>): void {
+    alertEventsStore.set(seed.id, {
+      created_at: "2026-10-12T09:00:00",
+      ...seed,
+    });
+    nextAlertEventId = Math.max(nextAlertEventId, seed.id + 1);
   }
 
   function addRefreshSchedule(seed: StoredSchedule): void {
@@ -1930,6 +1997,92 @@ export function installConsoleBackend(
       return Promise.resolve(jsonResponse(lifecycleDetail(artifact)));
     }
 
+    // ── 告警执行（wire-alert-evaluation 任务 5）：states map / 事件列表
+    //    （id 倒序 + artifact_id/limit 过滤）/ 试运行（可配置返回 + 可注失败，
+    //    零副作用）——语义对齐 api 仓 alerts 路由（Bearer 客户隔离；states
+    //    仅放行同客户可见的 alert_rule 产物，非 alert_rule 产物 test 404）。──
+    if (path === "/api/v1/alerts/states" && method === "GET") {
+      if (options.failAlertStatesStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `alert states ${options.failAlertStatesStatus}` },
+            options.failAlertStatesStatus,
+          ),
+        );
+      }
+      const states: Record<string, unknown> = {};
+      for (const [key, seed] of alertStatesStore) {
+        const artifact = ownLifecycleArtifact(Number(key), customerId);
+        if (!artifact || artifact.kind !== "alert_rule") continue;
+        if (seed.customer_id && seed.customer_id !== customerId) continue;
+        states[key] = {
+          state: seed.state,
+          last_value: seed.last_value ?? null,
+          last_evaluated_at: seed.last_evaluated_at ?? null,
+          last_error_at: seed.last_error_at ?? null,
+        };
+      }
+      return Promise.resolve(jsonResponse({ states }));
+    }
+
+    if (path === "/api/v1/alerts/events" && method === "GET") {
+      if (options.failAlertEventsStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `alert events ${options.failAlertEventsStatus}` },
+            options.failAlertEventsStatus,
+          ),
+        );
+      }
+      const artifactId = url.searchParams.get("artifact_id");
+      const rawLimit = Number(url.searchParams.get("limit") ?? "50");
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 50;
+      const mine = [...alertEventsStore.values()]
+        .filter((e) => !e.customer_id || e.customer_id === customerId)
+        .filter(
+          (e) =>
+            artifactId == null || artifactId === "" ||
+            String(e.artifact_id) === artifactId,
+        )
+        .sort((a, b) => b.id - a.id)
+        .slice(0, limit);
+      return Promise.resolve(
+        jsonResponse({
+          events: mine.map((e) => ({
+            id: e.id,
+            artifact_id: e.artifact_id,
+            kind: e.kind,
+            value: e.value ?? null,
+            threshold: e.threshold ?? null,
+            detail: e.detail ?? null,
+            created_at: e.created_at ?? "2026-10-12T08:00:00",
+          })),
+        }),
+      );
+    }
+
+    match = path.match(/^\/api\/v1\/artifacts\/(\d+)\/alert\/test$/);
+    if (match && method === "POST") {
+      if (options.failAlertTestStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failAlertTestDetail ??
+                `alert test ${options.failAlertTestStatus}`,
+            },
+            options.failAlertTestStatus,
+          ),
+        );
+      }
+      const artifact = ownLifecycleArtifact(Number(match[1]), customerId);
+      if (!artifact || artifact.kind !== "alert_rule") {
+        return Promise.resolve(jsonResponse({ detail: "artifact not found" }, 404));
+      }
+      const result = options.alertTest ?? { value: 1, would_fire: false };
+      return Promise.resolve(jsonResponse(result));
+    }
+
     // ── 我的数据：数据集列表 / 建档 / 详情 / 预览 ──
     if (path === "/api/v1/datasets" && method === "GET") {
       const mine = [...datasets.values()].filter(
@@ -2619,6 +2772,10 @@ export function installConsoleBackend(
       [...teamMembersStore.values()].map((row) => ({ ...row })),
     getTeamInvites: (): FakeTeamInviteRow[] =>
       [...teamInvitesStore.values()].map((row) => ({ ...row })),
+    getAlertEvents: () => [...alertEventsStore.values()].map((row) => ({ ...row })),
+    getAlertStates: (): Record<string, FakeAlertStateSeed> =>
+      Object.fromEntries([...alertStatesStore.entries()].map(([k, v]) => [k, { ...v }])),
+    addAlertEvent,
   };
 }
 

@@ -6,6 +6,11 @@ from fastapi import FastAPI
 
 from . import __version__
 from .admin import router as admin_router
+# 告警评估引擎（wire-alert-evaluation）：/api/v1/alerts 管理端点 + 产物试运行
+# + lifespan 后台 tick 循环（alert_states/alert_events 挂 AiBase，alembic 0028）
+from .alerts.db import init_db as init_alerts_db
+from .alerts.evaluator import start_alert_evaluator, stop_alert_evaluator
+from .alerts.routes import router as alerts_router
 from .ai import init_db as init_ai_db
 from .ai import router as ai_router
 # 产物生命周期（wire-artifacts-persistence）：/api/v1/artifacts 全端点
@@ -107,6 +112,11 @@ async def lifespan(_: FastAPI):
     # FD_WIRE_REFRESH_SCHEDULER_ENABLED=false 可关）。
     init_schedules_db()
     start_refresh_scheduler()
+    # 告警评估引擎（wire-alert-evaluation）：alert_states/alert_events 幂等
+    # 建表兜底（生产走 alembic 0028）+ tick 循环（published alert_rule 逐条
+    # 评估，缺省 30s；FD_WIRE_ALERTS_ENABLED=false 可关）。
+    init_alerts_db()
+    start_alert_evaluator()
     # 客户数据集（wire-customer-local-data 任务组 2）：登记/同步/修正/上传
     # 表幂等建表兜底（生产走 Alembic 0011）。
     init_datasets_db()
@@ -126,6 +136,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        stop_alert_evaluator()
         stop_selfcheck_loop()
         stop_sealer_loop()
         stop_forwarder_loop()
@@ -164,6 +175,9 @@ app.include_router(ai_router)
 # 产物生命周期（wire-artifacts-persistence）：持久化/版本化/状态机
 # （表与 ai 切片同引擎，create_all 兜底由 init_ai_db 覆盖；生产走 0021）
 app.include_router(artifacts_router)
+# 告警评估管理面（wire-alert-evaluation）：状态/事件时间线 + alert_rule
+# 试运行（零副作用调试面；状态/事件表与产物同 AiBase 引擎）
+app.include_router(alerts_router)
 # 指标目录镜像（任务 6.1）：公开目录查询 + internal 同步触发 + 每日调度
 register_catalog(app)
 # 内部后台（任务 7.1）：客户/账本/需求单派发/目录治理/用量分轨

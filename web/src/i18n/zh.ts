@@ -475,6 +475,41 @@ const zh = {
         copied: "已复制到剪贴板。",
         close: "关闭",
       },
+      // 告警执行面（wire-alert-evaluation 任务 5）：alert_rule 行状态徽标 +
+      // 详情区事件列表 + 试运行。
+      alert: {
+        lastEvaluated: "最近评估",
+        states: {
+          firing: "已触发",
+          ok: "正常",
+          error: "错误",
+          errorAt: "错误（最近 {{time}}）",
+          unevaluated: "未评估",
+        },
+        kinds: {
+          firing: "已触发",
+          resolved: "已恢复",
+          error: "错误",
+          notify_failed: "通知失败",
+        },
+        events: {
+          title: "告警事件",
+          refresh: "刷新",
+          loading: "事件加载中…",
+          fetchError: "告警事件加载失败。",
+          empty: "暂无事件",
+          valueLabel: "值",
+          thresholdLabel: "阈值",
+        },
+        test: {
+          button: "试运行",
+          running: "试运行中…",
+          result: "归约值 {{value}} · {{verdict}}",
+          wouldFire: "将触发",
+          wouldNotFire: "不触发",
+          failed: "试运行失败，请稍后重试。",
+        },
+      },
     },
     // 仪表盘渲染器 + 基础编辑器（wire-dashboard-renderer）：dashboard kind
     // 的看板视图入口、快照口径标注、legacy 兼容与编辑器表单文案。
