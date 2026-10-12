@@ -282,7 +282,11 @@ def check_slug_free(slug: str, *, http_client: httpx.Client | None = None) -> Sl
 
 
 def export_workorder_service(
-    db: Session, demand: Demand, *, slug_override: str | None = None
+    db: Session,
+    demand: Demand,
+    *,
+    slug_override: str | None = None,
+    trigger: str | None = None,
 ) -> dict:
     """出单 service：确定性映射 + append-only 留档入队（端点唯一实现）。
 
@@ -299,6 +303,10 @@ def export_workorder_service(
       同一需求单可重出新工单、历史不改写、状态不迁移；
     - 响应恒带工单全文供人工推送降级——出单时刻未投递（``delivered``
       =false），绝不展示自动化投递成功假象。
+
+    ``trigger``（wire-demand-auto-export）：自动补扫出单传 ``"auto"``，
+    导出事件带 ``trigger`` 键供运营面标注来源；缺省 None 时事件形状与
+    人工出单路径逐字节一致（零漂移）。
     """
     current = DemandStatus(demand.status)
     if current is not DemandStatus.in_progress:
@@ -341,14 +349,15 @@ def export_workorder_service(
     except ValueError as exc:
         raise WorkorderExportError(422, str(exc)) from exc
     sha256 = hashlib.sha256(ticket_yaml.encode("utf-8")).hexdigest()
-    demand.append_pipeline_event(
-        {
-            "type": EVENT_WORKORDER_EXPORTED,
-            "ticket_path": ticket_path,
-            "ticket_yaml": ticket_yaml,
-            "sha256": sha256,
-        }
-    )
+    event: dict = {
+        "type": EVENT_WORKORDER_EXPORTED,
+        "ticket_path": ticket_path,
+        "ticket_yaml": ticket_yaml,
+        "sha256": sha256,
+    }
+    if trigger is not None:
+        event["trigger"] = trigger
+    demand.append_pipeline_event(event)
     db.commit()  # 工单不丢：exported 事件落库即入拉取队列
     db.refresh(demand)
     return {

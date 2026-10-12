@@ -51,6 +51,7 @@ from .demands import router as demands_router
 # 工单状态回流（wire-demand-generation-orchestration 任务 3）：轮询公开仓
 # 工单 YAML 真实状态 → pipeline_events 追加事件 + 客户可见时间线
 from .demands.orchestration_sync import start_workorder_sync, stop_workorder_sync
+from .demands.auto_export import start_auto_export_sweeper, stop_auto_export_sweeper
 from .materialization import init_db as init_materialization_db
 from .materialization import router as materialization_router
 from .materialization import (
@@ -136,9 +137,15 @@ async def lifespan(_: FastAPI):
     # 实体语义层（wire-entity-layer）：entities / entity_relationships
     # 幂等建表兜底（生产走 alembic 0026；零引擎调用——纯元数据声明层）。
     init_entities_db()
+    # 受理后自动出单补扫（wire-demand-auto-export）：tick 循环扫
+    # in_progress 且无任何出单尝试留档的需求单自动出单（缺省 60s；
+    # DEMAND_AUTO_EXPORT_ENABLED=false 可关）。零迁移——事件挂既有
+    # pipeline_events JSON 列。
+    start_auto_export_sweeper()
     try:
         yield
     finally:
+        stop_auto_export_sweeper()
         stop_alert_evaluator()
         stop_selfcheck_loop()
         stop_sealer_loop()
