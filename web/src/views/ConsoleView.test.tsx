@@ -368,6 +368,46 @@ describe("ConsoleView（个人偏好：跨端同步语义）", () => {
     expectActiveTab("usage");
   });
 
+  it("帧序回归（生产实弹）：ready 首帧即已是程序跳转目标页签时，suppress 按目标消费，用户首次切页签照常即写", async () => {
+    const backend = installConsoleBackend([], {
+      preferences: {
+        "demo-customer": {
+          ui_locale: "zh",
+          landing_tab: "team",
+          pinned_dashboard_id: 11,
+        },
+      },
+    });
+    seedDashboard(backend);
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    seedConsoleSession({ sub: "demo-customer" });
+    window.location.hash = "#/console";
+    // 真实浏览器合帧：hash 赋值的事件任务先于 React ready 提交，首帧 tab 直接
+    // 已是跳转目标 artifacts（App 壳用例的 happy-dom 时序为两帧，覆盖不到）。
+    const { rerender } = render(<ConsoleView tab="artifacts" />);
+
+    await screen.findByTestId("console-nav");
+    await waitFor(() =>
+      expect(screen.getByTestId("artifact-dashboard-default")).toBeTruthy(),
+    );
+    // 程序跳转（含首帧即目标）不回写 landing_tab。
+    expect(
+      preferencePuts(backend).filter(
+        (c) => (c.body as Record<string, unknown> | undefined)?.landing_tab !== undefined,
+      ),
+    ).toEqual([]);
+
+    // 用户切页签 → 照常即写（旧实现此处被未消费的 suppress 吞掉——生产抓出）。
+    rerender(<ConsoleView tab="usage" />);
+    await waitFor(() => {
+      expect(
+        preferencePuts(backend).find(
+          (c) => (c.body as { landing_tab?: string })?.landing_tab === "usage",
+        ),
+      ).toBeTruthy();
+    });
+  });
+
   it("裸 #/console 仅 landing_tab=team → 落 team；无置顶不展开、无任何 PUT", async () => {
     const backend = installConsoleBackend([], {
       preferences: { "demo-customer": { ui_locale: "zh", landing_tab: "team" } },

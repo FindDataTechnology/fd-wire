@@ -98,9 +98,12 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
   const [initialDashboardId, setInitialDashboardId] = useState<number | null>(
     null,
   );
-  // 偏好驱动的程序跳转标记：置位期间 tab 变化不回写 landing_tab（见下方
-  // 页签写回 effect）；消费一次即复位。
-  const suppressTabWriteRef = useRef(false);
+  // 偏好驱动的程序跳转标记：记录**跳转目标页签**；当前 tab 到达该目标即
+  // 清标记且不回写——跳转本身不得覆盖用户存的落地习惯。按「目标页签」而非
+  // 「下一次 tab 变化」消费：真实浏览器里 hash 赋值的事件任务先于 React 的
+  // ready 提交任务（首帧即已是目标页签），按变化消费会把标记留给用户的第一
+  // 次切页签、吞掉那次写回（生产冒烟实弹抓出）。
+  const suppressTabWriteRef = useRef<ConsoleTab | null>(null);
   // 上一次生效的 tab（ready 后首帧不算用户导航，变更才写回）。
   const lastTabRef = useRef<ConsoleTab | null>(null);
 
@@ -167,7 +170,7 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
         // pinned（跳 artifacts + 展开该看板）> landing_tab > datasets。
         if (isBareConsoleHash()) {
           if (loaded.pinned_dashboard_id != null) {
-            suppressTabWriteRef.current = true;
+            suppressTabWriteRef.current = "artifacts";
             setInitialDashboardId(loaded.pinned_dashboard_id);
             window.location.hash = "#/console/artifacts";
           } else if (
@@ -175,7 +178,7 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
             loaded.landing_tab !== "datasets"
           ) {
             // 落地 datasets = 裸入口现状（tab 不变），无需跳转也无需 suppress。
-            suppressTabWriteRef.current = true;
+            suppressTabWriteRef.current = loaded.landing_tab as ConsoleTab;
             window.location.hash = `#/console/${loaded.landing_tab}`;
           }
         }
@@ -212,16 +215,19 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
   // 页签写回（wire-personal-preferences）：ready 后 tab 变化即写 landing_tab
   // （fire-and-forget，失败静默）；首帧不算导航；偏好驱动的程序跳转
   //（置顶→artifacts / landing_tab 跳转）经 suppressTabWriteRef 不回写——
-  // 跳转本身不得覆盖用户存的落地习惯。
+  // 跳转本身不得覆盖用户存的落地习惯。标记按目标页签消费（见 ref 注释：
+  // 真实浏览器里首帧可能已是目标页签，按变化消费会漏清、吞下一次用户写回）。
   useEffect(() => {
     if (phase.kind !== "ready") return;
+    if (suppressTabWriteRef.current !== null && tab === suppressTabWriteRef.current) {
+      // 到达程序跳转目标：清标记且不回写；此后用户切页签照常即写。
+      suppressTabWriteRef.current = null;
+      lastTabRef.current = tab;
+      return;
+    }
     const prev = lastTabRef.current;
     lastTabRef.current = tab;
     if (prev == null || prev === tab) return;
-    if (suppressTabWriteRef.current) {
-      suppressTabWriteRef.current = false;
-      return;
-    }
     void putPreferences({ landing_tab: tab }).catch(() => {
       /* 写回失败静默：落地偏好下次仍按旧值 */
     });
