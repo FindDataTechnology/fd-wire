@@ -13,9 +13,9 @@
   客户隔离；全套绿
 - [x] 5. web：ArtifactsPage alert_rule 行状态徽标+最近评估时间；详情区事件
   列表+试运行按钮（value/wouldFire 展示）+ api client + i18n + 测试；tsc/套件绿
-- [ ] 6. 发布：**先落迁移 0028（离线 SQL 双库）再滚版**（避免 create_all 先
+- [x] 6. 发布：**先落迁移 0028（离线 SQL 双库）再滚版**（避免 create_all 先
   建表撞迁移——23 轮课）；快照+GHA+滚版
-- [ ] 7. 生产冒烟：API 建规则（免费档数据集 sum>阈值）→发布→等首评估→
+- [x] 7. 生产冒烟：API 建规则（免费档数据集 sum>阈值）→发布→等首评估→
   徽标 firing+事件落库→调阈值→resolved→test 端点零副作用；webhook 指向
   不可达地址验 notify_failed 如实
 - [ ] 8. 归档+ROADMAP（方向 D 我的规则落地）+记忆
