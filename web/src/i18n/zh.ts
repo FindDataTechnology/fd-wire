@@ -451,6 +451,18 @@ const zh = {
         titleRequired: "请输入表单标题。",
         failed: "创建失败，请稍后重试。",
       },
+      // 空白新建告警规则（wire-alert-evaluation）：规则模板壳出生入口，
+      // 创建即进 spec 编辑器改 dataset/阈值，发布后评估器武装。
+      createAlert: {
+        button: "新建告警规则",
+        titleLabel: "告警规则标题",
+        titlePlaceholder: "给新告警规则起个名字",
+        submit: "创建",
+        creating: "创建中…",
+        cancel: "取消",
+        titleRequired: "请输入告警规则标题。",
+        failed: "创建失败，请稍后重试。",
+      },
       viewer: {
         title: "spec 编辑器",
         note: "保存到服务端会追加为新版本；未保存的编辑自动暂存到本地浏览器（仅作离开提示缓冲）。",

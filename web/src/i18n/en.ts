@@ -479,6 +479,18 @@ const en: Translation = {
         titleRequired: "Please enter a form title.",
         failed: "Creation failed, please retry later.",
       },
+      // Blank alert-rule creation (wire-alert-evaluation): template-shell
+      // birth entry; opens the spec editor right away, publish arms it.
+      createAlert: {
+        button: "New alert rule",
+        titleLabel: "Alert rule title",
+        titlePlaceholder: "Name your new alert rule",
+        submit: "Create",
+        creating: "Creating…",
+        cancel: "Cancel",
+        titleRequired: "Please enter an alert rule title.",
+        failed: "Creation failed, please retry later.",
+      },
       viewer: {
         title: "Spec editor",
         note: "Saving to the server appends a new version; unsaved edits are buffered in this browser only as a leave-warning buffer.",

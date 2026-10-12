@@ -353,17 +353,30 @@ def import_from_draft(
 
 # --------------------------------------------------------------- 空白创建
 
-#: 空白创建的 kind 白名单：dashboard（最小空板）与 form（最小空表单）——
-#: 两类结构简单、可「空壳」出生直接进编辑器/构建器；其余四类（复合指标/
-#: 研报/告警/定时）结构强，仍只能由 AI 构建草稿转正产生。
-BLANK_CREATE_KINDS: tuple[str, ...] = ("dashboard", "form")
+#: 空白创建的 kind 白名单：dashboard（最小空板）/ form（最小空表单）/
+#: alert_rule（规则模板壳，wire-alert-evaluation——alert 此前唯一出生路径
+#: 是 AI 草稿转正，而 AI 构建要求 cell，免费档无门）。其余三类（复合指标/
+#: 研报/定时）结构强，仍只能由 AI 构建草稿转正产生。
+BLANK_CREATE_KINDS: tuple[str, ...] = ("dashboard", "form", "alert_rule")
 
 
 def _blank_spec(kind: str, title: str) -> dict:
     """空白创建的最小 spec（kind 分派）：dashboard=空面板；form=零字段、
-    datasetId=None（构建中间态——可保存不可提交，进构建器再绑定数据集）。"""
+    datasetId=None（构建中间态——可保存不可提交，进构建器再绑定数据集）；
+    alert_rule=规则模板壳（占位 dataset_id；出生版本不过规则契约层，首次
+    PUT 真实 spec 才校验——评估器对未修占位的 published 规则记 error 事件）。"""
     if kind == FORM_KIND:
         return {"title": title, "spec": {"title": title, "datasetId": None, "fields": []}}
+    if kind == ALERT_KIND:
+        return {
+            "title": title,
+            "spec": {
+                "query": {"dataset_id": "<数据集id>", "columns": ["<列名>"]},
+                "aggregate": {"func": "count"},
+                "condition": {"op": "gt", "value": 0},
+                "intervalMinutes": 30,
+            },
+        }
     return {"title": title, "spec": {"title": title, "panels": []}}
 
 
@@ -385,7 +398,9 @@ def create_blank_artifact(
     落任何产物/版本行）。
     """
     if kind not in BLANK_CREATE_KINDS:
-        raise InvalidArtifactSpec("空白创建仅支持 dashboard、form（其他 kind 由 AI 构建产生）")
+        raise InvalidArtifactSpec(
+            "空白创建仅支持 dashboard、form、alert_rule（其他 kind 由 AI 构建产生）"
+        )
     if not title.strip():
         raise InvalidArtifactSpec("title 必须是非空字符串")
     title = title.strip()

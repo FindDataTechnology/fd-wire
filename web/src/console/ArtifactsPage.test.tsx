@@ -970,6 +970,37 @@ describe("ArtifactsPage 表单产物（wire-form-builder 4.4）", () => {
     expect(screen.queryByTestId("create-form-form")).toBeNull();
   });
 
+  it("新建告警规则入口：标题 → POST {kind:'alert_rule'} → 置顶 + 直接进 spec 编辑器（模板壳）", async () => {
+    const backend = installFormRows();
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+
+    fireEvent.click(screen.getByTestId("create-alert-open"));
+    expect(screen.getByTestId("create-alert-form")).toBeTruthy();
+
+    fireEvent.change(screen.getByTestId("create-alert-title"), {
+      target: { value: "行数监控" },
+    });
+    fireEvent.click(screen.getByTestId("create-alert-submit"));
+
+    // 创建即跳 spec 编辑器（SpecViewer 展开显示模板壳）
+    expect(await screen.findByTestId("spec-editor")).toBeTruthy();
+
+    const post = backend.calls.find(
+      (c) => c.method === "POST" && c.url.pathname === "/api/v1/artifacts",
+    );
+    expect(post?.body).toEqual({ kind: "alert_rule", title: "行数监控" });
+
+    // 新行置顶：alert_rule 徽标 + draft v1；表单收起
+    const items = screen.getAllByTestId("artifact-item");
+    const newRow = items[0]!;
+    expect(
+      within(newRow).getByTestId("artifact-kind-badge").getAttribute("data-kind"),
+    ).toBe("alert_rule");
+    expect(within(newRow).getByTestId("artifact-version").textContent).toBe("v1");
+    expect(screen.queryByTestId("create-alert-form")).toBeNull();
+  });
+
   it("新建表单空标题前端先拦：不发 POST、提示后可修正再创建", async () => {
     const backend = installFormRows();
     render(<ArtifactsPage />);

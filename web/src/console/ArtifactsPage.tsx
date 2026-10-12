@@ -29,6 +29,7 @@ import {
   ARTIFACT_STATUSES,
   apiErrorText,
   archiveArtifact,
+  createBlankAlertRule,
   createBlankDashboard,
   createBlankForm,
   createDashboardShareLink,
@@ -133,6 +134,8 @@ export function ArtifactsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   // 新建表单表单开合（wire-form-builder 任务 4.4：与新建看板并列）。
   const [createFormOpen, setCreateFormOpen] = useState(false);
+  // 新建告警规则表单开合（wire-alert-evaluation：免 AI 的规则出生路径）。
+  const [createAlertOpen, setCreateAlertOpen] = useState(false);
   // 刚空白创建的产物 id：其看板/表单展开区直接进编辑态（创建即跳编辑器）。
   const [freshlyCreatedId, setFreshlyCreatedId] = useState<number | null>(null);
   const [freshlyFormId, setFreshlyFormId] = useState<number | null>(null);
@@ -233,6 +236,16 @@ export function ArtifactsPage() {
     setFormFor(detail.id);
   }, []);
 
+  /** 空白建告警规则成功（wire-alert-evaluation）：置顶+复位筛选+行展开
+   *  （selectedId）直接进 spec 编辑器——模板壳改 dataset/阈值后保存发布。 */
+  const handleAlertCreated = useCallback((detail: ArtifactDetail) => {
+    setArtifacts((prev) => (prev ? [detail, ...prev] : prev));
+    setKindFilter("all");
+    setStatusFilter("all");
+    setCreateAlertOpen(false);
+    setSelectedId(detail.id);
+  }, []);
+
   return (
     <div>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -245,7 +258,7 @@ export function ArtifactsPage() {
         <div className="flex items-center gap-2">
           {/* 空白建板入口（wire-dashboard-blank-create）：免费档无 cell 无 AI
               草稿时的唯一出生路径——标题输入 → POST → 直接进编辑器。 */}
-          {!createOpen && !createFormOpen && (
+          {!createOpen && !createFormOpen && !createAlertOpen && (
             <button
               type="button"
               data-testid="create-dashboard-open"
@@ -257,7 +270,7 @@ export function ArtifactsPage() {
           )}
           {/* 空白建表单入口（wire-form-builder 任务 4.4）：与新建看板并列的
               出生路径——标题输入 → POST kind=form → 直接进构建器。 */}
-          {!createFormOpen && !createOpen && (
+          {!createFormOpen && !createOpen && !createAlertOpen && (
             <button
               type="button"
               data-testid="create-form-open"
@@ -265,6 +278,19 @@ export function ArtifactsPage() {
               className="rounded bg-emerald-600 px-3 py-1 text-xs text-white hover:bg-emerald-500"
             >
               {t("console.artifacts.createForm.button")}
+            </button>
+          )}
+          {/* 空白建告警规则入口（wire-alert-evaluation）：与建板/表单并列的
+              规则出生路径——标题输入 → POST kind=alert_rule 模板壳 → 直接进
+              spec 编辑器改 dataset/阈值 → 发布即武装评估。 */}
+          {!createAlertOpen && !createOpen && !createFormOpen && (
+            <button
+              type="button"
+              data-testid="create-alert-open"
+              onClick={() => setCreateAlertOpen(true)}
+              className="rounded bg-rose-600 px-3 py-1 text-xs text-white hover:bg-rose-500"
+            >
+              {t("console.artifacts.createAlert.button")}
             </button>
           )}
           <label htmlFor="artifact-kind-filter" className="text-xs text-slate-500">
@@ -315,6 +341,13 @@ export function ArtifactsPage() {
         <CreateFormForm
           onCreated={handleFormCreated}
           onCancel={() => setCreateFormOpen(false)}
+        />
+      )}
+
+      {createAlertOpen && (
+        <CreateAlertForm
+          onCreated={handleAlertCreated}
+          onCancel={() => setCreateAlertOpen(false)}
         />
       )}
 
@@ -788,6 +821,90 @@ function CreateFormForm({
       </div>
       {error && (
         <p data-testid="create-form-error" className="mt-1.5 text-[11px] text-red-600">
+          {error}
+        </p>
+      )}
+    </form>
+  );
+}
+
+function CreateAlertForm({
+  onCreated,
+  onCancel,
+}: {
+  onCreated: (artifact: ArtifactDetail) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const [title, setTitle] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (creating) return;
+    const trimmed = title.trim();
+    if (!trimmed) {
+      setError(t("console.artifacts.createAlert.titleRequired"));
+      return;
+    }
+    setCreating(true);
+    setError(null);
+    try {
+      onCreated(await createBlankAlertRule(trimmed));
+    } catch (err) {
+      setError(apiErrorText(err, t("console.artifacts.createAlert.failed")));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <form
+      data-testid="create-alert-form"
+      className="mt-4 rounded-lg border border-slate-200 bg-white p-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <label htmlFor="create-alert-title" className="block text-xs text-slate-500">
+        {t("console.artifacts.createAlert.titleLabel")}
+      </label>
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <input
+          id="create-alert-title"
+          data-testid="create-alert-title"
+          value={title}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            setError(null);
+          }}
+          placeholder={t("console.artifacts.createAlert.titlePlaceholder")}
+          disabled={creating}
+          className="w-64 rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+        />
+        <button
+          type="submit"
+          data-testid="create-alert-submit"
+          disabled={creating}
+          className="rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {creating
+            ? t("console.artifacts.createAlert.creating")
+            : t("console.artifacts.createAlert.submit")}
+        </button>
+        <button
+          type="button"
+          data-testid="create-alert-cancel"
+          disabled={creating}
+          onClick={onCancel}
+          className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {t("console.artifacts.createAlert.cancel")}
+        </button>
+      </div>
+      {error && (
+        <p data-testid="create-alert-error" className="mt-1.5 text-[11px] text-red-600">
           {error}
         </p>
       )}

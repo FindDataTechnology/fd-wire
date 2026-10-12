@@ -1241,6 +1241,15 @@ export function createBlankForm(title: string): Promise<ArtifactDetail> {
   }) as Promise<ArtifactDetail>;
 }
 
+/** 空白建告警规则（wire-alert-evaluation）：POST kind=alert_rule → 模板壳
+ * draft v1（占位 dataset_id；PUT 真实规则 spec 才过契约校验，发布后武装）。 */
+export function createBlankAlertRule(title: string): Promise<ArtifactDetail> {
+  return requestJson(`${API_BASE}/v1/artifacts`, {
+    method: "POST",
+    body: { kind: "alert_rule", title },
+  }) as Promise<ArtifactDetail>;
+}
+
 // ── 源包（wire-source-packs 任务 3.3）──────────────────────────────────
 // 契约（tasks.md 2.1/2.2）：GET /api/v1/packs 与 GET /api/v1/packs/{id} 为
 // 公开端点（匿名可读——目录公开通道，不过计量轨道）；详情响应为平铺分页

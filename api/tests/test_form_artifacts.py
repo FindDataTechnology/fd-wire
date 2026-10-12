@@ -434,11 +434,12 @@ def test_blank_create_form_success(client) -> None:
 
 
 def test_blank_create_whitelist_outside_kinds_422(client) -> None:
-    """kind 白名单 = (dashboard, form)：其余四类 AI 产物 kind 422 零半写。"""
+    """kind 白名单 = (dashboard, form, alert_rule)：其余三类 AI 产物 kind 422
+    零半写（alert_rule 已放行空白出生——wire-alert-evaluation，模板壳断言
+    在 test_artifacts_lifecycle 侧）。"""
     for kind in (
         "composite_indicator",
         "research_report",
-        "alert_rule",
         "refresh_schedule",
     ):
         resp = client.post(

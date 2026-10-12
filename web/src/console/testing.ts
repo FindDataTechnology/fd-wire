@@ -1798,11 +1798,12 @@ export function installConsoleBackend(
     }
 
     // ── 空白建板（wire-dashboard-blank-create 1.2）/ 空白建表单
-    //    （wire-form-builder 1.2）：POST /api/v1/artifacts {kind, title} → 201
-    //    ArtifactDetail（draft v1）。kind 白名单 (dashboard, form)——dashboard
-    //    spec = 最小空板 {title, spec:{title, panels:[]}}；form spec = 最小
-    //    空表单 {title, spec:{title, datasetId:null, fields:[]}}（信封形状
-    //    逐端点对齐生产）；title 非空，非法 422 带 detail，语义对齐 api 仓。 ──
+    //    （wire-form-builder 1.2）/ 空白建告警规则（wire-alert-evaluation）：
+    //    POST /api/v1/artifacts {kind, title} → 201 ArtifactDetail（draft v1）。
+    //    kind 白名单 (dashboard, form, alert_rule)——dashboard spec = 最小空板
+    //    {title, spec:{title, panels:[]}}；form spec = 最小空表单；alert_rule
+    //    spec = 规则模板壳（占位 dataset_id；信封形状逐端点对齐生产）；
+    //    title 非空，非法 422 带 detail，语义对齐 api 仓。 ──
     if (path === "/api/v1/artifacts" && method === "POST") {
       if (options.failArtifactCreateStatus) {
         return Promise.resolve(
@@ -1820,12 +1821,16 @@ export function installConsoleBackend(
         kind?: string;
         title?: string;
       };
-      if (payload.kind !== "dashboard" && payload.kind !== "form") {
+      if (
+        payload.kind !== "dashboard" &&
+        payload.kind !== "form" &&
+        payload.kind !== "alert_rule"
+      ) {
         return Promise.resolve(
           jsonResponse(
             {
               detail:
-                `kind 白名单仅支持 dashboard/form（当前 ${String(payload.kind)}）` +
+                `kind 白名单仅支持 dashboard/form/alert_rule（当前 ${String(payload.kind)}）` +
                 "——其他类型仍由 AI 草稿转正产生",
             },
             422,
@@ -1843,7 +1848,17 @@ export function installConsoleBackend(
       const blankSpec =
         kind === "dashboard"
           ? { title, spec: { title, panels: [] } }
-          : { title, spec: { title, datasetId: null, fields: [] } };
+          : kind === "form"
+            ? { title, spec: { title, datasetId: null, fields: [] } }
+            : {
+                title,
+                spec: {
+                  query: { dataset_id: "<数据集id>", columns: ["<列名>"] },
+                  aggregate: { func: "count" },
+                  condition: { op: "gt", value: 0 },
+                  intervalMinutes: 30,
+                },
+              };
       const created: StoredLifecycleArtifact = {
         id,
         customer_id: customerId,
