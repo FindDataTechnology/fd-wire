@@ -26,7 +26,8 @@
   - `datasets`：总数、api/cell 分层计数、最近 ≤5 条（id/名称/存储层/行数/更新
     时间）、免费档真实配额（used/limit；付费档 null）；
   - `packs`：订阅数、最近订阅 ≤5 条（包 id/名称）；
-  - `artifacts`：活跃产物总数（draft+published）、五类各自计数、最近 ≤5 条
+  - `artifacts`：活跃产物总数（draft+published）、按类计数（六类展示口径，
+    含表单构建器的 form——与产物页一致；校验面五类 tuple 不动）、最近 ≤5 条
     （id/kind/title/status/updated_at）；
   - `alerts`：alert_rule 产物计数、firing 中计数（alert_states）、24h 事件数
     （alert_events）；

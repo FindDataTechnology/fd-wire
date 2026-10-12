@@ -140,12 +140,13 @@ describe("WorkbenchPage（聚合渲染）", () => {
     const packRow = screen.getByTestId("workbench-recent-pack");
     expect(packRow.textContent).toContain("宏观价格");
     expect(packRow.getAttribute("href")).toBe("#/console/packs");
-    // 看板与产物：活跃总数 + 五类 by_kind 徽标 + 最近产物（title/status）
+    // 看板与产物：活跃总数 + 六类 by_kind 徽标（含表单 form）+ 最近产物
     const artifacts = screen.getByTestId("workbench-section-artifacts");
     expect(artifacts.textContent).toContain("4 个活跃产物");
     const kindBadges = screen.getAllByTestId("workbench-kind-badge");
     expect(kindBadges.map((b) => b.getAttribute("data-kind"))).toEqual([
       "dashboard",
+      "form",
       "composite_indicator",
       "research_report",
       "alert_rule",

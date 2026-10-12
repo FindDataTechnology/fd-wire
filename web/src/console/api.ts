@@ -2408,13 +2408,8 @@ export interface WorkbenchSummary {
   };
   artifacts: {
     active_total: number;
-    by_kind: {
-      dashboard: number;
-      composite_indicator: number;
-      research_report: number;
-      alert_rule: number;
-      refresh_schedule: number;
-    };
+    // 六类展示口径（含表单 form）；服务端对清单外 kind 如实附加键，开放记录
+    by_kind: Record<string, number>;
     recent: WorkbenchArtifactRecent[];
   };
   alerts: {

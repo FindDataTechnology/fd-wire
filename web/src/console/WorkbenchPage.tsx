@@ -16,6 +16,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   apiErrorText,
+  ARTIFACT_KINDS,
   fetchWorkbench,
   type WorkbenchFreeQuota,
   type WorkbenchSummary,
@@ -25,14 +26,10 @@ import { packName } from "./PacksPage";
 import { YIZUO_DEMO_URL, YIZUO_PLATFORM_URL } from "../components/footerConstants";
 import { CONTACT_MAILTO } from "../views/HomeView";
 
-/** 工作台五段数据的 kind 徽标固定序（by_kind 键序；呈现与产物页口径一致）。 */
-const WORKBENCH_KINDS = [
-  "dashboard",
-  "composite_indicator",
-  "research_report",
-  "alert_rule",
-  "refresh_schedule",
-] as const;
+/** by_kind 徽标键序：复用 api.ts 的 ARTIFACT_KINDS（六类，含表单构建器的
+ * form——生产已有 form 产物，呈现口径必须与产物页一致，否则 active_total
+ * 与徽标和不一致）。 */
+const WORKBENCH_KINDS = ARTIFACT_KINDS;
 
 /** i18n 键缺失时兜底原样展示（与 MyDemandsPage statusLabel 同范式）。 */
 function labelOrRaw(translate: (key: string) => string, key: string): string {

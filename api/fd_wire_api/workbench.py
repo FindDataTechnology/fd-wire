@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from .ai.db import get_db as get_ai_db
 from .alerts.models import AlertEvent, AlertState
-from .artifacts.models import ARTIFACT_KINDS, Artifact
+from .artifacts.models import Artifact
 from .console.auth import require_console_customer_id
 from .datasets import service as datasets_service
 from .datasets.db import get_db as get_datasets_db
@@ -263,11 +263,26 @@ def packs_section(db: Session, *, customer_id: str) -> WorkbenchPacks:
     return WorkbenchPacks(subscribed=subscribed, recent=recent)
 
 
-def artifacts_section(db: Session, *, customer_id: str) -> WorkbenchArtifacts:
-    """产物段：活跃（draft+published）总数与五类分计数 + 最近 ≤5。
+#: 工作台展示面的产物类清单（六类，含表单构建器的 form——生产已有 form
+#: 产物）。注意与 artifacts.models.ARTIFACT_KINDS（五类，校验面口径）区分：
+#: 那边不加 form 是产物校验语义，展示面必须覆盖全部实际 kind，否则
+#: active_total 与 by_kind 徽标和会对不上。键序与 web api.ts 的
+#: ARTIFACT_KINDS 展示序一致。
+WORKBENCH_KINDS: tuple[str, ...] = (
+    "dashboard",
+    "form",
+    "composite_indicator",
+    "research_report",
+    "alert_rule",
+    "refresh_schedule",
+)
 
-    by_kind 五键全给（缺类零）——键序随 ARTIFACT_KINDS（与 web 预约定的
-    展示序一致）；archived 不计（活跃口径覆盖计数与最近列表两处）。
+
+def artifacts_section(db: Session, *, customer_id: str) -> WorkbenchArtifacts:
+    """产物段：活跃（draft+published）总数与六类分计数 + 最近 ≤5。
+
+    by_kind 六键全给（缺类零）；archived 不计（活跃口径覆盖计数与最近
+    列表两处）；库中出现清单外 kind 时如实附加键（不吞不虚构）。
     """
     active = Artifact.status.in_(ACTIVE_ARTIFACT_STATUSES)
     # customer 过滤是隔离红线——去掉它跨客户数据即泄漏（变异自证依赖此行）
@@ -276,7 +291,7 @@ def artifacts_section(db: Session, *, customer_id: str) -> WorkbenchArtifacts:
         .where(Artifact.customer_id == customer_id, active)
         .group_by(Artifact.kind)
     ).all()
-    by_kind: dict[str, int] = {kind: 0 for kind in ARTIFACT_KINDS}
+    by_kind: dict[str, int] = {kind: 0 for kind in WORKBENCH_KINDS}
     for kind, count in kind_rows:
         by_kind[str(kind)] = int(count)
     recent_rows = (
