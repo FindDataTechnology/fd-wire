@@ -873,13 +873,40 @@ const en: Translation = {
           eq: "equal to",
           neq: "not equal to",
           gt: "greater than",
-          gte: "greater than or equal",
+          gte: "greater than or equal to",
           lt: "less than",
-          lte: "less than or equal",
+          lte: "less than or equal to",
           contains: "containing",
           empty: "empty",
           notEmpty: "not empty",
         },
+        // Condition groups and linked options (wire-form-linkage-v2):
+        // multi-condition visibility (all/any + add/remove rows) and the
+        // select option mapping (control-field value → option list).
+        conditionGroupToggle: "Show on condition group",
+        conditionGroupModeLabel: "matching",
+        conditionGroupModes: {
+          all: "all conditions",
+          any: "any condition",
+        },
+        conditionGroupAdd: "Add condition",
+        conditionGroupRemove: "Remove",
+        conditionGroupClear: "Clear group",
+        conditionExclusiveWithSingle:
+          "A single condition is configured — mutually exclusive with a condition group; clear it first.",
+        conditionExclusiveWithGroup:
+          "A condition group is configured — mutually exclusive with a single condition; clear it first.",
+        optionsFromToggle: "Linked options",
+        optionsFromFieldLabel: "Control field",
+        optionsFromCaseKeyLabel: "Control value",
+        optionsFromCaseAdd: "Add mapping",
+        optionsFromCaseRemove: "Remove",
+        optionsFromFallbackLabel: "Fallback options (optional, comma-separated)",
+        optionsFromClear: "Clear linked options",
+        optionsExclusiveWithStatic:
+          "Static options are configured — mutually exclusive with linked options; clear them first.",
+        optionsExclusiveWithLinked:
+          "Linked options are configured — static options are unavailable; clear the linkage first.",
         inputTypes: {
           text: "Text",
           number: "Number",
@@ -913,6 +940,20 @@ const en: Translation = {
             "A visibility condition references its own field (self-reference is not allowed).",
           conditionMissing:
             "A visibility condition references a field that does not exist in this form.",
+          // New error codes for condition groups and linked options
+          // (wire-form-linkage-v2).
+          conditionGroupBad:
+            "A condition group is invalid (mode must be all/any, 1..10 conditions, each a valid single condition).",
+          conditionExclusive:
+            "A field carries both a single condition and a condition group (visibleWhen and visibleWhenGroup are mutually exclusive).",
+          optionsFromBad:
+            "A linked-options rule is invalid (missing control field / bad cases shape / option lists must be non-empty string lists).",
+          optionsExclusive:
+            "A dropdown field carries both static options and linked options (pick exactly one).",
+          optionsFromSelf:
+            "A linked-options rule references its own field (self-reference is not allowed).",
+          optionsFromMissing:
+            "A linked-options rule references a field that does not exist in this form.",
         },
       },
     },

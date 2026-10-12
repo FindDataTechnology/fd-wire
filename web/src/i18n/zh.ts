@@ -834,6 +834,32 @@ const zh = {
           empty: "为空",
           notEmpty: "不为空",
         },
+        // 条件组合与选项联动（wire-form-linkage-v2）：多条件组合显隐
+        //（all/any + 条件行增删）与 select 选项映射（控制字段值→选项组）。
+        conditionGroupToggle: "按条件组合显示",
+        conditionGroupModeLabel: "满足",
+        conditionGroupModes: {
+          all: "全部条件",
+          any: "任一条件",
+        },
+        conditionGroupAdd: "添加条件",
+        conditionGroupRemove: "移除",
+        conditionGroupClear: "清除组合",
+        conditionExclusiveWithSingle:
+          "已配置单条件——与条件组合互斥，请先清除单条件。",
+        conditionExclusiveWithGroup:
+          "已配置条件组合——与单条件互斥，请先清除组合。",
+        optionsFromToggle: "选项联动",
+        optionsFromFieldLabel: "控制字段",
+        optionsFromCaseKeyLabel: "控制值",
+        optionsFromCaseAdd: "添加映射",
+        optionsFromCaseRemove: "移除",
+        optionsFromFallbackLabel: "兜底选项（可选，逗号分隔）",
+        optionsFromClear: "清除选项联动",
+        optionsExclusiveWithStatic:
+          "已配置静态选项——与选项联动互斥，请先清空选项。",
+        optionsExclusiveWithLinked:
+          "已配置选项联动——静态选项不可用，请先清除选项联动。",
         inputTypes: {
           text: "文本",
           number: "数字",
@@ -863,6 +889,17 @@ const zh = {
           conditionBad: "存在非法的显隐条件（缺少字段/算子越枚举/值不可用）。",
           conditionSelf: "存在自引用的显隐条件（条件不能引用字段自身）。",
           conditionMissing: "存在引用了不存在字段的显隐条件。",
+          // 条件组合与选项联动（wire-form-linkage-v2）新错误码。
+          conditionGroupBad:
+            "存在非法的条件组合（mode 须为 all/any、条件须 1..10 条且每条为合法单条件）。",
+          conditionExclusive:
+            "字段不能同时携带单条件与条件组合（visibleWhen 与 visibleWhenGroup 互斥）。",
+          optionsFromBad:
+            "存在非法的选项联动（控制字段缺失/cases 形状不对/选项列表须为非空字符串列表）。",
+          optionsExclusive:
+            "下拉选择字段不能同时配置静态选项与选项联动（二选一）。",
+          optionsFromSelf: "存在自引用的选项联动（控制字段不能是字段自身）。",
+          optionsFromMissing: "存在引用了不存在字段的选项联动。",
         },
       },
     },

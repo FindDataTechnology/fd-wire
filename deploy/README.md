@@ -258,3 +258,19 @@ sha256sum fd-wire-connector-linux-amd64   # 对照 manifest.json 的 platforms[]
   会被上游空规则拒（invalid_scope）——如实留档，属预期。
 - **演练记录位**：交付即 scope ok 的全链证据记入 change
   `wire-scope-delivery-live` 归档说明（2026-10-12 首次点亮）。
+
+## wire 库凭据轮换配方（wire-form-linkage-v2 卫生件，2026-10-12 首次执行）
+
+背景：datasets PG 连接串密码曾以明文落在清单（10-11 实迁遗留、存于 git 历史）。
+轮换使历史泄露失效；此后 datasets URL 与 platform URL 一致走 secret。
+
+- **消费者清单**（轮换前核对）：仅 `fd-prod/fd-wire-api` pod 经
+  `100.64.0.12:5433` 以 wire 角色连库（platform+datasets 双库同角色）；
+  本地/容器内 `docker exec psql -U wire` 走 local socket 免密不受影响；
+  per-cell 库各有属主角色不受影响；backup.sh 走容器内 socket 不受影响。
+- **紧凑序**（暴露窗口 ≈ ArgoCD 同步+启动 ~90s，期间旧池重连可能报错）：
+  1. `ALTER ROLE wire WITH PASSWORD '<new>'`（cheap3 wire-postgres，local socket）；
+  2. fd-wire-env 同批更新 `database_url` 与 `datasets_database_url`（新密码）；
+  3. 清单 datasets 字面值改 secretKeyRef + 镜像 tag 同 commit 推 gitee；
+  4. ArgoCD hard refresh 滚 api。
+- 回退：同序反向（ALTER 回旧密码 + secret 回旧值 + 滚回）。

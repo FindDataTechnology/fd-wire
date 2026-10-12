@@ -9,7 +9,9 @@
   公开 GET（钉死版本信封原样）+ 公开 POST submit（design D3 校验序全链）；
   3.3b visibleWhen 求值矩阵（wire-form-field-linkage：九算子/空值口径/
   双端十进制/无递归——与 web 侧同款对拍）+ 提交三态联动（隐藏必填跳过、
-  隐藏携带值拒）；
+  隐藏携带值拒）；3.3c v1+ 联动（wire-form-linkage-v2）：visibleWhenGroup
+  all/any 求值矩阵、optionsFrom 解析与空选项按隐藏、动态成员校验、公开
+  提交级联正例与伪造非选项值 422（防篡改）；
 - 3.4 公开提交全矩阵：成功落 insert 修正且 actor=share-form:{id}、改版后
   旧令牌按旧字段集校验、未知列/缺必填/类型错 422 零写入、限流 429+
   Retry-After+超限不落库、归档断链 404、datasetId 未绑/数据集被删/他企
@@ -43,7 +45,11 @@ from fd_wire_api.ai.models import AIDraftArtifact
 from fd_wire_api.ai.schemas import ConversationCreate
 from fd_wire_api.ai.service import create_conversation
 from fd_wire_api.app import app
-from fd_wire_api.artifacts.form_spec import evaluate_hidden_columns, validate_form_values
+from fd_wire_api.artifacts.form_spec import (
+    evaluate_hidden_columns,
+    resolve_select_options,
+    validate_form_values,
+)
 from fd_wire_api.artifacts.models import ArtifactVersion
 from fd_wire_api.datasets import api_store
 from fd_wire_api.datasets.db import (
@@ -598,6 +604,337 @@ def test_validate_form_values_linkage() -> None:
         normalized, error = validate_form_values(fields, payload)
         assert error is None, empty_value
         assert normalized == {"channel": "电话"}, empty_value
+
+
+# ---------- 3.3c v1+ 联动求值与提交（wire-form-linkage-v2）
+
+
+def _grouped_fields(mode: str) -> list[dict]:
+    """三字段：kind(select) + amount(number) + detail（visibleWhenGroup
+    mode=mode，条件 eq kind=A + gt amount=100）。"""
+    return [
+        {
+            "column": "kind",
+            "label": "类型",
+            "input": "select",
+            "required": True,
+            "options": ["A", "B"],
+        },
+        {"column": "amount", "label": "金额", "input": "number"},
+        {
+            "column": "detail",
+            "label": "明细",
+            "input": "text",
+            "required": True,
+            "visibleWhenGroup": {
+                "mode": mode,
+                "conditions": [
+                    {"field": "kind", "op": "eq", "value": "A"},
+                    {"field": "amount", "op": "gt", "value": "100"},
+                ],
+            },
+        },
+    ]
+
+
+def test_visible_when_group_evaluation_matrix() -> None:
+    """组条件求值矩阵（与 web 侧同款对拍断言——冻结契约）：all 全真可见/
+    任一假隐藏；any 一真可见/全假隐藏；组内控制值空走带值算子全假口径；
+    组内不递归；存量零回归。"""
+    all_fields = _grouped_fields("all")
+    # all：两条件真 → 可见
+    assert evaluate_hidden_columns(all_fields, {"kind": "A", "amount": 200}) == set()
+    # all：条件一假（kind=B）/ 条件二假（amount=50 不 > 100）→ 隐藏
+    assert evaluate_hidden_columns(all_fields, {"kind": "B", "amount": 200}) == {
+        "detail"
+    }
+    assert evaluate_hidden_columns(all_fields, {"kind": "A", "amount": 50}) == {
+        "detail"
+    }
+    # all：任一控制值空（缺键/null/空白）→ 该条件带值算子一律假 → 隐藏
+    for values in ({}, {"kind": None}, {"kind": "A"}, {"kind": "  ", "amount": 200}):
+        assert evaluate_hidden_columns(all_fields, values) == {"detail"}, values
+
+    any_fields = _grouped_fields("any")
+    # any：一真即可见（另一假 / 另一控制值空）
+    assert evaluate_hidden_columns(any_fields, {"kind": "B", "amount": 200}) == set()
+    assert evaluate_hidden_columns(any_fields, {"kind": "A"}) == set()
+    # any：全假 → 隐藏；全控制值空 → 隐藏
+    assert evaluate_hidden_columns(any_fields, {"kind": "B", "amount": 50}) == {
+        "detail"
+    }
+    assert evaluate_hidden_columns(any_fields, {}) == {"detail"}
+
+    # 组内单条件口径逐字复用（冻结语义同款对拍）：两个控制字段独立设真值——
+    # contains 与 gt 数值/字典序口径在组内逐条生效
+    mixed = [
+        {"column": "region", "label": "大区", "input": "text"},
+        {"column": "code", "label": "编码", "input": "text"},
+        {
+            "column": "target",
+            "label": "目标",
+            "input": "text",
+            "visibleWhenGroup": {
+                "mode": "all",
+                "conditions": [
+                    {"field": "region", "op": "contains", "value": "华东"},
+                    {"field": "code", "op": "gt", "value": "100"},
+                ],
+            },
+        },
+    ]
+    # contains 真 + gt 数值口径真（1200 > 100）→ 可见
+    assert evaluate_hidden_columns(mixed, {"region": "华东大区", "code": "1200"}) == set()
+    # gt 假（双非数值走字典序："0abc" < "100"；contains 仍真）→ 隐藏
+    assert evaluate_hidden_columns(mixed, {"region": "华东大区", "code": "0abc"}) == {
+        "target"
+    }
+    # contains 假（gt 仍真）→ 隐藏
+    assert evaluate_hidden_columns(mixed, {"region": "华北", "code": "1200"}) == {
+        "target"
+    }
+    # 组内空值算子：notEmpty 真 + contains 假（空白串）→ 隐藏
+    blank_op = [
+        {"column": "ctrl", "label": "控制", "input": "text"},
+        {
+            "column": "target",
+            "label": "目标",
+            "input": "text",
+            "visibleWhenGroup": {
+                "mode": "any",
+                "conditions": [
+                    {"field": "ctrl", "op": "empty"},
+                    {"field": "ctrl", "op": "notEmpty"},
+                ],
+            },
+        },
+    ]
+    # 任意 ctrl 状态下 empty/notEmpty 必有一真 → any 恒可见
+    for values in ({}, {"ctrl": "x"}, {"ctrl": "  "}):
+        assert evaluate_hidden_columns(blank_op, values) == set(), values
+
+    # 组内不递归：被引用的控制字段自身隐藏，但其值在 values → 照常参与比较
+    chained = [
+        {"column": "master", "label": "主控", "input": "text"},
+        {
+            "column": "ctrl",
+            "label": "控制",
+            "input": "text",
+            "visibleWhen": {"field": "master", "op": "eq", "value": "on"},
+        },
+        {
+            "column": "target",
+            "label": "目标",
+            "input": "text",
+            "visibleWhenGroup": {
+                "mode": "all",
+                "conditions": [
+                    {"field": "ctrl", "op": "eq", "value": "go"},
+                    {"field": "master", "op": "notEmpty"},
+                ],
+            },
+        },
+    ]
+    assert evaluate_hidden_columns(chained, {"master": "off", "ctrl": "go"}) == {
+        "ctrl"
+    }
+    assert evaluate_hidden_columns(chained, {"master": "on", "ctrl": "go"}) == set()
+    # 存量零回归：无组键字段集恒得空 hidden 集
+    assert evaluate_hidden_columns(FIELDS, {"region": "east", "amount": 1}) == set()
+
+
+def _cascade_fields(*, fallback: list | None = None) -> list[dict]:
+    """省→市级联字段集：province 静态三选 + city optionsFrom（cases 覆盖
+    浙江/江苏；fallback 参数化——None 即无 fallback）。"""
+    options_from: dict = {
+        "field": "province",
+        "cases": {"浙江": ["杭州", "宁波"], "江苏": ["南京"]},
+    }
+    if fallback is not None:
+        options_from["fallback"] = fallback
+    return [
+        {
+            "column": "province",
+            "label": "省",
+            "input": "select",
+            "required": True,
+            "options": ["浙江", "江苏", "新疆"],
+        },
+        {
+            "column": "city",
+            "label": "市",
+            "input": "select",
+            "required": True,
+            "optionsFrom": options_from,
+        },
+    ]
+
+
+def test_options_from_resolution_matrix() -> None:
+    """optionsFrom 解析矩阵：命中/trim 匹配/未命中 fallback/无 fallback
+    空选项→隐藏；空控制值三态；数字控制值字符串形态；静态 select 零漂移。"""
+    fields = _cascade_fields(fallback=["其他"])
+    city = fields[1]
+    # 命中 → 该键选项列表
+    assert resolve_select_options(city, {"province": "浙江"}) == ["杭州", "宁波"]
+    # trim 口径：控制值带空白命中；cases 键带空白同样命中（双侧同口径 trim）
+    assert resolve_select_options(city, {"province": " 浙江 "}) == ["杭州", "宁波"]
+    spaced_key = {
+        "field": "province",
+        "cases": {"  浙江 ": ["杭州"]},
+    }
+    assert resolve_select_options(
+        {"column": "city", "input": "select", "optionsFrom": spaced_key},
+        {"province": "浙江"},
+    ) == ["杭州"]
+    # 未命中 → fallback
+    assert resolve_select_options(city, {"province": "新疆"}) == ["其他"]
+    # 数字控制值按 _scalar_text 字符串形态匹配（5 → "5"）
+    numeric = {
+        "field": "level",
+        "cases": {"5": ["高"]},
+    }
+    field_numeric = {
+        "column": "grade",
+        "input": "select",
+        "optionsFrom": numeric,
+    }
+    assert resolve_select_options(field_numeric, {"level": 5}) == ["高"]
+    assert resolve_select_options(field_numeric, {"level": "5"}) == ["高"]
+    assert resolve_select_options(field_numeric, {"level": 4}) == []
+
+    # 空控制值（缺键/null/空白串）→ fallback（有则可见）
+    for values in ({}, {"province": None}, {"province": "  "}):
+        assert resolve_select_options(city, values) == ["其他"], values
+        assert evaluate_hidden_columns(fields, values) == set(), values
+
+    # 无 fallback：未命中 / 空控制值 → 空选项 → 并入隐藏集（不可填即不可见）
+    bare = _cascade_fields()
+    assert resolve_select_options(bare[1], {"province": "新疆"}) == []
+    assert resolve_select_options(bare[1], {}) == []
+    assert evaluate_hidden_columns(bare, {"province": "新疆"}) == {"city"}
+    for values in ({}, {"province": None}, {"province": "  "}):
+        assert evaluate_hidden_columns(bare, values) == {"city"}, values
+    # 命中 → 不隐藏
+    assert evaluate_hidden_columns(bare, {"province": "浙江"}) == set()
+
+    # 静态 select 不参与空选项隐藏（存量零漂移锚点）：无 optionsFrom 恒可见
+    assert evaluate_hidden_columns(FIELDS, {}) == set()
+    # resolve_select_options 对静态字段返回原 options（单一出处零漂移）
+    assert resolve_select_options(FIELDS[0], {}) == ["east", "west", "north"]
+
+
+def test_validate_form_values_linkage_v2() -> None:
+    """v1+ 提交三态：组条件隐藏（必填不检查/携带值拒/空值跳过）；动态
+    成员校验（值 ∈ 解析后选项，文案带解析列表）；空选项列按隐藏同规。"""
+    fields = _grouped_fields("all")
+    # 组条件全真：明细可见——必填缺失照旧拦；携带值正常收
+    values, error = validate_form_values(fields, {"kind": "A", "amount": 200})
+    assert values is None
+    assert "必填字段" in error and "明细" in error and "detail" in error
+    normalized, error = validate_form_values(
+        fields, {"kind": "A", "amount": 200, "detail": "x"}
+    )
+    assert error is None
+    assert normalized == {"kind": "A", "amount": 200, "detail": "x"}
+    # 组条件假：明细隐藏——必填不检查（过，不写键）；携带值拒（同现行文案）
+    normalized, error = validate_form_values(fields, {"kind": "B", "amount": 200})
+    assert error is None
+    assert normalized == {"kind": "B", "amount": 200}
+    values, error = validate_form_values(
+        fields, {"kind": "B", "amount": 200, "detail": "x"}
+    )
+    assert values is None
+    assert error == "字段 明细（detail）当前不可见，不能携带值"
+
+    # 动态成员校验：值 ∈ 解析后选项过；伪造不在解析选项的值拒（文案带
+    # 解析后选项列表——防篡改）
+    cascade = _cascade_fields()
+    normalized, error = validate_form_values(
+        cascade, {"province": "浙江", "city": "杭州"}
+    )
+    assert error is None
+    assert normalized == {"province": "浙江", "city": "杭州"}
+    values, error = validate_form_values(
+        cascade, {"province": "浙江", "city": "南京"}
+    )
+    assert values is None
+    assert error == "字段 市（city） 必须是选项之一 ['杭州', '宁波']（收到 '南京'）"
+    # 控制值切换后解析集随之变化：江苏 → 南京 合法
+    normalized, error = validate_form_values(
+        cascade, {"province": "江苏", "city": "南京"}
+    )
+    assert error is None
+    assert normalized == {"province": "江苏", "city": "南京"}
+
+    # 空选项列按隐藏同规：province 未命中且无 fallback → city 隐藏——
+    # required 不检查（缺省过，不写键）；携带非空值拒；空值/null 跳过
+    normalized, error = validate_form_values(cascade, {"province": "新疆"})
+    assert error is None
+    assert normalized == {"province": "新疆"}
+    values, error = validate_form_values(
+        cascade, {"province": "新疆", "city": "杭州"}
+    )
+    assert values is None
+    assert error == "字段 市（city）当前不可见，不能携带值"
+    for empty_value in ("", "   ", None):
+        normalized, error = validate_form_values(
+            cascade, {"province": "新疆", "city": empty_value}
+        )
+        assert error is None, empty_value
+        assert normalized == {"province": "新疆"}, empty_value
+
+
+def test_submit_options_from_tamper_422(client, db_session) -> None:
+    """公开提交级联（省→市）：正例入库且值原样；伪造不属于解析选项的市
+    422 文案带解析后选项（防篡改同规）；控制值未命中（无 fallback）空选项
+    列按隐藏——携带值 422/缺省 201 不写键；零多余写入。"""
+    dataset_id = seed_dataset(
+        db_session,
+        key="cascade_src",
+        columns=[
+            {"name": "province", "type": "TEXT"},
+            {"name": "city", "type": "TEXT"},
+        ],
+    )
+    fields = _cascade_fields()
+    form = make_form(client, dataset_id=dataset_id, fields=fields)
+    link = _share(client, form["id"])
+
+    # 正例：浙江 → 杭州入库
+    resp = _submit(client, link["url"], {"province": "浙江", "city": "杭州"})
+    assert resp.status_code == 201, resp.text
+    rows = _corrections(db_session, dataset_id)
+    assert rows[-1].value_json == {"province": "浙江", "city": "杭州"}
+
+    # 防篡改：city 不属于浙江的解析选项（南京 ∈ 江苏的列表）→ 422 带
+    # 解析后选项；零写入
+    tampered = _submit(client, link["url"], {"province": "浙江", "city": "南京"})
+    assert tampered.status_code == 422, tampered.text
+    detail = tampered.json()["detail"]
+    assert "市（city）" in detail
+    assert "['杭州', '宁波']" in detail and "'南京'" in detail
+    assert len(_corrections(db_session, dataset_id)) == 1
+
+    # 控制值未命中（新疆 无 fallback）→ 空选项列隐藏：缺省提交 201 不写
+    # city 键（required 不检查）；携带值 422 不可见；空串/null 同缺省
+    blank_ok = _submit(client, link["url"], {"province": "新疆"})
+    assert blank_ok.status_code == 201, blank_ok.text
+    rows = _corrections(db_session, dataset_id)
+    assert rows[-1].value_json == {"province": "新疆"}
+    carried = _submit(client, link["url"], {"province": "新疆", "city": "杭州"})
+    assert carried.status_code == 422, carried.text
+    assert carried.json()["detail"] == "字段 市（city）当前不可见，不能携带值"
+    skipped = _submit(client, link["url"], {"province": "新疆", "city": ""})
+    assert skipped.status_code == 201, skipped.text
+    assert _corrections(db_session, dataset_id)[-1].value_json == {"province": "新疆"}
+    # 江苏命中路径照常（南京 ∈ 解析选项）
+    ok = _submit(client, link["url"], {"province": "江苏", "city": "南京"})
+    assert ok.status_code == 201, ok.text
+    assert _corrections(db_session, dataset_id)[-1].value_json == {
+        "province": "江苏",
+        "city": "南京",
+    }
 
 
 # --------------------------------------------------- 3.1 生成：kind 门与分派

@@ -7,7 +7,9 @@ insert 修正共享落层（任务 2.1/2.2）的 API 测试。
   kind）仍 422 零半写；title 校验对 form 同样生效；
 - form spec 结构校验矩阵：validate_form_spec 纯函数逐条文案断言 + 路由
   422 零半写（版本行不增）；1.1b visibleWhen 保存校验矩阵（wire-form-
-  field-linkage：九算子合法/形状错/带值错/自引用与不存在列拒）；
+  field-linkage：九算子合法/形状错/带值错/自引用与不存在列拒）；1.1c
+  visibleWhenGroup / optionsFrom 保存校验矩阵（wire-form-linkage-v2：
+  组形状与互斥/映射形状与互斥/组内与 optionsFrom.field 引用二趟）；
 - datasetId 属主校验（design D1 第②层）：绑定本企数据集保存成功且版本
   递增；他企/不存在 422 且零半写（版本行不增）；datasetId=None 构建中间
   态可保存；
@@ -399,6 +401,373 @@ def test_validate_form_spec_visible_when_matrix() -> None:
         "successMessage": "登记成功",
     }
     assert validate_form_spec(legacy) is None
+
+
+# ------------- 1.1c visibleWhenGroup / optionsFrom 保存校验（wire-form-linkage-v2）
+
+
+def _grouped_spec(group: object) -> dict:
+    """三字段 spec：kind(select) + amount(number) + detail 带 visibleWhenGroup。"""
+    return {
+        "datasetId": None,
+        "fields": [
+            {
+                "column": "kind",
+                "label": "类型",
+                "input": "select",
+                "required": True,
+                "options": ["A", "B"],
+            },
+            {"column": "amount", "label": "金额", "input": "number"},
+            {
+                "column": "detail",
+                "label": "明细",
+                "input": "text",
+                "required": True,
+                "visibleWhenGroup": group,
+            },
+        ],
+    }
+
+
+def _condition(field: str, op: str, value: object = None, *, with_value: bool = True):
+    """单条件捷径：无值算子不带 value 键。"""
+    rule: dict = {"field": field, "op": op}
+    if with_value:
+        rule["value"] = value
+    return rule
+
+
+def _city_spec(city_field: dict) -> dict:
+    """两字段 spec：province 控制列（select）+ 给定的 city 字段。"""
+    return {
+        "datasetId": None,
+        "fields": [
+            {
+                "column": "province",
+                "label": "省",
+                "input": "select",
+                "required": True,
+                "options": ["浙江", "江苏", "新疆"],
+            },
+            city_field,
+        ],
+    }
+
+
+def _city_field(**extra) -> dict:
+    """city 字段捷径（select 必填；extra 覆盖/追加键）。"""
+    field: dict = {
+        "column": "city",
+        "label": "市",
+        "input": "select",
+        "required": True,
+    }
+    field.update(extra)
+    return field
+
+
+def test_validate_form_spec_group_matrix() -> None:
+    """visibleWhenGroup 形状校验矩阵：mode/条数/组内单条件逐条拒 +
+    与 visibleWhen 互斥 + 组内引用二趟（文案带组内索引）。"""
+    # 合法：all/any × 单条件 / 10 条（上限边界）
+    for mode in ("all", "any"):
+        group = {"mode": mode, "conditions": [_condition("kind", "eq", "A")]}
+        assert validate_form_spec(_grouped_spec(group)) is None, mode
+    ten = {
+        "mode": "all",
+        "conditions": [
+            _condition("kind", "eq", "A"),
+            _condition("amount", "gt", "0"),
+        ]
+        + [_condition("kind", "neq", "B") for _ in range(8)],
+    }
+    assert validate_form_spec(_grouped_spec(ten)) is None
+    # 合法：组内无值算子/标量 value 形态（复用单条件口径）
+    mixed = {
+        "mode": "any",
+        "conditions": [
+            {"field": "kind", "op": "empty"},
+            _condition("amount", "gte", 100),
+        ],
+    }
+    assert validate_form_spec(_grouped_spec(mixed)) is None
+    # 合法：组内前向引用（detail 引用后不存在的列——这里引用自身前的列即可；
+    # 前向 = conditions 引用声明在其后的字段列，引用存在性在全列齐后裁决）
+    forward = {
+        "datasetId": None,
+        "fields": [
+            {
+                "column": "a",
+                "label": "甲",
+                "input": "text",
+                "visibleWhenGroup": {
+                    "mode": "all",
+                    "conditions": [{"field": "b", "op": "notEmpty"}],
+                },
+            },
+            {"column": "b", "label": "乙", "input": "text"},
+        ],
+    }
+    assert validate_form_spec(forward) is None
+
+    # 非对象
+    assert validate_form_spec(_grouped_spec(["x"])) == (
+        "fields[2].visibleWhenGroup 必须是 JSON 对象（{mode, conditions}）"
+    )
+    # mode：缺失 / 越枚举
+    assert validate_form_spec(
+        _grouped_spec({"conditions": [_condition("kind", "eq", "A")]})
+    ) == "fields[2].visibleWhenGroup.mode 必须是 all/any（收到 None）"
+    assert validate_form_spec(
+        _grouped_spec(
+            {"mode": "xor", "conditions": [_condition("kind", "eq", "A")]}
+        )
+    ) == "fields[2].visibleWhenGroup.mode 必须是 all/any（收到 'xor'）"
+    # conditions：非数组 / 空数组 / 11 条
+    bad_conditions = (
+        "fields[2].visibleWhenGroup.conditions 必须是非空数组（1..10 条）"
+    )
+    assert validate_form_spec(
+        _grouped_spec({"mode": "all", "conditions": {"field": "kind"}})
+    ) == bad_conditions
+    assert validate_form_spec(
+        _grouped_spec({"mode": "all", "conditions": []})
+    ) == bad_conditions
+    eleven = {
+        "mode": "all",
+        "conditions": [_condition("kind", "eq", "A") for _ in range(11)],
+    }
+    assert validate_form_spec(_grouped_spec(eleven)) == (
+        "fields[2].visibleWhenGroup.conditions 不能超过 10 条（收到 11 条）"
+    )
+    # 组内单条件非法：定位带组内索引（复用单条件校验器与文案）
+    assert validate_form_spec(
+        _grouped_spec(
+            {
+                "mode": "all",
+                "conditions": [
+                    _condition("kind", "eq", "A"),
+                    ["x"],
+                ],
+            }
+        )
+    ) == (
+        "fields[2].visibleWhenGroup.conditions[1] 必须是 JSON 对象"
+        "（{field, op, value?}）"
+    )
+    assert validate_form_spec(
+        _grouped_spec(
+            {
+                "mode": "all",
+                "conditions": [_condition("kind", "xor", "A")],
+            }
+        )
+    ) == (
+        "fields[2].visibleWhenGroup.conditions[0].op 必须是"
+        " eq/neq/gt/gte/lt/lte/contains/empty/notEmpty（收到 'xor'）"
+    )
+    # 组内无值算子带 value 键拒（定位带组内索引）
+    assert validate_form_spec(
+        _grouped_spec(
+            {
+                "mode": "any",
+                "conditions": [
+                    {"field": "kind", "op": "empty", "value": "x"},
+                ],
+            }
+        )
+    ) == "fields[2].visibleWhenGroup.conditions[0].empty 不得带 value 键"
+    # 组内带值算子缺 value 拒
+    assert validate_form_spec(
+        _grouped_spec(
+            {"mode": "all", "conditions": [{"field": "kind", "op": "eq"}]}
+        )
+    ) == (
+        "fields[2].visibleWhenGroup.conditions[0].value"
+        " 必须是非空标量（op=eq 必带）"
+    )
+    # 与 visibleWhen 并存拒（互斥）
+    both = {
+        "datasetId": None,
+        "fields": [
+            {"column": "a", "label": "甲", "input": "text"},
+            {
+                "column": "b",
+                "label": "乙",
+                "input": "text",
+                "visibleWhen": {"field": "a", "op": "notEmpty"},
+                "visibleWhenGroup": {
+                    "mode": "all",
+                    "conditions": [{"field": "a", "op": "notEmpty"}],
+                },
+            },
+        ],
+    }
+    assert validate_form_spec(both) == (
+        "fields[1] 同时携带 visibleWhen 与 visibleWhenGroup——两者互斥"
+    )
+    # 组内引用二趟：自引用 / 不存在列（文案带组定位与组内索引）
+    assert validate_form_spec(
+        _grouped_spec(
+            {
+                "mode": "all",
+                "conditions": [
+                    _condition("kind", "eq", "A"),
+                    _condition("detail", "eq", "x"),
+                ],
+            }
+        )
+    ) == (
+        "fields[2].visibleWhenGroup.conditions[1].field 不能自引用本字段: detail"
+    )
+    assert validate_form_spec(
+        _grouped_spec(
+            {
+                "mode": "all",
+                "conditions": [
+                    _condition("kind", "eq", "A"),
+                    _condition("ghost", "eq", "x"),
+                ],
+            }
+        )
+    ) == (
+        "fields[2].visibleWhenGroup.conditions[1].field"
+        " 引用了不存在的字段列: ghost"
+    )
+
+
+def test_validate_form_spec_options_from_matrix() -> None:
+    """optionsFrom 形状校验矩阵：field/cases/fallback 逐条拒 + 与静态
+    options 互斥（恰有其一）+ 非 select 拒 + 引用二趟。"""
+    mapping = {
+        "field": "province",
+        "cases": {"浙江": ["杭州", "宁波"], "江苏": ["南京"]},
+        "fallback": ["其他"],
+    }
+    # 合法：带 fallback / 不带 fallback / 前向引用
+    assert validate_form_spec(_city_spec(_city_field(optionsFrom=mapping))) is None
+    no_fallback = {
+        "field": "province",
+        "cases": {"浙江": ["杭州"]},
+    }
+    assert (
+        validate_form_spec(_city_spec(_city_field(optionsFrom=no_fallback))) is None
+    )
+    forward = {
+        "datasetId": None,
+        "fields": [
+            {
+                "column": "a",
+                "label": "甲",
+                "input": "select",
+                "optionsFrom": {"field": "b", "cases": {"x": ["1"]}},
+            },
+            {"column": "b", "label": "乙", "input": "text"},
+        ],
+    }
+    assert validate_form_spec(forward) is None
+
+    # 非对象
+    assert validate_form_spec(_city_spec(_city_field(optionsFrom=["x"]))) == (
+        "fields[1].optionsFrom 必须是 JSON 对象（{field, cases, fallback?}）"
+    )
+    # field：缺失 / 空白串
+    bad_field = "fields[1].optionsFrom.field 必须是非空字符串（同表单另一字段的 column）"
+    assert validate_form_spec(
+        _city_spec(_city_field(optionsFrom={"cases": {"浙江": ["杭州"]}}))
+    ) == bad_field
+    assert validate_form_spec(
+        _city_spec(
+            _city_field(
+                optionsFrom={"field": "  ", "cases": {"浙江": ["杭州"]}}
+            )
+        )
+    ) == bad_field
+    # cases：缺失 / 非对象 / 空对象
+    bad_cases = "fields[1].optionsFrom.cases 必须是非空对象（控制值 → 非空选项列表）"
+    assert validate_form_spec(
+        _city_spec(_city_field(optionsFrom={"field": "province"}))
+    ) == bad_cases
+    assert validate_form_spec(
+        _city_spec(
+            _city_field(
+                optionsFrom={"field": "province", "cases": ["浙江"]}
+            )
+        )
+    ) == bad_cases
+    assert validate_form_spec(
+        _city_spec(
+            _city_field(optionsFrom={"field": "province", "cases": {}})
+        )
+    ) == bad_cases
+    # cases 键 trim 后空白拒
+    assert validate_form_spec(
+        _city_spec(
+            _city_field(
+                optionsFrom={"field": "province", "cases": {"  ": ["杭州"]}}
+            )
+        )
+    ) == (
+        "fields[1].optionsFrom.cases 的键必须 trim 后非空（收到 '  '）"
+    )
+    # cases 值：非列表 / 空列表 / 列表含空串（同 options 列表口径）
+    for bad_value in ("杭州", [], ["杭州", ""]):
+        spec = _city_spec(
+            _city_field(
+                optionsFrom={"field": "province", "cases": {"浙江": bad_value}}
+            )
+        )
+        assert validate_form_spec(spec) == (
+            "fields[1].optionsFrom.cases['浙江'] 必须是非空字符串列表"
+        ), bad_value
+    # fallback：非列表 / 空列表 / 含空串
+    for bad_fallback in ("其他", [], ["其他", ""]):
+        spec = _city_spec(
+            _city_field(
+                optionsFrom={
+                    "field": "province",
+                    "cases": {"浙江": ["杭州"]},
+                    "fallback": bad_fallback,
+                }
+            )
+        )
+        assert validate_form_spec(spec) == (
+            "fields[1].optionsFrom.fallback 必须是非空字符串列表"
+        ), bad_fallback
+
+    # 与静态 options 并存拒（互斥）
+    both = _city_spec(_city_field(options=["x"], optionsFrom=no_fallback))
+    assert validate_form_spec(both) == "fields[1] 同时携带 options 与 optionsFrom——两者互斥"
+    # 都无：现行文案不变（select 必带 options 或 optionsFrom 恰其一）
+    assert validate_form_spec(_city_spec(_city_field())) == (
+        "fields[1].options 必须是非空字符串列表（input=select 必带）"
+    )
+    # 非 select 字段携带 optionsFrom 拒
+    alien = _city_spec(
+        {
+            "column": "city",
+            "label": "市",
+            "input": "text",
+            "optionsFrom": no_fallback,
+        }
+    )
+    assert validate_form_spec(alien) == (
+        "fields[1].optionsFrom 仅 input=select 字段可携带（收到 'text'）"
+    )
+    # 引用二趟：自引用 / 不存在列
+    self_ref = _city_spec(
+        _city_field(optionsFrom={"field": "city", "cases": {"x": ["1"]}})
+    )
+    assert validate_form_spec(self_ref) == (
+        "fields[1].optionsFrom.field 不能自引用本字段: city"
+    )
+    ghost_ref = _city_spec(
+        _city_field(optionsFrom={"field": "ghost", "cases": {"x": ["1"]}})
+    )
+    assert validate_form_spec(ghost_ref) == (
+        "fields[1].optionsFrom.field 引用了不存在的字段列: ghost"
+    )
 
 
 # ------------------------------------------------------------- 1.2 空白创建

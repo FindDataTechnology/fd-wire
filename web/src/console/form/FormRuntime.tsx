@@ -13,11 +13,18 @@
 // 可见转隐藏即清其 state 值（重新可见从空开始）；提交走联动感知
 // validateFormValues（隐藏必填不拦、隐藏携带值拒）。分享页共用本组件，
 // 联动自动生效。
+//
+// 联动 v1+（wire-form-linkage-v2）：①组条件显隐走同一 evaluateFieldVisibility
+// （all/any）；②select 动态选项——optionsFrom 按当前 raw values 解析
+// （resolveSelectOptions），解析为空的字段并入隐藏集走现行隐藏渲染路径；
+// 解析选项变化且现值不在新选项集 → 立即清值（与隐藏清值同款纪律，提交
+// 载荷不含；级联由 setValues 触发的重渲染自然推进）。
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { addCorrection, apiErrorText, postPublicJson } from "../api";
 import {
   evaluateFieldVisibility,
+  resolveSelectOptions,
   validateFormValues,
   type FormSpecBody,
 } from "./formSpec";
@@ -71,6 +78,45 @@ export function FormRuntime({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hiddenKey]);
+
+  // select 动态选项（wire-form-linkage-v2）：按当前 raw values 逐 select
+  // 解析候选（optionsFrom 命中 cases/回退 fallback；静态 options 原样）。
+  // 解析为空的字段已由 evaluateFieldVisibility 并入隐藏集（走现行隐藏渲染
+  // 与清值路径——不可填即不可见）。
+  const selectOptions = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const field of spec.fields) {
+      if (field.input === "select") {
+        map[field.column] = resolveSelectOptions(field, values);
+      }
+    }
+    return map;
+  }, [spec, values]);
+  // 稳定依赖键（选项列表真正变化时才推进下方清值 effect）。
+  const selectOptionsKey = useMemo(
+    () =>
+      Object.entries(selectOptions)
+        .map(([column, options]) => `${column}:${options.join("\u0001")}`)
+        .join("\u0000"),
+    [selectOptions],
+  );
+  // 解析选项变化且现值不在新选项集 → 立即清值（与「隐藏即清」同款纪律：
+  // 现值绝不进提交载荷；级联清理由 setValues 触发的重渲染自然推进）。
+  useEffect(() => {
+    setValues((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const [column, options] of Object.entries(selectOptions)) {
+        const current = next[column];
+        if (current && !options.includes(current)) {
+          next[column] = "";
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectOptionsKey]);
 
   // 未绑定数据集诚实态（构建中间态）：如实呈现而非可提交表单。
   // （局部 const 承接窄化——闭包内保持非空。）
@@ -188,11 +234,15 @@ export function FormRuntime({
                 className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
               >
                 <option value="">—</option>
-                {(field.options ?? []).map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
+                {/* 动态选项（wire-form-linkage-v2）：按当前 raw values 解析
+                    （optionsFrom 命中 cases/回退 fallback；静态原样）。 */}
+                {(selectOptions[field.column] ?? field.options ?? []).map(
+                  (option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ),
+                )}
               </select>
             ) : (
               /* 文本输入承载全部类型（number/date 由 validateFormValues 统一校验

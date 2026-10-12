@@ -4,6 +4,11 @@
 // （逐字段错误、零请求）；未绑数据集诚实态（不可提交）；public 态走公开
 // submit 端点（t/v 透传、免登录绝不携带 Authorization、响应 message 呈现、
 // 422/429 detail 如实呈现）。
+// 显隐联动（wire-form-field-linkage）：条件渲染往返、隐藏即清值、隐藏必填
+// 不拦、载荷排除。
+// 联动 v1+（wire-form-linkage-v2）：组条件显隐（all/any）+ select 动态选项
+// （optionsFrom 级联解析、选项变化清值不进载荷、空选项按隐藏）+ 公开提交
+// 防篡改（客户端拦截 + 服务端 422 文案呈现）。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import "../../i18n";
@@ -83,6 +88,48 @@ function install(options: ConsoleBackendOptions = {}) {
   const backend = installConsoleBackend([], { datasets: [DATASET], ...options });
   vi.stubGlobal("fetch", backend.fetchImpl);
   return backend;
+}
+
+/** 找 corrections POST 请求（console 提交载荷断言用）。 */
+function findCorrectionPost(backend: ReturnType<typeof install>) {
+  return backend.calls.find(
+    (c) =>
+      c.method === "POST" && c.url.pathname === "/api/v1/datasets/ds-form-1/corrections",
+  );
+}
+
+type PublicCall = {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body?: unknown;
+};
+
+/** 打公开端点假 fetch：记录请求（断言无 Authorization），按入参回状态。 */
+function stubPublicFetch(status: number, body: unknown): PublicCall[] {
+  const calls: PublicCall[] = [];
+  vi.stubGlobal(
+    "fetch",
+    ((input: RequestInfo | URL, init?: RequestInit) => {
+      const headers: Record<string, string> = {};
+      new Headers(init?.headers as HeadersInit | undefined).forEach((v, k) => {
+        headers[k.toLowerCase()] = v;
+      });
+      calls.push({
+        url: String(input),
+        method: (init?.method ?? "GET").toUpperCase(),
+        headers,
+        body:
+          typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      });
+      return Promise.resolve({
+        ok: status < 400,
+        status,
+        json: () => Promise.resolve(body),
+      } as unknown as Response);
+    }) as unknown as typeof fetch,
+  );
+  return calls;
 }
 
 describe("FormRuntime（console 态：corrections 提交）", () => {
@@ -239,43 +286,6 @@ describe("FormRuntime（console 态：corrections 提交）", () => {
 
 describe("FormRuntime（public 态：公开 submit 端点）", () => {
   const SUBMIT_URL = "/api/v1/share/form/9/submit?t=tok-abc&v=2";
-
-  type PublicCall = {
-    url: string;
-    method: string;
-    headers: Record<string, string>;
-    body?: unknown;
-  };
-
-  /** 打公开端点假 fetch：记录请求（断言无 Authorization），按入参回状态。 */
-  function stubPublicFetch(
-    status: number,
-    body: unknown,
-  ): PublicCall[] {
-    const calls: PublicCall[] = [];
-    vi.stubGlobal(
-      "fetch",
-      ((input: RequestInfo | URL, init?: RequestInit) => {
-        const headers: Record<string, string> = {};
-        new Headers(init?.headers as HeadersInit | undefined).forEach((v, k) => {
-          headers[k.toLowerCase()] = v;
-        });
-        calls.push({
-          url: String(input),
-          method: (init?.method ?? "GET").toUpperCase(),
-          headers,
-          body:
-            typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
-        });
-        return Promise.resolve({
-          ok: status < 400,
-          status,
-          json: () => Promise.resolve(body),
-        } as unknown as Response);
-      }) as unknown as typeof fetch,
-    );
-    return calls;
-  }
 
   it("公开提交成功：POST 分享端点（t/v 透传、免登录）+ 响应 message 呈现", async () => {
     const calls = stubPublicFetch(201, {
@@ -484,5 +494,298 @@ describe("FormRuntime（显隐联动：条件渲染+隐藏即清+载荷排除）
       values: { city: "沪", type: "标准" }, // detail 键不落
     });
     expect(JSON.stringify(post?.body).includes("detail")).toBe(false);
+  });
+});
+
+// --------------------------------- 条件组合与选项联动（wire-form-linkage-v2）
+
+describe("FormRuntime（条件组合显隐：all/any 级联+清值+载荷排除）", () => {
+  const GROUP_SPEC: FormSpecBody = {
+    datasetId: "ds-form-1",
+    fields: [
+      { column: "city", label: "城市", input: "text", required: true },
+      { column: "kind", label: "类型", input: "select", options: ["VIP", "普通"] },
+      { column: "amount", label: "金额", input: "number" },
+      {
+        column: "vip_note",
+        label: "VIP 备注",
+        input: "text",
+        required: true, // 隐藏必填不拦——只在可见时强制
+        visibleWhenGroup: {
+          mode: "all",
+          conditions: [
+            { field: "kind", op: "eq", value: "VIP" },
+            { field: "amount", op: "notEmpty" },
+          ],
+        },
+      },
+      {
+        column: "any_note",
+        label: "任一备注",
+        input: "text",
+        visibleWhenGroup: {
+          mode: "any",
+          conditions: [
+            { field: "kind", op: "eq", value: "VIP" },
+            { field: "amount", op: "gt", value: "100" },
+          ],
+        },
+      },
+    ],
+  };
+
+  function rowOf(column: string): HTMLElement | undefined {
+    return screen
+      .getAllByTestId("form-field")
+      .find((el) => el.getAttribute("data-column") === column);
+  }
+
+  function selectKind(value: string) {
+    fireEvent.change(within(fieldOf("kind")).getByTestId("form-field-input"), {
+      target: { value },
+    });
+  }
+
+  it("all 全真才出现、缺一即隐藏且清值；any 一真即出现、全假隐藏", () => {
+    install();
+    render(
+      <FormRuntime
+        spec={GROUP_SPEC}
+        endpoint={{ kind: "console", datasetId: "ds-form-1" }}
+      />,
+    );
+
+    // 初态：kind 空（eq 假）+ amount 空（notEmpty 假）→ 两者皆隐藏
+    expect(rowOf("vip_note")).toBeUndefined();
+    expect(rowOf("any_note")).toBeUndefined();
+
+    // 选 VIP（amount 仍空）：any 出现（一真即可见）、all 仍隐藏
+    selectKind("VIP");
+    expect(rowOf("any_note")).toBeDefined();
+    expect(rowOf("vip_note")).toBeUndefined();
+
+    // 填金额 → all 出现（必填标随行）可填值
+    fill("amount", "50");
+    const vipNote = rowOf("vip_note")!;
+    expect(within(vipNote).getByTestId("form-field-required")).toBeTruthy();
+    fireEvent.change(within(vipNote).getByTestId("form-field-input"), {
+      target: { value: "备注X" },
+    });
+
+    // 清空金额 → all 隐藏且 state 值被清（隐藏即清，同现行纪律）
+    fill("amount", "");
+    expect(rowOf("vip_note")).toBeUndefined();
+
+    // 切「普通」：any 的 eq 假 + amount 空 → gt 假 → 隐藏
+    selectKind("普通");
+    expect(rowOf("any_note")).toBeUndefined();
+  });
+
+  it("all 组合隐藏时必填不拦提交；载荷不含隐藏字段键", async () => {
+    const backend = install();
+    render(
+      <FormRuntime
+        spec={GROUP_SPEC}
+        endpoint={{ kind: "console", datasetId: "ds-form-1" }}
+      />,
+    );
+
+    fill("city", "沪");
+    selectKind("普通"); // vip_note（必填）与 any_note 均隐藏
+    fireEvent.click(screen.getByTestId("form-submit"));
+
+    expect(await screen.findByTestId("form-success")).toBeTruthy();
+    const post = findCorrectionPost(backend);
+    expect(post?.body).toEqual({
+      op: "insert",
+      values: { city: "沪", kind: "普通" },
+    });
+    expect(JSON.stringify(post?.body).includes("note")).toBe(false);
+  });
+});
+
+describe("FormRuntime（选项联动：动态选项+清值+空选项隐藏+防篡改）", () => {
+  const SUBMIT_URL = "/api/v1/share/form/9/submit?t=tok-abc&v=2";
+
+  const LINKED_SPEC: FormSpecBody = {
+    datasetId: "ds-form-1",
+    fields: [
+      { column: "city", label: "城市", input: "text", required: true },
+      { column: "region", label: "大区", input: "select", options: ["华东", "华南"] },
+      {
+        column: "province_city",
+        label: "所在城市",
+        input: "select",
+        optionsFrom: {
+          field: "region",
+          cases: { 华东: ["上海", "杭州"], 华南: ["广州", "深圳"] },
+          fallback: ["其他地区"],
+        },
+      },
+    ],
+  };
+
+  function citySelect(): HTMLSelectElement {
+    return within(fieldOf("province_city")).getByTestId(
+      "form-field-input",
+    ) as HTMLSelectElement;
+  }
+
+  function cityOptions(): string[] {
+    return [...citySelect().options].map((o) => o.value);
+  }
+
+  function selectRegion(value: string) {
+    fireEvent.change(within(fieldOf("region")).getByTestId("form-field-input"), {
+      target: { value },
+    });
+  }
+
+  function selectProvinceCity(value: string) {
+    fireEvent.change(citySelect(), { target: { value } });
+  }
+
+  it("控制值未选 → fallback；选华东 → 华东列表；切华南 → 选项切换且现值立即被清", () => {
+    install();
+    render(
+      <FormRuntime
+        spec={LINKED_SPEC}
+        endpoint={{ kind: "console", datasetId: "ds-form-1" }}
+      />,
+    );
+
+    // 初态控制值空 → 解析 fallback
+    expect(cityOptions()).toEqual(["", "其他地区"]);
+    selectRegion("华东");
+    expect(cityOptions()).toEqual(["", "上海", "杭州"]);
+    selectProvinceCity("上海");
+
+    // 切华南：上海不在新选项集 → 立即清值（绝不进提交载荷）
+    selectRegion("华南");
+    expect(cityOptions()).toEqual(["", "广州", "深圳"]);
+    expect(citySelect().value).toBe("");
+  });
+
+  it("级联提交：载荷的联动值 ∈ 当前解析选项", async () => {
+    const backend = install();
+    render(
+      <FormRuntime
+        spec={LINKED_SPEC}
+        endpoint={{ kind: "console", datasetId: "ds-form-1" }}
+      />,
+    );
+
+    fill("city", "沪");
+    selectRegion("华东");
+    selectProvinceCity("杭州");
+    fireEvent.click(screen.getByTestId("form-submit"));
+
+    expect(await screen.findByTestId("form-success")).toBeTruthy();
+    expect(findCorrectionPost(backend)?.body).toEqual({
+      op: "insert",
+      values: { city: "沪", region: "华东", province_city: "杭州" },
+    });
+  });
+
+  it("空选项按隐藏：无 fallback + 控制值未命中 → 字段不渲染（连 label 都不出）、必填不拦、载荷不含键", async () => {
+    const backend = install();
+    render(
+      <FormRuntime
+        spec={{
+          datasetId: "ds-form-1",
+          fields: [
+            { column: "city", label: "城市", input: "text", required: true },
+            {
+              column: "region",
+              label: "大区",
+              input: "select",
+              options: ["华东", "华南"],
+            },
+            {
+              column: "province_city",
+              label: "所在城市",
+              input: "select",
+              required: true, // 空选项按隐藏 → required 不查
+              optionsFrom: { field: "region", cases: { 华东: ["上海"] } }, // 无 fallback
+            },
+          ],
+        }}
+        endpoint={{ kind: "console", datasetId: "ds-form-1" }}
+      />,
+    );
+
+    // 初态控制值空 → 解析 [] → 视同隐藏（不渲染）
+    expect(screen.getAllByTestId("form-field").length).toBe(2);
+    expect(
+      screen
+        .getAllByTestId("form-field")
+        .some((el) => el.getAttribute("data-column") === "province_city"),
+    ).toBe(false);
+
+    fill("city", "沪");
+    fireEvent.click(screen.getByTestId("form-submit"));
+    expect(await screen.findByTestId("form-success")).toBeTruthy();
+    const post = findCorrectionPost(backend);
+    expect(post?.body).toEqual({ op: "insert", values: { city: "沪" } });
+    expect(JSON.stringify(post?.body).includes("province_city")).toBe(false);
+  });
+
+  it("防篡改（客户端拦截）：注入 DOM 伪造选项值 → select 错误呈现、零请求", () => {
+    const backend = install();
+    render(
+      <FormRuntime
+        spec={LINKED_SPEC}
+        endpoint={{ kind: "console", datasetId: "ds-form-1" }}
+      />,
+    );
+
+    selectRegion("华东");
+    // 模拟 devtools 篡改：向 select 注入伪造 <option> 再改值——state 持有
+    // 不 ∈ 解析后选项的值，提交走 validateFormValues 先拦。
+    const bogus = document.createElement("option");
+    bogus.value = "伪造城市";
+    citySelect().appendChild(bogus);
+    fireEvent.change(citySelect(), { target: { value: "伪造城市" } });
+    bogus.remove();
+
+    fill("city", "沪");
+    fireEvent.click(screen.getByTestId("form-submit"));
+    expect(
+      within(fieldOf("province_city")).getByTestId("form-field-error")
+        .textContent,
+    ).toContain("选项");
+    expect(
+      backend.calls.filter(
+        (c) => c.method === "POST" && c.url.pathname.includes("corrections"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("公开提交端到端：级联正例载荷 + 服务端 422（动态成员裁决）detail 如实呈现、零清空", async () => {
+    const calls = stubPublicFetch(422, {
+      detail:
+        "字段 所在城市（province_city）必须是选项之一 ['上海', '杭州']（收到 '伪造城市'）",
+    });
+    render(
+      <FormRuntime spec={LINKED_SPEC} endpoint={{ kind: "public", url: SUBMIT_URL }} />,
+    );
+
+    // 客户端解析口径下合法（杭州 ∈ 华东列表）→ 请求发出，服务端按 raw
+    // values 重解析裁决 422——detail 如实呈现，表单不清空。
+    fill("city", "京");
+    selectRegion("华东");
+    selectProvinceCity("杭州");
+    fireEvent.click(screen.getByTestId("form-submit"));
+
+    expect(
+      (await screen.findByTestId("form-submit-error")).textContent,
+    ).toContain("必须是选项之一");
+    expect(calls[0]?.body).toEqual({
+      values: { city: "京", region: "华东", province_city: "杭州" },
+    });
+    expect(
+      (within(fieldOf("city")).getByTestId("form-field-input") as HTMLInputElement)
+        .value,
+    ).toBe("京");
   });
 });

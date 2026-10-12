@@ -4,6 +4,11 @@
 // options → submitLabel/successMessage 可配 → 保存走既有 PUT（信封口径
 // 断言）；未绑数据集保存允许（构建中间态）；结构自检零请求拦截；未保存
 // 离开 confirm。
+// 显隐条件编辑（wire-form-field-linkage）：配条件/清除/empty 免值/存量零
+// 变化往返。
+// 条件组合与选项联动编辑（wire-form-linkage-v2）：组条件行增删（1..10）+
+// all/any 切换 + 保存落形 + 与单条件互斥；select 选项联动（控制字段+cases
+// 映射行+fallback）+ 与静态 options 互斥 + 空映射保存拦截。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "../../i18n";
@@ -511,5 +516,409 @@ describe("FormEditor（显隐条件编辑）", () => {
     expect(
       JSON.stringify(lastSavedSpec(backend)).includes("visibleWhen"),
     ).toBe(false);
+  });
+});
+
+// --------------------------------- 条件组合与选项联动编辑（wire-form-linkage-v2）
+
+describe("FormEditor（条件组合编辑）", () => {
+  /** 最近一次 PUT 的 spec.spec。 */
+  function lastSavedSpec(backend: ReturnType<typeof install>): {
+    fields: Array<{
+      column: string;
+      visibleWhenGroup?: unknown;
+    }>;
+  } {
+    const puts = backend.calls.filter((c) => c.method === "PUT");
+    return (puts[puts.length - 1]?.body as {
+      spec: { spec: { fields: Array<{ column: string; visibleWhenGroup?: unknown }> } };
+    }).spec.spec;
+  }
+
+  /** 勾 city/amount/reported_on 三字段（组条件的目标字段=reported_on）。 */
+  async function openWithThreeFields() {
+    const { backend, datasetSelect } = await openEditor();
+    fireEvent.change(datasetSelect, { target: { value: "ds-sales" } });
+    fireEvent.click(columnCheckbox("city"));
+    fireEvent.click(columnCheckbox("amount"));
+    fireEvent.click(columnCheckbox("reported_on"));
+    return backend;
+  }
+
+  /** 打开 reported_on 的组合条件（默认 mode=all、一条条件）。 */
+  function enableGroup() {
+    fireEvent.click(
+      within(fieldRow("reported_on")).getByTestId(
+        "editor-field-condition-group-toggle",
+      ),
+    );
+  }
+
+  it("开关打开默认组：mode=all、一条条件（当字段=首个其他字段 city、算子=等于、值空）", async () => {
+    await openWithThreeFields();
+    enableGroup();
+
+    const row = fieldRow("reported_on");
+    expect(
+      (within(row).getByTestId("editor-field-group-mode") as HTMLSelectElement)
+        .value,
+    ).toBe("all");
+    const conditionRows = within(row).getAllByTestId("editor-group-condition");
+    expect(conditionRows).toHaveLength(1);
+    expect(
+      (within(conditionRows[0]!).getByTestId("editor-group-condition-field") as HTMLSelectElement)
+        .value,
+    ).toBe("city");
+    expect(
+      (within(conditionRows[0]!).getByTestId("editor-group-condition-op") as HTMLSelectElement)
+        .value,
+    ).toBe("eq");
+    expect(
+      (within(conditionRows[0]!).getByTestId("editor-group-condition-value") as HTMLInputElement)
+        .value,
+    ).toBe("");
+  });
+
+  it("配组+加条件+切 any → 保存落形（conditions 数组逐条保标量）", async () => {
+    const backend = await openWithThreeFields();
+    enableGroup();
+    const row = fieldRow("reported_on");
+
+    // 首条：当字段=city（默认）、算子=等于（默认）、值=上海
+    fireEvent.change(within(row).getByTestId("editor-group-condition-value"), {
+      target: { value: "上海" },
+    });
+    // 加一条：当字段=amount、算子=notEmpty（值控件随 empty 族隐藏）
+    fireEvent.click(within(row).getByTestId("editor-field-group-condition-add"));
+    const second = within(row).getAllByTestId("editor-group-condition")[1]!;
+    fireEvent.change(within(second).getByTestId("editor-group-condition-field"), {
+      target: { value: "amount" },
+    });
+    fireEvent.change(within(second).getByTestId("editor-group-condition-op"), {
+      target: { value: "notEmpty" },
+    });
+    expect(
+      within(second).queryByTestId("editor-group-condition-value"),
+    ).toBeNull();
+    // 切 any
+    fireEvent.change(within(row).getByTestId("editor-field-group-mode"), {
+      target: { value: "any" },
+    });
+
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      await screen.findByTestId("editor-form-saved-version"),
+    ).toBeTruthy();
+    expect(
+      lastSavedSpec(backend).fields.find((f) => f.column === "reported_on")
+        ?.visibleWhenGroup,
+    ).toEqual({
+      mode: "any",
+      conditions: [
+        { field: "city", op: "eq", value: "上海" },
+        { field: "amount", op: "notEmpty" },
+      ],
+    });
+  });
+
+  it("条件行增删上限：至多 10 条（加满禁用）；至少留 1 条（仅 1 条时移除禁用）", async () => {
+    await openWithThreeFields();
+    enableGroup();
+    const row = fieldRow("reported_on");
+
+    // 仅 1 条时移除禁用
+    expect(
+      (within(row).getAllByTestId("editor-group-condition-remove")[0] as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    // 连加 9 条 → 10 条封顶，加按钮禁用
+    for (let i = 0; i < 9; i++) {
+      fireEvent.click(
+        within(fieldRow("reported_on")).getByTestId(
+          "editor-field-group-condition-add",
+        ),
+      );
+    }
+    expect(
+      within(fieldRow("reported_on")).getAllByTestId("editor-group-condition"),
+    ).toHaveLength(10);
+    expect(
+      (within(fieldRow("reported_on")).getByTestId(
+        "editor-field-group-condition-add",
+      ) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    // 移除一行 → 9 条、加按钮恢复
+    fireEvent.click(
+      within(fieldRow("reported_on")).getAllByTestId(
+        "editor-group-condition-remove",
+      )[0]!,
+    );
+    expect(
+      within(fieldRow("reported_on")).getAllByTestId("editor-group-condition"),
+    ).toHaveLength(9);
+    expect(
+      (within(fieldRow("reported_on")).getByTestId(
+        "editor-field-group-condition-add",
+      ) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it("清除组合：一键回无条件（visibleWhenGroup 键不落、开关回关）", async () => {
+    const backend = await openWithThreeFields();
+    enableGroup();
+    fireEvent.click(
+      within(fieldRow("reported_on")).getByTestId("editor-field-group-clear"),
+    );
+    expect(
+      within(fieldRow("reported_on")).queryByTestId("editor-field-group"),
+    ).toBeNull();
+    expect(
+      (within(fieldRow("reported_on")).getByTestId(
+        "editor-field-condition-group-toggle",
+      ) as HTMLInputElement).checked,
+    ).toBe(false);
+
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      await screen.findByTestId("editor-form-saved-version"),
+    ).toBeTruthy();
+    expect(
+      JSON.stringify(lastSavedSpec(backend)).includes("visibleWhenGroup"),
+    ).toBe(false);
+  });
+
+  it("与单条件互斥：配了单条件→组合入口禁用+提示；清除单条件后可用；反向配了组合→单条件开关禁用+提示", async () => {
+    await openWithThreeFields();
+    const row = fieldRow("reported_on");
+
+    // 配单条件 → 组合入口禁用并提示互斥
+    fireEvent.click(
+      within(row).getByTestId("editor-field-condition-toggle"),
+    );
+    expect(
+      (within(fieldRow("reported_on")).getByTestId(
+        "editor-field-condition-group-toggle",
+      ) as HTMLInputElement).disabled,
+    ).toBe(true);
+    expect(
+      within(fieldRow("reported_on")).getByTestId(
+        "editor-field-group-exclusive-hint",
+      ).textContent,
+    ).toContain("互斥");
+
+    // 清除单条件 → 组合入口恢复
+    fireEvent.click(
+      within(fieldRow("reported_on")).getByTestId("editor-field-condition-clear"),
+    );
+    expect(
+      (within(fieldRow("reported_on")).getByTestId(
+        "editor-field-condition-group-toggle",
+      ) as HTMLInputElement).disabled,
+    ).toBe(false);
+
+    // 配组合 → 单条件开关禁用并提示互斥
+    enableGroup();
+    expect(
+      (within(fieldRow("reported_on")).getByTestId(
+        "editor-field-condition-toggle",
+      ) as HTMLInputElement).disabled,
+    ).toBe(true);
+    expect(
+      within(fieldRow("reported_on")).getByTestId(
+        "editor-field-condition-exclusive-hint",
+      ).textContent,
+    ).toContain("互斥");
+  });
+});
+
+describe("FormEditor（选项联动编辑）", () => {
+  /** 最近一次 PUT 的 spec.spec。 */
+  function lastSavedSpec(backend: ReturnType<typeof install>): {
+    fields: Array<{
+      column: string;
+      options?: unknown;
+      optionsFrom?: unknown;
+    }>;
+  } {
+    const puts = backend.calls.filter((c) => c.method === "PUT");
+    return (puts[puts.length - 1]?.body as {
+      spec: { spec: { fields: Array<{ column: string; options?: unknown; optionsFrom?: unknown }> } };
+    }).spec.spec;
+  }
+
+  /** 勾 city/amount/reported_on，city 转 select（空 options 占位不算已配置静态选项）。 */
+  async function openWithSelectCity() {
+    const { backend, datasetSelect } = await openEditor();
+    fireEvent.change(datasetSelect, { target: { value: "ds-sales" } });
+    fireEvent.click(columnCheckbox("city"));
+    fireEvent.click(columnCheckbox("amount"));
+    fireEvent.click(columnCheckbox("reported_on"));
+    fireEvent.change(within(fieldRow("city")).getByTestId("editor-field-input"), {
+      target: { value: "select" },
+    });
+    return backend;
+  }
+
+  it("切入选项联动：默认控制字段=首个其他字段 + 一行空映射；配映射行+兜底 → 保存落形（options 键不落）", async () => {
+    const backend = await openWithSelectCity();
+    const row = fieldRow("city");
+    fireEvent.click(within(row).getByTestId("editor-field-options-from-toggle"));
+
+    expect(
+      (within(row).getByTestId("editor-field-options-from-field") as HTMLSelectElement)
+        .value,
+    ).toBe("amount");
+    const caseRows = within(row).getAllByTestId("editor-field-case-row");
+    expect(caseRows).toHaveLength(1);
+    // 配映射行：控制值=大 → 选项 1, 2
+    fireEvent.change(within(caseRows[0]!).getByTestId("editor-field-case-key"), {
+      target: { value: "大" },
+    });
+    fireEvent.change(
+      within(caseRows[0]!).getByTestId("editor-field-case-options"),
+      { target: { value: "1, 2 ," },
+      },
+    );
+    // 兜底：其他
+    fireEvent.change(within(row).getByTestId("editor-field-options-from-fallback"), {
+      target: { value: "其他" },
+    });
+
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      await screen.findByTestId("editor-form-saved-version"),
+    ).toBeTruthy();
+    const city = lastSavedSpec(backend).fields.find((f) => f.column === "city");
+    expect(city?.optionsFrom).toEqual({
+      field: "amount",
+      cases: { 大: ["1", "2"] },
+      fallback: ["其他"],
+    });
+    // 互斥纪律：切入选项联动后 options 键不落
+    expect(city?.options).toBeUndefined();
+  });
+
+  it("映射行增删与控制字段切换；兜底清空即键不落", async () => {
+    const backend = await openWithSelectCity();
+    const row = fieldRow("city");
+    fireEvent.click(within(row).getByTestId("editor-field-options-from-toggle"));
+
+    // 首行配齐后可加第二行；存在空白键行时加按钮禁用（键去重纪律）
+    expect(
+      (within(row).getByTestId("editor-field-case-add") as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    const first = within(row).getAllByTestId("editor-field-case-row")[0]!;
+    fireEvent.change(within(first).getByTestId("editor-field-case-key"), {
+      target: { value: "大",
+      },
+    });
+    fireEvent.change(within(first).getByTestId("editor-field-case-options"), {
+      target: { value: "1" },
+    });
+    expect(
+      (within(row).getByTestId("editor-field-case-add") as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+    fireEvent.click(within(row).getByTestId("editor-field-case-add"));
+    const second = within(row).getAllByTestId("editor-field-case-row")[1]!;
+    fireEvent.change(within(second).getByTestId("editor-field-case-key"), {
+      target: { value: "小" },
+    });
+    fireEvent.change(within(second).getByTestId("editor-field-case-options"), {
+      target: { value: "3" },
+    });
+    // 切换控制字段 amount → city 自身不可选（候选=其他字段）
+    fireEvent.change(within(row).getByTestId("editor-field-options-from-field"), {
+      target: { value: "reported_on" },
+    });
+
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      await screen.findByTestId("editor-form-saved-version"),
+    ).toBeTruthy();
+    expect(
+      lastSavedSpec(backend).fields.find((f) => f.column === "city")
+        ?.optionsFrom,
+    ).toEqual({
+      field: "reported_on",
+      cases: { 大: ["1"], 小: ["3"] },
+    });
+
+    // 删除一行（剩一行）+ 移除按钮随即禁用（至少留一行）
+    fireEvent.click(
+      within(fieldRow("city")).getAllByTestId("editor-field-case-remove")[1]!,
+    );
+    expect(
+      within(fieldRow("city")).getAllByTestId("editor-field-case-row"),
+    ).toHaveLength(1);
+    expect(
+      (within(fieldRow("city")).getAllByTestId("editor-field-case-remove")[0] as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("静态 options 与选项联动互斥：配了静态选项→联动入口禁用+提示；清空选项后可用", async () => {
+    await openWithSelectCity();
+    fireEvent.change(within(fieldRow("city")).getByTestId("editor-field-options"), {
+      target: { value: "上海, 北京" },
+    });
+    expect(
+      (within(fieldRow("city")).getByTestId(
+        "editor-field-options-from-toggle",
+      ) as HTMLInputElement).disabled,
+    ).toBe(true);
+    expect(
+      within(fieldRow("city")).getByTestId(
+        "editor-field-options-from-exclusive-hint",
+      ).textContent,
+    ).toContain("互斥");
+
+    // 清空静态选项 → 联动入口恢复
+    fireEvent.change(within(fieldRow("city")).getByTestId("editor-field-options"), {
+      target: { value: "" },
+    });
+    expect(
+      (within(fieldRow("city")).getByTestId(
+        "editor-field-options-from-toggle",
+      ) as HTMLInputElement).disabled,
+    ).toBe(false);
+  });
+
+  it("配了选项联动→静态选项输入让位（提示呈现）；清除联动后回到静态输入", async () => {
+    await openWithSelectCity();
+    fireEvent.click(
+      within(fieldRow("city")).getByTestId("editor-field-options-from-toggle"),
+    );
+    expect(
+      within(fieldRow("city")).queryByTestId("editor-field-options"),
+    ).toBeNull();
+    expect(
+      within(fieldRow("city")).getByTestId("editor-field-options-exclusive-hint")
+        .textContent,
+    ).toBeTruthy();
+
+    fireEvent.click(
+      within(fieldRow("city")).getByTestId("editor-field-options-from-clear"),
+    );
+    expect(
+      within(fieldRow("city")).queryByTestId("editor-field-options-from"),
+    ).toBeNull();
+    expect(
+      within(fieldRow("city")).getByTestId("editor-field-options"),
+    ).toBeTruthy();
+  });
+
+  it("空映射行保存拦截（optionsFromBad）：错误呈现、零 PUT", async () => {
+    const backend = await openWithSelectCity();
+    fireEvent.click(
+      within(fieldRow("city")).getByTestId("editor-field-options-from-toggle"),
+    );
+    // 默认空白键空列表映射 → 保存自检拦截
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      (await screen.findByTestId("editor-form-error")).textContent,
+    ).toContain("选项联动");
+    expect(backend.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
   });
 });
