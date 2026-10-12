@@ -10,7 +10,7 @@
   owner 全通）/撤销即 401/无码首登零回归；全套绿
 - [x] 5. web：「团队」页（owner 名单+一次性码+撤销；成员只读+角色徽标）+
   api client + testing fakes + 测试；tsc/现有套件绿
-- [ ] 6. 发布：快照+GHA api/web 镜像+滚版（maxUnavailable 策略已在）
-- [ ] 7. 生产冒烟：owner 生成邀请码→码只显一次→作废另一码；viewer 席位
+- [x] 6. 发布：快照+GHA api/web 镜像+滚版（maxUnavailable 策略已在）
+- [x] 7. 生产冒烟：owner 生成邀请码→码只显一次→作废另一码；viewer 席位
   无真用户=负路径如实（已归属 sub 兑换拒）；GET /team 渲染
 - [ ] 8. 归档+ROADMAP 方向 B 标注+记忆

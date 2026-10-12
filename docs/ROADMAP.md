@@ -104,7 +104,10 @@ A/B/C）与个人侧（C 端信息工作台，方向 D）——同一个供给�
   分享页不得被目录或搜索引擎命中）→ 团队空间（二期）。
 - **进度（2026-10-12）**：前四项均已上产（wire-artifacts-persistence / dashboard 全线 /
   wire-form-builder 表单构建器+运行时+公开提交 / dashboard-share+form 分享）；
-  方向 B 剩团队空间（二期）与表单字段联动等 v1+ 深化。
+  **团队空间 v0 已上产**（wire-team-spaces：N:1 成员 + wsi- 一次性邀请码 24h +
+  owner/editor/viewer 三角角色门禁入统一鉴权依赖 + team_events append-only 审计；
+  v0 边界=一人一队、无按席位计费、无邮件邀请）；
+  方向 B 剩表单字段联动等 v1+ 深化与团队空间二期（按席位计费/多团队）。
 
 ### 方向 C：供给引擎（数据中台的上游）
 
