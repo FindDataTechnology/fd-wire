@@ -1315,13 +1315,13 @@ const en: Translation = {
         next: "Next",
       },
     },
-    // Team (wire-team-spaces task 5): membership management — owner gets the
-    // roster, one-time invite codes and revocation; editor/viewer get a
-    // read-only roster plus their own seat badge.
+    // Team (wire-team-spaces task 5): membership management, owner-only per
+    // spec (team endpoints) — owner gets the roster, one-time invite codes and
+    // revocation; editor/viewer get an honest 403 notice block.
     team: {
       title: "Team",
       subtitle:
-        "Members and seats of your organization — the owner can generate one-time invite codes (invitees join on first sign-in and share the plan and quotas); editors and viewers see a read-only roster here.",
+        "Members and seats of your organization — the owner can generate one-time invite codes (invitees join on first sign-in and share the plan and quotas); member management is owner-only — editors and viewers cannot access this page.",
       loading: "Loading team…",
       errorTitle: "Failed to load team",
       retry: "Retry",
