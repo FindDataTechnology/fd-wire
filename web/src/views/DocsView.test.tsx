@@ -326,6 +326,52 @@ describe("DocsView（文档三节 · 如实呈现）", () => {
     i18n.changeLanguage("zh");
   });
 
+  // 团队空间章节（wire-team-spaces v0 + v2 任务 7.1）：三角角色门禁 /
+  // 席位双闸零超额（免费档=1 引导原句在场）/ 多团队切换=切数据面
+  // （guesting owner 暂失 owner 面原句在场）/ 角色变更即时生效 / 审计留痕。
+  it("「团队空间」章节：角色/席位双闸/多团队切换语义/角色变更/留痕（关键句逐字断言）", () => {
+    render(<DocsView />);
+
+    const section = screen.getByTestId("docs-team-spaces");
+    expect(section.getAttribute("id")).toBe("team-spaces");
+    expect(section.textContent).toContain("团队空间");
+    // 三角角色：owner 全权、密钥物 owner 专属、viewer 只读
+    expect(section.textContent).toContain("owner 全权");
+    expect(section.textContent).toContain("owner 专属");
+    expect(section.textContent).toContain("viewer 仅可查看");
+    // 席位：口径=成员数+1、双闸、码保活、免费档=1
+    const seats = screen.getByTestId("docs-team-spaces-seats");
+    expect(seats.textContent).toContain("成员数 + 1");
+    expect(seats.textContent).toContain("满员即拒、无超额计费");
+    expect(seats.textContent).toContain("腾出席位后仍可兑换");
+    expect(seats.textContent).toContain("免费档上限 1 席");
+    // 多团队：切队=切数据面、guesting owner 暂失 owner 面、自愈回落
+    const multi = screen.getByTestId("docs-team-spaces-multi");
+    expect(multi.textContent).toContain("切换团队即切换数据面");
+    expect(multi.textContent).toContain("切回即恢复 owner 权限");
+    expect(multi.textContent).toContain("会话失效");
+    // 角色变更：editor↔viewer、下次请求即生效
+    expect(section.textContent).toContain("下次请求即按新角色生效");
+    // 文档 → 控制台入口
+    const link = screen.getByTestId("docs-team-spaces-console-link");
+    expect(link.getAttribute("href")).toBe("#/console/team");
+  });
+
+  it("团队空间章节英文同步（docs.teamSpaces 双语键齐备）", () => {
+    i18n.changeLanguage("en");
+    render(<DocsView />);
+
+    const section = screen.getByTestId("docs-team-spaces");
+    expect(section.textContent).toContain("Team spaces");
+    const seats = screen.getByTestId("docs-team-spaces-seats");
+    expect(seats.textContent).toContain("members + 1");
+    expect(seats.textContent).toContain("no overage billing");
+    const multi = screen.getByTestId("docs-team-spaces-multi");
+    expect(multi.textContent).toContain("switching teams switches the data plane");
+    expect(multi.textContent).toContain("regain owner powers");
+    i18n.changeLanguage("zh");
+  });
+
   it("路由：#/docs 解析为 docs（未登录可访问）", () => {
     expect(parseHash("#/docs")).toEqual({ name: "docs" });
   });

@@ -15,13 +15,14 @@
 明文 key 纪律与 cell-manager 一致：簿记/审计只落 key_id，明文仅在铸出
 当次响应中一次性交付。
 
-团队空间三表（wire-team-spaces，alembic 0027）：``customer_members`` /
-``customer_invites`` / ``team_events``。身份模型：owner =
-``billing_customers.logto_sub`` 本人（不落成员表），成员表只存被邀成员
-（role ∈ editor|viewer）；一个 logto_sub 至多属于一个客户（全局唯一，
-一人一队），且应用层校验不得与任何 ``Customer.logto_sub`` 冲突（DB 跨表
-约束管不到，兑换入口 resolve_member_role 已覆盖该面）。``team_events``
-append-only：只 INSERT，审计不可改写。
+团队空间四表（wire-team-spaces 0027 + wire-team-spaces-v2 0033）：
+``customer_members`` / ``customer_invites`` / ``team_events`` /
+``member_active_team``。身份模型：owner = ``billing_customers.logto_sub``
+本人（不落成员表），成员表只存被邀成员（role ∈ editor|viewer）。v2 多队
+语义：``UNIQUE(customer_id, logto_sub)``——同一 sub 可属多个客户（受邀
+多队），一队至多一行；owner 身份与他在别队的成员身份可并存（guesting
+owner，活跃指针决定当前上下文）。``team_events`` append-only：只 INSERT，
+审计不可改写。
 
 个人偏好（wire-personal-preferences，alembic 0029）：``member_preferences``
 每 sub 一行——语言/落地页/置顶看板三类个人 UI 指针（详见类 docstring）。
@@ -31,7 +32,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Integer, String
+from sqlalchemy import JSON, DateTime, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from ..billing.models import utcnow
@@ -69,20 +70,52 @@ class CustomerMember(ConsoleBase):
 
     ``customer_id`` 指向 ``billing_customers.id``：与 ConsoleOnboarding 同款
     纪律——ORM 层不声明跨 Base ForeignKey（metadata 解析不到对方表），
-    DB 级 FK 由 alembic 0027 落（生产）。``logto_sub`` 全局唯一（一人至多
-    一队）；role 只 editor|viewer（应用层校验，owner 语义在解析层合成）。
+    DB 级 FK 由 alembic 0027 落（生产）。多队语义（wire-team-spaces-v2）：
+    ``UNIQUE(customer_id, logto_sub)``——同一 sub 可属多个客户（受邀多队），
+    一队至多一行；owner 身份与他在别队的成员行可并存（活跃指针
+    ``member_active_team`` 决定当前解析到哪队）。role 只 editor|viewer
+    （应用层校验，owner 语义在解析层合成）。
     """
 
     __tablename__ = "customer_members"
+    __table_args__ = (
+        UniqueConstraint("customer_id", "logto_sub", name="uq_customer_members_customer_sub"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     customer_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
-    logto_sub: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    logto_sub: Mapped[str] = mapped_column(String(64), nullable=False)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
     invited_by_sub: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class MemberActiveTeam(ConsoleBase):
+    """成员活跃团队指针（wire-team-spaces-v2：每 Logto sub 至多一行）。
+
+    ``customer_id`` 指向 ``billing_customers.id``：解析层 ``db.get(Customer,
+    ...)`` 校验悬空，ORM 层不声明跨 Base ForeignKey（同 CustomerMember 纪律，
+    生产 FK 也不落——指针行生命周期完全从属于成员行/自有队，自愈兜底比
+    DB 约束更可控）。**活跃团队指针（鉴权解析域）刻意独立成表**而非塞进
+    ``member_preferences``：偏好是 per-sub 个人 UI 域（只在个人面读），活跃
+    队决定每个控制台请求操作哪个客户（解析层每请求读）——两域生命周期与
+    读方不同，塞列会造成「改偏好的接口能影响鉴权上下文」的隐性耦合
+    （change design.md D1）。
+
+    解析序（console/auth.py ``resolve_member_role``）：指针优先 → owner
+    回退（自有队）→ 首个成员行回退；指针悬空（成员行已删且非自有队）时
+    解析层同事务自愈清除。``updated_at`` 记最近一次切换。
+    """
+
+    __tablename__ = "member_active_team"
+
+    logto_sub: Mapped[str] = mapped_column(String(64), primary_key=True)
+    customer_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
 
 
 class CustomerInvite(ConsoleBase):

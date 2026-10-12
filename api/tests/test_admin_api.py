@@ -42,6 +42,7 @@ from fd_wire_api.catalog.db import sync_session
 from fd_wire_api.catalog.models import CatalogSyncState, IndicatorSnapshot
 from fd_wire_api.demands.db import Base as DemandsBase
 from fd_wire_api.demands.db import get_db as get_demands_db
+from fd_wire_api.console.models import ConsoleBase
 from fd_wire_api.metering.db import to_utc
 from fd_wire_api.metering.models import MeteringRecord
 
@@ -95,9 +96,14 @@ def admin_env(tmp_path, monkeypatch):
     engine = create_engine(
         db_url, connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
-    # 各域表同库落表（对应生产 alembic 链 0001–0007 的单库口径）
+    # 各域表同库落表（对应生产 alembic 链 0001–0007 的单库口径）；
+    # console 域表（customer_members/member_active_team 等）也建——
+    # wire-team-spaces-v2 解析层指针优先，demands 客户面经
+    # resolve_member_role 首查 member_active_team，缺表即 OperationalError
+    # （生产平台库经 alembic 0027/0029/0033 建全）。
     AdminBase.metadata.create_all(engine)
     BillingBase.metadata.create_all(engine)
+    ConsoleBase.metadata.create_all(engine)
     DemandsBase.metadata.create_all(engine)
     with engine.begin() as conn:
         ensure_metering_records_table(conn)

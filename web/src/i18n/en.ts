@@ -285,6 +285,35 @@ const en: Translation = {
       "The join is LEFT JOIN semantics: all left rows are kept and unmatched right columns are NULL (never neighbor values); a right column colliding with a left one gets a right_ prefix; the result is registered as a derived dataset in “My data” and can be derived and re-materialized further. If the target cell has not rolled the new engine image yet, you get an honest “tool not found” error — it works once the cell is rolled.",
     consoleLink: "Open Console → Entities →",
   },
+  teamSpaces: {
+    // Team spaces (wire-team-spaces v0 + v2, task 7.1): three-role gating /
+    // seats & invitations (generation + redemption dual gate, zero overage,
+    // free=1 upgrade guidance) / multiple teams & active-team switching
+    // (switch = switch the data plane; a guesting owner temporarily loses
+    // their own owner face until switching back; revoked members' pointers
+    // self-heal) / role changes effective immediately / team_events audit
+    // trail — customer-facing, as-is; email invites are unlisted
+    // (link-copy invitations in service).
+    title: "Team spaces",
+    intro:
+      "A team shares one set of data, plan and quota: the owner generates one-time invite codes (wsi- prefix, valid for 24 hours) to bring people in, members act under their roles, and seats and every team operation are recorded and reviewable.",
+    rolesTitle: "Three roles",
+    rolesDesc:
+      "The owner has full power; team management (members, invitations, role changes) and key minting, viewing and revocation are owner-only. The editor can do everything else (including creating and modifying data); the viewer can only read — mutating calls are all rejected.",
+    seatsTitle: "Seats and invitations",
+    seatsDesc:
+      "Seats count as members + 1 — the owner occupies one too. Both generating an invitation and redeeming one check the seat limit: when full, the request is rejected (no overage billing); a rejected code stays valid and can be redeemed once a seat frees up. Free allows 1 seat (team collaboration unlocks with a paid plan), Basic 3, Standard 10, per your plan configuration.",
+    multiTitle: "Multiple teams and switching",
+    multiDesc:
+      "One account can belong to multiple teams; the console shows data, quota and usage under your active team — switching teams switches the data plane. An owner invited into another team who switches there acts under that team's member role and temporarily cannot manage their own team's members and keys, until they switch back and regain owner powers. When removed from a team, you fall back to a team you still belong to; with no membership left, the session ends.",
+    roleChangeTitle: "Role changes",
+    roleChangeDesc:
+      "The owner can move a member between editor and viewer; the new role applies from the member's next request. The owner role itself is out of scope for this change.",
+    auditTitle: "Audit trail",
+    auditDesc:
+      "Member joins, removals, role changes and invitation generation, voiding and redemption are all appended to the team event log — append-only and traceable.",
+    consoleLink: "Open Console → Team →",
+  },
   demands: {
       title: "Demand workflow",
       // Three-state machine (wire-ux-consolidation task 3.5): submitted →
@@ -436,6 +465,7 @@ const en: Translation = {
       org: "Customer",
       plan: "Plan",
       logout: "Sign out",
+      activeTeam: "Active team",
     },
     auth: {
       loading: "Starting the console…",
@@ -1828,6 +1858,8 @@ const en: Translation = {
         remove: "Remove",
         removing: "Removing…",
         removeFailed: "Failed to remove member, please retry later.",
+        roleChangeLabel: "Change role",
+        roleChangeFailed: "Failed to change the member role, please retry later.",
       },
       invite: {
         title: "Invite members",
@@ -1837,6 +1869,8 @@ const en: Translation = {
         submit: "Generate invite code",
         creating: "Generating…",
         failed: "Failed to generate the invite code, please retry later.",
+        fullHint:
+          "Seats are full — remove a member or upgrade the plan before inviting.",
         onceTitle: "Invite code (shown only once)",
         onceHint:
           "Shown only this once — it cannot be viewed again after leaving this page. Copy it and send it to the invitee now.",
@@ -1850,6 +1884,24 @@ const en: Translation = {
         revokeFailed: "Failed to revoke the invite, please retry later.",
         expired: "Expired",
         remaining: "{{hours}}h {{minutes}}m left",
+      },
+      // Seat usage (wire-team-spaces-v2 6.1): plan seats used/limit; over
+      // quota is grandfathered — nobody is removed, new invites stop.
+      seats: {
+        usage: "Seats {{used}} / {{limit}}",
+        overQuota:
+          "Over quota: new members cannot be invited until seats are freed.",
+      },
+      // My-teams switcher (wire-team-spaces-v2 6.2): rendered only for
+      // multi-team identities; switching reloads the whole console.
+      switcher: {
+        title: "My teams",
+        subtitle:
+          "One account can belong to multiple teams — switching reloads the console with that team's data.",
+        current: "Current",
+        switchTo: "Switch to this team",
+        switching: "Switching…",
+        failed: "Failed to switch teams, please retry later.",
       },
     },
     // Entities (wire-entity-layer tasks 3.1/3.2): the lightweight entity

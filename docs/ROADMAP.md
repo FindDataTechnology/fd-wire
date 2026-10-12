@@ -43,7 +43,7 @@ A/B/C）与个人侧（C 端信息工作台，方向 D）——同一个供给�
 |---|---|---|---|
 | ⓪ 供给 | crawl-platform / gitops 运行时 / tencent fleet 扩容 / source-generation-flow | 双角色在役：对外需求单交付 + 对内供血指标目录 | 需求→爬取中间段仍人工批处理；缺合规门 |
 | ① 接入 | wire-customer-local-data（连接器+上传，29/29） | 形态对；免费档门控挡入口；二进制无发布页 | 增量水位、实时隧道、ERP/CRM 适配器（原二期） |
-| ② 治理 | wire-provenance-ledger / caller-preflight-map / usage-transparency | **不输 Palantir，甚至更硬**（证据包离线验签） | 团队协作权限面 |
+| ② 治理 | wire-provenance-ledger / caller-preflight-map / usage-transparency | **不输 Palantir，甚至更硬**（证据包离线验签） | **团队协作权限面已上产（2026-10-12 v0 + 2026-10-13 v2，wire-team-spaces/-v2）**：多团队成员制（(customer_id, logto_sub) 唯一 + 活跃队指针与切换 + guesting owner 语义）+ 三角角色门禁 + 席位配额（free=1/basic=3/standard=10 双闸 409 零超额）+ 角色变更 + team_events 审计；剩余=邮件邀请（邮件通道缺位）、团队所有权转移（v3） |
 | ③ 语义 | unified-indicator-registry / indicator-scope | 指标侧成熟；客户数据侧=表 | 轻量实体层（实体+关系声明） |
 | ④ 变换 | wire-customer-data-engine（derive/join/血缘） | 原子操作齐 | **管线化已上产（2026-10-13，wire-transform-pipelines）**：版本化管线（append-only）、线性步骤链（derive/join/link）、稳定输出槽位、run/step 两级运行历史、管线级 cron 调度、控制台工作台；剩余=DAG/异步执行器（v2） |
 | ⑤ 分析 | AI 构建 + 产物页 + MCP/REST 双面 | **产物还是 localStorage 草稿**（真保存与物化是页面标注的后续任务） | 产物持久化转正、渲染器 |
@@ -115,7 +115,7 @@ A/B/C）与个人侧（C 端信息工作台，方向 D）——同一个供给�
   对拍逐字一致）；方向 B 主线+v1+ 深化全部落地（**表单联动 v1+ 已上产 2026-10-12，
   wire-form-linkage-v2：visibleWhenGroup 多条件组合（all/any）+
   optionsFrom 联动改选项（级联 select/空选项按隐藏/公开提交动态成员
-  防篡改）**，生产实弹全绿）；剩团队空间二期（按席位计费/多团队）。
+  防篡改）**，生产实弹全绿）；**团队空间二期已上产（2026-10-13，wire-team-spaces-v2）**：多团队（成员行 (customer_id, logto_sub) 唯一 + per-sub 活跃队指针与切换端点 + guesting owner 语义）+ 席位配额（档位 limits_json.seats，free=1/basic=3/standard=10，双闸 409 零超额）+ 角色变更端点；邮件邀请因邮件通道缺位继续挂账（链接复制邀请在役）；团队所有权转移留 v3 团队实体化。
 
 ### 方向 C：供给引擎（数据中台的上游）
 

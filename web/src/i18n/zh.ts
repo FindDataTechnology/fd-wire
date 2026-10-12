@@ -267,6 +267,32 @@ const zh = {
       "连接为 LEFT JOIN 语义：左表行全保留、右列未命中置空（绝不取邻值）；右列与左列撞名自动加 right_ 前缀；结果登记为派生数据集进入「我的数据」，可继续派生与重物化。若目标 cell 尚未滚动新引擎镜像，会收到「工具不存在」的如实报错——联系滚动后即可用。",
     consoleLink: "前往控制台「实体」→",
   },
+  teamSpaces: {
+    // 团队空间（wire-team-spaces v0 + v2 任务 7.1）：三角角色门禁 / 席位
+    // 与邀请（生成与兑换双闸零超额、免费档=1 引导升级）/ 多团队与活跃队
+    // 切换（切队=切数据面；guesting owner 暂失自家 owner 面、切回即恢复；
+    // 被撤成员指针自愈）/ 角色变更即时生效 / team_events 审计留痕——
+    // 面向客户如实口径；邮件邀请不在册不提（链接复制邀请在役）。
+    title: "团队空间",
+    intro:
+      "一个团队共享同一份数据、套餐与配额：owner 生成一次性邀请码（wsi- 前缀、24 小时内有效）邀人加入，成员按角色行权，席位与全部团队操作留痕可查。",
+    rolesTitle: "三种角色",
+    rolesDesc:
+      "owner 全权；团队管理（成员、邀请、角色变更）与密钥的铸造、查看、吊销为 owner 专属；editor 可执行其余全部操作（含数据的创建与修改）；viewer 仅可查看，变更类操作一律被拒。",
+    seatsTitle: "席位与邀请",
+    seatsDesc:
+      "席位按「成员数 + 1」计，owner 也占一席。生成邀请与兑换入队两处都校验席位：满员即拒、无超额计费；兑换被拒的邀请码保持有效，腾出席位后仍可兑换。免费档上限 1 席（团队协作随付费档解锁），基础档 3 席、标准档 10 席，以套餐配置为准。",
+    multiTitle: "多团队与切换",
+    multiDesc:
+      "同一账号可属于多个团队；控制台按「当前活跃团队」展示数据、配额与用量——切换团队即切换数据面。owner 受邀加入其他团队并切换过去后，在当前团队按成员角色行权，期间暂不能管理自己团队的成员与密钥，切回即恢复 owner 权限。被移出团队时自动回落到仍归属的团队；再无任何归属则会话失效。",
+    roleChangeTitle: "角色变更",
+    roleChangeDesc:
+      "owner 可将成员在 editor 与 viewer 之间变更，目标成员下次请求即按新角色生效；owner 角色本身不在此变更范围。",
+    auditTitle: "操作留痕",
+    auditDesc:
+      "成员加入、移除、角色变更与邀请的生成、作废、兑换均追加写入团队事件记录，仅增不改、可追溯。",
+    consoleLink: "前往控制台「团队」→",
+  },
   demands: {
       title: "需求单流程",
       // 三态机（wire-ux-consolidation 任务 3.5）：submitted → in_progress →
@@ -411,6 +437,7 @@ const zh = {
       org: "客户",
       plan: "档位",
       logout: "登出",
+      activeTeam: "当前团队",
     },
     auth: {
       loading: "控制台启动中…",
@@ -1736,6 +1763,8 @@ const zh = {
         remove: "移除",
         removing: "移除中…",
         removeFailed: "移除成员失败，请稍后重试。",
+        roleChangeLabel: "变更角色",
+        roleChangeFailed: "变更成员角色失败，请稍后重试。",
       },
       invite: {
         title: "邀请成员",
@@ -1745,6 +1774,7 @@ const zh = {
         submit: "生成邀请码",
         creating: "生成中…",
         failed: "生成邀请码失败，请稍后重试。",
+        fullHint: "席位已满——移除成员或升级档位后才能邀请新成员。",
         onceTitle: "邀请码（仅此一次显示）",
         onceHint:
           "仅此一次显示——离开本页后无法再查看，请立即复制并发给被邀请人。",
@@ -1758,6 +1788,22 @@ const zh = {
         revokeFailed: "作废邀请失败，请稍后重试。",
         expired: "已过期",
         remaining: "剩 {{hours}} 小时 {{minutes}} 分",
+      },
+      // 席位用量（wire-team-spaces-v2 6.1）：档位席位已用/上限；超配
+      // grandfather——不踢人只停邀新。
+      seats: {
+        usage: "席位 {{used}} / {{limit}}",
+        overQuota: "已超配：移除成员前无法邀新成员。",
+      },
+      // 我的团队切换面（wire-team-spaces-v2 6.2）：多队身份才渲染（单队
+      // 零打扰）；切换 = 切数据面，整页刷新。
+      switcher: {
+        title: "我的团队",
+        subtitle: "同一账号可属多个团队——切换后整页刷新数据面。",
+        current: "当前",
+        switchTo: "切换到此队",
+        switching: "切换中…",
+        failed: "切换团队失败，请稍后重试。",
       },
     },
     // 实体（wire-entity-layer 任务 3.1/3.2）：轻量实体语义层管理面——实体

@@ -8,8 +8,11 @@
 //（MyDemandsPage），不再是「上线中」占位。
 // 身份来自登录会话（auth.ts，Authorization: Bearer）；X-Customer-Id 可编辑的
 // 开发占位顶栏已退场（wire-self-serve-launch 任务 4.4）。
-import { type ReactNode } from "react";
+// 顶栏活跃队徽标（wire-team-spaces-v2 6.4）：多队身份（GET /api/console/teams
+// 长度 > 1）才在用户区旁渲染当前队名；单队/拉取失败静默零渲染。
+import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { getTeams } from "./api";
 
 export type ConsoleTab =
   | "workbench"
@@ -114,6 +117,27 @@ export function ConsoleLayout({
   children: ReactNode;
 }) {
   const { t } = useTranslation();
+  // 活跃队徽标（wire-team-spaces-v2 6.4）：挂载即拉一次 GET /api/console/teams
+  // ——多队身份才亮徽标（数据面随活跃队切换，切完由 TeamPage 整页 reload
+  // 重建本组件）；单队/失败静默（徽标缺席不阻塞控制台）。
+  const [activeTeamName, setActiveTeamName] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    getTeams()
+      .then((out) => {
+        if (cancelled || out.teams.length <= 1) return;
+        const active =
+          out.teams.find((m) => m.customerId === out.activeCustomerId) ??
+          out.teams.find((m) => m.isActive);
+        if (active) setActiveTeamName(active.customerName);
+      })
+      .catch(() => {
+        /* 静默降级：不渲染徽标 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className="flex min-h-[32rem] rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -183,6 +207,16 @@ export function ConsoleLayout({
           >
             {identity}
           </span>
+          {/* 活跃队徽标（v2）：多队身份才渲染（单队零打扰）。 */}
+          {activeTeamName != null && (
+            <span
+              data-testid="active-team-badge"
+              title={t("console.topbar.activeTeam")}
+              className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700 ring-1 ring-indigo-100"
+            >
+              {activeTeamName}
+            </span>
+          )}
           <button
             type="button"
             data-testid="console-logout"

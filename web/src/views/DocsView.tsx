@@ -586,6 +586,71 @@ export function DocsView() {
         </a>
       </section>
 
+      {/* 六c、团队空间（wire-team-spaces v0 + v2 任务 7.1）：三角角色门禁 /
+          席位与邀请（生成与兑换双闸零超额、免费档=1 引导升级）/ 多团队与
+          活跃队切换（切队=切数据面；guesting owner 暂失自家 owner 面、
+          切回即恢复；被撤成员指针自愈）/ 角色变更即时生效 / team_events
+          审计留痕——面向客户如实口径，邮件邀请不在册不提。 */}
+      <section
+        id="team-spaces"
+        data-testid="docs-team-spaces"
+        className="space-y-4"
+      >
+        <h2 className="text-xl font-semibold">
+          {t("docs.teamSpaces.title")}
+        </h2>
+        <p className="max-w-3xl text-sm text-slate-500">
+          {t("docs.teamSpaces.intro")}
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="rounded-lg border border-slate-200 p-5">
+            <h3 className="font-medium">{t("docs.teamSpaces.rolesTitle")}</h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.teamSpaces.rolesDesc")}
+            </p>
+          </div>
+          <div
+            data-testid="docs-team-spaces-seats"
+            className="rounded-lg border border-slate-200 p-5"
+          >
+            <h3 className="font-medium">{t("docs.teamSpaces.seatsTitle")}</h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.teamSpaces.seatsDesc")}
+            </p>
+          </div>
+          <div
+            data-testid="docs-team-spaces-multi"
+            className="rounded-lg border border-slate-200 p-5"
+          >
+            <h3 className="font-medium">{t("docs.teamSpaces.multiTitle")}</h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.teamSpaces.multiDesc")}
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-200 p-5">
+            <h3 className="font-medium">
+              {t("docs.teamSpaces.roleChangeTitle")}
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.teamSpaces.roleChangeDesc")}
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-200 p-5">
+            <h3 className="font-medium">{t("docs.teamSpaces.auditTitle")}</h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.teamSpaces.auditDesc")}
+            </p>
+          </div>
+        </div>
+        <a
+          href="#/console/team"
+          data-testid="docs-team-spaces-console-link"
+          className="inline-block text-sm text-slate-600 underline hover:text-slate-900"
+        >
+          {t("docs.teamSpaces.consoleLink")}
+        </a>
+      </section>
+
       {/* 三、需求单流程（三态状态机步骤条） */}
       <section className="space-y-4">
         <h2 className="text-xl font-semibold">{t("docs.demands.title")}</h2>

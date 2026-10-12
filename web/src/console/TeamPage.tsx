@@ -1,11 +1,17 @@
-// 控制台「团队」页（#/console/team，wire-team-spaces 任务 5）。
+// 控制台「团队」页（#/console/team，wire-team-spaces 任务 5 + v2）。
 // 成员制管理面，按本人角色分视角（me.role 来自 GET /api/console/team）：
-// - owner：成员名单（sub 截短 + 角色徽标 + 加入时间 + 移除按钮；owner 行
-//   徽标「所有者」不可撤）+ 邀请区（席位二选一 → 生成 → **一次性码醒目
-//   整段展示 + 「仅此一次显示」提示 + 复制按钮**）+ 待用邀请列表（码/角色/
+// - owner：成员名单（sub 截短 + 角色徽标 + 加入时间 + 角色就地变更
+//   editor↔viewer（PATCH）+ 移除按钮；owner 行徽标「所有者」不可撤不
+//   可改）+ 席位用量条（used/limit；超配 grandfather 警示态——琥珀色 +
+//   「移除成员前无法邀新成员」）+ 邀请区（席位二选一 → 生成 → **一次性
+//   码醒目整段展示 + 「仅此一次显示」提示 + 复制按钮**；满/超配时按钮
+//   禁用 + 升级引导，409 后端 detail 如实呈现）+ 待用邀请列表（码/角色/
 //   过期倒计时 + 作废按钮）；
 // - editor/viewer：只读名单 + 页顶自己的角色徽标说明（viewer 另加
 //   「只读席位：变更操作不可用」文案）——零变更按钮渲染。
+// 「我的团队」切换面（v2）：GET /api/console/teams 多队身份（长度 > 1）
+// 才在页顶渲染队清单卡（名称/角色徽标/当前标记/切换按钮）——单队零
+// 打扰；切换成功后整页 reload（切换 = 切数据面，所有缓存面一致重建）。
 // 错误处理照既有页（失败条 + 重试）；403 单列「无权」提示（amber 块，
 // 绝不崩溃）——后端 detail 如实附注。数据经 api.ts 边界翻译（UI 侧
 // camelCase）。
@@ -17,12 +23,16 @@ import {
   apiErrorText,
   createTeamInvite,
   getTeam,
+  getTeams,
   removeTeamMember,
   revokeTeamInvite,
+  switchTeam,
+  updateTeamMemberRole,
   type TeamInviteCreated,
   type TeamInviteRole,
   type TeamOverview,
   type TeamRole,
+  type TeamsOut,
 } from "./api";
 
 /** sub 截短显示（前 8 位 + …；title 悬浮给全文）。 */
@@ -63,11 +73,18 @@ export function TeamPage() {
   const [inviteRole, setInviteRole] = useState<TeamInviteRole>("editor");
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<TeamInviteCreated | null>(null);
-  // 变更类动作错误（生成/作废/移除共用，单行如实呈现后端 detail）。
+  // 变更类动作错误（生成/作废/移除/改角色共用，单行如实呈现后端 detail）。
   const [actionError, setActionError] = useState<string | null>(null);
-  // 飞行中的作废/移除目标（禁重复提交）。
+  // 飞行中的作废/移除/改角色目标（禁重复提交）。
   const [revokingInviteId, setRevokingInviteId] = useState<number | null>(null);
   const [removingSub, setRemovingSub] = useState<string | null>(null);
+  const [changingRoleSub, setChangingRoleSub] = useState<string | null>(null);
+  // 「我的团队」清单（wire-team-spaces-v2）：独立于 GET /team（多队切换面
+  // 对 editor/viewer 同样可用）；拉取失败静默降级（不渲染切换面）。
+  const [teams, setTeams] = useState<TeamsOut | null>(null);
+  // 飞行中的切换目标 + 切换失败（行内如实呈现后端 detail，如 404 目标无效）。
+  const [switchingTeamId, setSwitchingTeamId] = useState<number | null>(null);
+  const [switchError, setSwitchError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -87,9 +104,19 @@ export function TeamPage() {
     }
   }, [t]);
 
+  const loadTeams = useCallback(async () => {
+    try {
+      setTeams(await getTeams());
+    } catch {
+      // 静默降级：清单拉不到就不渲染切换面（零打扰），绝不阻塞团队页。
+      setTeams(null);
+    }
+  }, []);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadTeams();
+  }, [load, loadTeams]);
 
   /** owner 生成邀请：201 后一次性码整段醒目展示（仅此一次）。 */
   const generateInvite = async () => {
@@ -138,8 +165,45 @@ export function TeamPage() {
     }
   };
 
+  /** owner 就地变更成员角色 editor↔viewer（PATCH 成功后重载名单刷新行内
+   *  角色；owner 行不渲染控件——409 防线在服务端）。 */
+  const changeMemberRole = async (sub: string, role: TeamInviteRole) => {
+    if (changingRoleSub != null) return;
+    setChangingRoleSub(sub);
+    setActionError(null);
+    try {
+      await updateTeamMemberRole(sub, role);
+      await load();
+    } catch (err) {
+      setActionError(
+        apiErrorText(err, t("console.team.members.roleChangeFailed")),
+      );
+    } finally {
+      setChangingRoleSub(null);
+    }
+  };
+
+  /** 切换活跃队（POST switch 幂等）：成功后整页 reload——切换 = 切数据面，
+   *  控制台各页缓存一并重建（404 等失败行内如实呈现后端 detail）。 */
+  const switchTo = async (customerId: number) => {
+    if (switchingTeamId != null) return;
+    setSwitchingTeamId(customerId);
+    setSwitchError(null);
+    try {
+      await switchTeam(customerId);
+      window.location.reload();
+    } catch (err) {
+      setSwitchError(apiErrorText(err, t("console.team.switcher.failed")));
+      setSwitchingTeamId(null);
+    }
+  };
+
   const isOwner = team?.me.role === "owner";
   const myRole = team?.me.role;
+  // 席位门（wire-team-spaces-v2）：满/超配停邀新（grandfather 不踢人）；
+  // 超配另呈警示态（琥珀色用量 + 提示文案）。
+  const seatsFull = team != null && team.seatsUsed >= team.seatsLimit;
+  const overQuota = team != null && team.seatsUsed > team.seatsLimit;
 
   return (
     <div data-testid="team-page">
@@ -171,6 +235,78 @@ export function TeamPage() {
           </div>
         )}
       </div>
+
+      {/* ── 「我的团队」切换面（wire-team-spaces-v2）：多队身份（长度 > 1）
+          才渲染——单队零打扰；切换成功后整页 reload（切数据面）。── */}
+      {teams != null && teams.teams.length > 1 && (
+        <section
+          data-testid="team-switcher"
+          className="mt-4 rounded-lg border border-slate-200 bg-white p-4"
+        >
+          <h2 className="text-sm font-semibold text-slate-700">
+            {t("console.team.switcher.title")}
+          </h2>
+          <p className="mt-1 text-xs text-slate-500">
+            {t("console.team.switcher.subtitle")}
+          </p>
+          <ul data-testid="team-switcher-list" className="mt-2 space-y-1.5">
+            {teams.teams.map((membership) => {
+              const active = membership.customerId === teams.activeCustomerId;
+              return (
+                <li
+                  key={membership.customerId}
+                  data-testid="team-switcher-row"
+                  data-customer-id={membership.customerId}
+                  className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border px-3 py-2 ${
+                    active
+                      ? "border-slate-300 bg-slate-50"
+                      : "border-slate-200 bg-white"
+                  }`}
+                >
+                  <span className="text-sm font-medium text-slate-800">
+                    {membership.customerName}
+                  </span>
+                  <span
+                    data-testid="team-switcher-role-badge"
+                    data-role={membership.role}
+                    className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 ring-1 ring-slate-200"
+                  >
+                    {t(ROLE_KEYS[membership.role])}
+                  </span>
+                  {active ? (
+                    <span
+                      data-testid="team-active-badge"
+                      className="ml-auto rounded-full bg-slate-900 px-2 py-0.5 text-xs text-white"
+                    >
+                      {t("console.team.switcher.current")}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      data-testid={`team-switch-${membership.customerId}`}
+                      disabled={switchingTeamId != null}
+                      onClick={() => void switchTo(membership.customerId)}
+                      className="ml-auto rounded border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {switchingTeamId === membership.customerId
+                        ? t("console.team.switcher.switching")
+                        : t("console.team.switcher.switchTo")}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          {switchError && (
+            <p
+              data-testid="team-switch-error"
+              className="mt-2 break-all text-xs text-red-600"
+            >
+              {switchError}
+            </p>
+          )}
+        </section>
+      )}
 
       {/* 403 无权：amber 提示块（不崩溃）+ 重试。 */}
       {forbidden && (
@@ -231,11 +367,36 @@ export function TeamPage() {
 
       {team != null && (
         <>
-          {/* ── 成员名单（三视角同渲染；owner 才有移除按钮）── */}
+          {/* ── 成员名单（三视角同渲染；owner 才有改角色/移除按钮）── */}
           <section className="mt-5" data-testid="team-members-section">
-            <h2 className="text-sm font-semibold text-slate-700">
-              {t("console.team.members.title")}
-            </h2>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <h2 className="text-sm font-semibold text-slate-700">
+                {t("console.team.members.title")}
+              </h2>
+              {/* 席位用量条（v2）：used / limit；超配 grandfather 警示态。 */}
+              <span
+                data-testid="team-seats-usage"
+                data-over-quota={overQuota ? "true" : "false"}
+                className={`text-xs ${
+                  overQuota
+                    ? "font-medium text-amber-700"
+                    : "text-slate-500"
+                }`}
+              >
+                {t("console.team.seats.usage", {
+                  used: team.seatsUsed,
+                  limit: team.seatsLimit,
+                })}
+              </span>
+              {overQuota && (
+                <span
+                  data-testid="team-seats-over-quota"
+                  className="text-xs text-amber-700"
+                >
+                  {t("console.team.seats.overQuota")}
+                </span>
+              )}
+            </div>
             <ul data-testid="team-member-list" className="mt-2 space-y-2">
               {team.members.map((member) => {
                 const removable = isOwner && member.role !== "owner";
@@ -272,6 +433,31 @@ export function TeamPage() {
                         at: formatJoinedAt(member.createdAt),
                       })}
                     </span>
+                    {/* 角色就地变更 editor↔viewer（v2，owner-only；owner 行
+                        不渲染——409 防线在服务端）；成功后重载就地刷新。 */}
+                    {removable && (
+                      <select
+                        data-testid={`team-role-change-${member.logtoSub}`}
+                        data-sub={member.logtoSub}
+                        aria-label={t("console.team.members.roleChangeLabel")}
+                        title={t("console.team.members.roleChangeLabel")}
+                        value={member.role}
+                        disabled={changingRoleSub === member.logtoSub}
+                        onChange={(e) =>
+                          void changeMemberRole(
+                            member.logtoSub,
+                            e.target.value as TeamInviteRole,
+                          )
+                        }
+                        className="ml-auto rounded-md border border-slate-300 px-1.5 py-1 text-xs text-slate-700 disabled:opacity-50"
+                      >
+                        {TEAM_INVITE_ROLES.map((role) => (
+                          <option key={role} value={role}>
+                            {t(ROLE_KEYS[role])}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                     {removable ? (
                       <button
                         type="button"
@@ -279,7 +465,7 @@ export function TeamPage() {
                         data-sub={member.logtoSub}
                         disabled={removingSub != null}
                         onClick={() => void removeMember(member.logtoSub)}
-                        className="ml-auto rounded border border-rose-300 px-2.5 py-1 text-xs text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="rounded border border-rose-300 px-2.5 py-1 text-xs text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {removingSub === member.logtoSub
                           ? t("console.team.members.removing")
@@ -330,8 +516,9 @@ export function TeamPage() {
                 </div>
                 <button
                   type="button"
-                  data-testid="team-invite-create"
-                  disabled={creating}
+                  data-testid="team-invite-cta"
+                  disabled={creating || seatsFull}
+                  title={seatsFull ? t("console.team.invite.fullHint") : undefined}
                   onClick={() => void generateInvite()}
                   className="rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -340,6 +527,16 @@ export function TeamPage() {
                     : t("console.team.invite.submit")}
                 </button>
               </div>
+
+              {/* 满/超配引导（v2）：移除成员或升级档位（grandfather 不踢人）。 */}
+              {seatsFull && (
+                <p
+                  data-testid="team-invite-full-hint"
+                  className="mt-2 text-xs text-amber-700"
+                >
+                  {t("console.team.invite.fullHint")}
+                </p>
+              )}
 
               {/* 一次性码：醒目整段展示 + 仅此一次提示 + 复制（照 keyOnce 范式）。 */}
               {created && (

@@ -10,11 +10,12 @@ wire 的自助注册要求用户免人工获得授权，Logto 组/org 自动化�
   仅 JWKS 按 PyJWT 内置 key 缓存周期性拉取）。
 - 未配置 FD_WIRE_LOGTO_ISSUER / FD_WIRE_LOGTO_CLIENT_ID：受保护端点 503
   并给出精确缺项（绝不假登录放行），config 端点如实返回 configured=false。
-- sub → Customer 解析：owner 走 ``billing_customers.logto_sub`` 唯一映射
-  （wire-self-serve-launch 1.1），成员走 ``customer_members.logto_sub``
-  回退（wire-team-spaces ``resolve_member_role``）；两者均缺失 → 401
-  （首登走 POST /api/console/session 自动开户/邀请兑换，见 onboarding.py
-  与 team.py）。
+- sub → Customer 解析：``member_active_team`` 活跃指针优先（wire-
+  team-spaces-v2 多队），owner 回退走 ``billing_customers.logto_sub``
+  唯一映射（wire-self-serve-launch 1.1），首队回退走
+  ``customer_members.logto_sub`` 最小 id 行（wire-team-spaces
+  ``resolve_member_role``）；均缺失 → 401（首登走 POST
+  /api/console/session 自动开户/邀请兑换，见 onboarding.py 与 team.py）。
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from sqlalchemy.orm import Session
 
 from ..admin.db import get_db as get_platform_db
 from ..billing.models import Customer
-from .models import CustomerMember
+from .models import CustomerMember, MemberActiveTeam
 
 ALGORITHMS = ["ES384", "RS256", "ES256"]
 
@@ -181,28 +182,65 @@ def resolve_customer(db: Session, sub: str) -> Customer | None:
 
 
 def resolve_member_role(db: Session, sub: str) -> tuple[Customer, str] | None:
-    """sub → (Customer, role)（wire-team-spaces；owner 优先→成员回退）。
+    """sub → (Customer, role)（wire-team-spaces-v2；指针优先→owner 回退→
+    首个成员行回退）。
 
-    - owner：``billing_customers.logto_sub`` 命中 → role='owner'（创建者
-      本人，不落成员表）；
-    - 成员：``customer_members.logto_sub`` 命中（全局唯一，一人一队）→
-      role=成员行 role（editor|viewer）；
-    - 均未命中 → None（含成员行指向的客户行被清理的腐化态——按无归属
-      处理，401 面不变）。
+    解析序（design D2）：
 
-    成员 sub 与任何 ``Customer.logto_sub`` 的互斥由本函数的 owner 优先
-    解析天然覆盖：兑换入口先查本函数，命中即「已有归属」拒。
+    1. **指针优先**：``member_active_team`` 命中且目标仍有效（该客户是
+       sub 自有队，或存在该 (customer_id, sub) 的成员行）→ 返回 (该客户,
+       'owner' | 成员行 role)。指针显式表达「现在在哪队工作」——owner
+       优先会让受邀 guest 的 owner 永远解析回自家队，受邀失去意义；
+    2. **owner 回退**：``billing_customers.logto_sub`` 命中 → (自有客户,
+       'owner')（存量 owner 零感知——迁移不给他们落指针）；
+    3. **首队回退**：该 sub 全部成员行按 id 升序取第一行（腐化行——客户
+       行缺失——跳过取下一行）→ (该队, 成员行 role)；
+    4. 均未命中 → None（401 面文案不变）。
+
+    **自愈**：指针悬空（指向的客户行被清理，或成员行已删且非自有队——
+    被撤销）→ **同事务** delete 指针行并按 2/3 重解析（本函数不 commit，
+    自愈写与调用方同一事务面，随请求级 get_db 提交/回滚；撤销端点的
+    主动指针处置是正路，自愈只是并发窗口兜底）。
+
+    guesting owner（design D5）：owner 把指针切到 guest 队后按 guest 队
+    成员角色（editor|viewer）解析——guest 队密钥物面 403（角色门禁天然
+    覆盖）；自家 owner 面**暂时 403**（解析到 guest 队），切回指针即恢复。
+    刻意不做「密钥物面永远解析自有队」特例——一个请求两个客户上下文的
+    split-brain 比暂时失权更危险。
     """
+    pointer = db.get(MemberActiveTeam, sub)
+    if pointer is not None:
+        customer = db.get(Customer, pointer.customer_id)
+        if customer is not None:
+            if customer.logto_sub == sub:
+                return customer, "owner"  # 自有队（owner 自切场景）
+            member = db.execute(
+                select(CustomerMember).where(
+                    CustomerMember.customer_id == customer.id,
+                    CustomerMember.logto_sub == sub,
+                )
+            ).scalar_one_or_none()
+            if member is not None:
+                return customer, member.role
+        # 悬空指针（客户行被清理，或成员行已删且非自有队）：同事务自愈
+        # 清除后按 owner/首队回退重解析。
+        db.delete(pointer)
     customer = resolve_customer(db, sub)
     if customer is not None:
         return customer, "owner"
-    member = db.execute(
-        select(CustomerMember).where(CustomerMember.logto_sub == sub)
-    ).scalar_one_or_none()
-    if member is not None:
-        customer = db.get(Customer, member.customer_id)
-        if customer is not None:
-            return customer, member.role
+    member_rows = (
+        db.execute(
+            select(CustomerMember)
+            .where(CustomerMember.logto_sub == sub)
+            .order_by(CustomerMember.id)
+        )
+        .scalars()
+        .all()
+    )
+    for row in member_rows:
+        customer = db.get(Customer, row.customer_id)
+        if customer is not None:  # 腐化行（客户行缺失）跳过取下一行
+            return customer, row.role
     return None
 
 
@@ -223,7 +261,8 @@ def require_console_customer(
 
     wire-team-spaces 门禁升级（既有路由零改动受保护——门禁在统一依赖内，
     角色判定只来自服务端身份解析）：
-    - 解析 (customer, role)（owner 优先→成员回退）；未映射/被撤销 401；
+    - 解析 (customer, role)（指针优先→owner 回退→首队回退，见
+      resolve_member_role）；未映射/被撤销 401；
     - viewer 调变更类方法（POST/PUT/PATCH/DELETE）→ 403（viewer 只读）；
     - 密钥物面端点（KEY_SURFACE_PREFIXES）非 owner → 403（owner-only）。
     """
@@ -255,8 +294,8 @@ def require_console_member_identity(
     """个人面依赖（wire-personal-preferences）：任意已映射身份（含 viewer）。
 
     与 require_console_customer 同源解析（verify_id_token →
-    resolve_member_role，owner 优先→成员回退），未映射 401 同文案；返回
-    (Customer, sub)——偏好按 sub 一人一行，Customer 只用于置顶看板的
+    resolve_member_role，指针优先→owner/首队回退），未映射 401 同文案；
+    返回 (Customer, sub)——偏好按 sub 一人一行，Customer 只用于置顶看板的
     客户归属校验。
 
     **刻意不做两类门禁**（与 require_console_customer 的差异所在）：

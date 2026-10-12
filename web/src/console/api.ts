@@ -2001,11 +2001,21 @@ export function fetchEntityGraph(): Promise<EntityGraph> {
 // - GET /api/console/team → {me:{sub,role}, members:[{logto_sub,role,
 //   created_at,invited_by_sub?}], invites:[{id,code,role,expires_at,
 //   created_at}]}（三角色可读——viewer/editor 读面与 owner 一致）；
+//   wire-team-spaces-v2 追加 seats_used/seats_limit（档位席位；超配
+//   grandfather——不踢人只停邀新）；
 // - POST /api/console/team/invites body {role} → 201 {id,code,role,expires_at}
-//   （owner-only：editor/viewer 403 detail「团队成员权限不足…」）；
+//   （owner-only：editor/viewer 403 detail「团队成员权限不足…」；超配 409
+//   detail 含档位/席位/升级指引——UI 原样呈现）；
 // - DELETE /api/console/team/invites/{id} → {deleted:true}（owner-only）；
 // - DELETE /api/console/team/members/{sub} → {deleted:true}（owner-only；
-//   409 = owner 行不可撤，detail 带原因）。
+//   409 = owner 行不可撤，detail 带原因）；
+// - GET /api/console/teams → {teams:[{customer_id,customer_name,role,
+//   is_active}], active_customer_id}（wire-team-spaces-v2：一身份多队清单；
+//   单队身份长度 1）；
+// - POST /api/console/team/switch body {customer_id} → {active_customer_id}
+//   （幂等；404 = 目标无效）；
+// - PATCH /api/console/team/members/{sub} body {role:"editor"|"viewer"} →
+//   更新后成员行（owner-only；409 = owner 行不可改）。
 // 边界翻译纪律：wire 一律 snake_case（logto_sub/created_at/…），TS 侧一律
 // camelCase（logtoSub/createdAt/…）——双向翻译收口在 api.ts 内，UI 不见下划线。
 
@@ -2045,11 +2055,29 @@ export interface TeamInvite {
   createdAt: string;
 }
 
-/** 团队总览（名单 + 待用邀请）。 */
+/** 团队总览（名单 + 待用邀请 + 席位用量）。 */
 export interface TeamOverview {
   me: TeamMe;
   members: TeamMember[];
   invites: TeamInvite[];
+  /** 席位用量（wire-team-spaces-v2：档位席位；已用含全部成员）。 */
+  seatsUsed: number;
+  /** 席位上限（当前档位；超配 grandfather——不强制踢人，只停邀新）。 */
+  seatsLimit: number;
+}
+
+/** 「我的团队」清单行（GET /api/console/teams 响应项；身份可属多队）。 */
+export interface TeamMembership {
+  customerId: number;
+  customerName: string;
+  role: TeamRole;
+  isActive: boolean;
+}
+
+/** 我的团队清单信封（teams + 活跃队指针）。 */
+export interface TeamsOut {
+  teams: TeamMembership[];
+  activeCustomerId: number;
 }
 
 /** 创建邀请响应（一次性码仅此一次明文回显）。 */
@@ -2119,7 +2147,8 @@ function parseTeamInvites(raw: unknown): TeamInvite[] {
   });
 }
 
-/** 团队总览（名单 + 待用邀请；me 段 role 坏值按 viewer 最小权限回落）。 */
+/** 团队总览（名单 + 待用邀请 + 席位用量；me 段 role 坏值按 viewer 最小权限
+ *  回落；seats 坏值按 0 容错——契约字段 v2 起必有）。 */
 export async function getTeam(): Promise<TeamOverview> {
   const body = await requestJson(`${API_BASE}/console/team`, {
     method: "GET",
@@ -2133,7 +2162,16 @@ export async function getTeam(): Promise<TeamOverview> {
     },
     members: parseTeamMembers(record.members),
     invites: parseTeamInvites(record.invites),
+    seatsUsed: asSeatCount(record.seats_used),
+    seatsLimit: asSeatCount(record.seats_limit),
   };
+}
+
+/** wire 席位数字段收窄（非负整数；坏值 0 容错）。 */
+function asSeatCount(raw: unknown): number {
+  return typeof raw === "number" && Number.isFinite(raw) && raw >= 0
+    ? Math.floor(raw)
+    : 0;
 }
 
 /** 生成一次性邀请码（owner-only；24 小时有效，绑定席位角色）。 */
@@ -2172,6 +2210,77 @@ export function removeTeamMember(
     `${API_BASE}/console/team/members/${encodeURIComponent(sub)}`,
     { method: "DELETE" },
   ) as Promise<{ deleted: boolean }>;
+}
+
+/** 「我的团队」清单（wire-team-spaces-v2：一身份可属多队；单队身份即
+ *  teams 长度 1——UI 据此零打扰不渲染切换面；坏条目跳过）。 */
+export async function getTeams(): Promise<TeamsOut> {
+  const body = await requestJson(`${API_BASE}/console/teams`, {
+    method: "GET",
+  });
+  const record = (body ?? {}) as Record<string, unknown>;
+  const teams = Array.isArray(record.teams)
+    ? record.teams.flatMap((entry): TeamMembership[] => {
+        if (!entry || typeof entry !== "object") return [];
+        const row = entry as Record<string, unknown>;
+        const role = asTeamRole(row.role);
+        const name = asString(row.customer_name);
+        if (typeof row.customer_id !== "number" || !role || !name) return [];
+        return [
+          {
+            customerId: row.customer_id,
+            customerName: name,
+            role,
+            isActive: row.is_active === true,
+          },
+        ];
+      })
+    : [];
+  const activeRaw = record.active_customer_id;
+  return {
+    teams,
+    activeCustomerId:
+      typeof activeRaw === "number"
+        ? activeRaw
+        : (teams.find((m) => m.isActive)?.customerId ?? teams[0]?.customerId ?? 0),
+  };
+}
+
+/** 切换活跃队（幂等；404 = 目标无效——detail 如实上抛）。成功后调用方应
+ *  整页刷新控制台数据（切换 = 切数据面，所有缓存面一并重建）。 */
+export async function switchTeam(
+  customerId: number,
+): Promise<{ activeCustomerId: number }> {
+  const body = await requestJson(`${API_BASE}/console/team/switch`, {
+    method: "POST",
+    // 请求边界翻译：wire 即 {customer_id}（snake_case 形状冻结）。
+    body: { customer_id: customerId },
+  });
+  const active = (body as { active_customer_id?: unknown } | null)
+    ?.active_customer_id;
+  return {
+    activeCustomerId: typeof active === "number" ? active : customerId,
+  };
+}
+
+/** 就地变更成员角色 editor↔viewer（owner-only 后端门禁；owner 行 409、
+ *  失存 404——detail 如实上抛；响应为更新后的成员行，边界翻译同名单行）。 */
+export async function updateTeamMemberRole(
+  sub: string,
+  role: TeamInviteRole,
+): Promise<TeamMember> {
+  const body = await requestJsonAnyMethod(
+    `${API_BASE}/console/team/members/${encodeURIComponent(sub)}`,
+    "PATCH",
+    { body: { role } },
+  );
+  const parsed = parseTeamMembers([body])[0];
+  if (!parsed) {
+    throw new ConsoleApiError(
+      `invalid member row from PATCH /api/console/team/members/${sub}`,
+    );
+  }
+  return parsed;
 }
 
 // ── 个人偏好（wire-personal-preferences web 面）──────────────────────────

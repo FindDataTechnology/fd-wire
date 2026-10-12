@@ -1,4 +1,4 @@
-// 「团队」页测试（wire-team-spaces 任务 5）：
+// 「团队」页测试（wire-team-spaces 任务 5 + v2）：
 // - 导航接线：ConsoleLayout team tab（keys 之后）+ parseHash + ConsoleView
 //   挂载（GET /api/console/team 自动拉取）；
 // - owner 视角：成员名单（sub 截短 + 角色徽标 + 加入时间；owner 行徽标
@@ -13,6 +13,11 @@
 // - api client 翻译层：wire snake_case（logto_sub/created_at/expires_at…）↔
 //   TS camelCase（logtoSub/createdAt/expiresAt…）双向收口 + 信封形状
 //   （GET {me,members,invites}、POST 201 裸邀请项、DELETE {deleted:true}）。
+// wire-team-spaces-v2（6.1-6.4）：
+// - 席位用量条（used/limit）+ 超配 grandfather 警示态 + 满/超配邀请禁用；
+// - owner 就地变更成员角色（PATCH body {role} → 行内刷新）；
+// - 「我的团队」切换面（多队才渲染；切换 POST + 整页 reload）；
+// - ConsoleLayout 顶栏活跃队徽标（多队才渲染）+ 新端点 wire 信封对齐。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "../i18n";
@@ -28,13 +33,17 @@ import {
   type FakeResponse,
   type FakeTeamInviteSeed,
   type FakeTeamMemberSeed,
+  type FakeTeamSeed,
 } from "./testing";
 import {
   ConsoleApiError,
   createTeamInvite,
   getTeam,
+  getTeams,
   removeTeamMember,
   revokeTeamInvite,
+  switchTeam,
+  updateTeamMemberRole,
 } from "./api";
 
 const OWNER_SUB = "demo-customer";
@@ -74,6 +83,14 @@ function seedInvites(): FakeTeamInviteSeed[] {
       expiresAt: new Date(Date.now() + 90 * 60_000).toISOString(),
       createdAt: "2026-10-12T08:00:00",
     },
+  ];
+}
+
+/** 多队身份种子（wire-team-spaces-v2）：Acme 活跃 + Globex 待切换。 */
+function seedTeams(): FakeTeamSeed[] {
+  return [
+    { customer_id: 1, customer_name: "Acme", role: "owner" },
+    { customer_id: 2, customer_name: "Globex", role: "editor" },
   ];
 }
 
@@ -261,7 +278,7 @@ describe("TeamPage 生成邀请（一次性码整段展示）", () => {
       [...roleSelect.querySelectorAll("option")].map((o) => o.value),
     ).toEqual(["editor", "viewer"]);
     fireEvent.change(roleSelect, { target: { value: "viewer" } });
-    fireEvent.click(screen.getByTestId("team-invite-create"));
+    fireEvent.click(screen.getByTestId("team-invite-cta"));
 
     // 请求体冻结契约：wire 即 {role}（snake/camel 无歧义字段，形状锁死）。
     const call = await waitFor(() => {
@@ -420,6 +437,282 @@ describe("TeamPage 错误处理（403 无权 / 普通失败 + 重试）", () => 
   });
 });
 
+describe("TeamPage 席位用量与邀请门（wire-team-spaces-v2 6.1）", () => {
+  it("席位条：席位 used / limit 如实呈现，未超配无警示", async () => {
+    const backend = installConsoleBackend([], {
+      teamMembers: seedOwnerTeam(),
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<TeamPage />);
+
+    await screen.findAllByTestId("team-member-row");
+    const seats = screen.getByTestId("team-seats-usage");
+    // 缺省用量：used = 名单行数 3、limit = 8。
+    expect(seats.textContent).toBe("席位 3 / 8");
+    expect(seats.getAttribute("data-over-quota")).toBe("false");
+    expect(screen.queryByTestId("team-seats-over-quota")).toBeNull();
+    expect(screen.queryByTestId("team-invite-full-hint")).toBeNull();
+    expect((screen.getByTestId("team-invite-cta") as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it("满配（used == limit）：邀请按钮禁用 + 升级引导，无超配警示", async () => {
+    const backend = installConsoleBackend([], {
+      teamMembers: seedOwnerTeam(),
+      teamSeats: { used: 3, limit: 3 },
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<TeamPage />);
+
+    await screen.findAllByTestId("team-member-row");
+    expect(screen.getByTestId("team-seats-usage").textContent).toBe("席位 3 / 3");
+    expect(screen.getByTestId("team-seats-usage").getAttribute("data-over-quota")).toBe(
+      "false",
+    );
+    const cta = screen.getByTestId("team-invite-cta") as HTMLButtonElement;
+    expect(cta.disabled).toBe(true);
+    expect(cta.title).toContain("席位已满");
+    expect(screen.getByTestId("team-invite-full-hint").textContent).toContain(
+      "升级档位",
+    );
+    // 禁用态点击绝不发 POST（防线在前端，409 是竞态兜底）。
+    fireEvent.click(cta);
+    expect(
+      backend.calls.some(
+        (c) =>
+          c.url.pathname === "/api/console/team/invites" && c.method === "POST",
+      ),
+    ).toBe(false);
+  });
+
+  it("超配警示态（used > limit，grandfather）：琥珀警示 + 提示「移除成员前无法邀新成员」+ 禁用", async () => {
+    const backend = installConsoleBackend([], {
+      teamMembers: [
+        ...seedOwnerTeam(),
+        {
+          logtoSub: "extra-sub-77777",
+          role: "editor",
+          createdAt: "2026-10-10T09:00:00",
+          invitedBySub: OWNER_SUB,
+        },
+      ],
+      teamSeats: { limit: 3 },
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<TeamPage />);
+
+    await screen.findAllByTestId("team-member-row");
+    // used 缺省 = 名单行数 4 > limit 3 → 超配警示态。
+    const seats = screen.getByTestId("team-seats-usage");
+    expect(seats.textContent).toBe("席位 4 / 3");
+    expect(seats.getAttribute("data-over-quota")).toBe("true");
+    expect(screen.getByTestId("team-seats-over-quota").textContent).toContain(
+      "已超配",
+    );
+    expect(screen.getByTestId("team-seats-over-quota").textContent).toContain(
+      "移除成员前无法邀新成员",
+    );
+    expect((screen.getByTestId("team-invite-cta") as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+});
+
+describe("TeamPage 成员角色就地变更（owner-only，wire-team-spaces-v2 6.1）", () => {
+  it("editor→viewer：PATCH body {role} → 行内角色刷新；owner 行无控件", async () => {
+    const backend = installConsoleBackend([], {
+      teamMembers: seedOwnerTeam(),
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<TeamPage />);
+    await screen.findAllByTestId("team-member-row");
+
+    // owner 行不渲染角色变更控件（owner 不可改——409 防线在服务端）。
+    expect(screen.queryByTestId(`team-role-change-${OWNER_SUB}`)).toBeNull();
+    const select = screen.getByTestId(
+      `team-role-change-${EDITOR_SUB}`,
+    ) as HTMLSelectElement;
+    expect(select.value).toBe("editor");
+
+    fireEvent.change(select, { target: { value: "viewer" } });
+    // 请求体冻结契约：wire 即 {role}（sub 进路径段，百分号编码）。
+    const call = await waitFor(() => {
+      const found = backend.calls.find(
+        (c) =>
+          c.url.pathname ===
+            `/api/console/team/members/${encodeURIComponent(EDITOR_SUB)}` &&
+          c.method === "PATCH",
+      );
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    expect(call.body).toEqual({ role: "viewer" });
+    expect(call.headers["authorization"]).toMatch(/^Bearer /);
+    // 成功后就地刷新：行内徽标与控件同步为 viewer。
+    await waitFor(() => {
+      const row = screen
+        .getAllByTestId("team-member-row")
+        .find((li) => li.getAttribute("data-sub") === EDITOR_SUB)!;
+      expect(
+        row.querySelector('[data-testid="team-member-role-badge"]')!.getAttribute(
+          "data-role",
+        ),
+      ).toBe("viewer");
+    });
+    expect(
+      (screen.getByTestId(`team-role-change-${EDITOR_SUB}`) as HTMLSelectElement)
+        .value,
+    ).toBe("viewer");
+    expect(
+      backend.getTeamMembers().find((row) => row.logtoSub === EDITOR_SUB)!.role,
+    ).toBe("viewer");
+  });
+});
+
+describe("TeamPage「我的团队」切换面（wire-team-spaces-v2 6.2）", () => {
+  it("单队身份：完全不渲染切换卡（零打扰）", async () => {
+    const backend = installConsoleBackend([], {
+      teamMembers: seedOwnerTeam(),
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<TeamPage />);
+
+    await screen.findAllByTestId("team-member-row");
+    // 等清单端点返回后再断言缺席（避免竞态漏检）。
+    await waitFor(() => {
+      expect(
+        backend.calls.some((c) => c.url.pathname === "/api/console/teams"),
+      ).toBe(true);
+    });
+    expect(screen.queryByTestId("team-switcher")).toBeNull();
+    expect(screen.queryByTestId("team-active-badge")).toBeNull();
+  });
+
+  it("多队身份：清单卡（名称/角色徽标/当前标记/切换按钮）；切换 POST {customer_id} 后整页 reload", async () => {
+    const reloadMock = vi.fn();
+    vi.stubGlobal("location", {
+      reload: reloadMock,
+      href: "http://localhost/#/console/team",
+    });
+    const backend = installConsoleBackend([], {
+      teamMembers: seedOwnerTeam(),
+      teams: seedTeams(),
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<TeamPage />);
+
+    const switcher = await screen.findByTestId("team-switcher");
+    expect(switcher.textContent).toContain("Acme");
+    expect(switcher.textContent).toContain("Globex");
+    expect(
+      screen
+        .getAllByTestId("team-switcher-role-badge")
+        .map((el) => el.getAttribute("data-role"))
+        .sort(),
+    ).toEqual(["editor", "owner"]);
+    // 活跃队：当前标记 + 无切换按钮；非活跃队反之。
+    const activeRow = screen
+      .getAllByTestId("team-switcher-row")
+      .find((li) => li.getAttribute("data-customer-id") === "1")!;
+    expect(
+      activeRow.querySelector('[data-testid="team-active-badge"]')!.textContent,
+    ).toContain("当前");
+    expect(activeRow.querySelector("button")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("team-switch-2"));
+    // 请求体冻结契约：wire 即 {customer_id}（snake_case）。
+    const call = await waitFor(() => {
+      const found = backend.calls.find(
+        (c) =>
+          c.url.pathname === "/api/console/team/switch" && c.method === "POST",
+      );
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    expect(call.body).toEqual({ customer_id: 2 });
+    expect(call.headers["authorization"]).toMatch(/^Bearer /);
+    // 切换 = 切数据面：成功后整页 reload（mock 断言）。
+    await waitFor(() => {
+      expect(reloadMock).toHaveBeenCalledTimes(1);
+    });
+    expect(backend.getActiveTeamId()).toBe(2);
+  });
+});
+
+describe("ConsoleLayout 顶栏活跃队徽标（wire-team-spaces-v2 6.4）", () => {
+  it("多队身份：用户区旁渲染当前队名徽标（数据来自 GET /api/console/teams）", async () => {
+    const backend = installConsoleBackend([], {
+      teamMembers: seedOwnerTeam(),
+      teams: seedTeams(),
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(
+      <ConsoleLayout
+        tab="team"
+        customerName="演示客户"
+        planCode="basic"
+        identity="demo@test"
+        onLogout={() => {}}
+      >
+        <p>content</p>
+      </ConsoleLayout>,
+    );
+
+    const badge = await screen.findByTestId("active-team-badge");
+    // 活跃队 = active_customer_id（种子缺省首队 Acme）。
+    expect(badge.textContent).toBe("Acme");
+    expect(badge.getAttribute("title")).toBe("当前团队");
+  });
+
+  it("单队身份：不渲染徽标（零打扰）；teams 端点失败亦静默", async () => {
+    const backend = installConsoleBackend([], {
+      teamMembers: seedOwnerTeam(),
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(
+      <ConsoleLayout
+        tab="team"
+        customerName="演示客户"
+        planCode="basic"
+        identity="demo@test"
+        onLogout={() => {}}
+      >
+        <p>content</p>
+      </ConsoleLayout>,
+    );
+    await waitFor(() => {
+      expect(
+        backend.calls.some((c) => c.url.pathname === "/api/console/teams"),
+      ).toBe(true);
+    });
+    expect(screen.queryByTestId("active-team-badge")).toBeNull();
+
+    // 端点失败（如 503）：徽标缺席不崩溃、不影响顶栏其余元素。
+    const failing = installConsoleBackend([], { failTeamsStatus: 503 });
+    vi.stubGlobal("fetch", failing.fetchImpl);
+    cleanup();
+    render(
+      <ConsoleLayout
+        tab="team"
+        customerName="演示客户"
+        planCode="basic"
+        identity="demo@test"
+        onLogout={() => {}}
+      >
+        <p>content</p>
+      </ConsoleLayout>,
+    );
+    await waitFor(() => {
+      expect(
+        failing.calls.some((c) => c.url.pathname === "/api/console/teams"),
+      ).toBe(true);
+    });
+    expect(screen.queryByTestId("active-team-badge")).toBeNull();
+    expect(screen.getByTestId("console-topbar")).toBeTruthy();
+  });
+});
+
 describe("TeamPage 纯函数（sub 截短 / 邀请倒计时）", () => {
   it("shortSub：超 10 位截前 8 位 + …，短值原样", () => {
     expect(shortSub("abc")).toBe("abc");
@@ -532,6 +825,66 @@ describe("api client 翻译层（wire snake_case ↔ TS camelCase + 信封形状
     expect((err as ConsoleApiError).status).toBe(409);
     expect((err as ConsoleApiError).detail).toContain("所有者");
   });
+
+  it("getTeam（v2）：seats_used/seats_limit 翻译 seatsUsed/seatsLimit", async () => {
+    const backend = installConsoleBackend([], {
+      teamMembers: seedOwnerTeam(),
+      teamSeats: { used: 2, limit: 3 },
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+
+    const team = await getTeam();
+    expect(team.seatsUsed).toBe(2);
+    expect(team.seatsLimit).toBe(3);
+  });
+
+  it("getTeams / switchTeam / updateTeamMemberRole（v2）：wire snake_case ↔ camelCase 双向收口", async () => {
+    const backend = installConsoleBackend([], {
+      teamMembers: seedOwnerTeam(),
+      teams: seedTeams(),
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+
+    const out = await getTeams();
+    expect(out.activeCustomerId).toBe(1);
+    expect(out.teams).toEqual([
+      { customerId: 1, customerName: "Acme", role: "owner", isActive: true },
+      {
+        customerId: 2,
+        customerName: "Globex",
+        role: "editor",
+        isActive: false,
+      },
+    ]);
+    const teamsCall = backend.calls.find(
+      (c) => c.url.pathname === "/api/console/teams",
+    )!;
+    expect(teamsCall.method).toBe("GET");
+    expect(teamsCall.headers["authorization"]).toMatch(/^Bearer /);
+
+    const switched = await switchTeam(2);
+    expect(switched).toEqual({ activeCustomerId: 2 });
+    const switchCall = backend.calls.find(
+      (c) => c.url.pathname === "/api/console/team/switch",
+    )!;
+    expect(switchCall.method).toBe("POST");
+    expect(switchCall.body).toEqual({ customer_id: 2 });
+
+    const updated = await updateTeamMemberRole(VIEWER_SUB, "editor");
+    expect(updated).toEqual({
+      logtoSub: VIEWER_SUB,
+      role: "editor",
+      createdAt: "2026-10-05T16:00:00",
+      invitedBySub: OWNER_SUB,
+    });
+    const patchCall = backend.calls.find(
+      (c) =>
+        c.url.pathname ===
+          `/api/console/team/members/${encodeURIComponent(VIEWER_SUB)}` &&
+        c.method === "PATCH",
+    )!;
+    expect(patchCall.body).toEqual({ role: "editor" });
+  });
 });
 
 describe("假后端信封对齐（逐端点锁死生产形状）", () => {
@@ -541,7 +894,7 @@ describe("假后端信封对齐（逐端点锁死生产形状）", () => {
   });
   const bodyOf = (res: FakeResponse) => res.json();
 
-  it("GET /api/console/team → {me,members,invites}；三段均 snake_case", async () => {
+  it("GET /api/console/team → {me,members,invites,seats_used,seats_limit}；各段均 snake_case", async () => {
     const backend = installConsoleBackend([], {
       teamMembers: seedOwnerTeam(),
       teamInvites: seedInvites(),
@@ -551,7 +904,13 @@ describe("假后端信封对齐（逐端点锁死生产形状）", () => {
     });
     expect(res.status).toBe(200);
     const body = (await bodyOf(res)) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["invites", "me", "members"]);
+    expect(Object.keys(body).sort()).toEqual([
+      "invites",
+      "me",
+      "members",
+      "seats_limit",
+      "seats_used",
+    ]);
     expect(Object.keys(body["me"] as object).sort()).toEqual(["role", "sub"]);
     const member = (body["members"] as Array<Record<string, unknown>>).find(
       (m) => m["logto_sub"] === EDITOR_SUB,
@@ -639,5 +998,125 @@ describe("假后端信封对齐（逐端点锁死生产形状）", () => {
     );
     expect(removed.status).toBe(200);
     expect(await bodyOf(removed)).toEqual({ deleted: true });
+  });
+
+  it("GET /api/console/teams → {teams,active_customer_id}；is_active 随活跃队推导", async () => {
+    const backend = installConsoleBackend([], {
+      teamMembers: seedOwnerTeam(),
+      teams: seedTeams(),
+    });
+    const res = await backend.fetchImpl("/api/console/teams", {
+      headers: authHeaders(),
+    });
+    expect(res.status).toBe(200);
+    const body = (await bodyOf(res)) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["active_customer_id", "teams"]);
+    expect(body["active_customer_id"]).toBe(1);
+    const teams = body["teams"] as Array<Record<string, unknown>>;
+    expect(teams.map((t) => Object.keys(t).sort())).toEqual([
+      ["customer_id", "customer_name", "is_active", "role"],
+      ["customer_id", "customer_name", "is_active", "role"],
+    ]);
+    expect(teams[0]!["is_active"]).toBe(true);
+    expect(teams[1]!["is_active"]).toBe(false);
+  });
+
+  it("POST /api/console/team/switch：body {customer_id} → {active_customer_id}；幂等；未知目标 404", async () => {
+    const backend = installConsoleBackend([], {
+      teamMembers: seedOwnerTeam(),
+      teams: seedTeams(),
+    });
+    const ok = await backend.fetchImpl("/api/console/team/switch", {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ customer_id: 2 }),
+    });
+    expect(ok.status).toBe(200);
+    expect(await bodyOf(ok)).toEqual({ active_customer_id: 2 });
+    expect(backend.getActiveTeamId()).toBe(2);
+
+    // 幂等：重复切换同一目标仍 200。
+    const again = await backend.fetchImpl("/api/console/team/switch", {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ customer_id: 2 }),
+    });
+    expect(again.status).toBe(200);
+
+    const invalid = await backend.fetchImpl("/api/console/team/switch", {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ customer_id: 999 }),
+    });
+    expect(invalid.status).toBe(404);
+  });
+
+  it("PATCH /api/console/team/members/{sub}：body {role} → 成员行；owner 行 409；失存 404；非 editor/viewer 422", async () => {
+    const backend = installConsoleBackend([], {
+      teamMembers: seedOwnerTeam(),
+    });
+    const patched = await backend.fetchImpl(
+      `/api/console/team/members/${encodeURIComponent(EDITOR_SUB)}`,
+      {
+        method: "PATCH",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "viewer" }),
+      },
+    );
+    expect(patched.status).toBe(200);
+    const row = (await bodyOf(patched)) as Record<string, unknown>;
+    expect(row["logto_sub"]).toBe(EDITOR_SUB);
+    expect(row["role"]).toBe("viewer");
+
+    const ownerRow = await backend.fetchImpl(
+      `/api/console/team/members/${encodeURIComponent(OWNER_SUB)}`,
+      {
+        method: "PATCH",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "viewer" }),
+      },
+    );
+    expect(ownerRow.status).toBe(409);
+
+    const missing = await backend.fetchImpl(
+      "/api/console/team/members/ghost-sub",
+      {
+        method: "PATCH",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "viewer" }),
+      },
+    );
+    expect(missing.status).toBe(404);
+
+    const badRole = await backend.fetchImpl(
+      `/api/console/team/members/${encodeURIComponent(EDITOR_SUB)}`,
+      {
+        method: "PATCH",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "owner" }),
+      },
+    );
+    expect(badRole.status).toBe(422);
+  });
+
+  it("POST /api/console/team/invites 超/满配 409：detail 含档位/席位/升级指引（前端原样呈现）", async () => {
+    const backend = installConsoleBackend([], {
+      teamMembers: seedOwnerTeam(),
+      teamSeats: { used: 3, limit: 3 },
+    });
+    const res = await backend.fetchImpl("/api/console/team/invites", {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "editor" }),
+    });
+    expect(res.status).toBe(409);
+    const detail = String(
+      ((await bodyOf(res)) as { detail: string })["detail"],
+    );
+    expect(detail).toContain("basic");
+    expect(detail).toContain("3 席");
+    expect(detail).toContain("升级");
+    // 超配零半写：不产生新邀请。
+    expect(backend.getTeamInvites()).toHaveLength(0);
   });
 });

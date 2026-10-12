@@ -211,6 +211,17 @@ export interface ConsoleBackendOptions {
   /** 强制 GET /api/console/team 返回该状态（403 无权态 / 故障态注入）。 */
   failTeamStatus?: number;
   failTeamDetail?: string;
+  /** 种子「我的团队」清单（wire-team-spaces-v2）：无种子 = 单队身份
+   *  （teams 长度 1——切换面/顶栏徽标零渲染）。 */
+  teams?: FakeTeamSeed[];
+  /** 活跃队 customer_id（缺省首个种子；POST switch 原地更新）。 */
+  activeTeamId?: number;
+  /** 席位用量覆盖（wire-team-spaces-v2）：used 缺省 = 名单行数、limit
+   *  缺省 8；POST invites 在 used ≥ limit 时 409（detail 含档位/席位/
+   *  升级指引——前端原样呈现）。 */
+  teamSeats?: { used?: number; limit?: number };
+  /** 强制 GET /api/console/teams 返回该状态（顶栏徽标静默降级测试）。 */
+  failTeamsStatus?: number;
   /** 种子告警评估状态（wire-alert-evaluation 任务 5）：键 = artifact_id
    *  字符串化，仅对同客户可见的 alert_rule 产物生效。 */
   alertStates?: Record<string, FakeAlertStateSeed>;
@@ -386,6 +397,14 @@ export type FakeTeamMemberRow = {
   invitedBySub: string | null;
 };
 
+/** 「我的团队」种子行（wire-team-spaces-v2）：customer_id 数值键；is_active
+ *  由假后端按活跃队指针推导（POST switch 原地更新）。 */
+export type FakeTeamSeed = {
+  customer_id: number;
+  customer_name: string;
+  role: "owner" | "editor" | "viewer";
+};
+
 /** 待用邀请假后端行（getTeamInvites 断言面）。 */
 export type FakeTeamInviteRow = {
   id: number;
@@ -530,6 +549,15 @@ export function installConsoleBackend(
     getEntityRelationships: () => FakeEntityRelationshipRow[];
     getTeamMembers: () => FakeTeamMemberRow[];
     getTeamInvites: () => FakeTeamInviteRow[];
+    /** 「我的团队」清单断言面（wire-team-spaces-v2；wire snake_case 形状）。 */
+    getTeams: () => Array<{
+      customer_id: number;
+      customer_name: string;
+      role: "owner" | "editor" | "viewer";
+      is_active: boolean;
+    }>;
+    /** 活跃队指针断言面（POST switch 后变化）。 */
+    getActiveTeamId: () => number;
     getAlertEvents: () => FakeAlertEventSeed[];
     getAlertStates: () => Record<string, FakeAlertStateSeed>;
     getPreferences: (sub?: string) => Required<FakePreferencesSeed>;
@@ -674,6 +702,14 @@ export function installConsoleBackend(
     });
     nextTeamInviteId = Math.max(nextTeamInviteId, seed.id + 1);
   }
+
+  // ── 我的团队假后端状态（wire-team-spaces-v2）：种子清单直存（is_active
+  //    按活跃队指针推导）；无种子 = 单队身份（teams 长度 1——UI 切换面/
+  //    顶栏徽标零渲染）。席位 used 缺省按名单行数、limit 缺省 8；POST
+  //    invites 满/超配一律 409（grandfather：不踢人只停邀新）。──
+  const teamSeedsStore: FakeTeamSeed[] = [...(options.teams ?? [])];
+  let activeTeamId =
+    options.activeTeamId ?? teamSeedsStore[0]?.customer_id ?? 1;
 
   // ── 告警执行假后端状态（wire-alert-evaluation 任务 5）：states map /
   //    事件列表 snake_case wire 形状直存；试运行返回可配置（零副作用——
@@ -1484,10 +1520,12 @@ export function installConsoleBackend(
       return Promise.resolve(jsonResponse({ ...row }));
     }
 
-    // ── 团队空间（wire-team-spaces 任务 5）：四端点全部 owner-only（spec
-    //    「团队管理端点 MUST owner-only」——editor/viewer 一律 403 detail
-    //    「团队成员权限不足（团队管理仅 owner）」，与真后端文案逐字一致）；
-    //    撤销 owner 行 409；信封形状逐字段对齐冻结契约（snake_case）。──
+    // ── 团队空间（wire-team-spaces 任务 5 + v2）：管理端点全部 owner-only
+    //    （spec「团队管理端点 MUST owner-only」——editor/viewer 一律 403
+    //    detail「团队成员权限不足（团队管理仅 owner）」，与真后端文案逐字
+    //    一致）；撤销/改角色 owner 行 409；席位满/超配邀新 409（detail 含
+    //    档位/席位/升级指引）；teams 清单/switch 三端点全员可读可切；
+    //    信封形状逐字段对齐冻结契约（snake_case）。──
     const ownTeamRole = (): "owner" | "editor" | "viewer" =>
       teamMembersStore.get(customerId)?.role ?? "owner";
     /** 名单行（bearer 未入种子时补合成 owner 行——单 owner 现状）。 */
@@ -1517,6 +1555,10 @@ export function installConsoleBackend(
           403,
         ),
       );
+    /** 席位用量（v2）：used 缺省 = 名单行数；limit 缺省 8。 */
+    const seatsUsed = (): number =>
+      options.teamSeats?.used ?? teamMemberRows().length;
+    const seatsLimit = (): number => options.teamSeats?.limit ?? 8;
 
     if (path === "/api/console/team" && method === "GET") {
       if (options.failTeamStatus) {
@@ -1538,11 +1580,25 @@ export function installConsoleBackend(
             ...(row.invitedBySub ? { invited_by_sub: row.invitedBySub } : {}),
           })),
           invites: [...teamInvitesStore.values()].map(teamInviteOut),
+          seats_used: seatsUsed(),
+          seats_limit: seatsLimit(),
         }),
       );
     }
     if (path === "/api/console/team/invites" && method === "POST") {
       if (ownTeamRole() !== "owner") return teamForbidden();
+      // 满/超配一律 409（grandfather：不踢人只停邀新；detail 含档位/席位/
+      // 升级指引——前端原样呈现）。
+      if (seatsUsed() >= seatsLimit()) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail: `席位已满（当前 ${options.planCode ?? "basic"} 档含 ${seatsLimit()} 席、已用 ${seatsUsed()} 席）——移除成员或升级档位后才能邀请新成员`,
+            },
+            409,
+          ),
+        );
+      }
       const payload = (calls[calls.length - 1]!.body ?? {}) as { role?: string };
       if (payload.role !== "editor" && payload.role !== "viewer") {
         return Promise.resolve(
@@ -1601,6 +1657,93 @@ export function installConsoleBackend(
       }
       teamMembersStore.delete(sub);
       return Promise.resolve(jsonResponse({ deleted: true }));
+    }
+    if (teamMemberMatch && method === "PATCH") {
+      // 角色就地变更 editor↔viewer（v2）：owner-only；owner 行 409；失存 404。
+      if (ownTeamRole() !== "owner") return teamForbidden();
+      const sub = decodeURIComponent(teamMemberMatch[1]!);
+      const target = teamMembersStore.get(sub);
+      if (!target) {
+        return Promise.resolve(
+          jsonResponse({ detail: "成员不存在或不属于本团队" }, 404),
+        );
+      }
+      if (target.role === "owner") {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: "所有者（owner）角色不可变更——团队必须至少保留一名所有者" },
+            409,
+          ),
+        );
+      }
+      const payload = (calls[calls.length - 1]!.body ?? {}) as { role?: string };
+      if (payload.role !== "editor" && payload.role !== "viewer") {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: "成员角色只能是 editor 或 viewer（owner 不可经变更产生）" },
+            422,
+          ),
+        );
+      }
+      target.role = payload.role;
+      teamMembersStore.set(sub, target);
+      // 响应 = 更新后成员行（与名单行同形，snake_case）。
+      return Promise.resolve(
+        jsonResponse({
+          logto_sub: target.logtoSub,
+          role: target.role,
+          created_at: target.createdAt,
+          ...(target.invitedBySub
+            ? { invited_by_sub: target.invitedBySub }
+            : {}),
+        }),
+      );
+    }
+    if (path === "/api/console/teams" && method === "GET") {
+      // 「我的团队」清单（v2）：全员可读（单队身份长度 1）。
+      if (options.failTeamsStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `teams ${options.failTeamsStatus}` },
+            options.failTeamsStatus,
+          ),
+        );
+      }
+      const rows = teamSeedsStore.length
+        ? teamSeedsStore.map((seed) => ({
+            customer_id: seed.customer_id,
+            customer_name: seed.customer_name,
+            role: seed.role,
+            is_active: seed.customer_id === activeTeamId,
+          }))
+        : [
+            {
+              customer_id: 1,
+              customer_name: options.customerName ?? "演示客户",
+              role: ownTeamRole(),
+              is_active: true,
+            },
+          ];
+      return Promise.resolve(
+        jsonResponse({ teams: rows, active_customer_id: activeTeamId }),
+      );
+    }
+    if (path === "/api/console/team/switch" && method === "POST") {
+      // 切换活跃队（v2）：幂等；目标无效 404（不泄露他户存在性）。
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        customer_id?: unknown;
+      };
+      const targetId = payload.customer_id;
+      const known = teamSeedsStore.some(
+        (seed) => seed.customer_id === targetId,
+      ) || (teamSeedsStore.length === 0 && targetId === 1);
+      if (typeof targetId !== "number" || !known) {
+        return Promise.resolve(
+          jsonResponse({ detail: "目标团队无效或不可用" }, 404),
+        );
+      }
+      activeTeamId = targetId;
+      return Promise.resolve(jsonResponse({ active_customer_id: targetId }));
     }
 
     // ── 需求单客户面（wire-ux-consolidation 3.2/4.1/4.3：POST/GET
@@ -4157,6 +4300,14 @@ export function installConsoleBackend(
       [...teamMembersStore.values()].map((row) => ({ ...row })),
     getTeamInvites: (): FakeTeamInviteRow[] =>
       [...teamInvitesStore.values()].map((row) => ({ ...row })),
+    getTeams: () =>
+      teamSeedsStore.map((seed) => ({
+        customer_id: seed.customer_id,
+        customer_name: seed.customer_name,
+        role: seed.role,
+        is_active: seed.customer_id === activeTeamId,
+      })),
+    getActiveTeamId: () => activeTeamId,
     getAlertEvents: () => [...alertEventsStore.values()].map((row) => ({ ...row })),
     getAlertStates: (): Record<string, FakeAlertStateSeed> =>
       Object.fromEntries([...alertStatesStore.entries()].map(([k, v]) => [k, { ...v }])),

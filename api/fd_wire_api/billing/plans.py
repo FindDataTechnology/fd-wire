@@ -87,6 +87,12 @@ PLAN_CODES: tuple[str, ...] = tuple(s.code for s in SEEDS)
 #: 禁用退场的旧档位码（指派校验与 seed 压制共用）
 LEGACY_CODES: frozenset[str] = frozenset(s.code for s in LEGACY_SEEDS)
 
+#: 席位缺省上限（wire-team-spaces-v2）：limits_json.seats 后台可配优先，
+#: 此处只是缺省映射；免费档=1 即团队功能付费解锁。
+SEAT_DEFAULTS: dict[str, int] = {"free": 1, "basic": 3, "standard": 10}
+#: 未知/禁用旧档的缺省席位（保守=仅 owner）
+SEAT_DEFAULT_UNKNOWN = 1
+
 
 def seed_plans(session: Session) -> dict[str, Plan]:
     """幂等播种档位：缺则插入，存在则保留（后台可配优先）。
@@ -136,3 +142,21 @@ def list_public_plans(session: Session) -> list[Plan]:
         .scalars()
         .all()
     )
+
+
+def seat_limit(session: Session, plan_code: str) -> int:
+    """席位上限：plan.limits_json['seats'] 显式配置优先，否则 SEAT_DEFAULTS，
+    未知档 SEAT_DEFAULT_UNKNOWN。
+
+    ``limits_json`` 无 ``seats`` 键时才算缺省（后台改 limits_json 即时生效，
+    不走 seed）；显式配 0 或负数不合法，按缺省处理。
+    """
+    plan = session.execute(
+        select(Plan).where(Plan.code == plan_code)
+    ).scalar_one_or_none()
+    if plan is not None:
+        limits = plan.limits_json if isinstance(plan.limits_json, dict) else None
+        seats = limits.get("seats") if limits is not None else None
+        if isinstance(seats, int) and seats > 0:
+            return seats
+    return SEAT_DEFAULTS.get(plan_code, SEAT_DEFAULT_UNKNOWN)

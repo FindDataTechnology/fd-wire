@@ -50,7 +50,7 @@ def test_chain_head_follows_catalog_source_db(migrated_sqlite) -> None:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
     # 链头断言随最新迁移推进（0032_transform_pipelines：管线五表，
     # wire-transform-pipelines——单链线性追加）
-    assert version == "0032_transform_pipelines"
+    assert version == "0033_team_spaces_v2"
     engine.dispose()
 
 
