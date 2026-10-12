@@ -1975,3 +1975,181 @@ export function fetchEntityGraph(): Promise<EntityGraph> {
     method: "GET",
   }) as Promise<EntityGraph>;
 }
+
+// ── 团队空间（wire-team-spaces 任务 5 web 面）────────────────────────────
+// 契约（api 仓 console team 路由，proposal 冻结形状；Bearer 登录身份）：
+// - GET /api/console/team → {me:{sub,role}, members:[{logto_sub,role,
+//   created_at,invited_by_sub?}], invites:[{id,code,role,expires_at,
+//   created_at}]}（三角色可读——viewer/editor 读面与 owner 一致）；
+// - POST /api/console/team/invites body {role} → 201 {id,code,role,expires_at}
+//   （owner-only：editor/viewer 403 detail「团队成员权限不足…」）；
+// - DELETE /api/console/team/invites/{id} → {deleted:true}（owner-only）；
+// - DELETE /api/console/team/members/{sub} → {deleted:true}（owner-only；
+//   409 = owner 行不可撤，detail 带原因）。
+// 边界翻译纪律：wire 一律 snake_case（logto_sub/created_at/…），TS 侧一律
+// camelCase（logtoSub/createdAt/…）——双向翻译收口在 api.ts 内，UI 不见下划线。
+
+/** 团队角色三档（owner 全权 / editor 除团队管理与密钥物 / viewer 只读）。 */
+export const TEAM_ROLES = ["owner", "editor", "viewer"] as const;
+
+export type TeamRole = (typeof TEAM_ROLES)[number];
+
+/** 可邀请席位两档（owner 不可经邀请产生）。 */
+export const TEAM_INVITE_ROLES = ["editor", "viewer"] as const;
+
+export type TeamInviteRole = (typeof TEAM_INVITE_ROLES)[number];
+
+/** 本人的团队视角（GET /team 响应 me 段）。 */
+export interface TeamMe {
+  sub: string;
+  role: TeamRole;
+}
+
+/** 团队成员行（UI 投影：wire snake_case 已在边界翻译）。 */
+export interface TeamMember {
+  logtoSub: string;
+  role: TeamRole;
+  /** 加入时间（ISO）。 */
+  createdAt: string;
+  /** 邀请人 sub（owner 首建行为 null）。 */
+  invitedBySub: string | null;
+}
+
+/** 待用邀请行。 */
+export interface TeamInvite {
+  id: number;
+  code: string;
+  role: TeamInviteRole;
+  /** 过期时间（ISO；24 小时窗）。 */
+  expiresAt: string;
+  createdAt: string;
+}
+
+/** 团队总览（名单 + 待用邀请）。 */
+export interface TeamOverview {
+  me: TeamMe;
+  members: TeamMember[];
+  invites: TeamInvite[];
+}
+
+/** 创建邀请响应（一次性码仅此一次明文回显）。 */
+export interface TeamInviteCreated {
+  id: number;
+  code: string;
+  role: TeamInviteRole;
+  expiresAt: string;
+}
+
+/** wire role 值收窄（owner/editor/viewer 之外拒绝）。 */
+function asTeamRole(raw: unknown): TeamRole | undefined {
+  return raw === "owner" || raw === "editor" || raw === "viewer"
+    ? raw
+    : undefined;
+}
+
+/** wire 邀请角色收窄（仅 editor/viewer——owner 不经邀请产生）。 */
+function asTeamInviteRole(raw: unknown): TeamInviteRole | undefined {
+  return raw === "editor" || raw === "viewer" ? raw : undefined;
+}
+
+function asString(raw: unknown): string {
+  return typeof raw === "string" ? raw : "";
+}
+
+/** wire members 段收窄翻译（snake_case → TeamMember[]；坏条目跳过）。 */
+function parseTeamMembers(raw: unknown): TeamMember[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((entry): TeamMember[] => {
+    if (!entry || typeof entry !== "object") return [];
+    const record = entry as Record<string, unknown>;
+    const role = asTeamRole(record.role);
+    const logtoSub = asString(record.logto_sub);
+    if (!logtoSub || !role) return [];
+    const invitedBy = asString(record.invited_by_sub);
+    return [
+      {
+        logtoSub,
+        role,
+        createdAt: asString(record.created_at),
+        invitedBySub: invitedBy || null,
+      },
+    ];
+  });
+}
+
+/** wire invites 段收窄翻译（snake_case → TeamInvite[]；坏条目跳过）。 */
+function parseTeamInvites(raw: unknown): TeamInvite[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((entry): TeamInvite[] => {
+    if (!entry || typeof entry !== "object") return [];
+    const record = entry as Record<string, unknown>;
+    const role = asTeamInviteRole(record.role);
+    const code = asString(record.code);
+    const id = record.id;
+    if (typeof id !== "number" || !code || !role) return [];
+    return [
+      {
+        id,
+        code,
+        role,
+        expiresAt: asString(record.expires_at),
+        createdAt: asString(record.created_at),
+      },
+    ];
+  });
+}
+
+/** 团队总览（名单 + 待用邀请；me 段 role 坏值按 viewer 最小权限回落）。 */
+export async function getTeam(): Promise<TeamOverview> {
+  const body = await requestJson(`${API_BASE}/console/team`, {
+    method: "GET",
+  });
+  const record = (body ?? {}) as Record<string, unknown>;
+  const me = (record.me ?? {}) as Record<string, unknown>;
+  return {
+    me: {
+      sub: asString(me.sub),
+      role: asTeamRole(me.role) ?? "viewer",
+    },
+    members: parseTeamMembers(record.members),
+    invites: parseTeamInvites(record.invites),
+  };
+}
+
+/** 生成一次性邀请码（owner-only；24 小时有效，绑定席位角色）。 */
+export async function createTeamInvite(
+  role: TeamInviteRole,
+): Promise<TeamInviteCreated> {
+  const body = await requestJson(`${API_BASE}/console/team/invites`, {
+    method: "POST",
+    // 请求边界翻译：wire 即 {role}（无 camelCase 字段，形状冻结）。
+    body: { role },
+  });
+  const record = (body ?? {}) as Record<string, unknown>;
+  const id = record.id;
+  return {
+    id: typeof id === "number" ? id : 0,
+    code: asString(record.code),
+    role: asTeamInviteRole(record.role) ?? role,
+    expiresAt: asString(record.expires_at),
+  };
+}
+
+/** 作废待用邀请（owner-only；{deleted:true}）。 */
+export function revokeTeamInvite(
+  id: number,
+): Promise<{ deleted: boolean }> {
+  return requestJson(`${API_BASE}/console/team/invites/${id}`, {
+    method: "DELETE",
+  }) as Promise<{ deleted: boolean }>;
+}
+
+/** 撤销成员（owner-only；owner 行 409、失存 404——detail 如实上抛）。 */
+export function removeTeamMember(
+  sub: string,
+): Promise<{ deleted: boolean }> {
+  return requestJson(
+    `${API_BASE}/console/team/members/${encodeURIComponent(sub)}`,
+    { method: "DELETE" },
+  ) as Promise<{ deleted: boolean }>;
+}

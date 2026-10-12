@@ -375,6 +375,7 @@ const en: Translation = {
       demands: "Demands",
       usage: "Usage",
     keys: "Data-Plane Keys",
+      team: "Team",
     },
     topbar: {
       org: "Customer",
@@ -1312,6 +1313,56 @@ const en: Translation = {
         pageOf: "Page {{page}} of {{pages}} · {{total}} items",
         prev: "Previous",
         next: "Next",
+      },
+    },
+    // Team (wire-team-spaces task 5): membership management — owner gets the
+    // roster, one-time invite codes and revocation; editor/viewer get a
+    // read-only roster plus their own seat badge.
+    team: {
+      title: "Team",
+      subtitle:
+        "Members and seats of your organization — the owner can generate one-time invite codes (invitees join on first sign-in and share the plan and quotas); editors and viewers see a read-only roster here.",
+      loading: "Loading team…",
+      errorTitle: "Failed to load team",
+      retry: "Retry",
+      forbiddenTitle: "Not allowed to view the team",
+      forbiddenBody:
+        "Your signed-in identity cannot view team information — contact the team owner to manage members.",
+      myRole: "My seat",
+      viewerNote: "Read-only seat: change operations are unavailable.",
+      roleBadge: {
+        owner: "Owner",
+        editor: "Editor",
+        viewer: "Viewer",
+      },
+      members: {
+        title: "Members",
+        joinedAt: "Joined {{at}}",
+        remove: "Remove",
+        removing: "Removing…",
+        removeFailed: "Failed to remove member, please retry later.",
+      },
+      invite: {
+        title: "Invite members",
+        subtitle:
+          "Generate a one-time invite code (valid for 24 hours, bound to a seat role) — the invitee joins your organization on first sign-in and the code is consumed.",
+        roleLabel: "Seat role",
+        submit: "Generate invite code",
+        creating: "Generating…",
+        failed: "Failed to generate the invite code, please retry later.",
+        onceTitle: "Invite code (shown only once)",
+        onceHint:
+          "Shown only this once — it cannot be viewed again after leaving this page. Copy it and send it to the invitee now.",
+        copy: "Copy",
+      },
+      invites: {
+        title: "Pending invites",
+        empty: "No pending invites.",
+        revoke: "Revoke",
+        revoking: "Revoking…",
+        revokeFailed: "Failed to revoke the invite, please retry later.",
+        expired: "Expired",
+        remaining: "{{hours}}h {{minutes}}m left",
       },
     },
     // Entities (wire-entity-layer tasks 3.1/3.2): the lightweight entity

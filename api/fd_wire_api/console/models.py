@@ -14,13 +14,21 @@
 
 明文 key 纪律与 cell-manager 一致：簿记/审计只落 key_id，明文仅在铸出
 当次响应中一次性交付。
+
+团队空间三表（wire-team-spaces，alembic 0027）：``customer_members`` /
+``customer_invites`` / ``team_events``。身份模型：owner =
+``billing_customers.logto_sub`` 本人（不落成员表），成员表只存被邀成员
+（role ∈ editor|viewer）；一个 logto_sub 至多属于一个客户（全局唯一，
+一人一队），且应用层校验不得与任何 ``Customer.logto_sub`` 冲突（DB 跨表
+约束管不到，兑换入口 resolve_member_role 已覆盖该面）。``team_events``
+append-only：只 INSERT，审计不可改写。
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String
+from sqlalchemy import JSON, DateTime, Integer, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from ..billing.models import utcnow
@@ -50,4 +58,67 @@ class ConsoleOnboarding(ConsoleBase):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+
+class CustomerMember(ConsoleBase):
+    """团队成员（被邀成员；owner = Customer.logto_sub 本人，不落本表）。
+
+    ``customer_id`` 指向 ``billing_customers.id``：与 ConsoleOnboarding 同款
+    纪律——ORM 层不声明跨 Base ForeignKey（metadata 解析不到对方表），
+    DB 级 FK 由 alembic 0027 落（生产）。``logto_sub`` 全局唯一（一人至多
+    一队）；role 只 editor|viewer（应用层校验，owner 语义在解析层合成）。
+    """
+
+    __tablename__ = "customer_members"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    logto_sub: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    invited_by_sub: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class CustomerInvite(ConsoleBase):
+    """一次性邀请码（``wsi-`` + 24 hex；24h 过期；兑换即置 used）。
+
+    ``role`` 是被邀者入队角色（editor|viewer）；``created_by_sub`` 是生成者
+    （owner）。明文码只在生成响应出现一次（兑换后不复用）。
+    """
+
+    __tablename__ = "customer_invites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_by_sub: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by_sub: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
+class TeamEvent(ConsoleBase):
+    """团队审计事件（append-only：只 INSERT，不可改写）。
+
+    action ∈ member.joined | member.removed | invite.created | invite.revoked；
+    target 是对象键（成员 sub / 邀请码）；detail 是 JSON 附注（角色等）。
+    """
+
+    __tablename__ = "team_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    actor_sub: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    target: Mapped[str] = mapped_column(String(128), nullable=False)
+    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
     )

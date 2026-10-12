@@ -6,6 +6,7 @@ slug unverified 放行、客户面安全子集。
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -28,9 +29,14 @@ from test_demands_workorder import (
     workorder,
 )
 
-TICKET = "reports/health-tickets/20261011-wire-DE-20261011-01.yaml"
+def _ticket_path() -> str:
+    """出单路径内嵌出单日 UTC 日期（DE-YYYYMMDD-01）——运行时取当日，免日期翻转 flake。"""
+    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return f"reports/health-tickets/{today}-wire-DE-{today}-01.yaml"
 
-LIFECYCLE_YAML = f"""ticket_id: 20261011-wire-DE-20261011-01
+
+def _lifecycle_yaml() -> str:
+    return f"""ticket_id: {_ticket_path().rsplit("/", 1)[-1][: -len(".yaml")]}
 kind: generate
 unit: spiders/stats-gov-cn/
 terminal: null
@@ -91,7 +97,7 @@ def _exported(harness) -> tuple[int, str]:
 def test_slug_unverified_passes_honestly(harness, slug_unverified):
     """出单时探测不可达 → 放行且 slug_check=unverified（不假装已验证）。"""
     did, path = _exported(harness)
-    assert path == TICKET
+    assert path == _ticket_path()
     # 重新出单再看响应字段
     resp = workorder(harness.client, did)
     assert resp.status_code == 200
@@ -124,7 +130,7 @@ def test_status_push_idempotent_and_customer_safe(harness, slug_unverified):
     did, path = _exported(harness)
     push = lambda: harness.client.post(
         "/internal/demands/workorders/status",
-        json={"ticket_path": path, "content": LIFECYCLE_YAML},
+        json={"ticket_path": path, "content": _lifecycle_yaml()},
         headers=INTERNAL,
     )
     first = push()

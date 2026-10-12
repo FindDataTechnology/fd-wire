@@ -353,6 +353,7 @@ const zh = {
       demands: "需求单",
       usage: "用量",
     keys: "数据面 Key",
+      team: "团队",
     },
     topbar: {
       org: "客户",
@@ -1245,6 +1246,55 @@ const zh = {
         pageOf: "第 {{page}} / {{pages}} 页 · 共 {{total}} 项",
         prev: "上一页",
         next: "下一页",
+      },
+    },
+    // 团队（wire-team-spaces 任务 5）：成员制管理面——owner 名单/一次性
+    // 邀请码/撤销；editor/viewer 只读名单 + 自己的席位徽标说明。
+    team: {
+      title: "团队",
+      subtitle:
+        "本企业的成员与席位——所有者可生成一次性邀请码邀请新成员（新成员首次登录时凭码加入，共享套餐与配额）；编辑者与阅读者在此只读查看名单。",
+      loading: "团队信息加载中…",
+      errorTitle: "团队信息加载失败",
+      retry: "重试",
+      forbiddenTitle: "无权查看团队信息",
+      forbiddenBody:
+        "当前登录身份没有查看团队信息的权限——如需管理成员，请联系团队所有者。",
+      myRole: "我的席位",
+      viewerNote: "只读席位：变更操作不可用。",
+      roleBadge: {
+        owner: "所有者",
+        editor: "编辑者",
+        viewer: "阅读者",
+      },
+      members: {
+        title: "成员",
+        joinedAt: "加入于 {{at}}",
+        remove: "移除",
+        removing: "移除中…",
+        removeFailed: "移除成员失败，请稍后重试。",
+      },
+      invite: {
+        title: "邀请成员",
+        subtitle:
+          "生成一次性邀请码（24 小时有效、绑定席位角色）——新成员在首次登录时输入码即加入本企业，码即失效。",
+        roleLabel: "席位角色",
+        submit: "生成邀请码",
+        creating: "生成中…",
+        failed: "生成邀请码失败，请稍后重试。",
+        onceTitle: "邀请码（仅此一次显示）",
+        onceHint:
+          "仅此一次显示——离开本页后无法再查看，请立即复制并发给被邀请人。",
+        copy: "复制",
+      },
+      invites: {
+        title: "待用邀请",
+        empty: "暂无待用邀请。",
+        revoke: "作废",
+        revoking: "作废中…",
+        revokeFailed: "作废邀请失败，请稍后重试。",
+        expired: "已过期",
+        remaining: "剩 {{hours}} 小时 {{minutes}} 分",
       },
     },
     // 实体（wire-entity-layer 任务 3.1/3.2）：轻量实体语义层管理面——实体

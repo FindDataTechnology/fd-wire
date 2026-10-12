@@ -48,8 +48,8 @@ def test_chain_head_follows_catalog_source_db(migrated_sqlite) -> None:
     engine = create_engine(migrated_sqlite)
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    # 链头断言随最新迁移推进（0026_entity_layer：entities 两表，单链线性追加）
-    assert version == "0026_entity_layer"
+    # 链头断言随最新迁移推进（0027_team_spaces：团队三表，单链线性追加）
+    assert version == "0027_team_spaces"
     engine.dispose()
 
 

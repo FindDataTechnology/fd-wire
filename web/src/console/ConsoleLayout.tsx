@@ -17,7 +17,8 @@ export type ConsoleTab =
   | "packs"
   | "demands"
   | "usage"
-  | "keys";
+  | "keys"
+  | "team";
 
 export const CONSOLE_TABS: ReadonlyArray<{
   id: ConsoleTab;
@@ -54,6 +55,9 @@ export const CONSOLE_TABS: ReadonlyArray<{
   { id: "usage", href: "#/console/usage", labelKey: "console.nav.usage" },
   // 数据面 key（wire-customer-data-engine 6.2）：REST 数据面凭据管理。
   { id: "keys", href: "#/console/keys", labelKey: "console.nav.keys" },
+  // 团队（wire-team-spaces 任务 5）：成员/席位/邀请管理——owner 管理面，
+  // editor/viewer 只读名单。
+  { id: "team", href: "#/console/team", labelKey: "console.nav.team" },
 ];
 
 export function ConsolePlaceholder({

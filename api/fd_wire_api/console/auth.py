@@ -10,9 +10,11 @@ wire 的自助注册要求用户免人工获得授权，Logto 组/org 自动化�
   仅 JWKS 按 PyJWT 内置 key 缓存周期性拉取）。
 - 未配置 FD_WIRE_LOGTO_ISSUER / FD_WIRE_LOGTO_CLIENT_ID：受保护端点 503
   并给出精确缺项（绝不假登录放行），config 端点如实返回 configured=false。
-- sub → Customer 解析：``billing_customers.logto_sub`` 唯一映射
-  （wire-self-serve-launch 1.1）；映射缺失 → 401（首登走
-  POST /api/console/session 自动开户，见 onboarding.py）。
+- sub → Customer 解析：owner 走 ``billing_customers.logto_sub`` 唯一映射
+  （wire-self-serve-launch 1.1），成员走 ``customer_members.logto_sub``
+  回退（wire-team-spaces ``resolve_member_role``）；两者均缺失 → 401
+  （首登走 POST /api/console/session 自动开户/邀请兑换，见 onboarding.py
+  与 team.py）。
 """
 
 from __future__ import annotations
@@ -28,11 +30,24 @@ from sqlalchemy.orm import Session
 
 from ..admin.db import get_db as get_platform_db
 from ..billing.models import Customer
+from .models import CustomerMember
 
 ALGORITHMS = ["ES384", "RS256", "ES256"]
 
 #: 登录配置运行时下发的 scopes（契约：/api/console/auth/config）
 CONSOLE_SCOPES = ["openid", "profile", "email", "roles", "offline_access"]
+
+#: viewer 被拒的变更类方法（wire-team-spaces 角色门禁：viewer 只读）
+VIEWER_DENIED_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+#: 密钥物面端点前缀（owner-only；wire-team-spaces）：客户凭据的明文/铸造/
+#: 吊销面——data-plane keys（wdk- 明文铸造/吊销/指纹列表）+ 连接器配对
+#: 令牌（fwp_ 一次性明文，换发 fwc_ 长命连接器凭据）。边界匹配含子路径
+#: （/api/v1/data-plane-keys/{key_id}）。
+KEY_SURFACE_PREFIXES = (
+    "/api/v1/data-plane-keys",
+    "/api/v1/connectors/pairing-tokens",
+)
 
 
 @dataclass(frozen=True)
@@ -165,6 +180,39 @@ def resolve_customer(db: Session, sub: str) -> Customer | None:
     ).scalar_one_or_none()
 
 
+def resolve_member_role(db: Session, sub: str) -> tuple[Customer, str] | None:
+    """sub → (Customer, role)（wire-team-spaces；owner 优先→成员回退）。
+
+    - owner：``billing_customers.logto_sub`` 命中 → role='owner'（创建者
+      本人，不落成员表）；
+    - 成员：``customer_members.logto_sub`` 命中（全局唯一，一人一队）→
+      role=成员行 role（editor|viewer）；
+    - 均未命中 → None（含成员行指向的客户行被清理的腐化态——按无归属
+      处理，401 面不变）。
+
+    成员 sub 与任何 ``Customer.logto_sub`` 的互斥由本函数的 owner 优先
+    解析天然覆盖：兑换入口先查本函数，命中即「已有归属」拒。
+    """
+    customer = resolve_customer(db, sub)
+    if customer is not None:
+        return customer, "owner"
+    member = db.execute(
+        select(CustomerMember).where(CustomerMember.logto_sub == sub)
+    ).scalar_one_or_none()
+    if member is not None:
+        customer = db.get(Customer, member.customer_id)
+        if customer is not None:
+            return customer, member.role
+    return None
+
+
+def _hits_key_surface(path: str) -> bool:
+    """路径是否命中密钥物面前缀（含子路径，边界对齐段）。"""
+    return any(
+        path == prefix or path.startswith(prefix + "/") for prefix in KEY_SURFACE_PREFIXES
+    )
+
+
 def require_console_customer(
     request: Request, db: Session = Depends(get_platform_db)
 ) -> Customer:
@@ -172,16 +220,58 @@ def require_console_customer(
 
     X-Customer-Id 不再被客户侧端点接受（占位登录退位，wire-self-serve-launch
     4.5）；映射缺失的新 sub 先经 POST /api/console/session 首登开户。
+
+    wire-team-spaces 门禁升级（既有路由零改动受保护——门禁在统一依赖内，
+    角色判定只来自服务端身份解析）：
+    - 解析 (customer, role)（owner 优先→成员回退）；未映射/被撤销 401；
+    - viewer 调变更类方法（POST/PUT/PATCH/DELETE）→ 403（viewer 只读）；
+    - 密钥物面端点（KEY_SURFACE_PREFIXES）非 owner → 403（owner-only）。
     """
     identity = verify_id_token(bearer_token(request))
-    customer = resolve_customer(db, identity.sub)
-    if customer is None:
+    resolved = resolve_member_role(db, identity.sub)
+    if resolved is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="登录身份尚未映射到客户（请先完成首次登录开户）",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    customer, role = resolved
+    if role == "viewer" and request.method in VIEWER_DENIED_METHODS:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="团队成员权限不足（viewer 只读）",
+        )
+    if role != "owner" and _hits_key_surface(request.url.path):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="团队成员权限不足（密钥管理仅 owner）",
+        )
     return customer
+
+
+def require_console_owner(
+    request: Request, db: Session = Depends(get_platform_db)
+) -> tuple[Customer, str]:
+    """团队管理面依赖（wire-team-spaces）：owner-only。
+
+    返回 (Customer, caller_sub)；未归属 401（语义同 require_console_customer），
+    editor/viewer 403（团队管理仅 owner）。
+    """
+    identity = verify_id_token(bearer_token(request))
+    resolved = resolve_member_role(db, identity.sub)
+    if resolved is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="登录身份尚未映射到客户（请先完成首次登录开户）",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    customer, role = resolved
+    if role != "owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="团队成员权限不足（团队管理仅 owner）",
+        )
+    return customer, identity.sub
 
 
 def require_console_customer_id(
@@ -200,6 +290,8 @@ def require_console_customer_id(
 __all__ = [
     "ALGORITHMS",
     "CONSOLE_SCOPES",
+    "KEY_SURFACE_PREFIXES",
+    "VIEWER_DENIED_METHODS",
     "ConsoleIdentity",
     "auth_config",
     "bearer_token",
@@ -208,6 +300,8 @@ __all__ = [
     "logto_issuer",
     "require_console_customer",
     "require_console_customer_id",
+    "require_console_owner",
     "resolve_customer",
+    "resolve_member_role",
     "verify_id_token",
 ]

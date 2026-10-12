@@ -17,6 +17,9 @@ from .catalog import shutdown_catalog, startup_catalog
 from .config import settings
 from .console import init_db as init_console_db
 from .console import router as console_router
+# 团队空间（wire-team-spaces）：邀请兑换入队走 session（routes.py）；此处
+# 注册 owner-only 团队管理四端点（/api/console/team*）
+from .console.team import router as console_team_router
 from .datasets import connector_router as datasets_connector_router
 from .datasets import init_datasets_db
 from .datasets import router as datasets_router
@@ -147,6 +150,9 @@ app.include_router(billing_router)
 # 控制台面（wire-self-serve-launch 4.2/4.3/6.1）：登录配置下发 + 首登自动
 # 开户 + 客户自助用量（Bearer ID token 身份）
 app.include_router(console_router)
+# 团队空间（wire-team-spaces）：GET /api/console/team + 邀请生成/作废 +
+# 成员撤销（owner-only；门禁在 console.auth.require_console_owner）
+app.include_router(console_team_router)
 app.include_router(demands_router)
 # 需求单 AI 预评估与人工报价（任务 6.4）：评估独立触发 + 确认台内部视图
 app.include_router(demands_admin_router)

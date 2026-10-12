@@ -197,6 +197,14 @@ export interface ConsoleBackendOptions {
    *  （wire-incremental-sync：422 校验回显等失败态）。 */
   failSyncSettingsStatus?: number;
   failSyncSettingsDetail?: string;
+  /** 种子团队成员（wire-team-spaces 任务 5）：bearer sub 命中种子行即取该
+   *  角色（GET me 段）；未命中回落 owner（现状单 owner 语义）。 */
+  teamMembers?: FakeTeamMemberSeed[];
+  /** 种子待用邀请（owner 视角列表）。 */
+  teamInvites?: FakeTeamInviteSeed[];
+  /** 强制 GET /api/console/team 返回该状态（403 无权态 / 故障态注入）。 */
+  failTeamStatus?: number;
+  failTeamDetail?: string;
 }
 
 /** 源包种子（wire-source-packs）：假后端按 indicators 分页切片出详情。 */
@@ -253,6 +261,43 @@ export type FakeEntityRelationshipRow = {
   label: string | null;
 };
 
+/** 团队成员种子（wire-team-spaces）：logtoSub 即 Bearer sub 匹配键。 */
+export type FakeTeamMemberSeed = {
+  logtoSub: string;
+  role: "owner" | "editor" | "viewer";
+  /** 加入时间（缺省固定 2026-10-01 09:00）。 */
+  createdAt?: string;
+  /** 邀请人 sub（owner 首建行为 null）。 */
+  invitedBySub?: string | null;
+};
+
+/** 待用邀请种子（缺省码 wsi-seed{id}、24 小时后过期）。 */
+export type FakeTeamInviteSeed = {
+  id: number;
+  code?: string;
+  role: "editor" | "viewer";
+  /** 过期时间 ISO（缺省 now + 24h——倒计时口径与真实时钟一致）。 */
+  expiresAt?: string;
+  createdAt?: string;
+};
+
+/** 团队成员假后端行（getTeamMembers 断言面；camelCase 内存态）。 */
+export type FakeTeamMemberRow = {
+  logtoSub: string;
+  role: "owner" | "editor" | "viewer";
+  createdAt: string;
+  invitedBySub: string | null;
+};
+
+/** 待用邀请假后端行（getTeamInvites 断言面）。 */
+export type FakeTeamInviteRow = {
+  id: number;
+  code: string;
+  role: "editor" | "viewer";
+  expiresAt: string;
+  createdAt: string;
+};
+
 /** 安装假后端为 global fetch；返回调用记录与状态注入接口。 */
 export function installConsoleBackend(
   conversations: Conversation[],
@@ -280,9 +325,11 @@ export function installConsoleBackend(
   getDatasets: () => Dataset[];
   getCorrections: (datasetId: string) => Correction[];
   getPackSubscriptions: (customerId?: string) => string[];
-  getEntities: () => FakeEntityRow[];
-  getEntityRelationships: () => FakeEntityRelationshipRow[];
-} {
+    getEntities: () => FakeEntityRow[];
+    getEntityRelationships: () => FakeEntityRelationshipRow[];
+    getTeamMembers: () => FakeTeamMemberRow[];
+    getTeamInvites: () => FakeTeamInviteRow[];
+  } {
   const store = new Map<number, StoredConversation>();
   let nextConversationId = 1;
   let nextMessageId = 1;
@@ -385,6 +432,32 @@ export function installConsoleBackend(
   for (const seed of options.refreshSchedules ?? []) {
     schedulesStore.set(seed.id, { ...seed });
     nextScheduleId = Math.max(nextScheduleId, seed.id + 1);
+  }
+
+  // ── 团队空间假后端状态（wire-team-spaces 任务 5）：成员按 logtoSub 键存；
+  //    GET me 段按 bearer sub 命中种子行，未命中回落 owner（现状单 owner
+  //    语义——首登开户即 owner）。邀请码 wsi- 前缀、24 小时窗。──
+  const teamMembersStore = new Map<string, FakeTeamMemberRow>();
+  for (const seed of options.teamMembers ?? []) {
+    teamMembersStore.set(seed.logtoSub, {
+      logtoSub: seed.logtoSub,
+      role: seed.role,
+      createdAt: seed.createdAt ?? "2026-10-01T09:00:00",
+      invitedBySub: seed.invitedBySub ?? null,
+    });
+  }
+  const teamInvitesStore = new Map<number, FakeTeamInviteRow>();
+  let nextTeamInviteId = 1;
+  for (const seed of options.teamInvites ?? []) {
+    teamInvitesStore.set(seed.id, {
+      id: seed.id,
+      code: seed.code ?? `wsi-seed${seed.id}`,
+      role: seed.role,
+      expiresAt:
+        seed.expiresAt ?? new Date(Date.now() + 24 * 3600_000).toISOString(),
+      createdAt: seed.createdAt ?? "2026-10-12T08:00:00",
+    });
+    nextTeamInviteId = Math.max(nextTeamInviteId, seed.id + 1);
   }
 
   function addRefreshSchedule(seed: StoredSchedule): void {
@@ -748,6 +821,125 @@ export function installConsoleBackend(
           },
         ),
       );
+    }
+
+    // ── 团队空间（wire-team-spaces 任务 5）：四端点全部 owner-only（spec
+    //    「团队管理端点 MUST owner-only」——editor/viewer 一律 403 detail
+    //    「团队成员权限不足（团队管理仅 owner）」，与真后端文案逐字一致）；
+    //    撤销 owner 行 409；信封形状逐字段对齐冻结契约（snake_case）。──
+    const ownTeamRole = (): "owner" | "editor" | "viewer" =>
+      teamMembersStore.get(customerId)?.role ?? "owner";
+    /** 名单行（bearer 未入种子时补合成 owner 行——单 owner 现状）。 */
+    const teamMemberRows = (): FakeTeamMemberRow[] => {
+      const rows = [...teamMembersStore.values()];
+      if (!teamMembersStore.has(customerId)) {
+        rows.unshift({
+          logtoSub: customerId,
+          role: "owner",
+          createdAt: "2026-10-01T09:00:00",
+          invitedBySub: null,
+        });
+      }
+      return rows;
+    };
+    const teamInviteOut = (row: FakeTeamInviteRow): unknown => ({
+      id: row.id,
+      code: row.code,
+      role: row.role,
+      expires_at: row.expiresAt,
+      created_at: row.createdAt,
+    });
+    const teamForbidden = () =>
+      Promise.resolve(
+        jsonResponse(
+          { detail: "团队成员权限不足（团队管理仅 owner）" },
+          403,
+        ),
+      );
+
+    if (path === "/api/console/team" && method === "GET") {
+      if (options.failTeamStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: options.failTeamDetail ?? `team ${options.failTeamStatus}` },
+            options.failTeamStatus,
+          ),
+        );
+      }
+      if (ownTeamRole() !== "owner") return teamForbidden();
+      return Promise.resolve(
+        jsonResponse({
+          me: { sub: customerId, role: ownTeamRole() },
+          members: teamMemberRows().map((row) => ({
+            logto_sub: row.logtoSub,
+            role: row.role,
+            created_at: row.createdAt,
+            ...(row.invitedBySub ? { invited_by_sub: row.invitedBySub } : {}),
+          })),
+          invites: [...teamInvitesStore.values()].map(teamInviteOut),
+        }),
+      );
+    }
+    if (path === "/api/console/team/invites" && method === "POST") {
+      if (ownTeamRole() !== "owner") return teamForbidden();
+      const payload = (calls[calls.length - 1]!.body ?? {}) as { role?: string };
+      if (payload.role !== "editor" && payload.role !== "viewer") {
+        return Promise.resolve(
+          jsonResponse({ detail: "邀请角色只能是 editor 或 viewer" }, 422),
+        );
+      }
+      const id = nextTeamInviteId++;
+      const row: FakeTeamInviteRow = {
+        id,
+        code: `wsi-inv${id}`,
+        role: payload.role,
+        expiresAt: new Date(Date.now() + 24 * 3600_000).toISOString(),
+        createdAt: new Date().toISOString(),
+      };
+      teamInvitesStore.set(id, row);
+      // 201 响应冻结为 {id,code,role,expires_at}（无 created_at——列表才有）。
+      return Promise.resolve(
+        jsonResponse(
+          {
+            id: row.id,
+            code: row.code,
+            role: row.role,
+            expires_at: row.expiresAt,
+          },
+          201,
+        ),
+      );
+    }
+    const teamInviteMatch = path.match(/^\/api\/console\/team\/invites\/(\d+)$/);
+    if (teamInviteMatch && method === "DELETE") {
+      if (ownTeamRole() !== "owner") return teamForbidden();
+      const id = Number(teamInviteMatch[1]);
+      if (!teamInvitesStore.has(id)) {
+        return Promise.resolve(jsonResponse({ detail: "invite not found" }, 404));
+      }
+      teamInvitesStore.delete(id);
+      return Promise.resolve(jsonResponse({ deleted: true }));
+    }
+    const teamMemberMatch = path.match(/^\/api\/console\/team\/members\/([^/]+)$/);
+    if (teamMemberMatch && method === "DELETE") {
+      if (ownTeamRole() !== "owner") return teamForbidden();
+      const sub = decodeURIComponent(teamMemberMatch[1]!);
+      const target = teamMemberRows().find((row) => row.logtoSub === sub);
+      if (!target) {
+        return Promise.resolve(
+          jsonResponse({ detail: "成员不存在或不属于本团队" }, 404),
+        );
+      }
+      if (target.role === "owner") {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: "所有者（owner）不可被撤销——团队必须至少保留一名所有者" },
+            409,
+          ),
+        );
+      }
+      teamMembersStore.delete(sub);
+      return Promise.resolve(jsonResponse({ deleted: true }));
     }
 
     // ── 需求单客户面（wire-ux-consolidation 3.2/4.1/4.3：POST/GET
@@ -2423,6 +2615,10 @@ export function installConsoleBackend(
       [...entitiesStore.values()].map((row) => ({ ...row })),
     getEntityRelationships: (): FakeEntityRelationshipRow[] =>
       [...entityRelationshipsStore.values()].map((row) => ({ ...row })),
+    getTeamMembers: (): FakeTeamMemberRow[] =>
+      [...teamMembersStore.values()].map((row) => ({ ...row })),
+    getTeamInvites: (): FakeTeamInviteRow[] =>
+      [...teamInvitesStore.values()].map((row) => ({ ...row })),
   };
 }
 
