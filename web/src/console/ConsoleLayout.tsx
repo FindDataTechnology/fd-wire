@@ -24,7 +24,8 @@ export type ConsoleTab =
   | "demands"
   | "usage"
   | "keys"
-  | "team";
+  | "team"
+  | "market";
 
 export const CONSOLE_TABS: ReadonlyArray<{
   id: ConsoleTab;
@@ -72,6 +73,9 @@ export const CONSOLE_TABS: ReadonlyArray<{
   // 团队（wire-team-spaces 任务 5）：成员/席位/邀请管理——owner 管理面，
   // editor/viewer 只读名单。
   { id: "team", href: "#/console/team", labelKey: "console.nav.team" },
+  // 数据市场（wire-dataset-marketplace 任务 6.2）：其他客户开放的数据集
+  // 浏览订阅面——列表 SQL 层只查 market 档，私有数据永不出现。
+  { id: "market", href: "#/console/market", labelKey: "console.nav.market" },
 ];
 
 export function ConsolePlaceholder({

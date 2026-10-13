@@ -134,6 +134,26 @@ const zh = {
     mcpNote:
       "agent 与自动化编排请优先走 MCP 调用面（wire 入口）：同源引擎、天然计量；REST 数据面面向自建前端与业务系统。",
   },
+  market: {
+    // 数据开放与市场（wire-dataset-marketplace 任务 7.1）：四档可见性阶梯 +
+    // 默认私有红线 + 访问模式 + 只读使用与计量归属——面向客户如实口径。
+    title: "数据开放与市场",
+    intro:
+      "你的数据默认私有。想让别人也能用，可以按需选择开放程度——只给链接、只给指定伙伴、或开放到数据市场让其他客户检索订阅；任何时候都能收回。",
+    tiersTitle: "四档开放程度",
+    tiersDesc:
+      "私有（默认）：仅自己团队可见；链接可见：拿到分享链接的人可查看；定向：只有指定客户可见；市场：所有登录客户都能检索、订阅并按需取用。",
+    defaultTitle: "默认私有",
+    defaultDesc:
+      "不主动选择开放，数据就永远不会出现在任何目录或市场里。开放与收回都是独立动作，逐次留痕可查；敏感度标记为「敏感」的数据只允许保持私有。",
+    accessTitle: "别人怎么用",
+    accessDesc:
+      "开放时可以选两种准入：订阅即得，或需你批准。批准前对方看不到任何内容；拒绝会留档。收回开放、对方退订或申请被拒，访问权下一次请求立即失效。",
+    readonlyTitle: "只读与计量",
+    readonlyDesc:
+      "获得访问权的一方只能查询与聚合，不能修改你的数据（写入一律被拒）。取数按消费方自己的凭据计量，不记在你的账上。",
+    consoleLink: "前往控制台「数据市场」→",
+  },
   localData: {
     // 「我的数据与连接器」客户教程（wire-connector-distribution 任务 4）：
     // 面向客户的口径从 deploy/README.md「连接器」段提炼，运维细节不进文档页。
@@ -430,8 +450,9 @@ const zh = {
       packs: "源包",
       demands: "需求单",
       usage: "用量",
-    keys: "数据面 Key",
+      keys: "数据面 Key",
       team: "团队",
+      market: "数据市场",
     },
     topbar: {
       org: "客户",
@@ -1891,6 +1912,66 @@ const zh = {
         subtitle:
           "节点 = 实体、边 = 关系（带 kind 标注）；点击节点定位到对应实体卡。此图谱与 AI 构建上下文同源。",
         empty: "图谱为空——声明实体后在此呈现。",
+      },
+    },
+    // 数据市场（wire-dataset-marketplace）：登录客户可检索已开放数据集，
+    // 订阅（或申请批准）后经数据面只读取数；列表 SQL 层只查 market 档。
+    market: {
+      title: "数据市场",
+      subtitle: "其他客户开放共享的数据集——订阅（或申请）后即可只读使用。",
+      searchPlaceholder: "搜索数据集名称、描述或标签",
+      search: "搜索",
+      domainPlaceholder: "业务域",
+      tagPlaceholder: "标签",
+      loading: "正在加载市场…",
+      loadError: "市场加载失败",
+      retry: "重试",
+      empty: "市场暂无符合条件的数据集。",
+      total: "共 {{total}} 个数据集",
+      rowsLabel: "{{count}} 行",
+      publishedAt: "开放于 {{at}}",
+      subscribe: "订阅",
+      unsubscribe: "退订",
+      requestAccess: "申请使用",
+      detailTitle: "数据集详情",
+      columnsTitle: "列结构",
+      close: "关闭",
+      actionError: "操作失败",
+    },
+    // 数据集可见性（wire-dataset-marketplace）：四档阶梯 + 开放模式 +
+    // 定向授权名单。默认 private——不主动选就永不进任何面。
+    dataset: {
+      visibility: {
+        title: "数据开放",
+        hint: "默认私有。选择开放档位后，该数据集按档位对相应对象可见；可随时改回私有（即时失效）。",
+        loading: "正在读取可见性…",
+        loadError: "可见性读取失败",
+        retry: "重试",
+        save: "保存",
+        saving: "保存中…",
+        saved: "已保存",
+        saveError: "保存失败",
+        publish: "发布到市场",
+        unpublish: "撤回开放",
+        publishedAt: "开放于 {{at}}",
+        levels: {
+          private: "私有",
+          link: "链接可见",
+          directed: "定向",
+          market: "市场",
+        },
+        accessModeLabel: "准入模式",
+        sensitiveNote: "敏感度「敏感」的数据集只允许保持私有。",
+        sensitiveBlockedTitle: "敏感数据不支持市场/定向开放",
+        grantsTitle: "定向授权名单",
+        grantsEmpty: "尚未授权任何客户——当前无人可见。",
+        grantPlaceholder: "输入客户 id 后回车添加",
+        grantAdd: "添加",
+        grantRemove: "移除",
+      },
+      accessMode: {
+        open: "订阅即得",
+        approval: "需批准",
       },
     },
   },

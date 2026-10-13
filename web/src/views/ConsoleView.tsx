@@ -45,6 +45,7 @@ import { MyDemandsPage } from "../console/MyDemandsPage";
 import { UsagePage } from "../console/UsagePage";
 import { KeysPage } from "../console/KeysPage";
 import { TeamPage } from "../console/TeamPage";
+import { MarketPage } from "../console/MarketPage";
 import { CONTACT_MAILTO } from "../views/HomeView";
 
 type BootstrapPhase =
@@ -475,6 +476,7 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
         {tab === "usage" && <UsagePage />}
         {tab === "keys" && <KeysPage />}
         {tab === "team" && <TeamPage />}
+        {tab === "market" && <MarketPage />}
       </ErrorBoundary>
     </ConsoleLayout>
   );

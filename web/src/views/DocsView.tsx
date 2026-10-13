@@ -651,6 +651,58 @@ export function DocsView() {
         </a>
       </section>
 
+      {/* 数据开放与市场（wire-dataset-marketplace 任务 7.1）：四档可见性 /
+          默认私有 / 可撤回 / 市场浏览订阅申请 / 只读使用与计量归属。 */}
+      <section
+        id="data-market"
+        data-testid="docs-data-market"
+        className="space-y-4"
+      >
+        <h2 className="text-xl font-semibold">{t("docs.market.title")}</h2>
+        <p className="max-w-3xl text-sm text-slate-500">
+          {t("docs.market.intro")}
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div
+            data-testid="docs-market-tiers"
+            className="rounded-lg border border-slate-200 p-5"
+          >
+            <h3 className="font-medium">{t("docs.market.tiersTitle")}</h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.market.tiersDesc")}
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-200 p-5">
+            <h3 className="font-medium">{t("docs.market.defaultTitle")}</h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.market.defaultDesc")}
+            </p>
+          </div>
+          <div
+            data-testid="docs-market-access"
+            className="rounded-lg border border-slate-200 p-5"
+          >
+            <h3 className="font-medium">{t("docs.market.accessTitle")}</h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.market.accessDesc")}
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-200 p-5">
+            <h3 className="font-medium">{t("docs.market.readonlyTitle")}</h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.market.readonlyDesc")}
+            </p>
+          </div>
+        </div>
+        <a
+          href="#/console/market"
+          data-testid="docs-market-console-link"
+          className="inline-block text-sm text-slate-600 underline hover:text-slate-900"
+        >
+          {t("docs.market.consoleLink")}
+        </a>
+      </section>
+
       {/* 三、需求单流程（三态状态机步骤条） */}
       <section className="space-y-4">
         <h2 className="text-xl font-semibold">{t("docs.demands.title")}</h2>

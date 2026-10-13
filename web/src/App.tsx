@@ -56,7 +56,8 @@ function parseConsoleTab(segment: string | undefined): ConsoleTab {
     segment === "demands" ||
     segment === "usage" ||
     segment === "keys" ||
-    segment === "team"
+    segment === "team" ||
+    segment === "market"
   ) {
     return segment;
   }

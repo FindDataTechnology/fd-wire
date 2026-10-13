@@ -141,6 +141,27 @@ const en: Translation = {
     mcpNote:
       "Agents and automation should prefer the MCP calling face (wire entrance): same engine, metering built in. The REST data plane is for self-built frontends and business systems.",
   },
+  market: {
+    // Data openness & market (wire-dataset-marketplace, task 7.1): the
+    // four-tier visibility ladder + private-by-default red line + access
+    // modes + read-only use and metering attribution — customer-facing.
+    title: "Data openness & market",
+    intro:
+      "Your data is private by default. When you want others to use it, pick how far to open it — by link only, to specific partners, or to the data market where other customers can find and subscribe to it; you can withdraw at any time.",
+    tiersTitle: "Four tiers of openness",
+    tiersDesc:
+      "Private (default): only your team. Link only: anyone with the share link. Directed: only the customers you list. Market: any signed-in customer can find it, subscribe, and use it.",
+    defaultTitle: "Private by default",
+    defaultDesc:
+      "Unless you actively choose to open it, your data never appears in any catalog or market. Opening and withdrawing are separate, logged actions; datasets marked \"Sensitive\" can only stay private.",
+    accessTitle: "How others use it",
+    accessDesc:
+      "When opening, choose either subscribe-to-access or approval-required. Until you approve, the requester sees nothing; rejections are logged. Withdrawing, unsubscribing, or a rejection takes effect on their very next request.",
+    readonlyTitle: "Read-only and metering",
+    readonlyDesc:
+      "Granted parties can only query and aggregate — they can never modify your data (writes are always rejected). Usage is metered against the consumer\'s own credentials, not your account.",
+    consoleLink: "Open Console → Data market →",
+  },
   localData: {
     // "My data & connectors" customer tutorial (wire-connector-distribution
     // task 4): customer-facing wording distilled from deploy/README.md;
@@ -458,8 +479,9 @@ const en: Translation = {
       packs: "Packs",
       demands: "Demands",
       usage: "Usage",
-    keys: "Data-Plane Keys",
+      keys: "Data-Plane Keys",
       team: "Team",
+      market: "Data market",
     },
     topbar: {
       org: "Customer",
@@ -1996,6 +2018,70 @@ const en: Translation = {
         subtitle:
           "Nodes = entities, edges = relationships (with kind labels); click a node to jump to its card. This graph is the same source the AI builder's context draws from.",
         empty: "The graph is empty — declare entities to see them here.",
+      },
+    },
+    // Dataset market (wire-dataset-marketplace): signed-in customers can
+    // browse datasets others opened, subscribe (or request approval), and
+    // read them read-only through the data plane; the list query only
+    // selects market-tier rows at the SQL level.
+    market: {
+      title: "Data market",
+      subtitle:
+        "Datasets other customers have opened up — subscribe (or request access) to use them read-only.",
+      searchPlaceholder: "Search dataset name, description or tags",
+      search: "Search",
+      domainPlaceholder: "Domain",
+      tagPlaceholder: "Tag",
+      loading: "Loading market…",
+      loadError: "Failed to load the market",
+      retry: "Retry",
+      empty: "No datasets match in the market yet.",
+      total: "{{total}} datasets",
+      rowsLabel: "{{count}} rows",
+      publishedAt: "Open since {{at}}",
+      subscribe: "Subscribe",
+      unsubscribe: "Unsubscribe",
+      requestAccess: "Request access",
+      detailTitle: "Dataset detail",
+      columnsTitle: "Columns",
+      close: "Close",
+      actionError: "Action failed",
+    },
+    // Dataset visibility (wire-dataset-marketplace): four-tier ladder +
+    // access mode + directed grant list. Private by default — nothing is
+    // exposed unless the customer opts in.
+    dataset: {
+      visibility: {
+        title: "Data openness",
+        hint: "Private by default. Once you pick an openness tier the dataset becomes visible to the matching audience; you can switch back to private at any time (effective immediately).",
+        loading: "Loading visibility…",
+        loadError: "Failed to load visibility",
+        retry: "Retry",
+        save: "Save",
+        saving: "Saving…",
+        saved: "Saved",
+        saveError: "Failed to save",
+        publish: "Publish to market",
+        unpublish: "Withdraw",
+        publishedAt: "Open since {{at}}",
+        levels: {
+          private: "Private",
+          link: "Link only",
+          directed: "Directed",
+          market: "Market",
+        },
+        accessModeLabel: "Access mode",
+        sensitiveNote: "Datasets marked \"Sensitive\" can only stay private.",
+        sensitiveBlockedTitle: "Sensitive data cannot be opened to market/directed",
+        grantsTitle: "Directed grant list",
+        grantsEmpty: "No customer granted yet — currently visible to nobody.",
+        grantPlaceholder: "Type a customer id and press Enter",
+        grantAdd: "Add",
+        grantRemove: "Remove",
+      },
+      accessMode: {
+        open: "Subscribe to access",
+        approval: "Approval required",
       },
     },
   },

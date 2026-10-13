@@ -10,6 +10,13 @@ api 层分支（wire-free-tier-data-gate）：``storage_tier=api`` 的数据集
 （免费档）query/aggregate/lineage 走本地执行（不触碰引擎、不计
 metering_records——D7 口径），derive/join/batchWrite/加列等 cell 耦合
 路径返回 403 档位闸（PLAN_TIER_REQUIRED）。
+
+市场访问（wire-dataset-marketplace）：**读端点**接受"他人开放给我的"
+数据集——本客户 ∪ 市场订阅 ∪ 定向 grant ∪ 已批准申请（判定与来源标注
+复用 ``market.browse.resolve_accessible_dataset``，实时查表无缓存，撤回/
+退订/拒绝下一次请求即失效）。**写端点仍严格本客户**（`_dataset_or_404`）：
+他人的数据永不写入（红线 1「永不写回客户源」在共享维度的延伸——别人的
+数据更不能写）。
 """
 
 from __future__ import annotations
@@ -158,6 +165,25 @@ def _is_api_tier(dataset: Dataset) -> bool:
     return getattr(dataset, "storage_tier", service.TIER_CELL) == service.TIER_API
 
 
+def _readable_dataset_or_404(db: Session, dataset_id: str, customer_id: str) -> Dataset:
+    """读端点数据集解析：本客户 ∪ 市场授予（订阅/定向/已批准申请）。
+
+    与 `_dataset_or_404` 的唯一差异：归属判定扩展为"该客户有权读"。
+    市场切片缺席（未部署/表未建）时退化为纯本客户判定——安全方向
+    （私有数据永不多给）。来源判定在 market.browse 内实时查表，撤回/
+    退订/拒绝后立即失效。
+    """
+    try:
+        from ..market import browse as market_browse
+
+        dataset, _source = market_browse.resolve_accessible_dataset(db, dataset_id, customer_id)
+        if dataset is not None:
+            return dataset
+    except Exception:  # noqa: BLE001 - 市场切片未就绪：退化纯本客户判定
+        pass
+    return _dataset_or_404(db, dataset_id, customer_id)
+
+
 @router.post("/api/v1/datasets/{dataset_id}/query")
 def dataset_query(
     dataset_id: str,
@@ -166,7 +192,7 @@ def dataset_query(
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> dict:
-    dataset = _dataset_or_404(db, dataset_id, principal.customer_id)
+    dataset = _readable_dataset_or_404(db, dataset_id, principal.customer_id)
     ensure_dataset_allowed(principal, dataset_id)
     if _is_api_tier(dataset):
         # 免费档本地执行：零引擎调用、零 metering_records（D5/D7）；
@@ -200,7 +226,7 @@ def dataset_aggregate(
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> dict:
-    dataset = _dataset_or_404(db, dataset_id, principal.customer_id)
+    dataset = _readable_dataset_or_404(db, dataset_id, principal.customer_id)
     ensure_dataset_allowed(principal, dataset_id)
     if _is_api_tier(dataset):
         try:
@@ -556,7 +582,7 @@ def dataset_lineage(
 ) -> dict:
     """血缘（引擎 key → dataset_id 映射后返回，附未解析地区等派生明细）。
     api 层数据集无引擎血缘 → 本地空视图（最小呈现，零引擎调用）。"""
-    dataset = _dataset_or_404(db, dataset_id, principal.customer_id)
+    dataset = _readable_dataset_or_404(db, dataset_id, principal.customer_id)
     ensure_dataset_allowed(principal, dataset_id)
     if _is_api_tier(dataset):
         return {"derivation": [], "children": []}

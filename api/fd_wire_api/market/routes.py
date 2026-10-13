@@ -303,6 +303,16 @@ def subscribe_market_dataset(
     return {"subscribed": True, "access_request": None, "created": False}
 
 
+@router.delete("/market/datasets/{dataset_id}/unsubscribe")
+def unsubscribe_market_dataset_alias(
+    dataset_id: str,
+    customer_id: str = Depends(require_console_customer_id),
+    db: Session = Depends(get_datasets_db),
+) -> dict:
+    """退订别名（路径与 packs 的 `/unsubscribe` 惯例一致；语义同 DELETE /subscribe）。"""
+    return unsubscribe_market_dataset(dataset_id=dataset_id, customer_id=customer_id, db=db)
+
+
 @router.delete("/market/datasets/{dataset_id}/subscribe")
 def unsubscribe_market_dataset(
     dataset_id: str,
