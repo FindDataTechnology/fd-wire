@@ -68,6 +68,7 @@ import {
 import { formatServerDate, truncate } from "./util";
 import { DashboardPane } from "./dashboard/DashboardPane";
 import { FormPane } from "./form/FormPane";
+import { ArtifactVisibilitySection } from "./ArtifactVisibilitySection";
 
 const BUFFER_STORAGE_PREFIX = "wire-web-artifact-buffer-";
 
@@ -713,6 +714,17 @@ export function ArtifactsPage({
                     onSaved={replaceArtifact}
                     // 刚空白创建的表单直接进构建器（创建即跳编辑器）。
                     startEditing={artifact.id === freshlyFormId}
+                  />
+                )}
+                {artifact.status === "published" && (
+                  // 产物公开分享选择器（wire-artifact-marketplace 5.1）：仅
+                  // published 行挂载——四档可见性 + 开放模式 + 允许复制；
+                  // 非私有档由服务端再校验（409 双保险）。
+                  <ArtifactVisibilitySection
+                    key={`visibility-${artifact.id}`}
+                    artifactId={artifact.id}
+                    artifactStatus={artifact.status}
+                    canEdit={true}
                   />
                 )}
               </li>

@@ -656,6 +656,18 @@ def migrated_0021(tmp_path, monkeypatch):
     return cfg, db_url
 
 
+@pytest.fixture()
+def migrated_head(tmp_path, monkeypatch):
+    """对临时库跑 alembic upgrade 至链头（drift check 用：ORM 含全链增量列）。"""
+    script_dir = _alembic_copy_with_stub(tmp_path)
+    db_url = f"sqlite:///{tmp_path}/artifacts_migration_head.db"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    cfg = Config(str(API_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(script_dir))
+    command.upgrade(cfg, "head")
+    return cfg, db_url
+
+
 def test_migration_creates_artifact_tables(migrated_0021) -> None:
     """0021 建两表 + 关键索引 + (artifact_id, version) 唯一；幂等重跑无恙。"""
     from sqlalchemy import create_engine, inspect
@@ -695,16 +707,22 @@ def test_migration_creates_artifact_tables(migrated_0021) -> None:
     engine.dispose()
 
 
-def test_migration_schema_matches_orm(migrated_0021) -> None:
-    """drift check：迁移产出列集与 ORM 声明（AiBase.metadata）逐表一致。"""
+def test_migration_schema_matches_orm(migrated_head) -> None:
+    """drift check：迁移产出列集与 ORM 声明（AiBase.metadata）逐表一致。
+
+    在**链头**上对账（0021 之后 artifacts 还经历了 0036 产物市场增量列；
+    只看 0021 会把后续增量列误报为漂移）。"""
     from sqlalchemy import create_engine, inspect
 
-    _, db_url = migrated_0021
+    _, db_url = migrated_head
     engine = create_engine(db_url)
     inspector = inspect(engine)
     for table in ("artifacts", "artifact_versions"):
         migrated = {c["name"] for c in inspector.get_columns(table)}
         declared = set(AiBase.metadata.tables[table].columns.keys())
+        # artifact_versions 无后续增量列，链头与 0021 同形；artifacts 的
+        # 0036 六列（visibility/access_mode/published_at/published_version/
+        # allow_copy/copied_from_artifact_id）经迁移在位即通过。
         assert migrated == declared, f"{table} 迁移与 ORM 列漂移: {migrated ^ declared}"
     engine.dispose()
 

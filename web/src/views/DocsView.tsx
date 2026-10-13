@@ -697,6 +697,20 @@ export function DocsView() {
               {t("docs.market.readonlyDesc")}
             </p>
           </div>
+          {/* 看板与报告开放（wire-artifact-marketplace 任务 7.1）：只读看
+              与可复制两种语义 + Q1 快照披露纪律（禁「仅结构不含数据」）。 */}
+          <div
+            data-testid="docs-market-artifacts"
+            className="rounded-lg border border-slate-200 p-5 sm:col-span-2"
+          >
+            <h3 className="font-medium">{t("docs.market.artifactsTitle")}</h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.market.artifactsDesc")}
+            </p>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.market.artifactsCopyDesc")}
+            </p>
+          </div>
         </div>
         <a
           href="#/console/market"

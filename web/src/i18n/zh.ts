@@ -153,6 +153,13 @@ const zh = {
     readonlyDesc:
       "获得访问权的一方只能查询与聚合，不能修改你的数据（写入一律被拒）。取数按消费方自己的凭据计量，不记在你的账上。",
     consoleLink: "前往控制台「数据市场」→",
+    // 看板与报告开放（wire-artifact-marketplace 任务 7.1）：两种使用语义 +
+    // Q1 快照披露纪律——公开看板/报告包含发布时刻的数据快照，如实说清。
+    artifactsTitle: "看板与报告开放",
+    artifactsDesc:
+      "看板与研究报告也能按同样的四档开放程度发布到市场（「看板」「报告」页签）。别人订阅后打开就是渲染好的交互页——可见内容是发布时刻的数据快照（面板取数结果已固化），底层数据集的实时数据不随之开放，需要单独订阅。",
+    artifactsCopyDesc:
+      "发布方可另行开启「允许复制」：订阅者能把产物的分析结构（布局/图表/查询绑定）复制到自己账号编辑，复制内容不含任何数据快照与数据值；面板绑定到自己有权访问的数据集后才可取数。",
   },
   localData: {
     // 「我的数据与连接器」客户教程（wire-connector-distribution 任务 4）：
@@ -691,6 +698,41 @@ const zh = {
           wouldFire: "将触发",
           wouldNotFire: "不触发",
           failed: "试运行失败，请稍后重试。",
+        },
+      },
+    },
+    // 产物可见性（wire-artifact-marketplace）：看板/研究报告的四档开放 +
+    // 准入模式 + 允许复制开关。默认 private；Q1 文案纪律——公开看板/报告
+    // 包含发布时刻的数据快照（严禁「仅结构不含数据」措辞）。
+    artifact: {
+      visibility: {
+        title: "产物开放",
+        hint: "默认私有。选择开放档位后，其他登录客户可在数据市场的「看板」「报告」页签发现并使用该产物；可随时改回私有（即时失效）。",
+        loading: "正在读取开放设置…",
+        loadError: "开放设置读取失败",
+        save: "保存",
+        saving: "保存中…",
+        saved: "已保存",
+        actionError: "操作失败",
+        publishHint: "产物需先「发布」后才能设置非私有档位。",
+        sensitiveNote:
+          "绑定数据集含「敏感」档时不可开放到市场（可选链接可见或定向）；开放后绑定数据集成敏感，订阅者的查看将立即被拒。",
+        publishedAtLabel: "开放于 ",
+        visibilityPublicNote:
+          "注意：公开的看板/报告包含发布时刻的数据快照，订阅者可看到其中的数据；底层数据集的实时数据不随之开放（需单独订阅）。",
+        accessModeLabel: "准入模式",
+        allowCopyLabel: "允许他人复制",
+        allowCopyHint:
+          "开启后，订阅者可把该产物的结构复制到自己账号（复制内容不含任何数据快照，数据仍需各自授权）。",
+        levels: {
+          private: "私有",
+          link: "链接可见",
+          directed: "定向",
+          market: "市场",
+        },
+        accessMode: {
+          open: "订阅即得",
+          approval: "需批准",
         },
       },
     },
@@ -1939,6 +1981,31 @@ const zh = {
       columnsTitle: "列结构",
       close: "关闭",
       actionError: "操作失败",
+      // 三页签（wire-artifact-marketplace Q14：默认数据集页签）；产物页签
+      // 是看板/报告的市场面——只读看（订阅）与可复制（allow_copy）两种语义。
+      tabs: {
+        datasets: "数据集",
+        dashboards: "看板",
+        reports: "报告",
+      },
+      artifacts: {
+        loading: "正在加载市场产物…",
+        loadError: "市场产物加载失败",
+        empty: "市场暂无符合条件的产物。",
+        detailTitle: "产物详情",
+        panelsTitle: "面板结构",
+        publisherLabel: "发布方：",
+        panelsLabel: "{{count}} 个面板",
+        dataScopeLabel: "数据范围",
+        dataRangeLabel: "时间范围",
+        copy: "复制到我的账号",
+        copying: "复制中…",
+        snapshotDisclosure:
+          "公开看板/报告包含发布时刻的数据快照——订阅后打开可见其中的数据；底层数据集的实时数据不随之开放（需单独订阅）。",
+        bindReportTitle: "复制完成",
+        bindReportCounts: "面板绑定：保留 {{bound}} 个，待重新绑定 {{unbound}} 个",
+        bindReportUnbound: "以下数据集你没有访问权，对应面板标注为未绑定——订阅后可重新绑定：",
+      },
     },
     // 数据集可见性（wire-dataset-marketplace）：四档阶梯 + 开放模式 +
     // 定向授权名单。默认 private——不主动选就永不进任何面。

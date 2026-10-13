@@ -294,9 +294,23 @@ def patch_asset_meta(
             after_json=after,
         )
     )
+
+    # 敏感度互锁（wire-artifact-marketplace design D12）：改为「敏感」且该
+    # 数据集处于非 private 档 → 自动撤回 private（复用 market 单写入口：
+    # 清锚点 + 清定向 grant 行 + 追加八字段留痕；与本次 PATCH 同事务原子）。
+    # 惰性导入避免 import 环（market 包路由依赖本模块的 require_asset_editor）。
+    from ..market.service import enforce_sensitivity_interlock  # noqa: PLC0415
+
+    reverted = enforce_sensitivity_interlock(
+        db, dataset=dataset, meta=meta, actor_sub=sub
+    )
     db.commit()
     db.refresh(meta)
-    return _meta_view(dataset=dataset, meta=meta)
+    view = _meta_view(dataset=dataset, meta=meta)
+    if reverted is not None:
+        # 如实告知前端（绝不静默改档）：可见性已被互锁自动撤回
+        view["auto_reverted_visibility"] = reverted
+    return view
 
 
 @router.get("/datasets/{dataset_id}/asset-meta/events")

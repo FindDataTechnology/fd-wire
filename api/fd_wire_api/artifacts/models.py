@@ -16,7 +16,17 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..ai.db import AiBase
@@ -63,6 +73,25 @@ class Artifact(AiBase):
     #: 状态迁移操作记录（append-only：{status, at, by, note} 列表，
     #: 与 demands.status_history 同款留痕口径）
     status_history: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # ── 可见性阶梯（wire-artifact-marketplace；值域与数据集市场逐字一致）──
+    #: private（默认）| link | directed | market——默认私有，不主动选永不进市场
+    visibility: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="private", server_default=sa_text("'private'"), index=True
+    )
+    #: open（订阅即可看）| approval（需发布方批准）；仅 market/directed 有效
+    access_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="open", server_default=sa_text("'open'")
+    )
+    #: 进入非 private 档位时刻（撤回时清空）
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    #: 进入非 private 档位时刻的版本锚点（审计用；市场渲染跟最新发布版本）
+    published_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: 允许复制（Q4/Q6：复制=分析结构且快照剥离；发布方显式允许才可复制）
+    allow_copy: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_text("false")
+    )
+    #: 复制溯源指针（Q7：仅审计，无跨客户更新提示）
+    copied_from_artifact_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive)
 
@@ -92,3 +121,66 @@ class ArtifactVersion(AiBase):
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用途
         return f"<ArtifactVersion artifact={self.artifact_id} v={self.version}>"
+
+
+# ── 产物市场三表（wire-artifact-marketplace；与 dataset 市场三表同构）────
+
+
+class ArtifactMarketSubscription(AiBase):
+    """产物订阅（唯一约束：customer_id × artifact_id）。
+
+    订阅授予「只读看」权（渲染该产物版本 spec）；撤回/退订即时失效。
+    """
+
+    __tablename__ = "artifact_market_subscriptions"
+    __table_args__ = (
+        UniqueConstraint(
+            "customer_id",
+            "artifact_id",
+            name="uq_artifact_market_subscriptions_customer_artifact",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    artifact_id: Mapped[int] = mapped_column(Integer, index=True)
+    customer_id: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive)
+
+
+class ArtifactShareGrant(AiBase):
+    """产物定向授权名单（唯一约束：artifact_id × customer_id）。"""
+
+    __tablename__ = "artifact_share_grants"
+    __table_args__ = (
+        UniqueConstraint(
+            "artifact_id",
+            "customer_id",
+            name="uq_artifact_share_grants_artifact_customer",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    artifact_id: Mapped[int] = mapped_column(Integer, index=True)
+    customer_id: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive)
+
+
+class ArtifactAccessRequest(AiBase):
+    """产物访问申请（status: pending|approved|rejected；同产物同申请方唯一）。"""
+
+    __tablename__ = "artifact_access_requests"
+    __table_args__ = (
+        UniqueConstraint(
+            "artifact_id",
+            "requester_customer_id",
+            name="uq_artifact_access_requests_artifact_requester",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    artifact_id: Mapped[int] = mapped_column(Integer, index=True)
+    requester_customer_id: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    decided_by: Mapped[str | None] = mapped_column(String(64), nullable=True)

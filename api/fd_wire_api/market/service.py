@@ -305,6 +305,31 @@ def unpublish_dataset(db: Session, *, dataset: Dataset, actor_sub: str) -> Asset
     return set_visibility(db, dataset=dataset, visibility="private", actor_sub=actor_sub)
 
 
+def enforce_sensitivity_interlock(
+    db: Session, *, dataset: Dataset, meta: AssetMeta, actor_sub: str
+) -> dict | None:
+    """敏感度互锁（wire-artifact-marketplace design D12，顺带修既有缺口）。
+
+    数据集处于**非 private 档**时敏感度被改为「敏感」→ 自动撤回 private
+    （复用 :func:`set_visibility` 单写入口：清锚点 + 清定向 grant 行 +
+    追加八字段留痕事件——撤回与敏感度变更同事务原子生效）。两通道一起严：
+    数据集面在此互锁，看板/报告面由市场渲染点实时复检（Q5 双点闸）。
+
+    返回 ``{"from": 原档位, "to": "private"}``（未触发 None）。调用方
+    （assets PATCH）据此在响应体如实告知前端；**绝不静默改档**。
+    """
+    if (meta.sensitivity or "常规") != SENSITIVITY_BLOCKED:
+        return None
+    visibility, _mode = _current(meta)
+    if visibility == VISIBILITY_DEFAULT:
+        return None
+    # 写入口返回的行与 meta 是同一会话同一对象（就地更新）；此处不取返回值
+    set_visibility(
+        db, dataset=dataset, visibility=VISIBILITY_DEFAULT, actor_sub=actor_sub
+    )
+    return {"from": visibility, "to": VISIBILITY_DEFAULT}
+
+
 def visibility_view(meta: AssetMeta | None) -> dict:
     """可见性读视图（响应段；缺行 = 默认私有 + open）。"""
     visibility, access_mode = _current(meta)

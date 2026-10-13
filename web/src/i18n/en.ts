@@ -161,6 +161,14 @@ const en: Translation = {
     readonlyDesc:
       "Granted parties can only query and aggregate — they can never modify your data (writes are always rejected). Usage is metered against the consumer\'s own credentials, not your account.",
     consoleLink: "Open Console → Data market →",
+    // Dashboards & reports sharing (wire-artifact-marketplace task 7.1): the
+    // two usage semantics + Q1 disclosure discipline — a public dashboard/
+    // report carries the data snapshot as of publish time, stated plainly.
+    artifactsTitle: "Dashboards & reports",
+    artifactsDesc:
+      "Dashboards and research reports can be shared under the same four tiers (Dashboards / Reports tabs of the market). A subscriber opens the rendered interactive page — what is visible is the data snapshot as of publish time (panel results are frozen); live data of the underlying datasets is not shared along with it and needs a separate subscription.",
+    artifactsCopyDesc:
+      "Publishers may also enable 'Allow copy': a subscriber can copy the artifact's analysis structure (layout / charts / query bindings) into their own account — no data snapshots or data values are included; panels fetch data only after binding to datasets the copier can access.",
   },
   localData: {
     // "My data & connectors" customer tutorial (wire-connector-distribution
@@ -731,6 +739,42 @@ const en: Translation = {
           wouldFire: "would fire",
           wouldNotFire: "would not fire",
           failed: "Test run failed, please retry later.",
+        },
+      },
+    },
+    // Artifact visibility (wire-artifact-marketplace): four-tier sharing for
+    // dashboards / research reports + access mode + allow-copy switch. Default
+    // private; Q1 disclosure discipline — a public dashboard/report contains
+    // the data snapshot as of publish time (never claim "structure only").
+    artifact: {
+      visibility: {
+        title: "Artifact sharing",
+        hint: "Private by default. Once shared, other signed-in customers can discover and use this artifact under the Dashboards / Reports tabs of the Data Market; switch back to private anytime (takes effect immediately).",
+        loading: "Loading sharing settings…",
+        loadError: "Failed to load sharing settings",
+        save: "Save",
+        saving: "Saving…",
+        saved: "Saved",
+        actionError: "Operation failed",
+        publishHint: "Publish the artifact before choosing a non-private tier.",
+        sensitiveNote:
+          "Blocked from the market while any bound dataset is marked Sensitive (link/directed still allowed); if a bound dataset becomes sensitive later, subscriber viewing is refused immediately.",
+        publishedAtLabel: "Shared ",
+        visibilityPublicNote:
+          "Note: a public dashboard/report contains the data snapshot as of publish time — subscribers can see that data; live data of the underlying datasets is not shared along with it (subscribe separately).",
+        accessModeLabel: "Access mode",
+        allowCopyLabel: "Allow others to copy",
+        allowCopyHint:
+          "When on, subscribers can copy the artifact's structure into their own account (no data snapshots are included — data still requires separate authorization).",
+        levels: {
+          private: "Private",
+          link: "Link",
+          directed: "Directed",
+          market: "Market",
+        },
+        accessMode: {
+          open: "Subscribe",
+          approval: "Approval",
         },
       },
     },
@@ -2048,6 +2092,33 @@ const en: Translation = {
       columnsTitle: "Columns",
       close: "Close",
       actionError: "Action failed",
+      // Three tabs (wire-artifact-marketplace Q14: datasets tab is default);
+      // the artifact tabs are the market face for dashboards / reports —
+      // read-only viewing (subscribe) plus copy (allow_copy).
+      tabs: {
+        datasets: "Datasets",
+        dashboards: "Dashboards",
+        reports: "Reports",
+      },
+      artifacts: {
+        loading: "Loading market artifacts…",
+        loadError: "Failed to load market artifacts",
+        empty: "No artifacts match in the market yet.",
+        detailTitle: "Artifact detail",
+        panelsTitle: "Panel structure",
+        publisherLabel: "Publisher: ",
+        panelsLabel: "{{count}} panels",
+        dataScopeLabel: "Data scope",
+        dataRangeLabel: "Time range",
+        copy: "Copy to my account",
+        copying: "Copying…",
+        snapshotDisclosure:
+          "A public dashboard/report contains the data snapshot as of publish time — subscribers can see that data once subscribed; live data of the underlying datasets is not shared along with it (subscribe separately).",
+        bindReportTitle: "Copy complete",
+        bindReportCounts: "Panel bindings: {{bound}} kept, {{unbound}} need rebinding",
+        bindReportUnbound:
+          "You lack access to the datasets below — their panels are marked unbound; subscribe to rebind them:",
+      },
     },
     // Dataset visibility (wire-dataset-marketplace): four-tier ladder +
     // access mode + directed grant list. Private by default — nothing is

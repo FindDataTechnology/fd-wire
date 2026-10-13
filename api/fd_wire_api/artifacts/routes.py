@@ -359,6 +359,11 @@ def refresh_artifact(
                 max_turns=get_settings().ai_max_turns,
             )
             mode, panels = "ai", None
+        # Q9（wire-artifact-marketplace）：快照时间随版本落盘——每个版本
+        # 各自携带刷新时刻，市场渲染面据此披露时效（旧版本无该键 → 前端
+        # 诚实显「未知」不猜）。响应与 spec 共用同一时间戳。
+        refreshed_at = service.utc_now_iso()
+        new_spec["refreshed_at"] = refreshed_at
         # 成功才落盘：同 PUT 语义（契约路径快照即终态、AI 轮内已做最小
         # 校验，此处追加新版本行 + operator 审计 + title 投影）。
         artifact = service.update_spec(db, artifact, spec=new_spec, customer_id=customer_id)
@@ -379,7 +384,7 @@ def refresh_artifact(
         _release(tool_executor)
     return ArtifactRefreshOut(
         version=artifact.version,
-        refreshed_at=service.utc_now_iso(),
+        refreshed_at=refreshed_at,
         mode=mode,
         panels=panels,
     )

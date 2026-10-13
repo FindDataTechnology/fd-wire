@@ -393,12 +393,16 @@ def test_refresh_success_new_version_and_audit(
     # 详情：新版本新快照；版本链 append-only（v2 → v1，v1 内容不变）
     detail = client.get(f"/api/v1/artifacts/{artifact['id']}", headers=CUST).json()
     assert detail["version"] == 2
-    assert detail["spec"] == updated_spec()
+    # Q9（wire-artifact-marketplace）：刷新路径把快照时间写进 spec——
+    # 值与响应字段同源（同一时刻），市场渲染面据此披露时效
+    spec_body = dict(detail["spec"])
+    assert spec_body.pop("refreshed_at") == body["refreshed_at"]
+    assert spec_body == updated_spec()
     versions = versions_of(client, artifact["id"])
     assert [v["version"] for v in versions] == [2, 1]
     assert all(v["operator"] == "console:cust-001" for v in versions)  # 审计同 PUT
     v1 = client.get(f"/api/v1/artifacts/{artifact['id']}/versions/1", headers=CUST)
-    assert v1.json()["spec"] == DASH_SPEC
+    assert v1.json()["spec"] == DASH_SPEC  # 历史版本无 refreshed_at（旧版本不猜）
     # 刷新不产生会话草稿（无头轮禁 stage）
     assert draft_count(db_session) == 1  # 仅建产物时那一条
 
