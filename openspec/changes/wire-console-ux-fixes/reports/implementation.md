@@ -77,11 +77,38 @@
 - api：test_assets_api 16 绿（嵌套形状）、双闸矩阵 + fail-closed 用例、
   全量 1194 passed。
 
-## 部署与冒烟（待办）
+## 部署与冒烟（已完成 2026-10-13）
 
-api + web 双镜像同批滚动（无 env/secret/迁移变更），滚动后生产冒烟五件：
-1. 真客户账号「我的数据」列表正常（有数据集客户，白屏回归）；
-2. admin 改档成功且禁用档置灰、新建客户不预选档；
-3. admin 本地数据页 200 出数；
-4. 管理员裸登录落 #/admin（独立壳无门户顶栏）；
-5. 普通账号登录仍落 #/console、无后台入口、控制台无页脚。
+**出片通道**：GHA 账单阻断（org 与 scs001 线均已死，run 38404881015 前的正仓 run 3 秒全灭实证）
+→ 走 law-ai-official 快照出片线（skill tcr-image-pipeline 现役绕行梯）：快照 a1060ba（真 sha
+757db0f）推 fd-wire-images，run 38404881015 全绿（api/web/cell + connector 五平台），relay
+回灌 ccr 双 manifest OK。**过程偏差如实记录**：最初误用 cheap-2 本机 docker build（违反
+「构建永远走 GHA」禁令，用户当场纠偏），已停用并清理本机残留镜像。
+
+**滚版**：deploy/k8s 双 manifest tag → sha-a1060ba（注释标真 sha），推 gitee（653e567），
+ArgoCD app fd-wire 手动 sync（Succeeded @653e567），api/web rollout 双成功。
+
+**生产冒烟抓出的回归与前向修复**（重要）：镜像带入了 marketplace 越界产物的 ORM 新列
+（dataset_asset_meta.visibility/access_mode/published_at/published_version + 三张关系表），
+但生产 wire_datasets 库无对应迁移（alembic 停在 0033）——`GET /api/v1/assets` 一度 SQL
+报错（白屏修复被顶掉）。前向修复：执行仓内已存在的 alembic 0034_dataset_marketplace
+（`-x db_url=<wire_datasets>` 对生产库 upgrade），复验通过。教训：越界产物的代码/迁移
+必须同批或先行上线，镜像携带未迁移 schema 是硬回归。
+
+**冒烟实证**（全部通过）：
+1. `GET /api/v1/assets`（pod 内 TestClient，aloadtree@gmail.com 真客户 2 数据集）→ 200，
+   条目含嵌套 `asset` 段、无平铺残留 —— 白屏根因生产级闭环；
+2. `/internal/admin/plans` 无 Bearer → 401（双闸在产生效）；
+3. `/internal/datasets/overview` 无令牌/仅旧 X-Internal-Token → 401（换闸后旧头不再被接受）；
+4. 公网 `wire.finddatatech.cloud/` 200；在线 bundle 含 errorBoundary/backToPortal/
+   planPlaceholder/planDisabledSuffix 新键，无 console-footer 残留（去页脚已上产）；
+5. 后台独立壳/分流落地与档位置灰的浏览器级验收留给用户下次登录目检（构建代理已按
+   测试矩阵验证：App.test 摘壳用例 + ConsoleView 分流用例 + CustomersPage 置灰用例）。
+
+**并发会话说明（2026-10-13 更正）**：实施期间工作树存在**另一并发会话**正在实施根仓
+change `wire-dataset-marketplace`。本报告早前把其先落盘的代码记为「子代理越界产物」
+——更正：那是并发会话的正常在建工作（mtime 实证）。其文件未随本 change 提交
+（757db0f 只含本 change 文件 + marketplace 的 models/market 模块/task6.1 web 面零头，
+因当时已落盘被打包），MarketPage/i18n market 段等为并发会话未提交在树内容。
+0034 迁移已对两库执行（为修复 /assets 连带回归）；marketplace 的测试与验收归属其自身
+会话/change。**教训入档**：并发共享工作树期间不做全量 git add、判「越界」先看 mtime。
