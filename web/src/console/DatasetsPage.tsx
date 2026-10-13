@@ -569,12 +569,14 @@ function DatasetCard({
   // 响应带 storage_tier 才显示（容错——api 侧未下发时不渲染）。
   const storageTier = item.storage_tier;
   const showTierBadge = storageTier === "api" || storageTier === "cell";
-  const sensitivity = item.asset.sensitivity;
+  // asset 段容错（wire-console-ux-fixes 任务 1.2）：后端契约切换期个别条目
+  // 可能缺 asset 键——全部改安全读法，缺席时元数据行整体不渲染（不白屏）。
+  const sensitivity = item.asset?.sensitivity;
   // 敏感度默认常规不占位；内部（amber）/敏感（rose）如实标注。
   const showSensitivity = sensitivity === "内部" || sensitivity === "敏感";
   const showAssetMeta =
-    Boolean(item.asset.domain) ||
-    item.asset.tags.length > 0 ||
+    Boolean(item.asset?.domain) ||
+    (item.asset?.tags?.length ?? 0) > 0 ||
     showSensitivity;
   return (
     <li
@@ -653,15 +655,15 @@ function DatasetCard({
           data-testid="dataset-asset-meta"
           className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]"
         >
-          {item.asset.domain && (
+          {item.asset?.domain && (
             <span
               data-testid="dataset-asset-domain"
               className="rounded bg-sky-50 px-1.5 py-0.5 text-sky-700"
             >
-              {item.asset.domain}
+              {item.asset?.domain}
             </span>
           )}
-          {item.asset.tags.map((tag) => (
+          {(item.asset?.tags ?? []).map((tag) => (
             <span
               key={tag}
               data-testid="dataset-asset-tag"

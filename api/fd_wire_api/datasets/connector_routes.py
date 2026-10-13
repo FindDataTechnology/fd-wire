@@ -9,7 +9,8 @@
   （漂移与配额判定在 **api 侧**，破坏性变更不调引擎）
 
 该 key 在客户面/MCP/计量读端点一律无效（scope 仅推送 + 拉配置）；
-内部概览走 ``X-Internal-Token``，只读、无任何管理操作。
+内部概览走 admin 双闸（X-Admin-Token + Bearer wire-admin 角色，
+wire-console-ux-fixes 4.3），只读、无任何管理操作。
 """
 
 from __future__ import annotations
@@ -34,7 +35,8 @@ from .ingest import (
     get_engine_client_factory,
 )
 from .models import Connector, ConnectorKey, ConnectorPairingToken, Dataset, DatasetSync
-from .routes import drift_response, engine_failure, quota_response, require_internal
+from ..admin.auth import require_admin_access
+from .routes import drift_response, engine_failure, quota_response
 from .schemas import (
     AbortOut,
     ChunkIn,
@@ -640,7 +642,10 @@ def abort_sync(
 @router.get(
     "/internal/datasets/overview",
     response_model=list[InternalOverviewOut],
-    dependencies=[Depends(require_internal)],
+    # admin 双闸（wire-console-ux-fixes 4.3）：与 /internal/admin/* 同源
+    # 鉴权——X-Admin-Token 常量时间比对 + Bearer ID token wire-admin 角色；
+    # 旧 X-Internal-Token 单闸不再被本端点接受。
+    dependencies=[Depends(require_admin_access)],
 )
 def internal_overview(db: Session = Depends(get_db)) -> list[InternalOverviewOut]:
     """per-cell 存储用量与连接器健康（只读；无吊销/删除/白名单管理入口）。"""

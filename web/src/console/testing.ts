@@ -292,6 +292,30 @@ export interface ConsoleBackendOptions {
   failPipelineScheduleStatus?: number;
   /** run 端点响应延迟毫秒数（in-flight 禁用态观察用；缺省立即返回）。 */
   pipelineRunDelayMs?: number;
+  /** 数据集可见性种子（wire-dataset-marketplace；键 = dataset id；缺行 =
+   *  默认 private + open——「不主动选就永不开放」的假后端镜像）。 */
+  datasetVisibility?: Record<string, FakeDatasetVisibilitySeed>;
+  /** 定向授权种子（键 = dataset id；值 = 被授权 customer_id 列表）。 */
+  datasetGrants?: Record<string, string[]>;
+  /** 市场浏览面入参覆盖（缺省按 datasetVisibility 推导：仅 market 档进列表，
+   *  归属过滤豁免——市场面可见**其他客户**已发布的条目）。 */
+  failMarketListStatus?: number;
+  /** 强制市场列表端点返回该状态。 */
+  failVisibilityPutStatus?: number;
+  failVisibilityPutDetail?: string | ApiDetailItem[];
+  /** 强制 PUT /visibility 返回该状态（如敏感档 422 拒收）。 */
+  failMarketSubscribeStatus?: number;
+  /** 强制订阅端点返回该状态。 */
+  failAccessRequestStatus?: number;
+  /** 强制 POST access-requests 返回该状态。 */
+  failAccessRequestsListStatus?: number;
+  /** 强制 GET access-requests 返回该状态（发布方查看）。 */
+  failAccessDecideStatus?: number;
+  /** 强制 approve/reject 返回该状态。 */
+  /** 预置市场订阅（wire snake_case：customerId → dataset id 列表）。 */
+  marketSubscriptions?: Record<string, string[]>;
+  /** 预置准入申请（customerId+datasetId 唯一键在假后端内合成）。 */
+  accessRequests?: FakeAccessRequestSeed[];
 }
 
 /** 源包种子（wire-source-packs）：假后端按 indicators 分页切片出详情。 */
@@ -498,6 +522,23 @@ export type FakePipelineRunSeed = {
   steps?: PipelineStepRun[];
 };
 
+/** 数据集可见性种子（wire-dataset-marketplace）：四档 + 开放模式 + 发布锚。 */
+export type FakeDatasetVisibilitySeed = {
+  visibility?: "private" | "link" | "directed" | "market";
+  access_mode?: "open" | "approval";
+  published_at?: string | null;
+  published_version?: string | null;
+};
+
+/** 准入申请种子（wire-dataset-marketplace）：requester + dataset 唯一。 */
+export type FakeAccessRequestSeed = {
+  id: number;
+  dataset_id: string;
+  requester_customer_id: string;
+  status?: "pending" | "approved" | "rejected";
+  created_at?: string;
+};
+
 /** 管线种子（wire-transform-pipelines 5.x）：versions 按序即 v1..vN（每版
  *  完整步骤定义）；schedule 已挂接态；failAt 对后续 run 生效。 */
 export type FakePipelineSeed = {
@@ -572,6 +613,26 @@ export function installConsoleBackend(
     /** 运行历史断言面（倒序摘要）。 */
     getPipelineRuns: (pipelineId: number) => PipelineRunSummary[];
     addAlertEvent: (seed: FakeAlertEventSeed) => void;
+    /** 可见性行断言面（wire-dataset-marketplace）。 */
+    getDatasetVisibility: (datasetId: string) => {
+      visibility: "private" | "link" | "directed" | "market";
+      access_mode: "open" | "approval";
+      published_at: string | null;
+      published_version: string | null;
+    };
+    /** 定向授权名单断言面。 */
+    getDatasetGrants: (datasetId: string) => string[];
+    /** 市场订阅断言面（customerId → dataset ids；缺省种子首客户）。 */
+    getMarketSubscriptions: (cid?: string) => string[];
+    /** 准入申请断言面。 */
+    getAccessRequests: () => Array<{
+      id: number;
+      dataset_id: string;
+      requester_customer_id: string;
+      status: string;
+      created_at: string;
+      decided_at: string | null;
+    }>;
   } {
   const store = new Map<number, StoredConversation>();
   let nextConversationId = 1;
@@ -765,6 +826,58 @@ export function installConsoleBackend(
   const qualityStore = new Map<string, FakeQualitySeed>();
   for (const [id, seed] of Object.entries(options.quality ?? {})) {
     qualityStore.set(id, { ...seed });
+  }
+
+  // ── 数据开放与市场假后端状态（wire-dataset-marketplace）：可见性行懒建
+  //    （缺行 = private + open——默认私有镜像）、grant 按数据集全量替换、
+  //    订阅与申请按 customer_id 隔离；市场列表仅放行 visibility='market'。──
+  type StoredVisibility = Required<
+    Omit<FakeDatasetVisibilitySeed, "published_at" | "published_version">
+  > & { published_at: string | null; published_version: string | null };
+  const visibilityStore = new Map<string, StoredVisibility>();
+  const visibilityOf = (id: string): StoredVisibility => {
+    const row = visibilityStore.get(id);
+    if (row) return row;
+    const fresh: StoredVisibility = {
+      visibility: "private",
+      access_mode: "open",
+      published_at: null,
+      published_version: null,
+    };
+    visibilityStore.set(id, fresh);
+    return fresh;
+  };
+  for (const [id, seed] of Object.entries(options.datasetVisibility ?? {})) {
+    visibilityStore.set(id, {
+      visibility: seed.visibility ?? "private",
+      access_mode: seed.access_mode ?? "open",
+      published_at: seed.published_at ?? null,
+      published_version: seed.published_version ?? null,
+    });
+  }
+  const grantsStore = new Map<string, string[]>();
+  for (const [id, list] of Object.entries(options.datasetGrants ?? {})) {
+    grantsStore.set(id, [...list]);
+  }
+  const marketSubscriptions = new Map<string, string[]>();
+  for (const [cid, list] of Object.entries(options.marketSubscriptions ?? {})) {
+    marketSubscriptions.set(cid, [...list]);
+  }
+  const accessRequestsStore = new Map<
+    number,
+    Required<FakeAccessRequestSeed> & { decided_at: string | null }
+  >();
+  let nextAccessRequestId = 1;
+  for (const seed of options.accessRequests ?? []) {
+    accessRequestsStore.set(seed.id, {
+      id: seed.id,
+      dataset_id: seed.dataset_id,
+      requester_customer_id: seed.requester_customer_id,
+      status: seed.status ?? "pending",
+      created_at: seed.created_at ?? "2026-10-13T08:00:00",
+      decided_at: null,
+    });
+    nextAccessRequestId = Math.max(nextAccessRequestId, seed.id + 1);
   }
 
   // ── 变换管线索度假后端状态（wire-transform-pipelines 5.x）：版本
@@ -2945,6 +3058,485 @@ export function installConsoleBackend(
       );
     }
 
+    // ── 数据开放与市场（wire-dataset-marketplace）：可见性四档端点（主端点
+    //    PUT + 一键 publish/unpublish 薄封装）、定向授权增删查、市场浏览
+    //    （SQL 层只放行 market 档的镜像：列表在内存层就只查 market 行）、
+    //    订阅/退订、准入申请（approval 模式）——语义对齐 api 仓 assets/market
+    //    切片（Bearer 身份；viewer 403 写操作；敏感档 market/directed 422）。──
+    /** 敏感度（资产元数据段；缺行 = 常规）。 */
+    const sensitivityOf = (datasetId: string): string =>
+      assetMetaStore.get(datasetId)?.sensitivity ?? "常规";
+    /** 可见性设置响应体（契约：{visibility, access_mode, published_at,
+     *  published_version}）。 */
+    const visibilityOut = (datasetId: string): Record<string, unknown> => {
+      const row = visibilityOf(datasetId);
+      return {
+        visibility: row.visibility,
+        access_mode: row.access_mode,
+        published_at: row.published_at,
+        published_version: row.published_version,
+      };
+    };
+    /** 市场卡片（列表项）：元数据 + 体量/时间 + 订阅态；绝无数据值。 */
+    const marketCard = (dataset: Dataset): Record<string, unknown> => {
+      const meta = assetMetaStore.get(dataset.id);
+      const vis = visibilityOf(dataset.id);
+      return {
+        id: dataset.id,
+        name: dataset.name,
+        source_kind: dataset.source_kind,
+        storage_tier: (dataset as DatasetWithTier).storage_tier ?? null,
+        row_count: dataset.row_count,
+        updated_at: dataset.updated_at,
+        description: meta?.description ?? "",
+        domain: meta?.domain ?? "",
+        tags: meta?.tags ? [...meta.tags] : [],
+        cadence_hint: meta?.cadence_hint ?? null,
+        owner_note: meta?.owner_note ?? "",
+        sensitivity: meta?.sensitivity ?? "常规",
+        visibility: vis.visibility,
+        access_mode: vis.access_mode,
+        published_at: vis.published_at,
+        published_version: vis.published_version,
+        subscribed: (marketSubscriptions.get(customerId) ?? []).includes(
+          dataset.id,
+        ),
+        access_source: (marketSubscriptions.get(customerId) ?? []).includes(
+          dataset.id,
+        )
+          ? "market_subscription"
+          : (grantsStore.get(dataset.id) ?? []).includes(customerId)
+            ? "directed_grant"
+            : null,
+      };
+    };
+    /** viewer 写拒绝（可见性设置为 owner/editor 面）。 */
+    const visibilityWriteMatch = path.match(
+      /^\/api\/v1\/datasets\/([^/]+)\/visibility$/,
+    );
+    if (visibilityWriteMatch && method === "GET") {
+      const dataset = datasets.get(visibilityWriteMatch[1]);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      return Promise.resolve(jsonResponse(visibilityOut(dataset.id)));
+    }
+    if (visibilityWriteMatch && method === "PUT") {
+      const dataset = datasets.get(visibilityWriteMatch[1]);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      if (options.failVisibilityPutStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failVisibilityPutDetail ??
+                `visibility ${options.failVisibilityPutStatus}`,
+            },
+            options.failVisibilityPutStatus,
+          ),
+        );
+      }
+      if (teamMembersStore.get(customerId)?.role === "viewer") {
+        return Promise.resolve(
+          jsonResponse({ detail: "团队成员权限不足（viewer 只读）" }, 403),
+        );
+      }
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        visibility?: string;
+        access_mode?: string;
+        grants?: unknown;
+      };
+      // 敏感档硬闸：敏感度=敏感 只允许 private/link（对齐 api 侧 422）。
+      if (
+        sensitivityOf(dataset.id) === "敏感" &&
+        (payload.visibility === "market" || payload.visibility === "directed")
+      ) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: "敏感度「敏感」的数据集只允许 private 或 link 开放档" },
+            422,
+          ),
+        );
+      }
+      if (
+        payload.visibility !== "private" &&
+        payload.visibility !== "link" &&
+        payload.visibility !== "directed" &&
+        payload.visibility !== "market"
+      ) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                "visibility 只能是 private / link / directed / market",
+            },
+            422,
+          ),
+        );
+      }
+      const row = visibilityOf(dataset.id);
+      row.visibility = payload.visibility;
+      if (payload.access_mode !== undefined) {
+        if (
+          payload.access_mode !== "open" &&
+          payload.access_mode !== "approval"
+        ) {
+          return Promise.resolve(
+            jsonResponse({ detail: "access_mode 只能是 open / approval" }, 422),
+          );
+        }
+        row.access_mode = payload.access_mode;
+      }
+      if (payload.visibility === "market" && row.published_at == null) {
+        row.published_at = "2026-10-13T09:00:00";
+        row.published_version = "1";
+      }
+      if (payload.visibility === "private") {
+        row.published_at = null;
+        row.published_version = null;
+      }
+      // grants 仅 directed 档生效：全量替换（其他档忽略）。
+      if (
+        payload.visibility === "directed" &&
+        Array.isArray(payload.grants)
+      ) {
+        grantsStore.set(
+          dataset.id,
+          payload.grants.filter((g): g is string => typeof g === "string"),
+        );
+      }
+      return Promise.resolve(jsonResponse(visibilityOut(dataset.id)));
+    }
+    const publishMatch = path.match(
+      /^\/api\/v1\/datasets\/([^/]+)\/market\/(publish|unpublish)$/,
+    );
+    if (publishMatch && method === "POST") {
+      const dataset = datasets.get(publishMatch[1]);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      if (teamMembersStore.get(customerId)?.role === "viewer") {
+        return Promise.resolve(
+          jsonResponse({ detail: "团队成员权限不足（viewer 只读）" }, 403),
+        );
+      }
+      if (publishMatch[2] === "publish" && sensitivityOf(dataset.id) === "敏感") {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: "敏感度「敏感」的数据集只允许 private 或 link 开放档" },
+            422,
+          ),
+        );
+      }
+      const row = visibilityOf(dataset.id);
+      if (publishMatch[2] === "publish") {
+        row.visibility = "market";
+        if (row.published_at == null) {
+          row.published_at = "2026-10-13T09:00:00";
+          row.published_version = "1";
+        }
+      } else {
+        row.visibility = "private";
+        row.published_at = null;
+        row.published_version = null;
+      }
+      return Promise.resolve(jsonResponse(visibilityOut(dataset.id)));
+    }
+    const grantsMatch = path.match(/^\/api\/v1\/datasets\/([^/]+)\/grants$/);
+    if (grantsMatch) {
+      const datasetId = grantsMatch[1];
+      const dataset = datasets.get(datasetId);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      if (method === "GET") {
+        return Promise.resolve(
+          jsonResponse(
+            (grantsStore.get(datasetId) ?? []).map((cid) => ({
+              customer_id: cid,
+              granted_at: "2026-10-13T09:00:00",
+            })),
+          ),
+        );
+      }
+      if (method === "POST") {
+        if (teamMembersStore.get(customerId)?.role === "viewer") {
+          return Promise.resolve(
+            jsonResponse({ detail: "团队成员权限不足（viewer 只读）" }, 403),
+          );
+        }
+        const payload = (calls[calls.length - 1]!.body ?? {}) as {
+          customer_id?: string;
+        };
+        if (!payload.customer_id) {
+          return Promise.resolve(
+            jsonResponse({ detail: "customer_id 不能为空" }, 422),
+          );
+        }
+        const list = grantsStore.get(datasetId) ?? [];
+        if (!list.includes(payload.customer_id)) list.push(payload.customer_id);
+        grantsStore.set(datasetId, list);
+        return Promise.resolve(jsonResponse({ granted: true }, 201));
+      }
+    }
+    const grantDeleteMatch = path.match(
+      /^\/api\/v1\/datasets\/([^/]+)\/grants\/([^/]+)$/,
+    );
+    if (grantDeleteMatch && method === "DELETE") {
+      if (teamMembersStore.get(customerId)?.role === "viewer") {
+        return Promise.resolve(
+          jsonResponse({ detail: "团队成员权限不足（viewer 只读）" }, 403),
+        );
+      }
+      const [, datasetId, target] = grantDeleteMatch;
+      const list = (grantsStore.get(datasetId) ?? []).filter(
+        (cid) => cid !== decodeURIComponent(target),
+      );
+      grantsStore.set(datasetId, list);
+      return Promise.resolve(jsonResponse({ deleted: true }));
+    }
+    // 发布方查看准入申请（pending 在前，其余按 id 倒序）。
+    const accessListMatch = path.match(
+      /^\/api\/v1\/datasets\/([^/]+)\/access-requests$/,
+    );
+    if (accessListMatch && method === "GET") {
+      if (options.failAccessRequestsListStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `access requests ${options.failAccessRequestsListStatus}` },
+            options.failAccessRequestsListStatus,
+          ),
+        );
+      }
+      const rows = [...accessRequestsStore.values()]
+        .filter((r) => r.dataset_id === accessListMatch[1])
+        .sort((a, b) => {
+          if ((a.status === "pending") !== (b.status === "pending")) {
+            return a.status === "pending" ? -1 : 1;
+          }
+          return b.id - a.id;
+        })
+        .map((row) => ({ ...row }));
+      return Promise.resolve(jsonResponse(rows));
+    }
+    const accessDecideMatch = path.match(
+      /^\/api\/v1\/datasets\/([^/]+)\/access-requests\/(\d+)\/(approve|reject)$/,
+    );
+    if (accessDecideMatch && method === "POST") {
+      if (options.failAccessDecideStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `access decide ${options.failAccessDecideStatus}` },
+            options.failAccessDecideStatus,
+          ),
+        );
+      }
+      if (teamMembersStore.get(customerId)?.role === "viewer") {
+        return Promise.resolve(
+          jsonResponse({ detail: "团队成员权限不足（viewer 只读）" }, 403),
+        );
+      }
+      const row = accessRequestsStore.get(Number(accessDecideMatch[2]));
+      if (!row || row.dataset_id !== accessDecideMatch[1]) {
+        return Promise.resolve(
+          jsonResponse({ detail: "access request not found" }, 404),
+        );
+      }
+      if (row.status !== "pending") {
+        return Promise.resolve(
+          jsonResponse({ detail: "该申请已裁决（仅 pending 可批/拒）" }, 409),
+        );
+      }
+      row.status =
+        accessDecideMatch[3] === "approve"
+          ? ("approved" as const)
+          : ("rejected" as const);
+      row.decided_at = "2026-10-13T10:00:00";
+      return Promise.resolve(jsonResponse({ ...row }));
+    }
+    // ── 市场浏览与订阅（登录面；列表内存层只放行 visibility='market'——
+    //    私有档的行根本不进结果集，与 api 侧 SQL 谓词同语义）。──
+    if (path === "/api/v1/market/datasets" && method === "GET") {
+      if (options.failMarketListStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `market ${options.failMarketListStatus}` },
+            options.failMarketListStatus,
+          ),
+        );
+      }
+      const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+      const domain = url.searchParams.get("domain") ?? "";
+      const tag = url.searchParams.get("tag") ?? "";
+      const limit = Number(url.searchParams.get("limit") ?? "20") || 20;
+      const offset = Number(url.searchParams.get("offset") ?? "0") || 0;
+      let rows = [...datasets.values()].filter(
+        (d) => visibilityOf(d.id).visibility === "market",
+      );
+      if (domain) {
+        rows = rows.filter(
+          (d) => (assetMetaStore.get(d.id)?.domain ?? "") === domain,
+        );
+      }
+      if (tag) {
+        rows = rows.filter((d) =>
+          (assetMetaStore.get(d.id)?.tags ?? []).includes(tag),
+        );
+      }
+      if (q) {
+        rows = rows.filter((d) => {
+          const meta = assetMetaStore.get(d.id);
+          return (
+            d.name.toLowerCase().includes(q) ||
+            (meta?.description ?? "").toLowerCase().includes(q) ||
+            (meta?.tags ?? []).some((t) => t.toLowerCase().includes(q))
+          );
+        });
+      }
+      rows.sort((a, b) =>
+        (visibilityOf(b.id).published_at ?? "").localeCompare(
+          visibilityOf(a.id).published_at ?? "",
+        ),
+      );
+      const total = rows.length;
+      return Promise.resolve(
+        jsonResponse({
+          items: rows.slice(offset, offset + limit).map(marketCard),
+          total,
+        }),
+      );
+    }
+    const marketSubMatch = path.match(
+      /^\/api\/v1\/market\/datasets\/([^/]+)\/(subscribe|unsubscribe)$/,
+    );
+    if (marketSubMatch) {
+      if (options.failMarketSubscribeStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `market subscribe ${options.failMarketSubscribeStatus}` },
+            options.failMarketSubscribeStatus,
+          ),
+        );
+      }
+      const datasetId = decodeURIComponent(marketSubMatch[1]);
+      const dataset = datasets.get(datasetId);
+      if (!dataset) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      const subscribing = marketSubMatch[2] === "subscribe";
+      if (subscribing) {
+        // open 模式订阅即得；approval 模式转为在途申请（重复复用原行）。
+        if (visibilityOf(datasetId).access_mode === "approval") {
+          if (options.failAccessRequestStatus) {
+            return Promise.resolve(
+              jsonResponse(
+                {
+                  detail: `access request ${options.failAccessRequestStatus}`,
+                },
+                options.failAccessRequestStatus,
+              ),
+            );
+          }
+          const existing = [...accessRequestsStore.values()].find(
+            (r) =>
+              r.dataset_id === datasetId &&
+              r.requester_customer_id === customerId,
+          );
+          if (existing && existing.status === "pending") {
+            return Promise.resolve(
+              jsonResponse(
+                { detail: "已有一条在途申请（等待发布方处理）" },
+                409,
+              ),
+            );
+          }
+          const id = nextAccessRequestId++;
+          const created = {
+            id,
+            dataset_id: datasetId,
+            requester_customer_id: customerId,
+            status: "pending" as const,
+            created_at: "2026-10-13T09:30:00",
+            decided_at: null,
+          };
+          accessRequestsStore.set(id, created);
+          return Promise.resolve(jsonResponse({ ...created }, 201));
+        }
+        const mine = marketSubscriptions.get(customerId) ?? [];
+        if (!mine.includes(datasetId)) mine.push(datasetId);
+        marketSubscriptions.set(customerId, mine);
+      } else {
+        const mine = (marketSubscriptions.get(customerId) ?? []).filter(
+          (id) => id !== datasetId,
+        );
+        marketSubscriptions.set(customerId, mine);
+      }
+      return Promise.resolve(
+        jsonResponse({ dataset_id: datasetId, subscribed: subscribing }),
+      );
+    }
+    // 显式准入申请（approval 模式；与订阅转换同状态机）。
+    const accessCreateMatch = path.match(
+      /^\/api\/v1\/market\/datasets\/([^/]+)\/access-requests$/,
+    );
+    if (accessCreateMatch && method === "POST") {
+      if (options.failAccessRequestStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `access request ${options.failAccessRequestStatus}` },
+            options.failAccessRequestStatus,
+          ),
+        );
+      }
+      const datasetId = decodeURIComponent(accessCreateMatch[1]);
+      if (!datasets.has(datasetId)) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      const existing = [...accessRequestsStore.values()].find(
+        (r) =>
+          r.dataset_id === datasetId && r.requester_customer_id === customerId,
+      );
+      if (existing && existing.status === "pending") {
+        return Promise.resolve(
+          jsonResponse({ detail: "已有一条在途申请（等待发布方处理）" }, 409),
+        );
+      }
+      const id = nextAccessRequestId++;
+      const created = {
+        id,
+        dataset_id: datasetId,
+        requester_customer_id: customerId,
+        status: "pending" as const,
+        created_at: "2026-10-13T09:30:00",
+        decided_at: null,
+      };
+      accessRequestsStore.set(id, created);
+      return Promise.resolve(jsonResponse({ ...created }, 201));
+    }
+    const marketDetailMatch = path.match(/^\/api\/v1\/market\/datasets\/([^/]+)$/);
+    if (marketDetailMatch && method === "GET") {
+      const datasetId = decodeURIComponent(marketDetailMatch[1]);
+      const dataset = datasets.get(datasetId);
+      // 详情同样只放行 market 档（directed 档按 grant 放行——定向对象
+      // 拿到的链接面；private/link 档一律 404 不泄露）。
+      const vis = visibilityOf(datasetId);
+      const granted =
+        vis.visibility === "directed" &&
+        (grantsStore.get(datasetId) ?? []).includes(customerId);
+      if (!dataset || (vis.visibility !== "market" && !granted)) {
+        return Promise.resolve(jsonResponse({ detail: "dataset not found" }, 404));
+      }
+      return Promise.resolve(
+        jsonResponse({
+          ...marketCard(dataset),
+          columns: dataset.columns.map((c) => ({ name: c.name, type: c.type })),
+          column_count: dataset.columns.length,
+        }),
+      );
+    }
+
     if (path === "/api/v1/datasets/uploads" && method === "POST") {
       if (options.failUploadStatus) {
         return Promise.resolve(
@@ -4340,6 +4932,16 @@ export function installConsoleBackend(
         error_text: run.error_text,
       })),
     addAlertEvent,
+    /** 可见性行断言面（wire-dataset-marketplace；wire snake_case 形状）。 */
+    getDatasetVisibility: (datasetId: string) => ({ ...visibilityOf(datasetId) }),
+    /** 定向授权名单断言面。 */
+    getDatasetGrants: (datasetId: string) => [...(grantsStore.get(datasetId) ?? [])],
+    /** 市场订阅断言面（customerId → dataset ids；缺省种子首客户）。 */
+    getMarketSubscriptions: (cid: string = "demo-customer") =>
+      [...(marketSubscriptions.get(cid) ?? [])],
+    /** 准入申请断言面。 */
+    getAccessRequests: () =>
+      [...accessRequestsStore.values()].map((row) => ({ ...row })),
   };
 }
 

@@ -63,6 +63,9 @@ CUSTOMER_A = bearer(mint_id_token(SUB_A))
 CUSTOMER_B = bearer(mint_id_token(SUB_B))
 CUST_HEADERS = {"cust-001": CUSTOMER_A, "cust-002": CUSTOMER_B}
 INTERNAL = {"X-Internal-Token": INTERNAL_TOKEN}
+# admin 双闸第一道凭据（4.3 内部概览切换 admin 门；FD_WIRE_ADMIN_TOKEN
+# 由 make_console_env 固定种成 "test-admin-token"）
+ADMIN_AUTH = {"X-Admin-Token": "test-admin-token"}
 
 
 class FakeEngine:
@@ -418,6 +421,7 @@ def make_uploaded_dataset(env, *, customer: str = "cust-001", name: str = "Uploa
 
 
 __all__ = [
+    "ADMIN_AUTH",
     "CUSTOMER_A",
     "CUSTOMER_B",
     "CUST_HEADERS",

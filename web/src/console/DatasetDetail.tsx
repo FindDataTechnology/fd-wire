@@ -93,6 +93,7 @@ import {
   DATASET_SCHEDULE_INTERVALS,
   RefreshScheduleSection,
 } from "./RefreshScheduleSection";
+import { DatasetVisibilitySection } from "./DatasetVisibilitySection";
 
 const SYNC_BADGE_CLASS: Record<SyncStatus, string> = {
   idle: "bg-slate-100 text-slate-600 ring-slate-200",
@@ -157,6 +158,9 @@ export function DatasetDetail({
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportTruncated, setExportTruncated] = useState(false);
+  // 敏感度镜像（wire-dataset-marketplace 6.1）：AssetMetaSection 加载/保存
+  // 上报；数据开放选择器据此禁用 market/directed 两档（敏感档硬闸）。
+  const [sensitivity, setSensitivity] = useState<AssetSensitivity>("常规");
 
   const loadDataset = useCallback(async () => {
     setError(false);
@@ -427,7 +431,14 @@ export function DatasetDetail({
 
       {/* 资产信息（wire-asset-catalog 5.2）：六字段元数据补全 + 留痕；403 时
           切只读态（viewer 席位——前端无独立角色源，以服务端口径为准）。 */}
-      <AssetMetaSection datasetId={datasetId} />
+      <AssetMetaSection
+        datasetId={datasetId}
+        onSensitivityChange={setSensitivity}
+      />
+      {/* 数据开放选择器（wire-dataset-marketplace 6.1）：四档可见性 +
+          开放模式 + 定向授权名单；敏感档（sensitivity=敏感）禁 market/
+          directed——闸数据源即上方资产信息的敏感度。 */}
+      <DatasetVisibilitySection datasetId={datasetId} sensitivity={sensitivity} />
       {/* 数据质量（wire-dataset-quality 5.3）：口径标注常驻 + 四种如实态 +
           行数趋势 + 手动「立即检查」。 */}
       <QualityPanel datasetId={datasetId} />
@@ -2658,7 +2669,15 @@ export function parseTagsInput(text: string): string[] {
     .filter(Boolean);
 }
 
-function AssetMetaSection({ datasetId }: { datasetId: string }) {
+function AssetMetaSection({
+  datasetId,
+  onSensitivityChange,
+}: {
+  datasetId: string;
+  /** 敏感度上报（wire-dataset-marketplace 6.1）：数据开放选择器的敏感档
+   *  禁用闸数据源——元数据加载与保存后即回调最新敏感度。 */
+  onSensitivityChange?: (sensitivity: AssetSensitivity) => void;
+}) {
   const { t } = useTranslation();
   const [meta, setMeta] = useState<DatasetAssetMeta | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -2679,15 +2698,19 @@ function AssetMetaSection({ datasetId }: { datasetId: string }) {
   const [events, setEvents] = useState<AssetMetaEvent[] | null>(null);
   const [eventsOpen, setEventsOpen] = useState(false);
 
-  const applyMeta = useCallback((next: DatasetAssetMeta) => {
-    setMeta(next);
-    setDomain(next.domain ?? "");
-    setTagsText(next.tags.join(", "));
-    setDescription(next.description ?? "");
-    setCadence(next.cadence_hint ?? "");
-    setOwner(next.owner_note ?? "");
-    setSensitivity(next.sensitivity);
-  }, []);
+  const applyMeta = useCallback(
+    (next: DatasetAssetMeta) => {
+      setMeta(next);
+      setDomain(next.domain ?? "");
+      setTagsText(next.tags.join(", "));
+      setDescription(next.description ?? "");
+      setCadence(next.cadence_hint ?? "");
+      setOwner(next.owner_note ?? "");
+      setSensitivity(next.sensitivity);
+      onSensitivityChange?.(next.sensitivity);
+    },
+    [onSensitivityChange],
+  );
 
   const load = useCallback(async () => {
     setLoadError(false);

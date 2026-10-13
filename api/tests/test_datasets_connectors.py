@@ -7,7 +7,8 @@
 - 心跳在线态推导（3×轮询周期阈值）；
 - ``GET /connector/config`` 响应**零凭据**断言（无任何 dsn/password/
   凭据字段与 key 明文/散列）且只含本连接器白名单数据集；
-- 内部概览：X-Internal-Token 鉴权 + 只读聚合形状。
+- 内部概览：admin 双闸鉴权（X-Admin-Token + Bearer wire-admin 角色，
+  wire-console-ux-fixes 4.3；旧 X-Internal-Token 不再被接受）+ 只读聚合形状。
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from fd_wire_api.datasets import service
 from fd_wire_api.datasets.db import get_session
 from fd_wire_api.datasets.models import Connector, ConnectorPairingToken
 from test_datasets_common import (
+    ADMIN_AUTH,
     CUSTOMER_A,
     CUSTOMER_B,
     INTERNAL,
@@ -32,6 +34,7 @@ from test_datasets_common import (
     pair_connector,
     pairing_token,
 )
+from console_fixture import bearer, mint_id_token
 
 
 def _session():
@@ -147,12 +150,14 @@ def test_connector_key_not_valid_for_customer_or_internal_reads(datasets_env) ->
         datasets_env.client.get("/internal/datasets/overview", headers=headers).status_code
         == 401
     )
+    # 内部概览已切 admin 双闸（4.3）：连接器 key 的 Bearer 不是 ID token，
+    # 即便叠加 X-Admin-Token 也过不了角色闸（X-Admin-Token 单独给 → 401 缺 Bearer）
     assert (
         datasets_env.client.get(
             "/internal/datasets/overview",
-            headers={**headers, **INTERNAL},
+            headers={**headers, **ADMIN_AUTH},
         ).status_code
-        == 200
+        == 401
     )
     # 载体错误（非 Bearer / 非 fwc_ 前缀）同样 401
     assert (
@@ -354,19 +359,21 @@ def test_pairing_token_is_customer_scoped(datasets_env) -> None:
 # ------------------------------------------------------------------ 内部概览
 
 
-def test_internal_overview_requires_token_and_aggregates(datasets_env) -> None:
+def _admin_bearer(*, roles: list[str] | None = None, expired: bool = False) -> dict:
+    """admin 双闸第二道凭据（照 test_admin_api 5.1 手法：本地铸 ID token）。"""
+    return bearer(mint_id_token("sub-overview-admin", roles=roles, expired=expired))
+
+
+def test_internal_overview_requires_admin_dual_gate_and_aggregates(datasets_env) -> None:
+    """admin 双闸矩阵（gate=on 缺省）+ 只读聚合形状（wire-console-ux-fixes 4.3）。"""
     paired = pair_connector(datasets_env)
     create_connector_dataset(
         datasets_env, connector_id=paired["connector_id"], name="Overview Data"
     )
-    assert datasets_env.client.get("/internal/datasets/overview").status_code == 401
-    assert (
-        datasets_env.client.get(
-            "/internal/datasets/overview", headers={"X-Internal-Token": "wrong"}
-        ).status_code
-        == 401
+    # 1. 双全（X-Admin-Token 正确 + Bearer 含 wire-admin 角色）→ 200 返回概览
+    resp = datasets_env.client.get(
+        "/internal/datasets/overview", headers=ADMIN_AUTH | _admin_bearer(roles=["wire-admin"])
     )
-    resp = datasets_env.client.get("/internal/datasets/overview", headers=INTERNAL)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert len(body) == 1
@@ -378,3 +385,55 @@ def test_internal_overview_requires_token_and_aggregates(datasets_env) -> None:
     # 只读视图：概览负载不含任何管理操作字段
     keys = set(body[0]["connectors"][0].keys())
     assert keys == {"id", "status", "last_heartbeat_at"}
+
+    # 2. 有令牌缺 Bearer → 401（缺第二道凭据）
+    assert (
+        datasets_env.client.get("/internal/datasets/overview", headers=ADMIN_AUTH).status_code
+        == 401
+    )
+    # 3. Bearer 无 wire-admin 角色（普通客户登录态）→ 403
+    assert (
+        datasets_env.client.get(
+            "/internal/datasets/overview",
+            headers=ADMIN_AUTH | _admin_bearer(roles=["ordinary-customer"]),
+        ).status_code
+        == 403
+    )
+    # roles claim 缺失同样 403
+    assert (
+        datasets_env.client.get(
+            "/internal/datasets/overview", headers=ADMIN_AUTH | _admin_bearer()
+        ).status_code
+        == 403
+    )
+    # 4. 缺 X-Admin-Token（仅带合法 Bearer）→ 401
+    assert (
+        datasets_env.client.get(
+            "/internal/datasets/overview", headers=_admin_bearer(roles=["wire-admin"])
+        ).status_code
+        == 401
+    )
+    # X-Admin-Token 错 → 同样 401（第一道闸照常校验）
+    assert (
+        datasets_env.client.get(
+            "/internal/datasets/overview",
+            headers={"X-Admin-Token": "wrong"} | _admin_bearer(roles=["wire-admin"]),
+        ).status_code
+        == 401
+    )
+    # 6. 旧 X-Internal-Token 单闸不再被接受（只带旧头 → 401）
+    assert (
+        datasets_env.client.get("/internal/datasets/overview", headers=INTERNAL).status_code
+        == 401
+    )
+
+
+def test_internal_overview_admin_token_unconfigured_fail_closed(
+    datasets_env, monkeypatch
+) -> None:
+    """FD_WIRE_ADMIN_TOKEN 未配置 → 403（fail-closed 优先于一切）。"""
+    monkeypatch.delenv("FD_WIRE_ADMIN_TOKEN", raising=False)
+    resp = datasets_env.client.get(
+        "/internal/datasets/overview", headers=_admin_bearer(roles=["wire-admin"])
+    )
+    assert resp.status_code == 403, resp.text

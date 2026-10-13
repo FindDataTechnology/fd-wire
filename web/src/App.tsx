@@ -24,10 +24,10 @@ import { DocsView } from "./views/DocsView";
 import { AdminView } from "./admin/AdminView";
 import { parseAdminSection, type AdminSection } from "./admin/AdminLayout";
 import { CallbackView } from "./console/CallbackView";
-import { hasAdminRole, loadSession } from "./console/auth";
+import { loadSession } from "./console/auth";
 import { putPreferences } from "./console/api";
 import type { ConsoleTab } from "./console/ConsoleLayout";
-import { ConsoleFooter } from "./components/ConsoleFooter";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SiteFooter } from "./components/SiteFooter";
 import { switchLanguage, type Language } from "./i18n";
 
@@ -180,20 +180,19 @@ export function App() {
   const route = parseHash(hash);
   // 控制台/内部后台是工作台布局（自带侧栏与宽内容区），主容器放宽。
   const wideMain = route.name === "console" || route.name === "admin";
-  // 页脚分发：门户视图（含登录页）全量；#/console/*（含需求单占位子页）
-  // 紧凑；#/admin 不渲染。
+  // 页脚分发（wire-console-ux-fixes 任务 3.1）：控制台是工作台布局（自带
+  // 侧栏与常驻顶栏），页脚从内容流里摘除——admin/console/demandNew 一律
+  // 无页脚，其余门户视图（含登录页）保留全量 SiteFooter。
   const footer =
-    route.name === "admin" ? null : route.name === "console" ||
-      route.name === "demandNew" ? (
-      <ConsoleFooter />
-    ) : (
-      <SiteFooter />
-    );
+    route.name === "admin" ||
+    route.name === "console" ||
+    route.name === "demandNew"
+      ? null
+      : <SiteFooter />;
   // Logto 回调：真实路径 /console/callback 优先于 hash 路由（完成后回 hash）。
   const callbackActive = isConsoleCallbackPath(window.location.pathname);
-  // admin 导航门禁：登录会话含 wire-admin 角色才渲染「内部后台」入口
-  // （路由直达仍有 AdminView 的角色门禁兜底）。
-  const showAdminNav = hasAdminRole(loadSession());
+  // 内部后台入口不再挂在门户顶栏（wire-console-ux-fixes 5.2）：后台独立成壳，
+  // 管理员由分流落地直达 #/admin；角色门禁仍在 AdminView 与 admin API 双闸。
 
   const tab = (h: string, label: string, active: boolean, testid?: string) => (
     <a
@@ -247,47 +246,50 @@ export function App() {
   // 公开分享页（wire-dashboard-share / wire-form-builder）：独立极简壳——
   // 自带「Wire」顶栏与「由柏讯分享」页脚，不进站点导航/控制台布局，无需登录。
   if (route.name === "shareDashboard" || route.name === "shareForm") {
-    return renderRoute(route);
+    return <ErrorBoundary>{renderRoute(route)}</ErrorBoundary>;
   }
 
   return (
     <div className="min-h-screen">
-      <header className="border-b border-slate-200">
-        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center gap-4">
-          <a href="#/" className="text-lg font-semibold tracking-wide">
-            {t("brand.name")}
-            <span className="ml-2 text-sm font-normal text-slate-500">
-              {t("brand.tagline")}
-            </span>
-          </a>
-          <nav className="ml-auto flex items-center gap-1">
-            {tab("#/", t("nav.home"), route.name === "home")}
-            {tab("#/pricing", t("nav.pricing"), route.name === "pricing")}
-            {tab("#/docs", t("nav.docs"), route.name === "docs")}
-            {tab("#/catalog", t("nav.catalog"), route.name === "catalog" || route.name === "catalogDetail")}
-            {tab("#/console", t("nav.console"), route.name === "console" || route.name === "demandNew")}
-            {showAdminNav &&
-              tab("#/admin", t("nav.admin"), route.name === "admin", "nav-admin")}
-
-            <a
-              href="#/login"
-              className="ml-2 px-3 py-1.5 rounded-md text-sm border border-slate-300 hover:bg-slate-100 transition-colors"
-            >
-              {t("nav.login")}
+      {/* 内部后台独立成壳（wire-console-ux-fixes 任务 5.2）：#/admin 不被
+          门户站点顶栏包裹——后台自有极简顶条（AdminLayout），门户页签/
+          语言切换/登录入口都只在门户与控制台面呈现。 */}
+      {route.name !== "admin" && (
+        <header className="border-b border-slate-200">
+          <div className="max-w-5xl mx-auto px-4 py-4 flex items-center gap-4">
+            <a href="#/" className="text-lg font-semibold tracking-wide">
+              {t("brand.name")}
+              <span className="ml-2 text-sm font-normal text-slate-500">
+                {t("brand.tagline")}
+              </span>
             </a>
-            <div className="ml-2 flex items-center rounded-md border border-slate-200 overflow-hidden">
-              {langButton("zh", "中")}
-              {langButton("en", "EN")}
-            </div>
-          </nav>
-        </div>
-      </header>
+            <nav className="ml-auto flex items-center gap-1">
+              {tab("#/", t("nav.home"), route.name === "home")}
+              {tab("#/pricing", t("nav.pricing"), route.name === "pricing")}
+              {tab("#/docs", t("nav.docs"), route.name === "docs")}
+              {tab("#/catalog", t("nav.catalog"), route.name === "catalog" || route.name === "catalogDetail")}
+              {tab("#/console", t("nav.console"), route.name === "console" || route.name === "demandNew")}
+
+              <a
+                href="#/login"
+                className="ml-2 px-3 py-1.5 rounded-md text-sm border border-slate-300 hover:bg-slate-100 transition-colors"
+              >
+                {t("nav.login")}
+              </a>
+              <div className="ml-2 flex items-center rounded-md border border-slate-200 overflow-hidden">
+                {langButton("zh", "中")}
+                {langButton("en", "EN")}
+              </div>
+            </nav>
+          </div>
+        </header>
+      )}
       <main
         className={
           wideMain ? "mx-auto max-w-7xl px-4 py-6" : "mx-auto max-w-5xl px-4 py-8"
         }
       >
-        {renderRoute(route)}
+        <ErrorBoundary>{renderRoute(route)}</ErrorBoundary>
       </main>
       {footer}
     </div>

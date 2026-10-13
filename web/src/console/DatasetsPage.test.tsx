@@ -1446,4 +1446,37 @@ describe("DatasetsPage 资产目录（筛选/搜索/分页 + 质量徽章，任�
     expect(await screen.findByTestId("datasets-error")).toBeTruthy();
     expect(screen.queryByTestId("dataset-card")).toBeNull();
   });
+
+  it("目录条目缺 asset 键（wire-console-ux-fixes 任务 1.2）：卡片照常渲染、无元数据行、不白屏", async () => {
+    // 契约切换期后端可能漏发 asset 段——前端容错读法（asset?.）是本次任务
+    // 的验收面。假后端形状（testing.ts /assets 嵌套口径）不动，这里在
+    // fetchImpl 外围包一层：仅对 /api/v1/assets 响应注入畸形条目。
+    const backend = install({ datasets: [makeDataset({ id: "ds-1", name: "门店销量" })] });
+    const inner = backend.fetchImpl;
+    const stripAsset = ((input: RequestInfo | URL, init?: RequestInit) =>
+      Promise.resolve(inner(input, init)).then((response) => {
+        const url = new URL(String(input), "http://console.test");
+        if (url.pathname !== "/api/v1/assets" || response.status >= 400) {
+          return response;
+        }
+        return response.json().then((body) => {
+          const items = (body as { items?: Array<Record<string, unknown>> }).items ?? [];
+          const stripped = items.map(({ asset: _asset, ...rest }) => rest);
+          return { ...response, json: () => Promise.resolve({ ...body, items: stripped }) };
+        });
+      })) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", stripAsset);
+
+    render(<DatasetsPage planCode="basic" />);
+
+    // 列表照常：卡片名/来源/行数在，无 asset 元数据行（域/标签/敏感度全缺席）
+    expect(await screen.findByTestId("dataset-card")).toBeTruthy();
+    expect(screen.getByTestId("dataset-name").textContent).toBe("门店销量");
+    expect(screen.getByTestId("dataset-rows").textContent).toContain("120");
+    expect(screen.queryByTestId("dataset-asset-meta")).toBeNull();
+    expect(screen.queryByTestId("dataset-asset-domain")).toBeNull();
+    expect(screen.queryByTestId("dataset-sensitivity-badge")).toBeNull();
+    // 不白屏：错误面也没被触发（容错而非报错）
+    expect(screen.queryByTestId("datasets-error")).toBeNull();
+  });
 });

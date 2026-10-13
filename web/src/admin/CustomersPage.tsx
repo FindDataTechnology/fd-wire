@@ -18,13 +18,28 @@ import {
 
 const STATUS_OPTIONS = ["active", "suspended", "closed"] as const;
 
+/** 行内档位下拉的选项集（wire-console-ux-fixes 任务 4.1）：活跃档 ∪ 该行
+ *  当前档——停售档不出现在新单里，但持有它的客户改档/不改档都要能看到
+ *  自己的当前档（value 恒为 customer.plan_code，选中态不因过滤丢失）。
+ *  顺序保持 plans 原序（当前档不在活跃集时按 code 插回原位）。 */
+export function planOptionsForRow(
+  plans: AdminPlan[],
+  planCode: string,
+): AdminPlan[] {
+  const active = plans.filter((p) => p.is_active);
+  if (active.some((p) => p.code === planCode)) return active;
+  const current = plans.find((p) => p.code === planCode);
+  if (!current) return active; // 未知档（plans 未含）回落活跃集
+  return plans.filter((p) => p.is_active || p.code === planCode);
+}
+
 export function CustomersPage() {
   const { t } = useTranslation();
   const [customers, setCustomers] = useState<AdminCustomer[] | null>(null);
   const [plans, setPlans] = useState<AdminPlan[]>([]);
   const [error, setError] = useState<{ status?: number; message: string; detail?: string } | null>(null);
   const [name, setName] = useState("");
-  const [planCode, setPlanCode] = useState("starter");
+  const [planCode, setPlanCode] = useState("");
   const [callerId, setCallerId] = useState("");
   const [creating, setCreating] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -49,7 +64,8 @@ export function CustomersPage() {
   }, [load]);
 
   const submitCreate = async () => {
-    if (!name.trim()) return;
+    // 任务 4.2：档位未选（占位项）不发请求——按钮 disabled 之外的兜底防线。
+    if (!name.trim() || !planCode) return;
     setCreating(true);
     setNotice(null);
     try {
@@ -135,11 +151,18 @@ export function CustomersPage() {
               onChange={(e) => setPlanCode(e.target.value)}
               className="mt-1 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
             >
-              {plans.map((plan) => (
-                <option key={plan.code} value={plan.code}>
-                  {plan.name}（{plan.monthly_price_yuan}）
-                </option>
-              ))}
+              {/* 占位项（任务 4.2）：默认不预选任何档——提交按钮以
+                  !planCode 兜底，杜绝「手滑用起步档开户」。 */}
+              <option value="" disabled>
+                {t("admin.customers.planPlaceholder")}
+              </option>
+              {plans
+                .filter((plan) => plan.is_active)
+                .map((plan) => (
+                  <option key={plan.code} value={plan.code}>
+                    {plan.name}（{plan.monthly_price_yuan}）
+                  </option>
+                ))}
             </select>
           </div>
           <div>
@@ -158,7 +181,7 @@ export function CustomersPage() {
           <button
             type="button"
             data-testid="new-customer-submit"
-            disabled={creating || !name.trim()}
+            disabled={creating || !name.trim() || !planCode}
             onClick={() => void submitCreate()}
             className="rounded-md bg-slate-900 px-4 py-1.5 text-sm text-white hover:bg-slate-700 disabled:opacity-50"
           >
@@ -215,11 +238,22 @@ export function CustomersPage() {
                     onChange={(e) => void changePlan(customer, e.target.value)}
                     className="rounded-md border border-slate-300 px-2 py-1 text-xs"
                   >
-                    {plans.map((plan) => (
-                      <option key={plan.code} value={plan.code}>
-                        {plan.name}
-                      </option>
-                    ))}
+                    {/* 活跃档 ∪ 当前档（任务 4.1）：停售档置灰并标注，当前档
+                        即便停售也保持可见可选中（选中值不变）。 */}
+                    {planOptionsForRow(plans, customer.plan_code).map((plan) => {
+                      const disabled = !plan.is_active;
+                      return (
+                        <option
+                          key={plan.code}
+                          value={plan.code}
+                          disabled={disabled}
+                        >
+                          {disabled
+                            ? `${plan.name}${t("admin.customers.planDisabledSuffix")}`
+                            : plan.name}
+                        </option>
+                      );
+                    })}
                   </select>
                 </td>
                 <td className="py-2 pr-4">

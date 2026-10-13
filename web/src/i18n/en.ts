@@ -2015,6 +2015,9 @@ const en: Translation = {
         "Dual-gate channel: login role + server-side token (injected by the gateway, never visible to the browser).",
       exit: "Back to site",
     },
+    layout: {
+      backToPortal: "Back to portal",
+    },
     roleGate: {
       title: "Internal admin access required",
       body: "This account does not carry the wire-admin role — ask an administrator to assign it in Logto if you need access.",
@@ -2038,6 +2041,9 @@ const en: Translation = {
       nameLabel: "Customer name",
       namePlaceholder: "e.g. Acme Data",
       planLabel: "Plan tier",
+      planPlaceholder: "Select a plan",
+      // Suffix for greyed-out inactive plan options (wire-console-ux-fixes task 4.1).
+      planDisabledSuffix: " (inactive)",
       callerLabel: "Metering identity (caller)",
       callerPlaceholder: "e.g. acme-caller",
       callerHint:
@@ -2249,6 +2255,16 @@ const en: Translation = {
     signOut: "Sign out",
     errorTitle: "Failed to load the sign-in configuration",
     errorHint: "Retry in a moment; contact the platform administrator if it persists.",
+  },
+  // Shared error boundary (wire-console-ux-fixes task 2.1): used by both the
+  // App-level fallback and the console content-area boundary; the fallback card
+  // mirrors the existing amber error surfaces.
+  common: {
+    errorBoundary: {
+      title: "Something went wrong",
+      body: "This section failed to render. Everything else keeps working — retry to reload this area, or contact us if it persists.",
+      retry: "Retry",
+    },
   },
   // Footer (wire-ux-consolidation task 1.1): org/tagline wording mirrors the
   // fd-official-web footer.org / footer.line; filing numbers live in

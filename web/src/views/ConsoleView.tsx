@@ -14,11 +14,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ConsoleLayout, type ConsoleTab } from "../console/ConsoleLayout";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import {
   beginLogin,
   clearSession,
   establishSession,
   fetchAuthConfig,
+  hasAdminRole,
   isExpired,
   loadSession,
   logoutLocal,
@@ -163,6 +165,18 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
         loaded = null; // 端点故障（4xx/5xx/网络）：照常进入控制台
       } finally {
         if (prefTimeout !== undefined) clearTimeout(prefTimeout);
+      }
+      // 角色分流（wire-console-ux-fixes 任务 5.1）：wire-admin 会话从裸
+      // #/console 进入 → 直落内部后台（优先于任何偏好落地——design D6：
+      // 管理员即便存过 landing_tab，裸登录也落 admin）。显式子路径
+      //（#/console/usage 等）不劫持。hash 赋值后照常 setPhase ready——
+      // App 的 hashchange 会切路由、ConsoleView 随之卸载；suppress 挡住
+      // 「admin 不在 console tabs 内」可能引发的写回。
+      if (isBareConsoleHash() && hasAdminRole(next)) {
+        suppressTabWriteRef.current = "datasets";
+        window.location.hash = "#/admin";
+        setPhase({ kind: "ready", session: next, keyOnce: establishment.keyOnce });
+        return;
       }
       if (loaded) {
         setPrefs(loaded);
@@ -449,15 +463,19 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
           initialDashboardId={initialDashboardId}
         />
       )}
-      {tab === "datasets" && (
-        <DatasetsPage planCode={customer?.plan_code ?? ""} />
-      )}
-      {tab === "entities" && <EntitiesPage />}
-      {tab === "packs" && <PacksPage />}
-      {tab === "demands" && <MyDemandsPage />}
-      {tab === "usage" && <UsagePage />}
-      {tab === "keys" && <KeysPage />}
-      {tab === "team" && <TeamPage />}
+      {/* 内容区层错误边界（wire-console-ux-fixes 任务 2.2）：单页异常只降级
+          页签内容（amber 错误卡 + 重试），侧栏/顶栏/密钥条仍在。 */}
+      <ErrorBoundary>
+        {tab === "datasets" && (
+          <DatasetsPage planCode={customer?.plan_code ?? ""} />
+        )}
+        {tab === "entities" && <EntitiesPage />}
+        {tab === "packs" && <PacksPage />}
+        {tab === "demands" && <MyDemandsPage />}
+        {tab === "usage" && <UsagePage />}
+        {tab === "keys" && <KeysPage />}
+        {tab === "team" && <TeamPage />}
+      </ErrorBoundary>
     </ConsoleLayout>
   );
 }

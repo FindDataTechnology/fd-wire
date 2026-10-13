@@ -116,7 +116,7 @@ describe("App shell（admin 导航按角色显隐 · Logto 回调真实路径）
     expect(isConsoleCallbackPath("/console")).toBe(false);
   });
 
-  it("无会话/普通客户：导航不渲染「内部后台」入口；wire-admin 会话才渲染", () => {
+  it("无会话/普通客户：门户顶栏无「内部后台」入口（wire-console-ux-fixes 5.2 摘壳后入口整体退役，管理员由分流落地直达）", () => {
     // 无会话
     const { unmount } = render(<App />);
     expect(screen.queryByTestId("nav-admin")).toBeNull();
@@ -130,10 +130,25 @@ describe("App shell（admin 导航按角色显隐 · Logto 回调真实路径）
     unmount2();
     cleanup();
     sessionStorage.clear();
-    // wire-admin 会话：入口渲染（路由直达另有 AdminView 角色门禁兜底）
+    // wire-admin 会话：门户顶栏也不再有后台入口（摘壳裁决）
     seedConsoleSession({ sub: "admin", roles: ["wire-admin"] });
     render(<App />);
-    expect(screen.getByTestId("nav-admin").getAttribute("href")).toBe("#/admin");
+    expect(screen.queryByTestId("nav-admin")).toBeNull();
+  });
+
+  it("#/admin 独立成壳：不渲染门户站点顶栏（门户页签/登录/语言切换），后台品牌条在场", () => {
+    seedConsoleSession({ sub: "admin", roles: ["wire-admin"] });
+    window.location.hash = "#/admin";
+    render(<App />);
+    // 门户顶栏整体缺席（品牌导航与页签不再包裹后台）
+    expect(screen.queryByTestId("nav-admin")).toBeNull();
+    expect(screen.queryAllByTestId(/^footer-service-/)).toEqual([]);
+    expect(screen.queryByText("nav-login", { selector: "a" })).toBeNull();
+    // 后台自有品牌条：品牌字 + 「内部后台」小标 + 返回门户
+    expect(screen.getByTestId("admin-brand-bar")).toBeTruthy();
+    expect(
+      screen.getByTestId("admin-back-portal").getAttribute("href"),
+    ).toBe("#/");
   });
 });
 
@@ -169,16 +184,17 @@ describe("App 页脚分发（wire-ux-consolidation 任务 1.2）", () => {
     }
   });
 
-  it("#/console 挂紧凑页脚（单行版权+备案，无跨服务行/GitHub）", () => {
+  it("#/console 无页脚（wire-console-ux-fixes 任务 3.1：工作台布局摘页脚）", async () => {
     vi.unstubAllGlobals();
     vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
+    seedConsoleSession({ sub: "demo-customer" });
     window.location.hash = "#/console";
     render(<App />);
-    expect(screen.getByTestId("console-footer")).toBeTruthy();
-    expect(screen.getByTestId("footer-icp").textContent).toBe(
-      "粤ICP备2026118740号-1",
-    );
+    // 控制台壳渲染（侧栏/顶栏在场），但页脚整体摘除。
+    expect(await screen.findByTestId("console-topbar")).toBeTruthy();
+    expect(screen.queryByTestId("console-footer")).toBeNull();
     expect(screen.queryByTestId("site-footer")).toBeNull();
+    expect(screen.queryByTestId("footer-icp")).toBeNull();
     expect(screen.queryAllByTestId(/^footer-service-/)).toEqual([]);
     expect(screen.queryByTestId("footer-github")).toBeNull();
   });
@@ -187,8 +203,21 @@ describe("App 页脚分发（wire-ux-consolidation 任务 1.2）", () => {
     window.location.hash = "#/admin";
     render(<App />);
     expect(screen.getByTestId("admin-role-gate")).toBeTruthy();
+    // 门禁拦截态品牌条仍在（wire-console-ux-fixes 5.2：深链被拦不悬空）
+    expect(screen.getByTestId("admin-brand-bar")).toBeTruthy();
+    expect(
+      screen.getByTestId("admin-back-portal").getAttribute("href"),
+    ).toBe("#/");
     expect(screen.queryByTestId("site-footer")).toBeNull();
     expect(screen.queryByTestId("console-footer")).toBeNull();
+  });
+
+  it("#/console/demands/new（需求单占位子页）同样无页脚", () => {
+    window.location.hash = "#/console/demands/new?indicator=CN_COAL";
+    render(<App />);
+    expect(screen.getByTestId("demand-description")).toBeTruthy();
+    expect(screen.queryByTestId("console-footer")).toBeNull();
+    expect(screen.queryByTestId("site-footer")).toBeNull();
   });
 });
 

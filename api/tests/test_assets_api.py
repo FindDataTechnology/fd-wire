@@ -526,26 +526,42 @@ def test_catalog_pagination(client, db_session, catalog_seed):
 
 
 def test_catalog_item_shape(client, db_session, catalog_seed):
-    """列表项 = 数据集摘要 + 元数据合并视图（缺行默认值）。"""
+    """列表项 = 数据集摘要平铺 + 嵌套 asset 段（六字段快照 + cadence_effective）。"""
     s = catalog_seed
     items = {
         item["id"]: item
         for item in client.get("/api/v1/assets", headers=OWNER).json()["items"]
     }
     daily = items[s["sales_daily"]]
+    # 条目顶层只保留数据集摘要 + 修改人/时间（元数据不再平铺）
+    assert set(daily.keys()) == {
+        "id",
+        "name",
+        "source_kind",
+        "row_count",
+        "storage_tier",
+        "created_at",
+        "updated_by",
+        "updated_at",
+        "asset",
+    }
     assert daily["name"] == "销售日报"
     assert daily["source_kind"] == "upload"
     assert daily["storage_tier"] == "api"
     assert daily["row_count"] == 10
     assert daily["created_at"] is not None
-    assert daily["domain"] == "销售"
-    assert daily["tags"] == ["销售", "日报"]
-    assert daily["sensitivity"] == "内部"
-    assert daily["description"] == "每日销售汇总"
-    # 未补全条目按默认值呈现
+    assert daily["asset"]["domain"] == "销售"
+    assert daily["asset"]["tags"] == ["销售", "日报"]
+    assert daily["asset"]["sensitivity"] == "内部"
+    assert daily["asset"]["description"] == "每日销售汇总"
+    assert daily["asset"]["cadence_hint"] is None
+    assert daily["asset"]["owner_note"] == ""
+    assert daily["asset"]["cadence_effective"] is None  # 列表不回查注册表
+    # 未补全条目按默认值呈现（asset 段全默认）
     roster = items[s["hr_roster"]]
-    assert roster["domain"] == "" and roster["tags"] == []
-    assert roster["sensitivity"] == "常规"
+    assert roster["asset"]["domain"] == "" and roster["asset"]["tags"] == []
+    assert roster["asset"]["sensitivity"] == "常规"
+    assert roster["asset"]["cadence_effective"] is None
     assert roster["updated_by"] is None and roster["updated_at"] is None
 
 

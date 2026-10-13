@@ -70,7 +70,7 @@
   wire_datasets）；PG URL 用 `postgresql+psycopg://` 形态（历史形态 api
   自动改写）。`AI_DATABASE_URL` 指向同一元数据库。
 - Ingress（`deploy/k8s/ingress.yaml`）是占位：集群现无 ingress controller，真实入口是步骤 9-10 的 Caddy；清单为路由意图存档，controller 启用后即生效。
-- `/internal/`（内部后台端点族）**不经 Caddy 单列路由**：`web/nginx.conf` 的 `location /internal/` 直接反代 `fd-wire-api.fd-prod.svc.cluster.local:8000`（wire-internal-public-routing）。admin 双闸（wire-self-serve-launch 5.2）：第一道 = 请求自带 `Authorization: Bearer <ID token>`（照常透传，服务端校验 `wire-admin` 角色）；第二道 = `X-Admin-Token` 由 web 容器启动时经 envsubst 注入（env `FD_WIRE_ADMIN_TOKEN` ← secret `fd-wire-env` 键 `fd_wire_admin_token`，与 api 同源）——令牌只存在容器 env 与 nginx 渲染配置里，**前端 bundle 不含任何令牌值**（旧开发占位 `dev-admin-token` 已随 5.2 退场）；未配置该 env 时注入空值 → 后端 fail-closed 403。生产密钥保持强随机值（10-07 核验为 48 位非占位）。
+- `/internal/`（内部后台端点族）**不经 Caddy 单列路由**：`web/nginx.conf` 的 `location /internal/` 直接反代 `fd-wire-api.fd-prod.svc.cluster.local:8000`（wire-internal-public-routing）。admin 双闸（wire-self-serve-launch 5.2）：第一道 = 请求自带 `Authorization: Bearer <ID token>`（照常透传，服务端校验 `wire-admin` 角色）；第二道 = `X-Admin-Token` 由 web 容器启动时经 envsubst 注入（env `FD_WIRE_ADMIN_TOKEN` ← secret `fd-wire-env` 键 `fd_wire_admin_token`，与 api 同源）——令牌只存在容器 env 与 nginx 渲染配置里，**前端 bundle 不含任何令牌值**（旧开发占位 `dev-admin-token` 已随 5.2 退场）；未配置该 env 时注入空值 → 后端 fail-closed 403。生产密钥保持强随机值（10-07 核验为 48 位非占位）。`/internal/datasets/overview`（客户本地数据运营概览）自 wire-console-ux-fixes 起并入同一 admin 双闸（原挂 `X-Internal-Token` 内部闸，网关从不注入该头=上线即 401；换闸后 nginx/前端零改动，`X-Internal-Token` 对该端点不再被接受）。
 - `fd-wire-api` 只暴露 ClusterIP；`/api` 由边缘 Caddy 承接直指 api，web nginx 刻意不设 `/api` 反代（同域双路由是隐患，注释占位保留仅作文档）。
 - 回滚：清单回退 git tag/commit → ArgoCD 滚回；镜像按不可变 sha- tag 永远可指回。
 

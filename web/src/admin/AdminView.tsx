@@ -6,6 +6,7 @@
 // 手填令牌——token prop 与 key 重挂载随令牌而变的旧制退场。
 import { useTranslation } from "react-i18next";
 import {
+  AdminBrandBar,
   AdminLayout,
   parseAdminSection,
   type AdminSection,
@@ -27,17 +28,22 @@ export function AdminView({
   const session = loadSession();
   const active: AdminSection = parseAdminSection(section);
 
-  // 角色门禁：无 wire-admin 一律拦下（不留任何数据请求面）。
+  // 角色门禁：无 wire-admin 一律拦下（不留任何数据请求面）。品牌条照常
+  // 渲染（wire-console-ux-fixes 5.2）：后台深链被拦时仍有品牌与返回门户
+  // 出口，页面不悬空。
   if (!hasAdminRole(session)) {
     return (
-      <div
-        data-testid="admin-role-gate"
-        className="max-w-xl rounded-lg border border-amber-200 bg-amber-50/50 p-8"
-      >
-        <h1 className="text-xl font-semibold">{t("admin.roleGate.title")}</h1>
-        <p className="mt-3 text-sm text-slate-600">
-          {t("admin.roleGate.body")}
-        </p>
+      <div>
+        <AdminBrandBar />
+        <div
+          data-testid="admin-role-gate"
+          className="mx-auto mt-8 max-w-xl rounded-lg border border-amber-200 bg-amber-50/50 p-8"
+        >
+          <h1 className="text-xl font-semibold">{t("admin.roleGate.title")}</h1>
+          <p className="mt-3 text-sm text-slate-600">
+            {t("admin.roleGate.body")}
+          </p>
+        </div>
       </div>
     );
   }

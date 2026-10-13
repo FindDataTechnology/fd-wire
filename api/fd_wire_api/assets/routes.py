@@ -351,6 +351,10 @@ def list_assets(
     客户隔离照 datasets 列表口径（本客户命名空间；团队成员共享同客户面）。
     域/标签/敏感度作用于**合并视图**（缺行按默认值参与——敏感度缺省常规、
     域缺省未分类），保证「未补全条目归未分类可筛」。
+
+    响应形状（任务 1.1 回嵌套契约）：条目 = 数据集摘要平铺字段 +
+    ``updated_by``/``updated_at`` + 嵌套 ``asset`` 段（六字段快照 +
+    ``cadence_effective``）——元数据不再平铺在条目顶层。
     """
     # 跨模块钩子（wire-dataset-quality，并行落片中）：freshness_statuses(
     # customer_id, dataset_ids) → {dataset_id: fresh|stale|unknown}。刻意不在
@@ -427,6 +431,10 @@ def list_assets(
         if freshness is not None:
             if freshness_map.get(dataset.id, "unknown") != freshness:
                 continue
+        # 列表条目的 cadence_effective 刻意只取 cadence_hint，不做注册表
+        # 回查（与详情视图 _meta_view 的差异）：注册表只有全量枚举一档，
+        # 逐条目回查会让列表页变慢——列表显示「未知」即可，详情页才补全。
+        hint = (meta.cadence_hint or "").strip() if meta is not None else ""
         items.append(
             {
                 "id": dataset.id,
@@ -435,9 +443,9 @@ def list_assets(
                 "row_count": dataset.row_count,
                 "storage_tier": getattr(dataset, "storage_tier", "cell"),
                 "created_at": dataset.created_at,
-                **snapshot,
                 "updated_by": meta.updated_by if meta is not None else None,
                 "updated_at": meta.updated_at if meta is not None else None,
+                "asset": {**snapshot, "cadence_effective": hint or None},
             }
         )
 

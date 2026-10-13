@@ -17,6 +17,14 @@
 敏感度三级（design D3）：「常规/内部/敏感」，刻意不含「公开」——客户数据
 集标「公开」会暗示可进公开面，而红线 3（公开目录与渲染层不含客户数据）
 禁止。值域校验在路由层（422 返回合法清单），DB 不设 CHECK。
+
+可见性阶梯（wire-dataset-marketplace，布尔 published 方案的修订形态）：
+客户对单个数据集的开放程度是**四档枚举**而非一个开关——``private``
+（默认私有，不出现在任何面）/ ``link``（签名链接可见，复用 share/ HMAC）
+/ ``directed``（定向，仅 grant 行列出的客户）/ ``market``（市场，登录
+客户可检索）。配套的 ``access_mode``（open|approval）只在 directed/market
+两档有效。默认私有由**列默认值** + **查询面 SQL 层过滤** + **敏感档硬闸**
+三层共同保证（design D2）。
 """
 
 from __future__ import annotations
@@ -38,6 +46,22 @@ SENSITIVITY_LEVELS: tuple[str, ...] = ("常规", "内部", "敏感")
 
 #: 敏感度缺省档（未补全条目的 COALESCE 默认值）
 SENSITIVITY_DEFAULT = "常规"
+
+#: 可见性四档（wire-dataset-marketplace；默认 private——不出现在任何面）
+#: - private：私有（默认；市场/定向/链接面一律不出现）
+#: - link：签名链接可见（有链接的人可看，不进市场——复用 share/ HMAC 机制）
+#: - directed：定向（仅 dataset_share_grants 列出的客户可见）
+#: - market：市场（登录客户可检索、可订阅）
+VISIBILITY_LEVELS: tuple[str, ...] = ("private", "link", "directed", "market")
+
+#: 可见性缺省档（**默认私有**——未补全条目 = 不出现在任何面，红线 3 核心）
+VISIBILITY_DEFAULT = "private"
+
+#: 准入模式（仅 directed/market 两档有效；private/link 时忽略）
+ACCESS_MODES: tuple[str, ...] = ("open", "approval")
+
+#: 准入模式缺省档
+ACCESS_MODE_DEFAULT = "open"
 
 
 class AssetMeta(DatasetsBase):
@@ -63,6 +87,19 @@ class AssetMeta(DatasetsBase):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow_naive, onupdate=_utcnow_naive
     )
+    # --------------------------------------------------- 可见性阶梯（0034）
+    #: private|link|directed|market（**默认私有** = 不出现在任何市场/检索面；
+    #: 迁移侧 server_default 必须是 "private" 字符串，双方言同形）。
+    #: 值域校验在路由层（422 带合法清单），DB 不设 CHECK（值域演进免迁移）。
+    visibility: Mapped[str] = mapped_column(String(16), default=VISIBILITY_DEFAULT)
+    #: open|approval（仅 directed/market 有效——approval 需发布方批准请求；
+    #: private/link 档忽略本值但保留原值，切回 directed/market 时生效）
+    access_mode: Mapped[str] = mapped_column(String(16), default=ACCESS_MODE_DEFAULT)
+    #: 首次进入非 private 态的时刻（切回 private 时清空——即时生效）
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    #: 发布时刻的版本锚点（数据集可变——连接器同步/管线刷新都会改内容；
+    #: 消费方按锚点读，撤回再发布则更新锚点。design D3）
+    published_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class AssetMetaEvent(DatasetsBase):

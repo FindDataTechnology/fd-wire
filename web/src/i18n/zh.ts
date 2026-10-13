@@ -1909,6 +1909,9 @@ const zh = {
       gateNote: "双闸通道：登录角色 + 服务端令牌（由网关注入，浏览器不可见）。",
       exit: "返回前台",
     },
+    layout: {
+      backToPortal: "返回门户",
+    },
     roleGate: {
       title: "需要内部后台权限",
       body: "当前登录账号不含 wire-admin 角色——如需访问，请联系管理员在 Logto 挂角色。",
@@ -1931,6 +1934,9 @@ const zh = {
       nameLabel: "客户名称",
       namePlaceholder: "如：上海壹座",
       planLabel: "套餐档位",
+      planPlaceholder: "请选择档位",
+      // 下拉里已停售档位的置灰后缀（wire-console-ux-fixes 任务 4.1）。
+      planDisabledSuffix: "（已停用）",
       callerLabel: "计量身份（caller）",
       callerPlaceholder: "如 acme-caller",
       callerHint:
@@ -2129,6 +2135,15 @@ const zh = {
     signOut: "登出",
     errorTitle: "登录配置获取失败",
     errorHint: "请稍后重试；若持续失败请联系平台管理员。",
+  },
+  // 通用错误边界（wire-console-ux-fixes 任务 2.1）：App 全局兜底 + 控制台
+  // 内容区层两层布点共用；降级卡 amber 风格对齐既有错误面。
+  common: {
+    errorBoundary: {
+      title: "页面出了点问题",
+      body: "这部分内容渲染时发生了异常，其余功能不受影响。点击重试可重新加载本区域；若持续出现请联系我们。",
+      retry: "重试",
+    },
   },
   // 页脚（wire-ux-consolidation 任务 1.1）：署名与标语措辞对齐官网
   // fd-official-web 的 footer.org / footer.line；备案号常量在

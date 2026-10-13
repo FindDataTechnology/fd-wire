@@ -95,6 +95,10 @@ export interface AdminBackendOptions {
   ledger?: LedgerEntry[];
   tracks?: AggRow[];
   bySource?: AggRow[];
+  /** 档位清单覆盖（wire-console-ux-fixes 4.1/4.2）：缺省 DEFAULT_PLANS。
+   *  含 is_active:false 条目即「停售档」态——行内下拉过滤/置灰与新单
+   *  占位禁用的测试面。 */
+  plans?: AdminPlan[];
   /** 客户本地数据只读概览（/internal/datasets/overview 响应体）。 */
   datasetOverviews?: CustomerLocalDataOverview[];
 }
@@ -200,7 +204,7 @@ export function installAdminBackend(options: AdminBackendOptions = {}): {
 
     // -- 客户管理 ----------------------------------------------------------
     if (path === "/internal/admin/plans" && method === "GET") {
-      return Promise.resolve(jsonResponse(DEFAULT_PLANS));
+      return Promise.resolve(jsonResponse(options.plans ?? DEFAULT_PLANS));
     }
     if (path === "/internal/admin/customers" && method === "GET") {
       return Promise.resolve(jsonResponse(customers));

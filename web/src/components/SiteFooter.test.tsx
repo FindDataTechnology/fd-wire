@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import "../i18n";
 import i18n from "../i18n";
-import { ConsoleFooter } from "./ConsoleFooter";
 import { SiteFooter } from "./SiteFooter";
 import {
   FOOTER_GITHUB_URL,
@@ -74,19 +73,3 @@ describe("SiteFooter（门户全量页脚）", () => {
   });
 });
 
-describe("ConsoleFooter（控制台紧凑页脚）", () => {
-  it("单行 版权+ICP+公安备：含年份与组织，备案链接齐备", () => {
-    render(<ConsoleFooter />);
-    const org = screen.getByTestId("console-footer-org");
-    expect(org.textContent).toContain(String(new Date().getFullYear()));
-    expect(org.textContent).toContain("寻数科技 FindData Technology");
-    expect(screen.getByTestId("footer-icp").textContent).toBe(FOOTER_ICP_NUMBER);
-    expect(screen.getByTestId("footer-mps").textContent).toBe(FOOTER_MPS_NUMBER);
-  });
-
-  it("无跨服务行、无 GitHub", () => {
-    render(<ConsoleFooter />);
-    expect(screen.queryAllByTestId(/^footer-service-/)).toEqual([]);
-    expect(screen.queryByTestId("footer-github")).toBeNull();
-  });
-});

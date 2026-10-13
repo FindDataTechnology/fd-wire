@@ -45,6 +45,32 @@ export function parseAdminSection(segment: string | undefined): AdminSection {
   return "customers";
 }
 
+/** 后台品牌条（wire-console-ux-fixes 任务 5.2）：后台独立成壳后自带的极简
+ *  顶条——门户站点顶栏不再包裹 #/admin，本条承载品牌与返回门户出口。既挂在
+ *  AdminLayout 顶部（正常后台页），也挂在 AdminView 角色门禁拦截分支（深链
+ *  无角色时不悬空）。 */
+export function AdminBrandBar() {
+  const { t } = useTranslation();
+  return (
+    <div
+      data-testid="admin-brand-bar"
+      className="flex items-center gap-3 border-b border-slate-100 px-6 py-2.5"
+    >
+      <a href="#/" className="text-sm font-semibold tracking-wide">
+        {t("brand.name")}
+      </a>
+      <span className="text-xs text-slate-400">{t("admin.title")}</span>
+      <a
+        href="#/"
+        data-testid="admin-back-portal"
+        className="ml-auto text-xs text-slate-500 underline hover:text-slate-800"
+      >
+        {t("admin.layout.backToPortal")}
+      </a>
+    </div>
+  );
+}
+
 export function AdminLayout({
   section,
   identity,
@@ -60,8 +86,10 @@ export function AdminLayout({
   const { t } = useTranslation();
 
   return (
-    <div className="flex min-h-[32rem] rounded-lg border border-slate-200 bg-white shadow-sm">
-      <aside className="w-52 shrink-0 border-r border-slate-200 p-4">
+    <div className="flex min-h-[32rem] flex-col rounded-lg border border-slate-200 bg-white shadow-sm">
+      <AdminBrandBar />
+      <div className="flex min-h-0 flex-1">
+        <aside className="w-52 shrink-0 border-r border-slate-200 p-4">
         <div className="text-xs font-medium uppercase tracking-wide text-slate-400">
           {t("admin.title")}
         </div>
@@ -119,6 +147,7 @@ export function AdminLayout({
           </a>
         </div>
         <div className="min-w-0 flex-1 p-6">{children}</div>
+      </div>
       </div>
     </div>
   );

@@ -3056,3 +3056,286 @@ export function resumePipelineSchedule(
     method: "POST",
   }) as Promise<PipelineScheduleInfo>;
 }
+
+// ── 数据开放与市场（wire-dataset-marketplace web 面）────────────────────
+// 契约（api 仓 assets/market 切片，proposal 冻结形状；Bearer 登录身份，
+// owner/editor 可设可见性、viewer 403）：
+// - PUT /api/v1/datasets/{id}/visibility body {visibility, access_mode?,
+//   grants?} → {visibility, access_mode, published_at, published_version}
+//   ——四档任选主端点；敏感度=敏感 时设 market/directed 由服务端 422 拒收；
+// - POST .../market/publish|unpublish ——薄封装（publish=market、
+//   unpublish=private），一键到市场/回私有；
+// - GET/POST/DELETE /api/v1/datasets/{id}/grants ——定向授权增删查；
+// - GET /api/v1/market/datasets?q=&domain=&tag=&limit=&offset= →
+//   {items:[卡片],total}——SQL 层只查 visibility='market'（默认私有，
+//   未开放永不出现）；卡片=元数据+体量/时间，绝无数据值；
+// - GET /api/v1/market/datasets/{id} → 卡片 + columns（列 schema {name,
+//   type}）+ column_count——详情面同样零数据值；
+// - POST/DELETE /api/v1/market/datasets/{id}/subscribe ——open 模式订阅
+//   即得；approval 模式 POST 由服务端转为发起申请（409 已在途）；
+// - POST /api/v1/market/datasets/{id}/access-requests ——显式发起申请；
+//   GET /api/v1/datasets/{id}/access-requests ——发布方查看（pending 在前）；
+//   POST .../access-requests/{rid}/approve|reject ——发布方裁决。
+
+/** 可见性四档阶梯（private 默认 → link → directed → market）。 */
+export const DATASET_VISIBILITIES = [
+  "private",
+  "link",
+  "directed",
+  "market",
+] as const;
+
+export type DatasetVisibility = (typeof DATASET_VISIBILITIES)[number];
+
+/** 取数方式（仅 market/directed 档有意义）：订阅即得 / 需发布方批准。 */
+export const DATASET_ACCESS_MODES = ["open", "approval"] as const;
+
+export type DatasetAccessMode = (typeof DATASET_ACCESS_MODES)[number];
+
+/** 可见性设置响应（published_at/published_version 仅开放后非 null）。 */
+export interface DatasetVisibilityState {
+  visibility: DatasetVisibility;
+  access_mode: DatasetAccessMode;
+  published_at: string | null;
+  published_version: string | null;
+}
+
+/** 可见性设置入参（grants 仅 directed 档用：customer_id 数组全量替换）。 */
+export interface DatasetVisibilityInput {
+  visibility: DatasetVisibility;
+  access_mode?: DatasetAccessMode;
+  /** directed 档的被授权客户名单（全量替换；其他档忽略）。 */
+  grants?: string[];
+}
+
+/** 当前可见性态（GET /visibility——四档 + 开放模式 + 发布锚）。 */
+export function fetchDatasetVisibility(
+  datasetId: string,
+): Promise<DatasetVisibilityState> {
+  return requestJson(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/visibility`,
+    { method: "GET" },
+  ) as Promise<DatasetVisibilityState>;
+}
+
+/** 设置数据集可见性（四档任选；幂等——同值重设不重复留痕）。 */
+export function updateDatasetVisibility(
+  datasetId: string,
+  payload: DatasetVisibilityInput,
+): Promise<DatasetVisibilityState> {
+  return requestJsonAnyMethod(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/visibility`,
+    "PUT",
+    { body: payload },
+  ) as Promise<DatasetVisibilityState>;
+}
+
+/** 一键发布到市场（=PUT visibility market；敏感档服务端 422 拒收）。 */
+export function publishDatasetToMarket(
+  datasetId: string,
+): Promise<DatasetVisibilityState> {
+  return requestJson(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/market/publish`,
+    { method: "POST" },
+  ) as Promise<DatasetVisibilityState>;
+}
+
+/** 撤回开放：回私有（publish 的唯一补救动作，随时可做）。 */
+export function unpublishDatasetFromMarket(
+  datasetId: string,
+): Promise<DatasetVisibilityState> {
+  return requestJson(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/market/unpublish`,
+    { method: "POST" },
+  ) as Promise<DatasetVisibilityState>;
+}
+
+/** 定向授权行（directed 档被授权客户）。 */
+export interface DatasetGrant {
+  customer_id: string;
+  granted_at: string;
+}
+
+/** 定向授权名单（directed 档；无行 = 无人可见——诚实处理）。 */
+export function fetchDatasetGrants(
+  datasetId: string,
+): Promise<DatasetGrant[]> {
+  return requestJson(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/grants`,
+    { method: "GET" },
+  ) as Promise<DatasetGrant[]>;
+}
+
+/** 增定向授权（幂等；重复授权不落第二行）。 */
+export function addDatasetGrant(
+  datasetId: string,
+  customerId: string,
+): Promise<{ granted: boolean }> {
+  return requestJson(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/grants`,
+    { method: "POST", body: { customer_id: customerId } },
+  ) as Promise<{ granted: boolean }>;
+}
+
+/** 删定向授权（幂等）。 */
+export function removeDatasetGrant(
+  datasetId: string,
+  customerId: string,
+): Promise<{ deleted: boolean }> {
+  return requestJson(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/grants/${encodeURIComponent(customerId)}`,
+    { method: "DELETE" },
+  ) as Promise<{ deleted: boolean }>;
+}
+
+/** 市场卡片（列表项）：元数据 + 体量/时间；绝无列 schema 或数据值。 */
+export interface MarketDatasetCard {
+  id: string;
+  name: string;
+  source_kind: DatasetSourceKind;
+  storage_tier: string | null;
+  row_count: number;
+  updated_at: string | null;
+  description: string;
+  domain: string;
+  tags: string[];
+  cadence_hint: AssetCadenceHint | null;
+  owner_note: string;
+  sensitivity: AssetSensitivity;
+  visibility: DatasetVisibility;
+  access_mode: DatasetAccessMode;
+  published_at: string | null;
+  published_version: string | null;
+  /** 当前查看者是否已订阅（发布方视角恒 false）。 */
+  subscribed: boolean;
+  /** 访问来源标注：market_subscription / directed_grant / access_request / own。 */
+  access_source: string | null;
+}
+
+/** 市场详情：卡片 + 列 schema（{name,type} 白名单）——零数据值。 */
+export interface MarketDatasetDetail extends MarketDatasetCard {
+  columns: DatasetColumn[];
+  column_count: number;
+}
+
+/** 市场列表筛选入参（全部可选；组合 AND）。 */
+export interface MarketDatasetFilters {
+  q?: string;
+  domain?: string;
+  tag?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** 市场列表分页结果。 */
+export interface MarketDatasetPage {
+  items: MarketDatasetCard[];
+  total: number;
+}
+
+/** 市场浏览列表（仅登录客户面；未开放数据永不出现）。 */
+export function fetchMarketDatasets(
+  filters: MarketDatasetFilters = {},
+): Promise<MarketDatasetPage> {
+  const params = new URLSearchParams();
+  if (filters.q) params.set("q", filters.q);
+  if (filters.domain) params.set("domain", filters.domain);
+  if (filters.tag) params.set("tag", filters.tag);
+  if (filters.limit != null) params.set("limit", String(filters.limit));
+  if (filters.offset != null) params.set("offset", String(filters.offset));
+  const query = params.size > 0 ? `?${params}` : "";
+  return requestJson(`${API_BASE}/v1/market/datasets${query}`, {
+    method: "GET",
+  }) as Promise<MarketDatasetPage>;
+}
+
+/** 市场详情（元数据 + 列 schema + 行数；不含任何数据值）。 */
+export function fetchMarketDataset(
+  datasetId: string,
+): Promise<MarketDatasetDetail> {
+  return requestJson(
+    `${API_BASE}/v1/market/datasets/${encodeURIComponent(datasetId)}`,
+    { method: "GET" },
+  ) as Promise<MarketDatasetDetail>;
+}
+
+/** 订阅响应（幂等：重复操作仍 200 返回终态）。 */
+export interface MarketSubscriptionResult {
+  dataset_id: string;
+  subscribed: boolean;
+}
+
+/** 订阅市场数据集（open 模式订阅即得；approval 模式服务端转申请）。 */
+export function subscribeMarketDataset(
+  datasetId: string,
+): Promise<MarketSubscriptionResult> {
+  return requestJson(
+    `${API_BASE}/v1/market/datasets/${encodeURIComponent(datasetId)}/subscribe`,
+    { method: "POST" },
+  ) as Promise<MarketSubscriptionResult>;
+}
+
+/** 退订市场数据集（幂等；退订后数据面访问权下一次查询即失效）。 */
+export function unsubscribeMarketDataset(
+  datasetId: string,
+): Promise<MarketSubscriptionResult> {
+  return requestJson(
+    `${API_BASE}/v1/market/datasets/${encodeURIComponent(datasetId)}/unsubscribe`,
+    { method: "DELETE" },
+  ) as Promise<MarketSubscriptionResult>;
+}
+
+/** 准入申请状态（pending → approved|rejected）。 */
+export type AccessRequestStatus = "pending" | "approved" | "rejected";
+
+/** 一条准入申请（发布方视角与申请人视角同形）。 */
+export interface DatasetAccessRequest {
+  id: number;
+  dataset_id: string;
+  requester_customer_id: string;
+  status: AccessRequestStatus;
+  created_at: string;
+  decided_at: string | null;
+}
+
+/** 显式发起准入申请（approval 模式；同数据集重复申请复用原行）。 */
+export function requestMarketAccess(
+  datasetId: string,
+): Promise<DatasetAccessRequest> {
+  return requestJson(
+    `${API_BASE}/v1/market/datasets/${encodeURIComponent(datasetId)}/access-requests`,
+    { method: "POST" },
+  ) as Promise<DatasetAccessRequest>;
+}
+
+/** 发布方查看本数据集的准入申请（pending 在前，其余按时间倒序）。 */
+export function fetchDatasetAccessRequests(
+  datasetId: string,
+): Promise<DatasetAccessRequest[]> {
+  return requestJson(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/access-requests`,
+    { method: "GET" },
+  ) as Promise<DatasetAccessRequest[]>;
+}
+
+/** 批准入入申请（批准后申请方获得数据面访问权）。 */
+export function approveDatasetAccessRequest(
+  datasetId: string,
+  requestId: number,
+): Promise<DatasetAccessRequest> {
+  return requestJson(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/access-requests/${requestId}/approve`,
+    { method: "POST" },
+  ) as Promise<DatasetAccessRequest>;
+}
+
+/** 拒绝准入申请。 */
+export function rejectDatasetAccessRequest(
+  datasetId: string,
+  requestId: number,
+): Promise<DatasetAccessRequest> {
+  return requestJson(
+    `${API_BASE}/v1/datasets/${encodeURIComponent(datasetId)}/access-requests/${requestId}/reject`,
+    { method: "POST" },
+  ) as Promise<DatasetAccessRequest>;
+}
