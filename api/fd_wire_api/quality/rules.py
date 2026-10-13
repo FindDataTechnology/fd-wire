@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re as _re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -41,8 +42,10 @@ from sqlalchemy.orm import Session
 from ..datasets.ingest import EngineCallError, EngineUnavailable, TOOL_QUERY
 from ..datasets.models import Dataset
 from .models import (
+    RULE_CHANNEL_CHECK,
     RULE_CHANNEL_QUERY,
     RULE_CHANNEL_SNAPSHOT,
+    RULE_CONTENT_METRICS,
     RULE_METRICS,
     RULE_OPS,
     RULE_STATUS_ERROR,
@@ -53,15 +56,31 @@ from .models import (
     DatasetQualitySnapshot,
     STATUS_OK as SNAPSHOT_OK,
 )
-from .service import _resolve_engine_client, _utcnow_naive
+from .service import (
+    _is_unsupported_error,
+    _resolve_engine_client,
+    _sanitize_float,
+    _sanitize_int,
+    _utcnow_naive,
+)
 from .settings import get_settings
 
 logger = logging.getLogger(__name__)
+
+#: 引擎内容代检查工具（v2；旧 cell 无此工具 → 诚实 unsupported 降级）
+TOOL_CHECK = "customer_dataset_check"
 
 #: 指标 → 是否需要 column
 _METRIC_NEEDS_COLUMN = frozenset(
     {"null_count", "null_rate", "filled_rate", "value_violations"}
 )
+#: col_compare 六比较符（含 !=，与引擎 _QUERY_OPS 的 ne 对齐）
+_COL_COMPARE_OPS = ("<", "<=", "=", "!=", ">=", ">")
+#: 内容代检查单次引擎调用上限（Q8：配置不限、执行分批）
+_CONTENT_BATCH_SIZE = 5
+#: pattern 编译闸（与引擎侧同款：长度 + 灾难回溯构造黑名单）
+_PATTERN_MAX_LEN = 128
+_PATTERN_NESTED_QUANT = _re.compile(r"\([^()]*[+*][^()]*\)[+*]")
 #: 比率类指标（observed 是比率而非计数）
 _RATE_METRICS = frozenset({"null_rate", "filled_rate"})
 #: 白名单值的结构与长度上限（design D3：封闭面压到最小）
@@ -88,16 +107,21 @@ class RuleValidationError(ValueError):
 def validate_check(raw: Any, columns: list[str]) -> dict:
     """校验并归一一条规则检查体；非法抛 :class:`RuleValidationError`。
 
-    封闭枚举（design D3 注入防线第一层）：指标六选一、操作符五选一、
-    列名逐字符比对注册表、白名单值逐个类型校验。**校验不过绝不触引擎**。
+    封闭枚举（design D3 注入防线第一层）：计数代指标六选一 + 操作符
+    五选一 + 列名逐字符比对注册表 + 白名单值逐个类型校验；内容代
+    （regex/col_compare/range，v2）另走 :func:`_validate_content_check`。
+    **校验不过绝不触引擎**。
     """
     if not isinstance(raw, dict):
         raise RuleValidationError("检查体必须是对象")
 
     metric = raw.get("metric")
+    if metric in RULE_CONTENT_METRICS:
+        # 内容代（v2）：独立校验体（无 op/threshold 语义）
+        return _validate_content_check(metric, raw, columns)
     if metric not in RULE_METRICS:
         raise RuleValidationError(
-            f"未知指标 {metric!r}（允许: {', '.join(RULE_METRICS)}）"
+            f"未知指标 {metric!r}（允许: {', '.join(RULE_METRICS + RULE_CONTENT_METRICS)}）"
         )
 
     op = raw.get("op")
@@ -152,6 +176,73 @@ def validate_check(raw: Any, columns: list[str]) -> dict:
 
     return {"metric": metric, "column": column, "op": op,
             "threshold": float(threshold), **({"allowed": allowed} if allowed else {})}
+
+
+def _validate_content_check(metric: str, raw: dict, columns: list[str]) -> dict:
+    """内容代检查（v2）校验体——与引擎 customer_dataset_check 契约一致。
+
+    - regex：column（注册表内）+ pattern（长度 ≤128、无嵌套量词构造）；
+    - col_compare：col_a/col_b（均注册表内、不相同）+ op（六符含 !=）；
+    - range：column + min/max（至少一个、min ≤ max）。
+    """
+
+    def _require_column(value, what: str) -> str:
+        if not isinstance(value, str) or not value:
+            raise RuleValidationError(f"{what} 必须指定列名")
+        if value not in columns:
+            raise RuleValidationError(f"未知列 {value!r}（不在该数据集的列注册表内）")
+        return value
+
+    if metric == "regex":
+        column = _require_column(raw.get("column"), "regex")
+        pattern = raw.get("pattern")
+        if not isinstance(pattern, str) or not pattern:
+            raise RuleValidationError("regex 必须给 pattern")
+        if len(pattern) > _PATTERN_MAX_LEN:
+            raise RuleValidationError(
+                f"pattern 过长（>{_PATTERN_MAX_LEN} 字符）"
+            )
+        if _PATTERN_NESTED_QUANT.search(pattern):
+            raise RuleValidationError(
+                "pattern 含嵌套量词构造（灾难回溯风险），拒绝"
+            )
+        try:
+            _re.compile(pattern)
+        except _re.error as exc:
+            raise RuleValidationError(f"pattern 编译失败: {exc}") from exc
+        return {"metric": "regex", "column": column, "pattern": pattern}
+
+    if metric == "col_compare":
+        col_a = _require_column(raw.get("col_a"), "col_compare 左侧")
+        col_b = _require_column(raw.get("col_b"), "col_compare 右侧")
+        if col_a == col_b:
+            raise RuleValidationError("col_compare 两侧不能是同一列")
+        op = raw.get("op")
+        if op not in _COL_COMPARE_OPS:
+            raise RuleValidationError(
+                f"col_compare 操作符必须是 {'/'.join(_COL_COMPARE_OPS)} 之一"
+            )
+        return {"metric": "col_compare", "col_a": col_a, "op": op, "col_b": col_b}
+
+    # range
+    column = _require_column(raw.get("column"), "range")
+    lo, hi = raw.get("min"), raw.get("max")
+    for value, name in ((lo, "min"), (hi, "max")):
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+        ):
+            raise RuleValidationError(f"range 的 {name} 必须是有限数值")
+    if lo is None and hi is None:
+        raise RuleValidationError("range 至少给 min 或 max 之一")
+    if lo is not None and hi is not None and float(lo) > float(hi):
+        raise RuleValidationError("range 的 min 不能大于 max")
+    out = {"metric": "range", "column": column}
+    if lo is not None:
+        out["min"] = float(lo)
+    if hi is not None:
+        out["max"] = float(hi)
+    return out
 
 
 def validate_name(raw: Any) -> str | None:
@@ -312,6 +403,106 @@ def _evaluate_snapshot_metric(
     )
 
 
+def _engine_check(dataset: Dataset, checks: list[dict], client: Any) -> list[dict]:
+    """引擎内容代检查一次调用（≤5 条/批；调用方保证批量上限）。
+
+    返回逐检查契约列表；形态异常抛 EngineCallError（上层落 error）。
+    """
+    engine = _resolve_engine_client(dataset.customer_id, client)
+    payload = engine.call(
+        TOOL_CHECK, {"dataset_key": dataset.key, "checks": checks}
+    )
+    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+        raise EngineCallError(
+            f"引擎检查返回形态异常（期望 results 数组，收到 {type(payload).__name__}）"
+        )
+    return payload["results"]
+
+
+def _check_spec_of(check: dict) -> dict:
+    """平台检查体 → 引擎 customer_dataset_check 的 spec（列名直传——
+    两侧同封关闭集校验，结构化字典无拼串）。"""
+    metric = check["metric"]
+    if metric == "regex":
+        return {"kind": "regex", "column": check["column"], "pattern": check["pattern"]}
+    if metric == "col_compare":
+        return {
+            "kind": "col_compare",
+            "col_a": check["col_a"],
+            "op": check["op"],
+            "col_b": check["col_b"],
+        }
+    return {
+        "kind": "range",
+        "column": check["column"],
+        **({"min": check["min"]} if "min" in check else {}),
+        **({"max": check["max"]} if "max" in check else {}),
+    }
+
+
+def _evaluate_content_check(
+    db: Session, *, dataset: Dataset, rule: DatasetQualityRule,
+    triggered_by: str, client: Any,
+) -> DatasetQualityRuleResult:
+    """内容代检查求值（v2）：引擎单条调用（批量编排在 run 层）。
+
+    observed 语义（design D5b）= 未达标行数。旧 cell（无 check 工具/
+    pandera 缺失）→ 诚实 error「引擎暂不支持该检查类型」。
+    """
+    now = _utcnow_naive()
+    check = rule.check_json
+    try:
+        results = _engine_check(dataset, [_check_spec_of(check)], client)
+    except EngineUnavailable as exc:
+        return _record_result(
+            db, rule=rule, status=RULE_STATUS_ERROR, triggered_by=triggered_by,
+            channel=RULE_CHANNEL_CHECK, basis_at=now,
+            error_text=f"引擎不可用: {exc}",
+        )
+    except EngineCallError as exc:
+        text = str(exc)
+        if _is_unsupported_error(exc):
+            text = "引擎暂不支持该检查类型（cell 镜像未升级）"
+        return _record_result(
+            db, rule=rule, status=RULE_STATUS_ERROR, triggered_by=triggered_by,
+            channel=RULE_CHANNEL_CHECK, basis_at=now, error_text=text,
+        )
+    if not results:
+        return _record_result(
+            db, rule=rule, status=RULE_STATUS_ERROR, triggered_by=triggered_by,
+            channel=RULE_CHANNEL_CHECK, basis_at=now,
+            error_text="引擎检查无逐条结果（形态异常）",
+        )
+    item = results[0]
+    return _record_check_item(
+        db, rule=rule, item=item, triggered_by=triggered_by, basis_at=now,
+    )
+
+
+def _record_check_item(
+    db: Session, *, rule: DatasetQualityRule, item: dict,
+    triggered_by: str, basis_at: datetime,
+) -> DatasetQualityRuleResult:
+    """引擎逐检查契约 → 结果行（D5b 映射：observed=未达标行数、
+    threshold_json=检查定义原文——UI 分类渲染）。"""
+    status = item.get("status")
+    if status not in (RULE_STATUS_PASS, RULE_STATUS_FAIL):
+        return _record_result(
+            db, rule=rule, status=RULE_STATUS_ERROR, triggered_by=triggered_by,
+            channel=RULE_CHANNEL_CHECK, basis_at=basis_at,
+            error_text=item.get("error") or "检查执行失败",
+        )
+    return _record_result(
+        db, rule=rule, status=status, triggered_by=triggered_by,
+        element_count=_sanitize_int(item.get("element_count")),
+        unexpected_count=_sanitize_int(item.get("unexpected_count")),
+        pass_rate=_sanitize_float(item.get("pass_rate")),
+        observed=_sanitize_float(item.get("unexpected_count")),
+        channel=RULE_CHANNEL_CHECK,
+        basis_at=basis_at,
+    )
+
+
 def evaluate_rule(
     db: Session,
     *,
@@ -325,6 +516,11 @@ def evaluate_rule(
         check = rule.check_json
         if check.get("metric") == "key_uniqueness":
             return _evaluate_snapshot_metric(db, rule, triggered_by)
+        if check.get("metric") in RULE_CONTENT_METRICS:
+            return _evaluate_content_check(
+                db, dataset=dataset, rule=rule,
+                triggered_by=triggered_by, client=client,
+            )
 
         now = _utcnow_naive()
         try:
@@ -424,15 +620,78 @@ def evaluate_dataset_rules(
         stmt = stmt.where(DatasetQualityRule.id.in_(rule_ids))
     rules = db.execute(stmt.order_by(DatasetQualityRule.id)).scalars().all()
     results: list[DatasetQualityRuleResult] = []
-    for rule in rules:
+
+    # 内容代检查批量编排（Q8）：同批 ≤5 条一次引擎调用，多批串行、
+    # 逐批独立失败隔离（一批失败该批全体 error，不影响计数代与其他批）。
+    content_rules = [r for r in rules if r.check_json.get("metric") in RULE_CONTENT_METRICS]
+    others = [r for r in rules if r not in content_rules]
+
+    for rule in others:
         results.append(
             evaluate_rule(
                 db, dataset=dataset, rule=rule,
                 triggered_by=triggered_by, client=client,
             )
         )
+    for start in range(0, len(content_rules), _CONTENT_BATCH_SIZE):
+        batch = content_rules[start : start + _CONTENT_BATCH_SIZE]
+        results.extend(
+            _evaluate_content_batch(
+                db, dataset=dataset, rules=batch,
+                triggered_by=triggered_by, client=client,
+            )
+        )
+    # 保持规则原顺序返回（跨批/混合场景下调用方依赖有序）
+    order = {rule.id: i for i, rule in enumerate(rules)}
+    results.sort(key=lambda row: order.get(row.rule_id, 0))
     db.commit()
     return results
+
+
+def _evaluate_content_batch(
+    db: Session, *, dataset: Dataset, rules: list[DatasetQualityRule],
+    triggered_by: str, client: Any,
+) -> list[DatasetQualityRuleResult]:
+    """一批内容代检查（≤5）一次引擎调用；整批失败全体 error 不外抛。"""
+    now = _utcnow_naive()
+    specs = [_check_spec_of(r.check_json) for r in rules]
+    try:
+        items = _engine_check(dataset, specs, client)
+    except EngineUnavailable as exc:
+        return [
+            _record_result(
+                db, rule=r, status=RULE_STATUS_ERROR, triggered_by=triggered_by,
+                channel=RULE_CHANNEL_CHECK, basis_at=now,
+                error_text=f"引擎不可用: {exc}",
+            )
+            for r in rules
+        ]
+    except EngineCallError as exc:
+        text = (
+            "引擎暂不支持该检查类型（cell 镜像未升级）"
+            if _is_unsupported_error(exc) else str(exc)
+        )
+        return [
+            _record_result(
+                db, rule=r, status=RULE_STATUS_ERROR, triggered_by=triggered_by,
+                channel=RULE_CHANNEL_CHECK, basis_at=now, error_text=text,
+            )
+            for r in rules
+        ]
+    out: list[DatasetQualityRuleResult] = []
+    for idx, rule in enumerate(rules):
+        item = items[idx] if idx < len(items) and isinstance(items[idx], dict) else None
+        if item is None:
+            out.append(_record_result(
+                db, rule=rule, status=RULE_STATUS_ERROR, triggered_by=triggered_by,
+                channel=RULE_CHANNEL_CHECK, basis_at=now,
+                error_text="引擎检查无逐条结果（形态异常）",
+            ))
+            continue
+        out.append(_record_check_item(
+            db, rule=rule, item=item, triggered_by=triggered_by, basis_at=now,
+        ))
+    return out
 
 
 def auto_evaluate_rules(

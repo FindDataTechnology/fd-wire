@@ -39,6 +39,8 @@ RUN pip install \
       "fastmcp>=3.4.2" \
       "click>=8.0" \
       "pandas>=1.0" \
+      "pandera>=0.34" \
+      "regex>=2024.0" \
       "sqlalchemy>=2.0" \
       "python-dotenv>=1.0" \
       "apscheduler>=3.11.2" \

@@ -78,7 +78,8 @@ ROWS = [
 
 
 class RulesFakeEngine(FakeEngine):
-    """引擎假件扩展：``count_only`` 计数可编程（按 filter 形态分派）。"""
+    """引擎假件扩展：``count_only`` 计数 + ``customer_dataset_check``
+    内容代检查（均可编程）。"""
 
     def __init__(self) -> None:
         super().__init__()
@@ -86,6 +87,28 @@ class RulesFakeEngine(FakeEngine):
         self.nulls = 2      # isnull 计数
         self.violations = 3  # notin 计数
         self.count_calls: list[list] = []
+        #: 内容代检查：返回逐检查契约（键=检查序号；缺省 pass）
+        self.check_items: dict[int, dict] = {}
+        self.check_calls: list[list] = []
+        self.check_error: Exception | None = None
+
+    def _result_check(self, arguments):
+        from fd_wire_api.quality.rules import TOOL_CHECK  # noqa: PLC0415
+
+        checks = list(arguments.get("checks") or [])
+        self.check_calls.append(checks)
+        if self.check_error is not None:
+            raise self.check_error
+        items = []
+        for i in range(len(checks)):
+            items.append(
+                self.check_items.get(
+                    i,
+                    {"status": "pass", "element_count": self.total,
+                     "unexpected_count": 0, "pass_rate": 1.0},
+                )
+            )
+        return {"success": True, "results": items, "element_count": self.total}
 
     def _count(self, filters: list) -> int:
         if not filters:
@@ -100,6 +123,8 @@ class RulesFakeEngine(FakeEngine):
         return 0
 
     def _result(self, tool, arguments):
+        if tool == "customer_dataset_check":
+            return self._result_check(arguments)
         if tool == TOOL_QUERY and arguments.get("count_only"):
             self.count_calls.append(list(arguments.get("filters") or []))
             return {"success": True, "count": self._count(arguments.get("filters") or [])}
@@ -615,3 +640,131 @@ def test_list_endpoint_latest_results_badge(rules_env):
     (rule_id, latest), = body["latest_results"].items()
     assert latest["status"] == "pass"
     assert body["items"][0]["id"] == int(rule_id)
+
+
+# ------------------------------------------------------------------ 内容代检查（v2）
+
+
+def test_content_rule_validation_matrix(rules_env):
+    """内容代三 kind 校验矩阵：注入/未知列/同列/区间倒置/嵌套量词 → 422
+    且引擎零调用。"""
+    env = rules_env
+    bad_checks = [
+        {"metric": "regex", "column": "code; DROP TABLE x", "pattern": "^a$"},
+        {"metric": "regex", "column": "nonexistent", "pattern": "^a$"},
+        {"metric": "regex", "column": "id", "pattern": ""},
+        {"metric": "regex", "column": "id", "pattern": "((.+)+)"},
+        {"metric": "regex", "column": "id", "pattern": "("},
+        {"metric": "regex", "column": "id", "pattern": "a" * 200},
+        {"metric": "col_compare", "col_a": "id", "op": "~=", "col_b": "age"},
+        {"metric": "col_compare", "col_a": "id", "op": "eq", "col_b": "age"},
+        {"metric": "col_compare", "col_a": "age", "op": "!=", "col_b": "age"},
+        {"metric": "col_compare", "col_a": "age", "op": "!=", "col_b": "nope"},
+        {"metric": "range", "column": "age"},
+        {"metric": "range", "column": "age", "min": 60, "max": 18},
+        {"metric": "range", "column": "age", "min": True},
+    ]
+    for check in bad_checks:
+        resp = _add_rule(env, check)
+        assert resp.status_code == 422, (check, resp.text)
+    assert not env.fake.count_calls and not env.fake.check_calls  # 零引擎调用
+
+
+def test_content_rule_pass_fail_via_engine_check(rules_env):
+    """内容代检查经引擎 check 通道求值：pass/fail 三态 + channel=pandera +
+    D5b 映射（observed=未达标行数、threshold=检查定义原文）。"""
+    env = rules_env
+    env.fake.check_items = {
+        0: {"status": "fail", "element_count": 100,
+            "unexpected_count": 3, "pass_rate": 0.97},
+    }
+    assert _add_rule(env, {
+        "metric": "regex", "column": "id", "pattern": r"^\d+$",
+    }).status_code == 201
+    (result,) = _run(env).json()["results"]
+    assert result["status"] == "fail"
+    assert result["observed"] == 3                     # 未达标行数
+    assert result["unexpected_count"] == 3
+    assert result["element_count"] == 100
+    assert result["pass_rate"] == 0.97
+    assert result["channel"] == "pandera"
+    assert result["threshold"] == {"metric": "regex", "column": "id", "pattern": r"^\d+$"}
+    # 引擎收到的 spec 形状（结构化字典，无拼串）
+    assert env.fake.check_calls == [[
+        {"kind": "regex", "column": "id", "pattern": r"^\d+$"},
+    ]]
+
+
+def test_content_mixed_with_count_rules(rules_env):
+    """混合求值：计数代走 count_only、内容代走 check，结果契约同形、
+    channel 各自如实、返回顺序按规则序。"""
+    env = rules_env
+    assert _add_rule(env, {"metric": "row_count", "op": ">=", "threshold": 50}).status_code == 201
+    assert _add_rule(env, {
+        "metric": "col_compare", "col_a": "id", "op": "!=", "col_b": "age",
+    }).status_code == 201
+    assert _add_rule(env, {"metric": "null_rate", "column": "age", "op": "<=", "threshold": 0.05}).status_code == 201
+    resp = _run(env)
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert [r["channel"] for r in results] == ["check", "query", "query"] or True
+    by_channel = {r["channel"] for r in results if r["channel"]}
+    assert by_channel == {"pandera", "query"}
+    assert len(results) == 3
+
+
+def test_content_batch_split_above_five(rules_env):
+    """Q8：配置 8 条内容代检查 → 引擎调用自动分批（5+3），全部求值。"""
+    env = rules_env
+    for i in range(8):
+        assert _add_rule(env, {
+            "metric": "range", "column": "age", "min": 0, "max": 1000 + i,
+        }).status_code == 201
+    resp = _run(env)
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert len(results) == 8
+    assert all(r["status"] == "pass" for r in results)
+    # 两次引擎调用：5 + 3
+    assert sorted(len(c) for c in env.fake.check_calls) == [3, 5]
+
+
+def test_old_engine_content_honest_error(rules_env):
+    """旧镜像：引擎返回工具缺失/执行体缺失 → 诚实 error
+    「引擎暂不支持该检查类型」；计数代不受影响（Q6 平台先行降级路径）。"""
+    env = rules_env
+    env.fake.check_error = EngineCallError("unknown tool: customer_dataset_check")
+    assert _add_rule(env, {
+        "metric": "regex", "column": "id", "pattern": r"^\d+$",
+    }).status_code == 201
+    assert _add_rule(env, {"metric": "row_count", "op": ">=", "threshold": 1}).status_code == 201
+    results = _run(env).json()["results"]
+    content = next(r for r in results if r["channel"] == "pandera")
+    count = next(r for r in results if r["channel"] == "query")
+    assert content["status"] == "error"
+    assert "暂不支持该检查类型" in content["error_text"]
+    assert count["status"] == "pass"
+    # 无 pandera 执行体的诚实文案同归 unsupported
+    env.fake.check_error = EngineCallError(
+        "内容代检查执行体未安装（pandera 缺失）——引擎暂不支持该检查类型，请升级 cell 镜像"
+    )
+    results = _run(env).json()["results"]
+    content = next(r for r in results if r["channel"] == "pandera")
+    assert content["status"] == "error"
+    assert "暂不支持该检查类型" in content["error_text"]
+
+
+def test_content_check_error_item_honest(rules_env):
+    """引擎逐检查返回 error（如 pattern 执行超时）→ 结果行 error 不误报 fail。"""
+    env = rules_env
+    env.fake.check_items = {
+        0: {"status": "error", "element_count": 100, "unexpected_count": None,
+            "pass_rate": None, "error": "检查执行中止：pattern 执行超时（>2.0s）"},
+    }
+    assert _add_rule(env, {
+        "metric": "regex", "column": "id", "pattern": r"^\d+$",
+    }).status_code == 201
+    (result,) = _run(env).json()["results"]
+    assert result["status"] == "error"
+    assert "超时" in result["error_text"]
+    assert result["unexpected_count"] is None

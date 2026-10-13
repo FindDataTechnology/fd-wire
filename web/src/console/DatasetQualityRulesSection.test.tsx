@@ -1,9 +1,13 @@
-// 质量规则区块测试（wire-quality-rules）：规则列表 + 每条规则最新结果徽章
+// 质量规则区块测试（wire-quality-rules / v2）：规则列表 + 每条规则最新结果徽章
 // （pass/fail）、空态、错误态（fetch 500 + 重试）、canEdit=false 只读档
 // （无添加/启停/删除/立即检查/改名入口）、添加流程（POST 契约载荷 + 列表
 // 刷新 + 表单复位）、添加 422 后端 detail 如实、立即检查（POST run → 返回
 // 结果就地刷新）、删除（window.confirm 用 removeConfirm 文案；取消不发）、
 // 启停开关 PATCH、行内改名 save/cancel、snapshot 通道结果显示基准时刻。
+// v2 扩充：metric 下拉两代 optgroup 分组（汇总 6 + 内容 3）、内容代三 kind
+// （regex/col_compare/range）条件表单字段与六符 op、提交前轻量校验
+// （同列/区间倒序/pattern 空）、内容代 POST 载荷形状、内容代检查定义摘要
+// 渲染、内容代结果行「未达标 N 行」而非 observed vs threshold 假数字。
 // fetch 为本文件内置契约假后端（零网络，不改 testing.ts——DatasetDetail 手法）；
 // 新 i18n 键译文未落地前 t() 回落键名本身，断言只锚 testid/data-* 与语言
 // 中立内容（检查表达式、数值），不锚文案。
@@ -20,9 +24,14 @@ import "../i18n";
 import i18n from "../i18n";
 import {
   DatasetQualityRulesSection,
+  QUALITY_RULE_CONTENT_METRICS,
+  QUALITY_RULE_METRICS,
+  QUALITY_RULE_OPS_WITH_NE,
   describeQualityCheck,
+  isContentCheck,
   latestResultFor,
   metricNeedsColumn,
+  validateContentCheckForm,
   type QualityRule,
   type QualityRuleCheck,
   type QualityRuleResult,
@@ -33,14 +42,23 @@ const RULES_PATH = "/api/v1/datasets/ds-1/quality-rules";
 const RUN_PATH = `${RULES_PATH}/run`;
 const RESULTS_PATH = `${RULES_PATH}/results`;
 
-function makeCheck(partial: Partial<QualityRuleCheck> = {}): QualityRuleCheck {
+function makeCheck(partial: Record<string, unknown> = {}): QualityRuleCheck {
   return {
     metric: "null_rate",
     column: "age",
     op: "<=",
     threshold: 0.05,
     ...partial,
-  };
+  } as QualityRuleCheck;
+}
+
+/** 内容代（v2）检查体构造：regex/col_compare/range 三 kind。 */
+function makeContentCheck(
+  partial: Record<string, unknown> & {
+    metric: "regex" | "col_compare" | "range";
+  },
+): QualityRuleCheck {
+  return { ...partial } as QualityRuleCheck;
 }
 
 function makeRule(partial: Partial<QualityRule> = {}): QualityRule {
@@ -67,6 +85,7 @@ function makeResult(
     unexpected_count: 0,
     pass_rate: 1,
     observed: 0.012,
+    threshold: null,
     channel: "query",
     basis_at: null,
     error_text: null,
@@ -178,6 +197,14 @@ function installBackend(options: {
       for (const rule of rules) {
         if (!rule.enabled) continue;
         const status = options.runStatuses?.[rule.id] ?? "pass";
+        const content = isContentCheck(rule.check);
+        // 内容代（v2）契约：channel=pandera、observed=未达标行数、
+        // threshold=检查定义原文（design D5b）；计数代 observed=实测阈值。
+        const observed = isContentCheck(rule.check)
+          ? status === "fail"
+            ? 3
+            : 0
+          : rule.check.threshold;
         results = [
           makeResult({
             id: nextResultId++,
@@ -185,9 +212,11 @@ function installBackend(options: {
             status,
             element_count: 120,
             unexpected_count: status === "fail" ? 3 : 0,
-            pass_rate: status === "fail" ? 0.9 : 1,
-            observed: rule.check.threshold,
-            channel: "query",
+            pass_rate: content ? 0.975 : status === "fail" ? 0.9 : 1,
+            observed,
+            // 后端契约：threshold_json = 检查定义原文（两代同形）。
+            threshold: { ...rule.check },
+            channel: content ? "pandera" : "query",
             error_text: status === "error" ? "engine timeout" : null,
             created_at: ranAt,
           }),
@@ -639,5 +668,453 @@ describe("纯逻辑：describeQualityCheck / latestResultFor / metricNeedsColumn
     expect(metricNeedsColumn("null_rate")).toBe(true);
     expect(metricNeedsColumn("filled_rate")).toBe(true);
     expect(metricNeedsColumn("value_violations")).toBe(true);
+    // v2：col_compare 用 col_a/col_b 两列，无单列 column 字段
+    expect(metricNeedsColumn("col_compare")).toBe(false);
+    expect(metricNeedsColumn("regex")).toBe(true);
+    expect(metricNeedsColumn("range")).toBe(true);
+  });
+
+  it("describeQualityCheck 内容代（v2）：regex/col_compare/range 摘要，不拼假阈值", () => {
+    expect(
+      describeQualityCheck(
+        makeContentCheck({ metric: "regex", column: "code", pattern: "^\\d{3}$" }),
+      ),
+    ).toBe("regex(code): ^\\d{3}$");
+    expect(
+      describeQualityCheck(
+        makeContentCheck({
+          metric: "regex",
+          column: "code",
+          pattern: "^[A-Z]{2}\\d{4}$",
+        }),
+      ),
+    ).toBe("regex(code): ^[A-Z]{2}\\d{4}$");
+    expect(
+      describeQualityCheck(
+        makeContentCheck({
+          metric: "col_compare",
+          col_a: "end",
+          op: ">=",
+          col_b: "start",
+        }),
+      ),
+    ).toBe("end >= start");
+    expect(
+      describeQualityCheck(
+        makeContentCheck({
+          metric: "col_compare",
+          col_a: "adjust",
+          op: "!=",
+          col_b: "amount",
+        }),
+      ),
+    ).toBe("adjust != amount");
+    expect(
+      describeQualityCheck(
+        makeContentCheck({ metric: "range", column: "age", min: 20, max: 40 }),
+      ),
+    ).toBe("20 ≤ age ≤ 40");
+  });
+
+  it("isContentCheck：内容代三 kind 为真，计数代六项为假", () => {
+    for (const metric of QUALITY_RULE_CONTENT_METRICS) {
+      expect(
+        isContentCheck(
+          makeContentCheck({ metric } as Partial<QualityRuleCheck> & {
+            metric: "regex" | "col_compare" | "range";
+          }),
+        ),
+      ).toBe(true);
+    }
+    for (const metric of QUALITY_RULE_METRICS) {
+      const check =
+        metric === "row_count" || metric === "key_uniqueness"
+          ? { metric, op: ">=" as const, threshold: 1 }
+          : { metric, column: "c", op: ">=" as const, threshold: 1 };
+      expect(isContentCheck(check as QualityRuleCheck)).toBe(false);
+    }
+    // 六符常量：含 != 且五项旧符全在（v2 col_compare 专用）
+    expect([...QUALITY_RULE_OPS_WITH_NE]).toEqual([
+      "<",
+      "<=",
+      "=",
+      "!=",
+      ">=",
+      ">",
+    ]);
+  });
+
+  it("validateContentCheckForm：同列/区间倒序/pattern 空 → 错误码；正常 → null", () => {
+    const base = {
+      metric: "regex" as const,
+      column: "code",
+      pattern: "^\\d{3}$",
+      colA: "",
+      colB: "",
+      minText: "",
+      maxText: "",
+    };
+    expect(validateContentCheckForm(base)).toBeNull();
+    expect(validateContentCheckForm({ ...base, pattern: "   " })).toBe(
+      "patternRequired",
+    );
+    expect(
+      validateContentCheckForm({
+        ...base,
+        metric: "col_compare",
+        colA: "end",
+        colB: "end",
+      }),
+    ).toBe("sameColumn");
+    expect(
+      validateContentCheckForm({
+        ...base,
+        metric: "col_compare",
+        colA: "end",
+        colB: " start ",
+      }),
+    ).toBeNull();
+    expect(
+      validateContentCheckForm({
+        ...base,
+        metric: "range",
+        minText: "50",
+        maxText: "10",
+      }),
+    ).toBe("rangeOrder");
+    expect(
+      validateContentCheckForm({
+        ...base,
+        metric: "range",
+        minText: "10",
+        maxText: "50",
+      }),
+    ).toBeNull();
+  });
+});
+
+// ── v2：检查项目录扩面（optgroup 分组 + 内容代条件表单）──────────────────
+describe("DatasetQualityRulesSection v2 检查目录与表单（wire-quality-rules-v2）", () => {
+  it("metric 下拉两级 optgroup：汇总检查 6 项 + 内容检查 3 项（共 9），内容项带慢提示", async () => {
+    installBackend({ rules: [], results: [] });
+    render(<DatasetQualityRulesSection datasetId="ds-1" canEdit />);
+    await screen.findByTestId("quality-rules-empty");
+
+    const select = screen.getByTestId("quality-rule-metric");
+    const options = select.querySelectorAll("option");
+    expect(options.length).toBe(9);
+    expect([...options].map((option) => option.value)).toEqual([
+      "row_count",
+      "null_count",
+      "null_rate",
+      "filled_rate",
+      "value_violations",
+      "key_uniqueness",
+      "regex",
+      "col_compare",
+      "range",
+    ]);
+    // 分组：两个 optgroup，各 6 / 3 项
+    const groups = select.querySelectorAll("optgroup");
+    expect(groups.length).toBe(2);
+    expect(groups[0]!.querySelectorAll("option").length).toBe(6);
+    expect(groups[1]!.querySelectorAll("option").length).toBe(3);
+    // 分组标签走 i18n 键（译文未落地时回落键名本身）
+    expect(groups[0]!.getAttribute("label")).toBe(
+      "汇总检查",
+    );
+    expect(groups[1]!.getAttribute("label")).toBe(
+      "内容检查",
+    );
+    // 内容代三选项的中文名 + 「逐行执行，较慢」提示（option 文本后缀；
+    // 键未落地时 t() 回落键名——断言以 i18n.t 活取，不硬编码文案）
+    expect(
+      [...groups[1]!.querySelectorAll("option")].map((o) => o.textContent),
+    ).toEqual(
+      ["regex", "col_compare", "range"].map(
+        (metric) =>
+          `${i18n.t(`console.dataset.qualityRules.metric.${metric}`)} · ${i18n.t(
+            "console.dataset.qualityRules.contentSlowHint",
+          )}`,
+      ),
+    );
+  });
+
+  it("选 regex：显示 column + pattern，隐藏 op/threshold；pattern 空提交被阻止", async () => {
+    const backend = installBackend({ rules: [], results: [] });
+    render(<DatasetQualityRulesSection datasetId="ds-1" canEdit />);
+    await screen.findByTestId("quality-rules-empty");
+
+    fireEvent.change(screen.getByTestId("quality-rule-metric"), {
+      target: { value: "regex" },
+    });
+    // 内容代表单字段集：column + pattern；op/threshold 不在场
+    expect(screen.getByTestId("quality-rule-column")).toBeTruthy();
+    expect(screen.getByTestId("quality-rule-pattern")).toBeTruthy();
+    expect(screen.queryByTestId("quality-rule-op")).toBeNull();
+    expect(screen.queryByTestId("quality-rule-threshold")).toBeNull();
+    expect(screen.queryByTestId("quality-rule-allowed")).toBeNull();
+
+    // column 填了、pattern 空 → 提交被阻止 + 明确错误（不发网络）
+    fireEvent.change(screen.getByTestId("quality-rule-column"), {
+      target: { value: "code" },
+    });
+    fireEvent.click(screen.getByTestId("quality-rule-add"));
+    expect(
+      screen.getByTestId("quality-rule-form-error").textContent,
+    ).toContain("请填写正则模式");
+    expect(callsOf(backend.calls, "POST", RULES_PATH).length).toBe(0);
+  });
+
+  it("选 col_compare：col_a + 六符 op（含 !=）+ col_b；col_a===col_b 被阻止", async () => {
+    const backend = installBackend({ rules: [], results: [] });
+    render(<DatasetQualityRulesSection datasetId="ds-1" canEdit />);
+    await screen.findByTestId("quality-rules-empty");
+
+    fireEvent.change(screen.getByTestId("quality-rule-metric"), {
+      target: { value: "col_compare" },
+    });
+    expect(screen.getByTestId("quality-rule-col-a")).toBeTruthy();
+    expect(screen.getByTestId("quality-rule-col-b")).toBeTruthy();
+    // 单列 column 框不在场（col_compare 用两列）
+    expect(screen.queryByTestId("quality-rule-column")).toBeNull();
+    expect(screen.queryByTestId("quality-rule-threshold")).toBeNull();
+    const opSelect = screen.getByTestId("quality-rule-compare-op");
+    const opValues = [...opSelect.querySelectorAll("option")].map(
+      (option) => option.value,
+    );
+    expect(opValues).toEqual(["<", "<=", "=", "!=", ">=", ">"]);
+
+    // 两列同名 → 提交被阻止 + sameColumnError（不发网络）
+    fireEvent.change(screen.getByTestId("quality-rule-col-a"), {
+      target: { value: "end" },
+    });
+    fireEvent.change(screen.getByTestId("quality-rule-col-b"), {
+      target: { value: "end" },
+    });
+    fireEvent.click(screen.getByTestId("quality-rule-add"));
+    expect(
+      screen.getByTestId("quality-rule-form-error").textContent,
+    ).toContain("两侧不能是同一列");
+    expect(callsOf(backend.calls, "POST", RULES_PATH).length).toBe(0);
+
+    // 改成不同列 + != → 放行（POST 载荷六符语义如实）
+    fireEvent.change(screen.getByTestId("quality-rule-col-b"), {
+      target: { value: "start" },
+    });
+    fireEvent.change(screen.getByTestId("quality-rule-compare-op"), {
+      target: { value: "!=" },
+    });
+    fireEvent.click(screen.getByTestId("quality-rule-add"));
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "POST", RULES_PATH).length).toBe(1),
+    );
+    expect(callsOf(backend.calls, "POST", RULES_PATH)[0]!.body).toEqual({
+      check: { metric: "col_compare", col_a: "end", op: "!=", col_b: "start" },
+    });
+  });
+
+  it("选 range：column + min/max；min > max 被阻止（rangeOrderError）；正常放行", async () => {
+    const backend = installBackend({ rules: [], results: [] });
+    render(<DatasetQualityRulesSection datasetId="ds-1" canEdit />);
+    await screen.findByTestId("quality-rules-empty");
+
+    fireEvent.change(screen.getByTestId("quality-rule-metric"), {
+      target: { value: "range" },
+    });
+    expect(screen.getByTestId("quality-rule-column")).toBeTruthy();
+    expect(screen.getByTestId("quality-rule-min")).toBeTruthy();
+    expect(screen.getByTestId("quality-rule-max")).toBeTruthy();
+    expect(screen.queryByTestId("quality-rule-op")).toBeNull();
+    expect(screen.queryByTestId("quality-rule-threshold")).toBeNull();
+
+    fireEvent.change(screen.getByTestId("quality-rule-column"), {
+      target: { value: "age" },
+    });
+    fireEvent.change(screen.getByTestId("quality-rule-min"), {
+      target: { value: "50" },
+    });
+    fireEvent.change(screen.getByTestId("quality-rule-max"), {
+      target: { value: "10" },
+    });
+    fireEvent.click(screen.getByTestId("quality-rule-add"));
+    expect(
+      screen.getByTestId("quality-rule-form-error").textContent,
+    ).toContain("最小值不能大于最大值");
+    expect(callsOf(backend.calls, "POST", RULES_PATH).length).toBe(0);
+
+    // 改回 min ≤ max（10 ≤ 50）→ 放行，载荷 min/max 为数字、无 op/threshold
+    fireEvent.change(screen.getByTestId("quality-rule-min"), {
+      target: { value: "10" },
+    });
+    fireEvent.change(screen.getByTestId("quality-rule-max"), {
+      target: { value: "50" },
+    });
+    fireEvent.click(screen.getByTestId("quality-rule-add"));
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "POST", RULES_PATH).length).toBe(1),
+    );
+    expect(callsOf(backend.calls, "POST", RULES_PATH)[0]!.body).toEqual({
+      check: { metric: "range", column: "age", min: 10, max: 50 },
+    });
+    expect(screen.queryByTestId("quality-rule-form-error")).toBeNull();
+  });
+});
+
+describe("DatasetQualityRulesSection v2 提交载荷与内容代呈现（wire-quality-rules-v2）", () => {
+  it("regex 添加流程：POST 载荷 {metric, column, pattern} 形状正确 + 列表刷新", async () => {
+    const backend = installBackend({ rules: [], results: [] });
+    render(<DatasetQualityRulesSection datasetId="ds-1" canEdit />);
+    await screen.findByTestId("quality-rules-empty");
+
+    fireEvent.change(screen.getByTestId("quality-rule-metric"), {
+      target: { value: "regex" },
+    });
+    fireEvent.change(screen.getByTestId("quality-rule-column"), {
+      target: { value: "code" },
+    });
+    fireEvent.change(screen.getByTestId("quality-rule-pattern"), {
+      target: { value: "^\\d{3}$" },
+    });
+    fireEvent.click(screen.getByTestId("quality-rule-add"));
+
+    await waitFor(() =>
+      expect(callsOf(backend.calls, "POST", RULES_PATH).length).toBe(1),
+    );
+    // 契约形状：无 op/threshold/allowed，仅 metric/column/pattern
+    expect(callsOf(backend.calls, "POST", RULES_PATH)[0]!.body).toEqual({
+      check: { metric: "regex", column: "code", pattern: "^\\d{3}$" },
+    });
+    expect(
+      callsOf(backend.calls, "POST", RULES_PATH)[0]!.headers["authorization"],
+    ).toMatch(/^Bearer /);
+    // 列表刷新：新规则行出现并渲染内容代摘要
+    const item = await screen.findByTestId("quality-rule-item-rule-1");
+    expect(item.textContent).toContain("regex(code): ^\\d{3}$");
+    // 表单复位：metric 回 row_count → 内容代字段收起、计数代字段复出
+    expect(screen.queryByTestId("quality-rule-pattern")).toBeNull();
+    expect(screen.getByTestId("quality-rule-threshold")).toBeTruthy();
+    expect(screen.queryByTestId("quality-rule-form-error")).toBeNull();
+  });
+
+  it("内容代规则列表项渲染摘要（regex/col_compare/range 三种）", async () => {
+    installBackend({
+      rules: [
+        makeRule({
+          id: "r-regex",
+          check: makeContentCheck({
+            metric: "regex",
+            column: "code",
+            pattern: "^\\d{3}$",
+          }),
+        }),
+        makeRule({
+          id: "r-compare",
+          check: makeContentCheck({
+            metric: "col_compare",
+            col_a: "end",
+            op: ">=",
+            col_b: "start",
+          }),
+        }),
+        makeRule({
+          id: "r-range",
+          check: makeContentCheck({
+            metric: "range",
+            column: "age",
+            min: 20,
+            max: 40,
+          }),
+        }),
+      ],
+      results: [],
+    });
+    render(<DatasetQualityRulesSection datasetId="ds-1" canEdit />);
+
+    expect(
+      (await screen.findByTestId("quality-rule-item-r-regex")).textContent,
+    ).toContain("regex(code): ^\\d{3}$");
+    expect(
+      screen.getByTestId("quality-rule-item-r-compare").textContent,
+    ).toContain("end >= start");
+    expect(screen.getByTestId("quality-rule-item-r-range").textContent).toContain(
+      "20 ≤ age ≤ 40",
+    );
+  });
+
+  it("内容代结果行：渲染「未达标 N 行」（observed 映射）而非 observed vs threshold 假数字", async () => {
+    installBackend({
+      rules: [
+        makeRule({
+          id: "r1",
+          check: makeContentCheck({
+            metric: "regex",
+            column: "code",
+            pattern: "^\\d{3}$",
+          }),
+        }),
+        makeRule({
+          id: "r2",
+          check: makeCheck({ metric: "row_count", column: undefined, op: ">=", threshold: 100 }),
+        }),
+      ],
+      results: [
+        makeResult({
+          id: 102,
+          rule_id: "r1",
+          status: "fail",
+          observed: 7,
+          unexpected_count: 7,
+          pass_rate: 0.93,
+          threshold: { metric: "regex", column: "code", pattern: "^\\d{3}$" },
+          channel: "pandera",
+        }),
+        makeResult({
+          id: 101,
+          rule_id: "r2",
+          observed: 120,
+          unexpected_count: 0,
+          pass_rate: 1,
+          threshold: { metric: "row_count", op: ">=", threshold: 100 },
+          channel: "query",
+        }),
+      ],
+    });
+    render(<DatasetQualityRulesSection datasetId="ds-1" canEdit />);
+
+    const rows = within(await screen.findByTestId("quality-rules-results"))
+      .getAllByTestId("quality-rule-result-row");
+    const contentRow = rows.find(
+      (row) => row.getAttribute("data-rule-id") === "r1",
+    )!;
+    const countRow = rows.find(
+      (row) => row.getAttribute("data-rule-id") === "r2",
+    )!;
+
+    // 内容代：摘要 + 未达标 N 行 + 达标率；且不出现 observed/threshold 对比
+    expect(contentRow.getAttribute("data-channel")).toBe("pandera");
+    expect(contentRow.textContent).toContain("regex(code): ^\\d{3}$");
+    const contentCount = within(contentRow).getByTestId(
+      "quality-rule-result-content-count",
+    );
+    expect(contentCount.textContent).toContain("7");
+    expect(contentRow.textContent).toContain("93.0%");
+    expect(
+      within(contentRow).queryByTestId("quality-rule-result-observed"),
+    ).toBeNull();
+    // 内容代不再并列「阈值：100」（100 是另一条规则的假阈值）也不出现 observed 标签
+    expect(contentRow.textContent).not.toContain(
+      "console.dataset.qualityRules.observed",
+    );
+
+    // 计数代照旧：observed vs threshold 数字对比 + 未达标行数独立展示
+    const countObserved = within(countRow).getByTestId(
+      "quality-rule-result-observed",
+    );
+    expect(countObserved.textContent).toContain("120");
+    expect(countObserved.textContent).toContain("100");
+    expect(
+      within(countRow).queryByTestId("quality-rule-result-content-count"),
+    ).toBeNull();
   });
 });

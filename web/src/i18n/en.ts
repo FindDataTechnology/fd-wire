@@ -2088,6 +2088,18 @@ const en: Translation = {
         removeConfirm: "Delete this quality rule? (result history is kept)",
         rulesNote:
           "Quality rules are indicative checks, not a certification; key uniqueness reuses the latest quality snapshot (basis time shown per result).",
+        groupAggregate: "Aggregate checks",
+        groupContent: "Content checks",
+        contentSlowHint: "row-by-row, slower",
+        pattern: "Pattern",
+        patternPlaceholder: "e.g. ^[A-Z]{2}\d{4}$",
+        colA: "Left column",
+        colB: "Right column",
+        min: "Min",
+        max: "Max",
+        sameColumnError: "The two sides must be different columns",
+        rangeOrderError: "Min must not exceed max",
+        patternRequired: "Enter a pattern",
         metricLabel: "Metric",
         metric: {
           row_count: "Row count",
@@ -2096,6 +2108,9 @@ const en: Translation = {
           filled_rate: "Filled rate",
           value_violations: "Domain violations",
           key_uniqueness: "Key uniqueness",
+          regex: "Regex match",
+          col_compare: "Column comparison",
+          range: "Numeric range",
         },
       },
       visibility: {

@@ -76,7 +76,9 @@ class DatasetQualitySnapshot(DatasetsBase):
 # ------------------------------------------------------------------ 规则引擎
 # wire-quality-rules：规则配置可编辑（updated_by 留痕），结果 append-only。
 
-#: 规则指标封闭枚举（design D1/D5：全部是"一次计数查询可表达"或"快照已有"）
+#: 规则指标封闭枚举（两代）：
+#: 计数代（v1）= 一次计数查询可表达或快照已有；
+#: 内容代（v2）= 引擎侧 pandera 进程内检查（wire-quality-rules-v2）。
 RULE_METRICS: tuple[str, ...] = (
     "row_count",
     "null_count",
@@ -85,6 +87,8 @@ RULE_METRICS: tuple[str, ...] = (
     "value_violations",
     "key_uniqueness",
 )
+#: 内容代检查 kind（v2）——引擎 customer_dataset_check 执行
+RULE_CONTENT_METRICS: tuple[str, ...] = ("regex", "col_compare", "range")
 
 #: 规则比较操作符封闭枚举（SodaCL 语法形）
 RULE_OPS: tuple[str, ...] = ("<", "<=", "=", ">=", ">")
@@ -99,9 +103,11 @@ RULE_STATUS_VALUES: tuple[str, ...] = (
     RULE_STATUS_ERROR,
 )
 
-#: 求值通道：query=编译成引擎 count_only 计数；snapshot=复用最近 ok 快照
+#: 求值通道：query=编译成引擎 count_only 计数；snapshot=复用最近 ok 快照；
+#: pandera=引擎 content 检查（进程内执行，wire-quality-rules-v2）
 RULE_CHANNEL_QUERY = "query"
 RULE_CHANNEL_SNAPSHOT = "snapshot"
+RULE_CHANNEL_CHECK = "pandera"
 
 
 class DatasetQualityRule(DatasetsBase):

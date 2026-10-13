@@ -76,6 +76,10 @@ _UNSUPPORTED_MARKERS: tuple[str, ...] = (
     "invalid tool",
     "未知工具",
     "工具不存在",
+    # 引擎侧内容代检查执行体缺失（wire-quality-rules-v2：旧 cell 镜像
+    # 无 pandera → 引擎返回此文案；平台侧同归 unsupported 降级语义）
+    "引擎暂不支持该检查类型",
+    "内容代检查执行体未安装",
 )
 
 #: 引擎客户端工厂覆写（测试/调度链注入假件；None=用真实 EngineToolClient）

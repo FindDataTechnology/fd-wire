@@ -1977,6 +1977,18 @@ const zh = {
         removeConfirm: "确定删除这条质量规则？（历史结果将保留）",
         rulesNote:
           "质量规则是指示性检查而非质量认证；键唯一性依据最近一次质量快照计算（结果中标注基准时刻）。",
+        groupAggregate: "汇总检查",
+        groupContent: "内容检查",
+        contentSlowHint: "逐行执行，较慢",
+        pattern: "正则模式",
+        patternPlaceholder: "如 ^[A-Z]{2}\d{4}$",
+        colA: "左侧列",
+        colB: "右侧列",
+        min: "最小值",
+        max: "最大值",
+        sameColumnError: "两侧不能是同一列",
+        rangeOrderError: "最小值不能大于最大值",
+        patternRequired: "请填写正则模式",
         metricLabel: "指标",
         metric: {
           row_count: "行数",
@@ -1985,6 +1997,9 @@ const zh = {
           filled_rate: "填充率",
           value_violations: "值域违规数",
           key_uniqueness: "键唯一率",
+          regex: "正则匹配",
+          col_compare: "列间比较",
+          range: "数值区间",
         },
       },
       visibility: {

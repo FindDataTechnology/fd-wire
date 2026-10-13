@@ -1,6 +1,17 @@
-// 质量规则区块（wire-quality-rules）：数据集详情页内的「质量规则」区块——
-// 客户对单个数据集定义质量检查规则（六种指标 × 五种比较符 × 阈值；
-// value_violations 另需允许值清单），并查看求值结果（pass/fail/error 三态）。
+// 质量规则区块（wire-quality-rules / v2）：数据集详情页内的「质量规则」区块——
+// 客户对单个数据集定义质量检查规则并查看求值结果（pass/fail/error 三态）。
+// 检查目录两代，下拉 optgroup 分组呈现（v2）：
+// - 计数代（v1，6 项）：row_count/null_count/null_rate/filled_rate/
+//   value_violations/key_uniqueness——metric × op(五符) × threshold
+//   （值域类另需 allowed 白名单），走引擎 count_only/snapshot 通道；
+// - 内容代（v2，3 项）：regex(column+pattern)、col_compare(col_a+op 六符含
+//   !=+col_b)、range(column+min/max 闭区间)——无 op/threshold，引擎侧逐行
+//   执行（pandera 通道，较慢；旧镜像诚实 error 降级）。
+// 结果字段对内容代重映射（后端契约）：observed=未达标行数、
+// threshold_json=检查定义原文（regex→{pattern}；col_compare→{col_a,op,col_b}；
+// range→{min,max}）——故结果行按 check.metric 分派：计数代照旧
+// 「observed / threshold」数字对比，内容代只给「摘要 + 未达标 N 行 + 达标率」，
+// 绝不拼 operator+数字 的假阈值。
 // - 规则 CRUD：GET/POST/PATCH/DELETE /api/v1/datasets/{id}/quality-rules；
 // - 立即检查：POST .../run → 用返回结果就地刷新（结果列表重拉由 run 响应承担）；
 // - 结果：GET .../results?limit=20（最近在前）；规则行内徽章取该规则最新一条
@@ -17,7 +28,7 @@ import { ConsoleApiError, apiErrorText } from "./api";
 import { loadSession } from "./auth";
 import { formatServerDate, truncate } from "./util";
 
-/** 六种检查指标（前四种按列求值；row_count/key_uniqueness 是全表口径）。 */
+/** 计数代六种检查指标（v1；前四种按列求值，row_count/key_uniqueness 是全表口径）。 */
 export const QUALITY_RULE_METRICS = [
   "row_count",
   "null_count",
@@ -26,26 +37,148 @@ export const QUALITY_RULE_METRICS = [
   "value_violations",
   "key_uniqueness",
 ] as const;
-export type QualityRuleMetric = (typeof QUALITY_RULE_METRICS)[number];
+export type QualityRuleCountMetric = (typeof QUALITY_RULE_METRICS)[number];
 
-/** 五种比较符（阈值闭区间语义由服务端求值；前端只拼表达式）。 */
+/** 内容代三种检查指标（v2；逐行执行、较慢——引擎侧 pandera 通道）。 */
+export const QUALITY_RULE_CONTENT_METRICS = [
+  "regex",
+  "col_compare",
+  "range",
+] as const;
+export type QualityRuleContentMetric =
+  (typeof QUALITY_RULE_CONTENT_METRICS)[number];
+
+export type QualityRuleMetric =
+  | QualityRuleCountMetric
+  | QualityRuleContentMetric;
+
+/** 计数代五种比较符（阈值闭区间语义由服务端求值；前端只拼表达式）。 */
 export const QUALITY_RULE_OPS = ["<", "<=", "=", ">=", ">"] as const;
 export type QualityRuleOp = (typeof QUALITY_RULE_OPS)[number];
 
-/** 除 row_count / key_uniqueness 外的指标都必须指定列。 */
-export function metricNeedsColumn(metric: QualityRuleMetric): boolean {
-  return metric !== "row_count" && metric !== "key_uniqueness";
+/** col_compare 专用六种比较符（v2：含不等于 `!=`；与后端契约同枚举）。
+ *  旧 QUALITY_RULE_OPS 保留不动——计数代五符语义不扩。 */
+export const QUALITY_RULE_OPS_WITH_NE = [
+  "<",
+  "<=",
+  "=",
+  "!=",
+  ">=",
+  ">",
+] as const;
+export type QualityRuleCompareOp = (typeof QUALITY_RULE_OPS_WITH_NE)[number];
+
+/** 内容代（v2）判定：regex/col_compare/range——表单字段与结果渲染按此分派。 */
+export function isContentMetric(
+  metric: QualityRuleMetric,
+): metric is QualityRuleContentMetric {
+  return (
+    metric === "regex" || metric === "col_compare" || metric === "range"
+  );
 }
 
-export type QualityRuleCheck = {
-  metric: QualityRuleMetric;
-  /** 除 row_count / key_uniqueness 外必填。 */
-  column?: string;
-  op: QualityRuleOp;
-  threshold: number;
-  /** 仅 value_violations 必填（2-32 个）。 */
-  allowed?: string[];
+/** 除 row_count / key_uniqueness 外的指标都必须指定列（col_compare 用
+ *  col_a/col_b 两列，无单列 column 字段）。 */
+export function metricNeedsColumn(metric: QualityRuleMetric): boolean {
+  return (
+    metric !== "row_count" &&
+    metric !== "key_uniqueness" &&
+    metric !== "col_compare"
+  );
+}
+
+/** 计数代检查体（v1 契约，逐字段不变）。 */
+export type QualityRuleCountCheck =
+  | { metric: "row_count"; op: QualityRuleOp; threshold: number }
+  | {
+      metric: "null_count" | "null_rate" | "filled_rate";
+      column: string;
+      op: QualityRuleOp;
+      threshold: number;
+    }
+  | {
+      metric: "value_violations";
+      column: string;
+      op: QualityRuleOp;
+      threshold: number;
+      /** 2-32 个。 */
+      allowed: string[];
+    }
+  | { metric: "key_uniqueness"; op: QualityRuleOp; threshold: number };
+
+/** 内容代检查体（v2 契约）：regex/col_compare/range——无 op/threshold。 */
+export type QualityRuleContentCheck =
+  | { metric: "regex"; column: string; pattern: string }
+  | {
+      metric: "col_compare";
+      col_a: string;
+      /** 六比较符（含 !=）。 */
+      op: QualityRuleCompareOp;
+      col_b: string;
+    }
+  | { metric: "range"; column: string; min: number; max: number };
+
+export type QualityRuleCheck = QualityRuleCountCheck | QualityRuleContentCheck;
+
+/** 内容代检查判定（结果行渲染按此分派：内容代无假阈值对比）。 */
+export function isContentCheck(
+  check: QualityRuleCheck,
+): check is QualityRuleContentCheck {
+  return (
+    check.metric === "regex" ||
+    check.metric === "col_compare" ||
+    check.metric === "range"
+  );
+}
+
+/** 提交前轻量校验错误码（内容代三 kind 的成形性检查）。 */
+export type QualityRuleFormError =
+  | "sameColumn"
+  | "rangeOrder"
+  | "patternRequired";
+
+/** 错误码 → i18n 键（zh/en 键位对仗由 i18nKeys.test 把关）。 */
+const FORM_ERROR_KEYS: Record<QualityRuleFormError, string> = {
+  sameColumn: "console.dataset.qualityRules.sameColumnError",
+  rangeOrder: "console.dataset.qualityRules.rangeOrderError",
+  patternRequired: "console.dataset.qualityRules.patternRequired",
 };
+
+/** 内容代提交前校验（轻量、不为难用户）：
+ *  col_compare 两列同名、range min > max、regex pattern 空 → 阻止提交。
+ *  返回 null 表示通过。 */
+export function validateContentCheckForm(input: {
+  metric: QualityRuleContentMetric;
+  column: string;
+  pattern: string;
+  colA: string;
+  colB: string;
+  minText: string;
+  maxText: string;
+}): QualityRuleFormError | null {
+  if (input.metric === "regex" && input.pattern.trim() === "") {
+    return "patternRequired";
+  }
+  if (input.metric === "col_compare") {
+    const a = input.colA.trim();
+    const b = input.colB.trim();
+    if (a !== "" && a === b) return "sameColumn";
+  }
+  if (input.metric === "range") {
+    const min = Number(input.minText);
+    const max = Number(input.maxText);
+    if (
+      input.minText.trim() !== "" &&
+      input.maxText.trim() !== "" &&
+      Number.isFinite(min) &&
+      Number.isFinite(max) &&
+      min > max
+    ) {
+      return "rangeOrder";
+    }
+  }
+  return null;
+}
 
 export type QualityRule = {
   id: string;
@@ -66,16 +199,37 @@ export type QualityRuleResult = {
   element_count: number | null;
   unexpected_count: number | null;
   pass_rate: number | null;
+  /** 计数代=实测值；内容代（v2）=未达标行数（与 unexpected_count 同值）。 */
   observed: number | null;
-  channel: "query" | "snapshot";
+  /** 检查定义原文（内容代 result 行的 threshold_json 映射；计数代同形回显）。 */
+  threshold: Record<string, unknown> | null;
+  channel: "query" | "snapshot" | "pandera";
   basis_at: string | null;
   error_text: string | null;
   created_at: string;
 };
 
-/** 人话化检查表达式：`null_rate(age) <= 0.05`（语言中立，原始口径拼出）。 */
+/** 人话化检查表达式（语言中立，原始口径拼出）：
+ * - 计数代：`null_rate(age) <= 0.05`（value_violations 追加 ∈ {白名单}）；
+ * - 内容代（v2）：regex → `regex(code): ^\d{3}$`；
+ *   col_compare → `end >= start`；range → `20 ≤ age ≤ 40`
+ *   ——均为检查定义原文摘要，不拼 operator + 数字的假阈值。 */
 export function describeQualityCheck(check: QualityRuleCheck): string {
-  const head = check.column ? `${check.metric}(${check.column})` : check.metric;
+  if (check.metric === "regex") {
+    return `${check.metric}(${check.column}): ${check.pattern}`;
+  }
+  if (check.metric === "col_compare") {
+    return `${check.col_a} ${check.op} ${check.col_b}`;
+  }
+  if (check.metric === "range") {
+    return `${check.min} ≤ ${check.column} ≤ ${check.max}`;
+  }
+  // 计数代（row_count/key_uniqueness 全表口径无列；其余按列）；
+  // value_violations 追加白名单。
+  const head =
+    check.metric === "row_count" || check.metric === "key_uniqueness"
+      ? check.metric
+      : `${check.metric}(${check.column})`;
   const base = `${head} ${check.op} ${check.threshold}`;
   if (check.metric === "value_violations" && check.allowed?.length) {
     return `${base} ∈ {${check.allowed.join(", ")}}`;
@@ -180,12 +334,20 @@ export function DatasetQualityRulesSection({
   const [busy, setBusy] = useState(false); // 增/删/启停/改名互斥
   const [running, setRunning] = useState(false); // 立即检查进行中
   const [actionError, setActionError] = useState<string | null>(null);
-  // 添加表单草稿
+  // 添加表单草稿（计数代字段 + 内容代 v2 字段并存；按 metric 条件渲染）
   const [metric, setMetric] = useState<QualityRuleMetric>("row_count");
   const [column, setColumn] = useState("");
   const [op, setOp] = useState<QualityRuleOp>(">=");
   const [thresholdText, setThresholdText] = useState("");
   const [allowedText, setAllowedText] = useState("");
+  const [patternText, setPatternText] = useState("");
+  const [colAText, setColAText] = useState("");
+  const [colBText, setColBText] = useState("");
+  const [compareOp, setCompareOp] = useState<QualityRuleCompareOp>(">=");
+  const [minText, setMinText] = useState("");
+  const [maxText, setMaxText] = useState("");
+  /** 提交前轻量校验的错误码（i18n 键由 FORM_ERROR_KEYS 映射）。 */
+  const [formError, setFormError] = useState<QualityRuleFormError | null>(null);
   // 行内改名
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState("");
@@ -238,41 +400,115 @@ export function DatasetQualityRulesSection({
     }
   };
 
-  // ── 添加表单 ──
+  // ── 添加表单 ──（计数代 v1 字段 + 内容代 v2 字段；按 metric 条件渲染）
   const threshold = Number(thresholdText);
+  const content = isContentMetric(metric);
   const needsColumn = metricNeedsColumn(metric);
   const needsAllowed = metric === "value_violations";
   const allowedValues = allowedText
     .split(/[,，]/)
     .map((value) => value.trim())
     .filter(Boolean);
-  const formValid =
+  // 计数代成形性（内容代不走 op/threshold）
+  const countValid =
     thresholdText.trim() !== "" &&
     Number.isFinite(threshold) &&
     (!needsColumn || column.trim() !== "") &&
     (!needsAllowed ||
       (allowedValues.length >= 2 && allowedValues.length <= 32));
+  // 内容代成形性（三 kind 各自必填字段齐备）。注意 pattern 为空 / 两列同名 /
+  // min>max 三类**留给提交时校验**（按钮不禁用），以便给出明确错误文案。
+  const contentValid =
+    (metric === "regex" && column.trim() !== "") ||
+    (metric === "col_compare" &&
+      colAText.trim() !== "" &&
+      colBText.trim() !== "") ||
+    (metric === "range" &&
+      column.trim() !== "" &&
+      minText.trim() !== "" &&
+      Number.isFinite(Number(minText)) &&
+      maxText.trim() !== "" &&
+      Number.isFinite(Number(maxText)));
+  const formValid = content ? contentValid : countValid;
+
+  /** 组装 POST 载荷 check（两代各按契约字段集，绝不多发无关字段）。 */
+  const buildCheck = (): QualityRuleCheck => {
+    if (metric === "regex") {
+      return { metric, column: column.trim(), pattern: patternText.trim() };
+    }
+    if (metric === "col_compare") {
+      return {
+        metric,
+        col_a: colAText.trim(),
+        op: compareOp,
+        col_b: colBText.trim(),
+      };
+    }
+    if (metric === "range") {
+      return {
+        metric,
+        column: column.trim(),
+        min: Number(minText),
+        max: Number(maxText),
+      };
+    }
+    // 计数代（v1 契约逐字段不变）
+    if (metric === "row_count" || metric === "key_uniqueness") {
+      return { metric, op, threshold };
+    }
+    if (metric === "value_violations") {
+      return {
+        metric,
+        column: column.trim(),
+        op,
+        threshold,
+        allowed: allowedValues,
+      };
+    }
+    return { metric, column: column.trim(), op, threshold };
+  };
+
+  /** 表单复位（提交成功后回到初态；字段全清、metric 回 row_count）。 */
+  const resetForm = () => {
+    setMetric("row_count");
+    setColumn("");
+    setOp(">=");
+    setThresholdText("");
+    setAllowedText("");
+    setPatternText("");
+    setColAText("");
+    setColBText("");
+    setCompareOp(">=");
+    setMinText("");
+    setMaxText("");
+    setFormError(null);
+  };
 
   const addRule = async () => {
-    if (!formValid || busy) return;
+    if (busy) return;
+    // 轻量校验先行（顺序性/必填语义类错误不进网络）：col_a===col_b、
+    // min>max、pattern 为空 → 就地提示并阻止提交。
+    const validationError = content
+      ? validateContentCheckForm({
+          metric,
+          column,
+          pattern: patternText,
+          colA: colAText,
+          colB: colBText,
+          minText,
+          maxText,
+        })
+      : null;
+    setFormError(validationError);
+    if (!formValid || validationError != null) return;
     setBusy(true);
     setActionError(null);
     try {
       await qualityRequest(`/v1/datasets/${datasetId}/quality-rules`, "POST", {
-        check: {
-          metric,
-          ...(needsColumn ? { column: column.trim() } : {}),
-          op,
-          threshold,
-          ...(needsAllowed ? { allowed: allowedValues } : {}),
-        },
+        check: buildCheck(),
       });
       // 复位 + 刷新列表（新规则来自服务端，含 id/时间戳）。
-      setMetric("row_count");
-      setColumn("");
-      setOp(">=");
-      setThresholdText("");
-      setAllowedText("");
+      resetForm();
       const next = (await qualityRequest(
         `/v1/datasets/${datasetId}/quality-rules`,
         "GET",
@@ -561,16 +797,36 @@ export function DatasetQualityRulesSection({
                   <select
                     data-testid="quality-rule-metric"
                     value={metric}
-                    onChange={(e) =>
-                      setMetric(e.target.value as QualityRuleMetric)
-                    }
+                    onChange={(e) => {
+                      setMetric(e.target.value as QualityRuleMetric);
+                      setFormError(null);
+                    }}
                     className="rounded border border-slate-300 bg-white px-1.5 py-1"
                   >
-                    {QUALITY_RULE_METRICS.map((value) => (
-                      <option key={value} value={value}>
-                        {t(`console.dataset.qualityRules.metric.${value}`)}
-                      </option>
-                    ))}
+                    {/* v2：两代分组（汇总检查 6 / 内容检查 3）；内容代选项
+                        后缀「逐行执行，较慢」提示，选前即知代价。 */}
+                    <optgroup
+                      label={t(
+                        "console.dataset.qualityRules.groupAggregate",
+                      )}
+                    >
+                      {QUALITY_RULE_METRICS.map((value) => (
+                        <option key={value} value={value}>
+                          {t(`console.dataset.qualityRules.metric.${value}`)}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup
+                      label={t("console.dataset.qualityRules.groupContent")}
+                    >
+                      {QUALITY_RULE_CONTENT_METRICS.map((value) => (
+                        <option key={value} value={value}>
+                          {`${t(`console.dataset.qualityRules.metric.${value}`)} · ${t(
+                            "console.dataset.qualityRules.contentSlowHint",
+                          )}`}
+                        </option>
+                      ))}
+                    </optgroup>
                   </select>
                 </label>
                 {needsColumn && (
@@ -586,48 +842,158 @@ export function DatasetQualityRulesSection({
                     />
                   </label>
                 )}
-                <label className="flex items-center gap-1.5">
-                  <span className="text-slate-500">
-                    {t("console.dataset.qualityRules.op")}
-                  </span>
-                  <select
-                    data-testid="quality-rule-op"
-                    value={op}
-                    onChange={(e) => setOp(e.target.value as QualityRuleOp)}
-                    className="rounded border border-slate-300 bg-white px-1.5 py-1 font-mono"
-                  >
-                    {QUALITY_RULE_OPS.map((value) => (
-                      <option key={value} value={value}>
-                        {value}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="flex items-center gap-1.5">
-                  <span className="text-slate-500">
-                    {t("console.dataset.qualityRules.threshold")}
-                  </span>
-                  <input
-                    data-testid="quality-rule-threshold"
-                    type="number"
-                    step="any"
-                    value={thresholdText}
-                    onChange={(e) => setThresholdText(e.target.value)}
-                    className="w-24 rounded border border-slate-300 bg-white px-2 py-1 font-mono text-[11px]"
-                  />
-                </label>
-                {needsAllowed && (
+                {metric === "regex" && (
                   <label className="flex items-center gap-1.5">
                     <span className="text-slate-500">
-                      {t("console.dataset.qualityRules.allowedValues")}
+                      {t("console.dataset.qualityRules.pattern")}
                     </span>
                     <input
-                      data-testid="quality-rule-allowed"
-                      value={allowedText}
-                      onChange={(e) => setAllowedText(e.target.value)}
-                      className="w-56 rounded border border-slate-300 bg-white px-2 py-1 text-[11px]"
+                      data-testid="quality-rule-pattern"
+                      value={patternText}
+                      onChange={(e) => {
+                        setPatternText(e.target.value);
+                        setFormError(null);
+                      }}
+                      placeholder={t(
+                        "console.dataset.qualityRules.patternPlaceholder",
+                      )}
+                      className="w-56 rounded border border-slate-300 bg-white px-2 py-1 font-mono text-[11px]"
                     />
                   </label>
+                )}
+                {metric === "col_compare" && (
+                  <>
+                    <label className="flex items-center gap-1.5">
+                      <span className="text-slate-500">
+                        {t("console.dataset.qualityRules.colA")}
+                      </span>
+                      <input
+                        data-testid="quality-rule-col-a"
+                        value={colAText}
+                        onChange={(e) => {
+                          setColAText(e.target.value);
+                          setFormError(null);
+                        }}
+                        className="w-28 rounded border border-slate-300 bg-white px-2 py-1 font-mono text-[11px]"
+                      />
+                    </label>
+                    <label className="flex items-center gap-1.5">
+                      <span className="text-slate-500">
+                        {t("console.dataset.qualityRules.op")}
+                      </span>
+                      <select
+                        data-testid="quality-rule-compare-op"
+                        value={compareOp}
+                        onChange={(e) =>
+                          setCompareOp(e.target.value as QualityRuleCompareOp)
+                        }
+                        className="rounded border border-slate-300 bg-white px-1.5 py-1 font-mono"
+                      >
+                        {QUALITY_RULE_OPS_WITH_NE.map((value) => (
+                          <option key={value} value={value}>
+                            {value}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-1.5">
+                      <span className="text-slate-500">
+                        {t("console.dataset.qualityRules.colB")}
+                      </span>
+                      <input
+                        data-testid="quality-rule-col-b"
+                        value={colBText}
+                        onChange={(e) => {
+                          setColBText(e.target.value);
+                          setFormError(null);
+                        }}
+                        className="w-28 rounded border border-slate-300 bg-white px-2 py-1 font-mono text-[11px]"
+                      />
+                    </label>
+                  </>
+                )}
+                {metric === "range" && (
+                  <>
+                    <label className="flex items-center gap-1.5">
+                      <span className="text-slate-500">
+                        {t("console.dataset.qualityRules.min")}
+                      </span>
+                      <input
+                        data-testid="quality-rule-min"
+                        type="number"
+                        step="any"
+                        value={minText}
+                        onChange={(e) => {
+                          setMinText(e.target.value);
+                          setFormError(null);
+                        }}
+                        className="w-24 rounded border border-slate-300 bg-white px-2 py-1 font-mono text-[11px]"
+                      />
+                    </label>
+                    <label className="flex items-center gap-1.5">
+                      <span className="text-slate-500">
+                        {t("console.dataset.qualityRules.max")}
+                      </span>
+                      <input
+                        data-testid="quality-rule-max"
+                        type="number"
+                        step="any"
+                        value={maxText}
+                        onChange={(e) => {
+                          setMaxText(e.target.value);
+                          setFormError(null);
+                        }}
+                        className="w-24 rounded border border-slate-300 bg-white px-2 py-1 font-mono text-[11px]"
+                      />
+                    </label>
+                  </>
+                )}
+                {!content && (
+                  <>
+                    <label className="flex items-center gap-1.5">
+                      <span className="text-slate-500">
+                        {t("console.dataset.qualityRules.op")}
+                      </span>
+                      <select
+                        data-testid="quality-rule-op"
+                        value={op}
+                        onChange={(e) => setOp(e.target.value as QualityRuleOp)}
+                        className="rounded border border-slate-300 bg-white px-1.5 py-1 font-mono"
+                      >
+                        {QUALITY_RULE_OPS.map((value) => (
+                          <option key={value} value={value}>
+                            {value}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-1.5">
+                      <span className="text-slate-500">
+                        {t("console.dataset.qualityRules.threshold")}
+                      </span>
+                      <input
+                        data-testid="quality-rule-threshold"
+                        type="number"
+                        step="any"
+                        value={thresholdText}
+                        onChange={(e) => setThresholdText(e.target.value)}
+                        className="w-24 rounded border border-slate-300 bg-white px-2 py-1 font-mono text-[11px]"
+                      />
+                    </label>
+                    {needsAllowed && (
+                      <label className="flex items-center gap-1.5">
+                        <span className="text-slate-500">
+                          {t("console.dataset.qualityRules.allowedValues")}
+                        </span>
+                        <input
+                          data-testid="quality-rule-allowed"
+                          value={allowedText}
+                          onChange={(e) => setAllowedText(e.target.value)}
+                          className="w-56 rounded border border-slate-300 bg-white px-2 py-1 text-[11px]"
+                        />
+                      </label>
+                    )}
+                  </>
                 )}
                 <button
                   type="button"
@@ -639,6 +1005,14 @@ export function DatasetQualityRulesSection({
                   {t("console.dataset.qualityRules.add")}
                 </button>
               </div>
+              {formError != null && (
+                <p
+                  data-testid="quality-rule-form-error"
+                  className="mt-2 text-xs text-red-600"
+                >
+                  {t(FORM_ERROR_KEYS[formError])}
+                </p>
+              )}
             </div>
           )}
 
@@ -695,25 +1069,48 @@ export function DatasetQualityRulesSection({
                     <span className="font-mono text-slate-600">
                       {rule ? describeQualityCheck(rule.check) : result.rule_id}
                     </span>
-                    <span className="text-slate-500">
-                      {t("console.dataset.qualityRules.observed")}：
-                      {result.observed ?? "—"}
-                      {rule
-                        ? ` / ${t("console.dataset.qualityRules.threshold")}：${rule.check.threshold}`
-                        : ""}
-                    </span>
+                    {/* 内容代（v2）结果：observed/threshold 已在后端重映射
+                        （observed=未达标行数、threshold=检查定义原文），
+                        不再拼假阈值对比——摘要已在左侧，此处只补
+                        「未达标 N 行 + 达标率」。计数代照旧 observed /
+                        threshold 数字对比。 */}
+                    {rule != null && isContentCheck(rule.check) ? (
+                      result.observed != null && (
+                        <span
+                          data-testid="quality-rule-result-content-count"
+                          className="text-slate-500"
+                        >
+                          {t("console.dataset.qualityRules.unexpectedCount")}：
+                          {result.observed}
+                        </span>
+                      )
+                    ) : (
+                      <span
+                        data-testid="quality-rule-result-observed"
+                        className="text-slate-500"
+                      >
+                        {t("console.dataset.qualityRules.observed")}：
+                        {result.observed ?? "—"}
+                        {rule != null && !isContentCheck(rule.check)
+                          ? ` / ${t("console.dataset.qualityRules.threshold")}：${rule.check.threshold}`
+                          : ""}
+                      </span>
+                    )}
                     {result.element_count != null && (
                       <span className="text-slate-500">
                         {t("console.dataset.qualityRules.elementCount")}：
                         {result.element_count.toLocaleString()}
                       </span>
                     )}
-                    {result.unexpected_count != null && (
-                      <span className="text-slate-500">
-                        {t("console.dataset.qualityRules.unexpectedCount")}：
-                        {result.unexpected_count}
-                      </span>
-                    )}
+                    {result.unexpected_count != null &&
+                      !(
+                        rule != null && isContentCheck(rule.check)
+                      ) && (
+                        <span className="text-slate-500">
+                          {t("console.dataset.qualityRules.unexpectedCount")}：
+                          {result.unexpected_count}
+                        </span>
+                      )}
                     {result.pass_rate != null && (
                       <span className="text-slate-500">
                         {t("console.dataset.qualityRules.passRate")}：
