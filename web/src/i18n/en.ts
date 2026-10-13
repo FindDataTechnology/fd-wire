@@ -229,7 +229,7 @@ const en: Translation = {
     qualityFreshness:
       "Freshness: “stale” is judged only for datasets that declare an expected refresh cadence; undeclared ones show “unknown”.",
     qualityRules:
-      "Quality rules: your own acceptance bar (metric + threshold, e.g. null rate ≤ 5%), evaluated via engine-side counts with pass/fail results",
+      "Quality rules: your own acceptance bar — aggregate checks (e.g. null rate ≤ 5%) via engine-side counts, content checks (regex / column comparison / range) executed row-by-row inside your dedicated engine, all reporting pass/fail",
     computeTitle: "Where quality is computed",
     computeDesc:
       "Quality metrics are computed inside your dedicated data engine; the platform keeps only the aggregate numbers and never touches your data content — your data stays within your scope.",
@@ -2058,7 +2058,7 @@ const en: Translation = {
       qualityRules: {
         title: "Quality rules",
         subtitle:
-          "Define your own acceptance bar (metric + threshold); the platform evaluates via engine-side counts and reports pass/fail/error per rule. Cell-tier datasets only.",
+          "Define your own acceptance bar: aggregate checks evaluate via engine-side counts; content checks (regex / column comparison / range) run inside your dedicated engine (data never leaves it). Cell-tier datasets only.",
         add: "Add rule",
         empty: "No quality rules yet — add one and let your acceptance bar speak for itself.",
         loading: "Loading quality rules…",
