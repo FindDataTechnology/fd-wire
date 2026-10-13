@@ -210,7 +210,7 @@ def test_chain_head_is_provenance_foundation(migrated_sqlite) -> None:
         ).scalar()
     # 链头断言随最新迁移前进（0032_transform_pipelines：管线五表；0031 质量
     # 快照表在其前——wire-asset-catalog 任务组 4，单链线性追加）
-    assert version == "0033_team_spaces_v2"
+    assert version == "0034_dataset_marketplace"
     engine.dispose()
 
 

@@ -47,6 +47,10 @@ from .entities import router as entities_router
 # 资产目录（wire-asset-catalog）：数据集资产元数据 + 目录浏览端点
 # （表挂 DatasetsBase 走 datasets 库；生产迁移 alembic 0030）
 from .assets import router as assets_router
+# 数据市场（wire-dataset-marketplace）：四档可见性阶梯（private 默认 /
+# link / directed / market）+ 定向授权 + 订阅/审批访问（三表挂
+# DatasetsBase；生产迁移 alembic 0034；默认私有——未开放永不进任何面）
+from .market import router as market_router
 # 数据集质量快照（wire-asset-catalog 任务组 4）：快照通道 + 新鲜度徽章
 # （表挂 DatasetsBase；生产迁移 alembic 0031）
 from .quality import router as quality_router
@@ -252,6 +256,10 @@ app.include_router(entities_router)
 # /api/v1/datasets/{id}/asset-meta 元数据读写与留痕（console 身份；
 # 元数据绝不出公开面——红线 3 的资产维度延伸）
 app.include_router(assets_router)
+# 数据市场（wire-dataset-marketplace）：/api/v1/datasets/{id}/visibility 与
+# grants/access-requests（发布方写面）+ /api/v1/market/* 浏览订阅面
+# （市场列表 SQL 层只查 market 档——私有数据永不进结果集）
+app.include_router(market_router)
 # 数据集质量快照（wire-asset-catalog 任务组 4）：/api/v1/quality/summary
 # 徽章聚合 + /api/v1/datasets/{id}/quality 详情与手动 refresh
 # （计算在 cell 引擎侧，平台侧只收聚合计数——红线 2）
