@@ -228,6 +228,8 @@ const en: Translation = {
       "Four states are shown as they are: OK / latest snapshot failed (stale values are not shown) / engine not supported yet (older versions) / no snapshot yet.",
     qualityFreshness:
       "Freshness: “stale” is judged only for datasets that declare an expected refresh cadence; undeclared ones show “unknown”.",
+    qualityRules:
+      "Quality rules: your own acceptance bar (metric + threshold, e.g. null rate ≤ 5%), evaluated via engine-side counts with pass/fail results",
     computeTitle: "Where quality is computed",
     computeDesc:
       "Quality metrics are computed inside your dedicated data engine; the platform keeps only the aggregate numbers and never touches your data content — your data stays within your scope.",
@@ -2051,6 +2053,51 @@ const en: Translation = {
     // access mode + directed grant list. Private by default — nothing is
     // exposed unless the customer opts in.
     dataset: {
+      // Quality rules (wire-quality-rules): customer-defined acceptance
+      // thresholds + GX-style three-state results.
+      qualityRules: {
+        title: "Quality rules",
+        subtitle:
+          "Define your own acceptance bar (metric + threshold); the platform evaluates via engine-side counts and reports pass/fail/error per rule. Cell-tier datasets only.",
+        add: "Add rule",
+        empty: "No quality rules yet — add one and let your acceptance bar speak for itself.",
+        loading: "Loading quality rules…",
+        error: "Failed to load quality rules",
+        runNow: "Run checks",
+        running: "Running…",
+        column: "Column",
+        op: "Operator",
+        threshold: "Threshold",
+        allowedValues: "Allowed values (comma-separated, 2-32)",
+        enabled: "Enabled",
+        disabled: "Disabled",
+        delete: "Delete",
+        cancel: "Cancel",
+        save: "Save",
+        results: "Results",
+        resultsEmpty: "No results yet — hit “Run checks” for a round.",
+        statusPass: "Pass",
+        statusFail: "Fail",
+        statusError: "Error",
+        observed: "Observed",
+        elementCount: "Rows",
+        unexpectedCount: "Offending rows",
+        passRate: "Pass rate",
+        basisAt: "Basis at",
+        actionError: "Action failed",
+        removeConfirm: "Delete this quality rule? (result history is kept)",
+        rulesNote:
+          "Quality rules are indicative checks, not a certification; key uniqueness reuses the latest quality snapshot (basis time shown per result).",
+        metricLabel: "Metric",
+        metric: {
+          row_count: "Row count",
+          null_count: "Null count",
+          null_rate: "Null rate",
+          filled_rate: "Filled rate",
+          value_violations: "Domain violations",
+          key_uniqueness: "Key uniqueness",
+        },
+      },
       visibility: {
         title: "Data openness",
         hint: "Private by default. Once you pick an openness tier the dataset becomes visible to the matching audience; you can switch back to private at any time (effective immediately).",

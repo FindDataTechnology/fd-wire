@@ -213,6 +213,8 @@ const zh = {
       "状态如实呈现四种：正常 / 最近一次快照失败（不显示旧值）/ 引擎暂不支持（旧版本）/ 暂无快照。",
     qualityFreshness:
       "新鲜度：仅对声明了期望更新节奏的数据集判定「过期」，未声明的显示「未知」。",
+    qualityRules:
+      "质量规则：自定义合格线（指标+阈值，如空值率 ≤ 5%），按引擎计数求值并给出通过/失败三态",
     computeTitle: "计算位置",
     computeDesc:
       "质量指标在你的专属数据引擎内计算，平台只保存聚合数字、不接触你的数据内容——数据始终留在你的范围内。",
@@ -1941,6 +1943,50 @@ const zh = {
     // 数据集可见性（wire-dataset-marketplace）：四档阶梯 + 开放模式 +
     // 定向授权名单。默认 private——不主动选就永不进任何面。
     dataset: {
+      // 质量规则（wire-quality-rules）：客户自定义合格线 + GX 三态结果。
+      qualityRules: {
+        title: "质量规则",
+        subtitle:
+          "自定义合格线（指标 + 阈值），系统按引擎计数求值并给出通过/失败/错误三态结果。仅 cell 档数据集可用。",
+        add: "添加规则",
+        empty: "还没有质量规则——添加一条，让数据合格线自己说话。",
+        loading: "正在读取质量规则…",
+        error: "质量规则读取失败",
+        runNow: "立即检查",
+        running: "检查中…",
+        column: "列",
+        op: "操作符",
+        threshold: "阈值",
+        allowedValues: "白名单值（逗号分隔，2-32 个）",
+        enabled: "已启用",
+        disabled: "已停用",
+        delete: "删除",
+        cancel: "取消",
+        save: "保存",
+        results: "求值结果",
+        resultsEmpty: "还没有求值结果——点「立即检查」跑一轮。",
+        statusPass: "通过",
+        statusFail: "未通过",
+        statusError: "错误",
+        observed: "实测值",
+        elementCount: "总行数",
+        unexpectedCount: "未达标行数",
+        passRate: "达标率",
+        basisAt: "基准时刻",
+        actionError: "操作失败",
+        removeConfirm: "确定删除这条质量规则？（历史结果将保留）",
+        rulesNote:
+          "质量规则是指示性检查而非质量认证；键唯一性依据最近一次质量快照计算（结果中标注基准时刻）。",
+        metricLabel: "指标",
+        metric: {
+          row_count: "行数",
+          null_count: "空值数",
+          null_rate: "空值率",
+          filled_rate: "填充率",
+          value_violations: "值域违规数",
+          key_uniqueness: "键唯一率",
+        },
+      },
       visibility: {
         title: "数据开放",
         hint: "默认私有。选择开放档位后，该数据集按档位对相应对象可见；可随时改回私有（即时失效）。",

@@ -94,6 +94,7 @@ import {
   RefreshScheduleSection,
 } from "./RefreshScheduleSection";
 import { DatasetVisibilitySection } from "./DatasetVisibilitySection";
+import { DatasetQualityRulesSection } from "./DatasetQualityRulesSection";
 
 const SYNC_BADGE_CLASS: Record<SyncStatus, string> = {
   idle: "bg-slate-100 text-slate-600 ring-slate-200",
@@ -442,6 +443,10 @@ export function DatasetDetail({
       {/* 数据质量（wire-dataset-quality 5.3）：口径标注常驻 + 四种如实态 +
           行数趋势 + 手动「立即检查」。 */}
       <QualityPanel datasetId={datasetId} />
+      {/* 质量规则（wire-quality-rules）：客户自定义检查（指标+阈值）+
+          求值结果三态（GX 契约）。写权限以服务端口径为准（403 如实回显），
+          与本页既有「前端无独立角色源」纪律一致。 */}
+      <DatasetQualityRulesSection datasetId={datasetId} canEdit={true} />
 
       <PreviewGrid
         datasetId={datasetId}

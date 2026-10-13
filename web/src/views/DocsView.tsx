@@ -416,6 +416,10 @@ export function DocsView() {
             <ul className="mt-3 space-y-1.5 text-sm text-slate-500">
               <li>{t("docs.assets.qualityStates")}</li>
               <li>{t("docs.assets.qualityFreshness")}</li>
+              {/* 质量规则（wire-quality-rules）：客户自定义合格线 */}
+              <li data-testid="docs-assets-quality-rules">
+                {t("docs.assets.qualityRules")}
+              </li>
             </ul>
           </div>
           <div className="rounded-lg border border-slate-200 p-5">

@@ -387,7 +387,9 @@ def notify_dataset_changed(
       平台侧直读被红线禁止，引擎侧也无其数据表——不落伪造快照；
     - ``unsupported`` 退避窗口内跳过（见 :func:`_should_skip_automatic`）；
     - 任何异常（含快照落库失败）只记日志——主流程（同步/派生/建档）的
-      结果已在调用前落定，绝不因快照中断或回滚。
+      结果已在调用前落定，绝不因快照中断或回滚；
+    - 快照后顺跑质量规则自动求值（wire-quality-rules）：独立失败隔离
+      （规则求值的任何异常同样只记日志，绝不影响主流程）。
     """
     try:
         if getattr(dataset, "storage_tier", "cell") == "api":
@@ -408,6 +410,12 @@ def notify_dataset_changed(
             "质量快照自动触发失败（已隔离，主流程不受影响）dataset_id=%s trigger=%s",
             getattr(dataset, "id", "?"),
             triggered_by,
+        )
+    finally:
+        from . import rules as _rules  # noqa: PLC0415 - 惰性防环
+
+        _rules.auto_evaluate_rules(
+            dataset=dataset, triggered_by=triggered_by, client=client
         )
 
 

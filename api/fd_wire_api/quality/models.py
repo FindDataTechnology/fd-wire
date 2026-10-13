@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, String, Text
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..datasets.db import DatasetsBase
@@ -71,3 +71,99 @@ class DatasetQualitySnapshot(DatasetsBase):
     null_rates_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
     sample_limit_hit: Mapped[bool] = mapped_column(Boolean, default=False)
     error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+# ------------------------------------------------------------------ 规则引擎
+# wire-quality-rules：规则配置可编辑（updated_by 留痕），结果 append-only。
+
+#: 规则指标封闭枚举（design D1/D5：全部是"一次计数查询可表达"或"快照已有"）
+RULE_METRICS: tuple[str, ...] = (
+    "row_count",
+    "null_count",
+    "null_rate",
+    "filled_rate",
+    "value_violations",
+    "key_uniqueness",
+)
+
+#: 规则比较操作符封闭枚举（SodaCL 语法形）
+RULE_OPS: tuple[str, ...] = ("<", "<=", "=", ">=", ">")
+
+#: 求值结果状态（GX 结果契约的柏讯面）
+RULE_STATUS_PASS = "pass"
+RULE_STATUS_FAIL = "fail"
+RULE_STATUS_ERROR = "error"
+RULE_STATUS_VALUES: tuple[str, ...] = (
+    RULE_STATUS_PASS,
+    RULE_STATUS_FAIL,
+    RULE_STATUS_ERROR,
+)
+
+#: 求值通道：query=编译成引擎 count_only 计数；snapshot=复用最近 ok 快照
+RULE_CHANNEL_QUERY = "query"
+RULE_CHANNEL_SNAPSHOT = "snapshot"
+
+
+class DatasetQualityRule(DatasetsBase):
+    """数据集质量规则（配置，可编辑；每数据集上限见 quality/settings）。
+
+    ``check_json`` 是封闭枚举的结构化检查体（写入前经
+    :func:`fd_wire_api.quality.rules.validate_check` 校验——指标/操作符/
+    列名/白名单值逐项白名单，编译器只组装 filter 字典，永不拼表达式
+    字符串，design D3 注入防线）::
+
+        {"metric": "null_rate", "column": "age", "op": "<=", "threshold": 0.05}
+        {"metric": "value_violations", "column": "status", "op": "=",
+         "threshold": 0, "allowed": ["active", "closed"]}
+    """
+
+    __tablename__ = "dataset_quality_rules"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    dataset_id: Mapped[str] = mapped_column(String(36), index=True)
+    #: 客户自拟规则名（可空——空时控制台用指标人话化兜底）
+    name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    check_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: 最近一次变更的操作者（服务端身份，不信请求头）
+    updated_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_utcnow_naive, onupdate=_utcnow_naive
+    )
+
+
+class DatasetQualityRuleResult(DatasetsBase):
+    """规则求值结果（append-only；GX 契约三数 + 实测值 + 基准时刻）。
+
+    - ``element_count`` / ``unexpected_count`` / ``pass_rate``：Great
+      Expectations 结果契约的柏讯面（row_count 类无比率语义的指标恒 NULL）；
+    - ``observed``：实测值（计数类=个数、比率类=比率、快照类=键唯一率）；
+    - ``channel``：query（实算）| snapshot（复用快照）；
+    - ``basis_at``：求值基准时刻（query=引擎计数时刻、snapshot=所依据
+      快照的 computed_at——如实披露结论依据的快照年龄）；
+    - ``error_text``：status=error 时的原因摘要（绝不用旧结果冒充当前）。
+    """
+
+    __tablename__ = "dataset_quality_rule_results"
+
+    # 注意：SQLite 只有 INTEGER PRIMARY KEY 才自动增量（BIGINT 不行）
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    rule_id: Mapped[int] = mapped_column(Integer, index=True)
+    dataset_id: Mapped[str] = mapped_column(String(36), index=True)
+    #: pass | fail | error
+    status: Mapped[str] = mapped_column(String(8))
+    element_count: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    unexpected_count: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    pass_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    observed: Mapped[float | None] = mapped_column(Float, nullable=True)
+    threshold_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    #: query | snapshot
+    channel: Mapped[str] = mapped_column(String(8))
+    basis_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: create | sync | materialize | manual（与快照同集）
+    triggered_by: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
