@@ -11,11 +11,12 @@ draft/published/archived 状态机、会话草稿导入，以及控制台产物�
 
 ### Requirement: 产物持久化
 
-产物为客户域内的一等实体：跨会话持久保存（kind、标题、spec、状态、来源会话
-指针、更新时间）；客户只能访问自己的产物；会话草稿可一键固化为 draft 产物且
-保留来源指针，会话草稿读取端点行为不变；**空白新建**——console 会话可直接
-创建空白 dashboard 或 form draft 产物（v1=最小空 spec；form 见 form-apps
-能力），kind 白名单 v0 为 dashboard 与 form，title 必填。
+产物MUST为客户域内的一等实体：跨会话持久保存（kind、标题、spec、状态、
+来源会话指针、更新时间）；客户只能访问自己的产物；会话草稿可一键固化为
+draft 产物且保留来源指针，会话草稿读取端点行为不变；**空白新建**——
+console 会话可直接创建空白 dashboard、form 或 record-view draft 产物
+（v1=最小空 spec；form 见 form-apps 能力、record-view 见 record-view
+能力），kind 白名单 v0 为 dashboard、form 与 record-view，title 必填。
 
 #### Scenario: 草稿转正
 - **WHEN** 客户把某会话草稿导入为产物
@@ -32,10 +33,15 @@ draft/published/archived 状态机、会话草稿导入，以及控制台产物�
 #### Scenario: 空白建表单
 - **WHEN** 免费档客户（无 cell）新建表单并起标题
 - **THEN** 生成 draft 产物（零字段、未绑数据集的最小 form spec），可直接进
-  构建器绑数据集配字段
+    构建器绑数据集配字段
+
+#### Scenario: 空白建溯源页
+- **WHEN** 免费档客户（无 cell）新建单记录公开页并起标题
+- **THEN** 生成 draft 产物（未绑数据集的最小 record-view spec），可直接进
+    构建器绑主数据集配头部与时间轴
 
 #### Scenario: kind 白名单
-- **WHEN** 请求以空白方式创建 dashboard 与 form 之外的 kind
+- **WHEN** 请求以空白方式创建 dashboard、form 与 record-view 之外的 kind
 - **THEN** 422 如实拒绝（其他 kind 仍由 AI 草稿转正产生）
 
 ### Requirement: 版本化
