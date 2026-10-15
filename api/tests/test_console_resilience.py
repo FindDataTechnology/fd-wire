@@ -492,3 +492,24 @@ def test_migration_downgrade_drops_index_keeps_names(tmp_path, monkeypatch) -> N
 
     command.upgrade(_alembic_config(), "head")
     assert "uq_billing_customers_name" in _unique_name_indexes(db_url)
+
+
+# ---------------------------------------------------------------------------
+# 回归守卫：revision id 长度 ≤32（PG alembic_version.version_num varchar(32)；
+# SQLite 不强制长度，超长只在生产 PG 暴露——2026-10-15 生产迁移首跑实测）
+# ---------------------------------------------------------------------------
+
+
+def test_all_revision_ids_fit_alembic_version_column() -> None:
+    """全链 revision id 必须 ≤32 字符（PG varchar(32) 硬上限）。"""
+    import re
+    from pathlib import Path
+
+    versions_dir = Path(__file__).resolve().parent.parent / "alembic" / "versions"
+    bad = []
+    for path in versions_dir.glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        m = re.search(r'^revision:\s*str\s*=\s*"([^"]+)"', text, re.MULTILINE)
+        if m and len(m.group(1)) > 32:
+            bad.append((path.name, m.group(1), len(m.group(1))))
+    assert bad == [], f"revision id 超 32 字符（PG 迁移必失败）: {bad}"

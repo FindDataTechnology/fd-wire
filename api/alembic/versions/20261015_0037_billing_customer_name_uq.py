@@ -22,7 +22,7 @@ NULL）与自开户真户同 ``name`` → ``plan_code_for``/``storage_limit_for`
 downgrade 只删索引、**不改名**——``#orphan-`` 改名不可逆（改名前的原名
 未留痕），降级库回到「重名可存在」的旧缺陷态，如实不再重演自愈。
 
-Revision ID: 0037_billing_customer_name_unique
+Revision ID: 0037_billing_customer_name_uq
 Revises: 0036_artifact_marketplace
 Create Date: 2026-10-15
 
@@ -35,7 +35,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0037_billing_customer_name_unique"
+revision: str = "0037_billing_customer_name_uq"
 down_revision: Union[str, None] = "0036_artifact_marketplace"
 branch_labels: Union[str, Sequence[str] | None] = None
 depends_on: Union[str, Sequence[str] | None] = None

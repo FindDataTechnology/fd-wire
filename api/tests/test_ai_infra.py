@@ -547,7 +547,7 @@ def test_migration_0005_creates_ai_tables(migrated_sqlite) -> None:
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
     # 迁移链只增不改：head 随链推进（wire-transform-pipelines 起 = 0032）
-    assert version == "0037_billing_customer_name_unique"
+    assert version == "0037_billing_customer_name_uq"
 
 
 def _cfg() -> Config:
