@@ -29,7 +29,7 @@ spec:
         - name: web
           # TODO(go-live): 首次构建后回填实际 sha- tag。
           # 出片 tag=law-ai-official 快照仓 sha（fd-wire-images 68242b8 = 真 4146d1b（wire-artifact-marketplace：市场三页签+产物可见性选择器+快照披露））。
-          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-68242b8
+          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-4ee9387
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
