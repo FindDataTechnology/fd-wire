@@ -206,17 +206,20 @@ def create_customer(
     - sub2api 不可达/5xx → 502 fail-closed 中止（不留半开户：本地行与
       代建账户要么都有、要么都没有）；
     - 显式传 ``sub2api_user_id`` 保留为兼容路径（跳过代建，直接落本地行）；
-    - 同名同档重复开户 → 409；禁用档 → 409；未知档位 → 422。
+    - 同名（任意档位）→ 422 如实拒（wire-console-resilience D3：客户名
+      全局唯一，提示改名）；禁用档 → 409；未知档位 → 422。
     """
     plan = _assignable_plan_or_error(db, payload.plan_code)
 
     duplicate = db.execute(
-        select(Customer).where(Customer.name == payload.name, Customer.plan_id == plan.id)
+        select(Customer).where(Customer.name == payload.name)
     ).scalar_one_or_none()
     if duplicate is not None:
+        # 建户动作之前拦截（零半写）：唯一索引的最后防线在这里前置成
+        # 可读的 422，而不是等 flush IntegrityError。
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"同名同档客户已存在（id={duplicate.id}）",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"客户名已存在: {payload.name}",
         )
 
     if payload.sub2api_user_id:
@@ -252,7 +255,7 @@ def create_customer(
     if not created:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"同名同档客户已存在（id={customer.id}）",
+            detail=f"同名客户已存在（id={customer.id}）",
         )
     db.flush()
     return _customer_out(db, customer)

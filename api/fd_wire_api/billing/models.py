@@ -97,12 +97,16 @@ class Customer(Base):
     ``logto_sub``（wire-self-serve-launch 1.1）：控制台登录身份 → Customer
     的唯一映射键（可空——人工开户的历史行允许暂无登录身份；首登自动
     开户/绑定时回写）。唯一 sub 至多映射一个客户。
+    ``name``（wire-console-resilience）：客户命名空间键，全表唯一——
+    档位解析（plan_code_for/storage_limit_for）按 name 收敛，重名会令
+    解析不确定（生产 2026-10-15 孤儿行事故）。迁移 0037 自愈改名后建
+    唯一索引（迁移是权威——create_all 仅新库一致）。
     """
 
     __tablename__ = "billing_customers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     sub2api_user_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     logto_sub: Mapped[str | None] = mapped_column(String(64), unique=True)
     plan_id: Mapped[int] = mapped_column(ForeignKey("billing_plans.id"), nullable=False)

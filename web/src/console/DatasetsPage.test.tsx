@@ -17,7 +17,7 @@ import "../i18n";
 import i18n from "../i18n";
 import { DatasetsPage } from "./DatasetsPage";
 import { installConsoleBackend, seedConsoleSession, type FetchCall } from "./testing";
-import type { Connector, Dataset } from "./api";
+import type { Connector, Dataset, DatasetQuota } from "./api";
 import { CONSOLE_TABS } from "./ConsoleLayout";
 import { parseHash } from "../App";
 
@@ -1478,5 +1478,49 @@ describe("DatasetsPage 资产目录（筛选/搜索/分页 + 质量徽章，任�
     expect(screen.queryByTestId("dataset-sensitivity-badge")).toBeNull();
     // 不白屏：错误面也没被触发（容错而非报错）
     expect(screen.queryByTestId("datasets-error")).toBeNull();
+  });
+});
+
+// ── 配额条档位未知降级（wire-console-resilience D4）──────────────────────
+describe("DatasetsPage 配额条：档位未知 null 降级", () => {
+  it("max_* 为 null（档位 fail-closed）→ 中性提示行，不渲染数值条/CTA 且不崩", async () => {
+    install({
+      datasets: [],
+      datasetQuota: {
+        plan_code: "",
+        used_datasets: 0,
+        max_datasets: null,
+        max_rows_per_dataset: null,
+      } as unknown as DatasetQuota,
+    });
+    render(<DatasetsPage planCode="free" />);
+
+    const bar = await screen.findByTestId("datasets-quota");
+    expect(bar.getAttribute("data-unknown")).toBe("true");
+    expect(bar.textContent).toContain("当前档位限额信息不可用");
+    // 降级态不渲染升档引导（数值未知时 CTA 语义不成立）
+    expect(screen.queryByTestId("datasets-quota-upgrade")).toBeNull();
+    // 页面其余功能不受影响（未触发错误面）
+    expect(screen.queryByTestId("datasets-error")).toBeNull();
+  });
+
+  it("限额齐全 → 数值条逐字零漂移（含触达上限 amber + 升档引导）", async () => {
+    install({
+      datasets: [],
+      datasetQuota: {
+        plan_code: "free",
+        used_datasets: 3,
+        max_datasets: 3,
+        max_rows_per_dataset: 10000,
+      },
+    });
+    render(<DatasetsPage planCode="free" />);
+
+    const bar = await screen.findByTestId("datasets-quota");
+    expect(bar.getAttribute("data-unknown")).toBeNull();
+    expect(bar.getAttribute("data-exhausted")).toBe("true");
+    expect(bar.textContent).toContain("已用 3/3");
+    expect(bar.textContent).toContain("10,000");
+    expect(screen.getByTestId("datasets-quota-upgrade")).toBeTruthy();
   });
 });

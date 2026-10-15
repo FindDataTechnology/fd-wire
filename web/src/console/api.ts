@@ -1097,12 +1097,14 @@ export function connectorDownloadUrl(
 // ── 免费档数据集配额（wire-free-tier-data-gate 任务 4.1）────────────────────
 // 契约：GET /api/v1/datasets/quota → { plan_code, used_datasets,
 // max_datasets, max_rows_per_dataset }。端点未就绪/失败时调用方应静默降级
-// （配额条隐藏），绝不阻塞「我的数据」页面。
+// （配额条隐藏），绝不阻塞「我的数据」页面。max_* 为 `number | null`
+//（wire-console-resilience：后端档位解析 fail-closed 时如实回 null，
+// 与 schemas 的 `int | None` 对齐——消费方按「档位未知」降级，不抛错）。
 export interface DatasetQuota {
   plan_code: string;
   used_datasets: number;
-  max_datasets: number;
-  max_rows_per_dataset: number;
+  max_datasets: number | null;
+  max_rows_per_dataset: number | null;
 }
 
 /** 免费档配额余量（已用集数 / 上限集数、单集行数上限）。 */
@@ -2727,11 +2729,13 @@ export interface WorkbenchDatasetRecent {
   updated_at: string;
 }
 
-/** 免费档数据集配额（与 GET /v1/datasets/quota 同语义嵌入；付费档 null）。 */
+/** 免费档数据集配额（与 GET /v1/datasets/quota 同语义嵌入；付费档 null）。
+ *  max_* 为 `number | null`（wire-console-resilience：fail-closed 如实回
+ *  null——消费方按「档位未知」降级，不抛错）。 */
 export interface WorkbenchFreeQuota {
   used_datasets: number;
-  max_datasets: number;
-  max_rows_per_dataset: number;
+  max_datasets: number | null;
+  max_rows_per_dataset: number | null;
 }
 
 /** 最近订阅源包行（packs.recent 条目；名称双语由静态定义下发）。 */

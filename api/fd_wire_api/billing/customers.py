@@ -46,15 +46,20 @@ def ensure_customer(
     username: str | None = None,
     idempotency_key: str | None = None,
 ) -> tuple[Customer, bool]:
-    """建客户（幂等）：已存在（同名同档）直接返回；否则 sub2api 认领/建户后落库。
+    """建客户（幂等）：已存在（同名，任意档位）直接返回；否则 sub2api
+    认领/建户后落库。
 
+    同名守卫（wire-console-resilience D3）：查重键从 ``(name, plan_id)``
+    放宽为单 ``name``——跨档同名即幂等复用既有行，不再造第二行
+    （``billing_customers.name`` 唯一索引前的行为防线；``logto_sub``
+    由 onboarding 终态步骤写入既有行）。
     sub2api 真契约（2026-10-09 实测）：email 必填唯一、create 面无幂等头——
     重复建户由 find_user_by_email 前置消解；password 仅满足建户约束不留存。
     缺省幂等键按客户名确定性派生且恒 ASCII。
     """
     plan = get_plan(session, plan_code)
     existing = session.execute(
-        select(Customer).where(Customer.name == name, Customer.plan_id == plan.id)
+        select(Customer).where(Customer.name == name)
     ).scalar_one_or_none()
     if existing is not None:
         return existing, False
@@ -89,8 +94,10 @@ def ensure_customer(
             session.add(customer)
             session.flush()
     except IntegrityError:
+        # 唯一索引兜底（name 或 sub2api_user_id 冲突）：同名（跨档）幂等
+        # 返回既有行；非同名冲突如实上抛。
         existing = session.execute(
-            select(Customer).where(Customer.name == name, Customer.plan_id == plan.id)
+            select(Customer).where(Customer.name == name)
         ).scalar_one_or_none()
         if existing is None:
             raise

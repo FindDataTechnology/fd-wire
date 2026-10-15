@@ -111,10 +111,26 @@ function SectionEmpty({
  * 免费档配额条（wire-personal-workbench 任务 2.1）：与 DatasetsPage 的
  * QuotaBar 同视觉语言——「已用 X/N 集、每集 ≤M 行」；触达上限转 amber 并附
  * 内联升档引导（mailto CTA）。只内联在数据集段内，绝不整页拦截。
+ * 档位未知降级（wire-console-resilience D4）：max_* 任一为 null/undefined
+ * （fail-closed 口径）→ 中性提示行——不渲染数值条/amber 态/升档 CTA，
+ * 绝不抛错；有值路径逐字不变。
  */
 function WorkbenchQuotaBar({ quota }: { quota: WorkbenchFreeQuota }) {
   const { t } = useTranslation();
-  const exhausted = quota.used_datasets >= quota.max_datasets;
+  // max 未知（null）时比较无意义——按「永不触达」占位，走下方 unknown 降级。
+  const exhausted =
+    quota.max_datasets != null && quota.used_datasets >= quota.max_datasets;
+  if (quota.max_datasets == null || quota.max_rows_per_dataset == null) {
+    return (
+      <div
+        data-testid="workbench-quota"
+        data-unknown="true"
+        className="mt-3 rounded-md border border-slate-200 bg-slate-50/60 px-3 py-2 text-xs text-slate-600"
+      >
+        {t("console.workbench.quota.unknown")}
+      </div>
+    );
+  }
   return (
     <div
       data-testid="workbench-quota"

@@ -134,17 +134,15 @@ def storage_limit_for(*, customer_id: str) -> int:
     """套餐分层的存储上限（wire-customer-data-engine 6.4）：
     billing_plans.limits_json.storage_bytes（经 Customer.name 命名空间键解析）
     → 无档位配置时回落全局缺省（datasets settings）。查询失败同样回落缺省
-    （fail-closed 方向仍是「有上限」，只是不放大）。"""
+    （fail-closed 方向仍是「有上限」，只是不放大）；同名多行按
+    :func:`_resolve_customer_row` 确定性收敛（不抛多行异常）。"""
     limit = None
     try:
         from ..admin.db import get_session as _platform_session
-        from ..billing.models import Customer as BillingCustomer
 
         sess = _platform_session()
         try:
-            row = sess.execute(
-                select(BillingCustomer).where(BillingCustomer.name == customer_id)
-            ).scalar_one_or_none()
+            row = _resolve_customer_row(sess, customer_id)
             if row is not None and row.plan is not None:
                 limits = row.plan.limits_json or {}
                 limit = limits.get("storage_bytes")
@@ -275,21 +273,43 @@ TIER_API = "api"
 TIER_CELL = "cell"
 
 
+def _resolve_customer_row(sess, name: str):
+    """billing_customers 按 name 的确定性单行解析（wire-console-resilience D1）。
+
+    同名多行（历史缺陷：admin 手工建档孤儿行 + 自开户真户同 email）时
+    ``scalar_one_or_none`` 会抛 MultipleResultsFound——本助手全取后按
+    「``logto_sub`` 非空行优先 → ``id`` 最小」收敛到一行，与生产手工止血
+    规则一致（真户恒有 sub）；纯读解析，不写库。空 → None。同名全部无
+    sub（孤儿群）时也收敛 id 最小一行——上游 ``row.plan`` 判空语义不变，
+    fail-closed 方向不受影响。
+    """
+    from ..billing.models import Customer as BillingCustomer
+
+    rows = (
+        sess.execute(select(BillingCustomer).where(BillingCustomer.name == name))
+        .scalars()
+        .all()
+    )
+    if not rows:
+        return None
+    if len(rows) == 1:
+        return rows[0]
+    return sorted(rows, key=lambda r: (r.logto_sub is None, r.id))[0]
+
+
 def plan_code_for(*, customer_id: str) -> str | None:
     """客户当前档位码（平台库 ``billing_customers.name`` → ``plan.code``）。
 
     解析纪律与 :func:`storage_limit_for` 同款：平台库不可达/客户未映射
-    返回 None（不放大权限——tier 判定按 None=非免费处理）。
+    返回 None（不放大权限——tier 判定按 None=非免费处理）；同名多行按
+    :func:`_resolve_customer_row` 确定性收敛（不抛多行异常）。
     """
     try:
         from ..admin.db import get_session as _platform_session
-        from ..billing.models import Customer as BillingCustomer
 
         sess = _platform_session()
         try:
-            row = sess.execute(
-                select(BillingCustomer).where(BillingCustomer.name == customer_id)
-            ).scalar_one_or_none()
+            row = _resolve_customer_row(sess, customer_id)
             if row is not None and row.plan is not None:
                 return str(row.plan.code)
         finally:

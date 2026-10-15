@@ -635,11 +635,15 @@ const en: Translation = {
       },
       // Free-tier quota bar (same visual language as the My-data QuotaBar;
       // hitting the limit shows an inline upgrade hint, never a page wall).
+      // unknown = plan-unknown fallback (D4: neutral line when max_* comes
+      // back null from the fail-closed plan resolution; no bar and no CTA).
       quota: {
         bar:
           "Free-tier quota: {{used}}/{{max}} datasets used · up to {{rows}} rows each",
         exhausted:
           "Dataset count has reached the free-tier limit ({{max}}) — delete unneeded datasets to free slots, or upgrade for more.",
+        unknown:
+          "Plan quota information is unavailable — contact us if you need to confirm your quota.",
         cta: "Contact us to upgrade",
       },
       // Compact Base entry card: same link semantics as the AI Build guide card
@@ -1429,10 +1433,14 @@ const en: Translation = {
       // Free-tier inline quota and upgrade guidance (wire-free-tier-data-gate
       // 4.1/4.4): the full-page wall is retired into inline hints on limit
       // hits; all numbers come from the quota endpoint (never hardcoded).
+      // unknown = plan-unknown fallback (D4: neutral line when max_* comes
+      // back null from the fail-closed plan resolution; no bar and no CTA).
       quota: {
         bar: "Free-tier quota: {{used}} of {{max}} datasets used · ≤{{rows}} rows per dataset",
         exhausted:
           "You have reached the free-tier limit of {{max}} datasets — remove datasets you no longer need to free a slot, or upgrade for more.",
+        unknown:
+          "Plan quota information is unavailable — contact us if you need to confirm your quota.",
         hitTitle: "Free-tier limit reached",
         hintBody:
           "The free tier caps the number of datasets and rows per dataset — remove datasets you no longer need to free a slot, or upgrade for higher limits plus connector and derivation capabilities.",

@@ -162,8 +162,18 @@ export function FormEditor({
     (f) => f.input === "select" && f.optionsFromDataset !== undefined,
   );
 
+  // ── 草稿态单一来源（wire-console-resilience D5 同构修）：body 变更一律
+  // 走 setDraft 函数式更新（从 prev 派生），绝不读渲染闭包里的 draft 快照
+  // ——事件连发时闭包里是上一次提交的旧本体，展开回写会清掉前一步选择。
   const patchDraft = (patch: Partial<FormEditorDraft>) => {
     setDraft((prev) => ({ ...prev, ...patch }));
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
+  };
+
+  const patchBody = (patch: Partial<FormSpecBody>) => {
+    setDraft((prev) => ({ ...prev, body: { ...prev.body, ...patch } }));
     setSavedVersion(null);
     setServerError(null);
     setStructureErrors([]);
@@ -172,30 +182,43 @@ export function FormEditor({
   /** 勾列成字段：新字段插入后按数据集列序稳定重排（不在列清单的字段——
    *  数据集已演进——排在其后并保留，构建器如实标注）。 */
   const toggleColumn = (column: DatasetColumn, checked: boolean) => {
-    const fields = checked
-      ? sortFields([...draft.body.fields, fieldFromColumn(column)], columns)
-      : draft.body.fields.filter((f) => f.column !== column.name);
-    patchDraft({ body: { ...draft.body, fields } });
+    setDraft((prev) => {
+      const fields = checked
+        ? sortFields(
+            [...prev.body.fields, fieldFromColumn(column)],
+            columns,
+          )
+        : prev.body.fields.filter((f) => f.column !== column.name);
+      return { ...prev, body: { ...prev.body, fields } };
+    });
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   const patchField = (column: string, patch: Partial<FormField>) => {
-    patchDraft({
+    setDraft((prev) => ({
+      ...prev,
       body: {
-        ...draft.body,
-        fields: draft.body.fields.map((f) =>
+        ...prev.body,
+        fields: prev.body.fields.map((f) =>
           f.column === column ? { ...f, ...patch } : f,
         ),
       },
-    });
+    }));
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   /** 显隐条件写入/清除（wire-form-field-linkage）：cond=null 时 visibleWhen
    *  键整体不落（既有无条件字段零变化）。 */
   const setFieldCondition = (column: string, cond: FieldVisibleWhen | null) => {
-    patchDraft({
+    setDraft((prev) => ({
+      ...prev,
       body: {
-        ...draft.body,
-        fields: draft.body.fields.map((f) => {
+        ...prev.body,
+        fields: prev.body.fields.map((f) => {
           if (f.column !== column) return f;
           if (!cond) {
             const { visibleWhen: _omit, ...rest } = f;
@@ -204,7 +227,10 @@ export function FormEditor({
           return { ...f, visibleWhen: cond };
         }),
       },
-    });
+    }));
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   /** 条件组合写入/清除（wire-form-linkage-v2）：group=null 时
@@ -213,10 +239,11 @@ export function FormEditor({
     column: string,
     group: FieldVisibleWhenGroup | null,
   ) => {
-    patchDraft({
+    setDraft((prev) => ({
+      ...prev,
       body: {
-        ...draft.body,
-        fields: draft.body.fields.map((f) => {
+        ...prev.body,
+        fields: prev.body.fields.map((f) => {
           if (f.column !== column) return f;
           if (!group) {
             const { visibleWhenGroup: _omit, ...rest } = f;
@@ -225,7 +252,10 @@ export function FormEditor({
           return { ...f, visibleWhenGroup: group };
         }),
       },
-    });
+    }));
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   /** 选项联动写入/清除（wire-form-linkage-v2）：source=null 时 optionsFrom
@@ -235,10 +265,11 @@ export function FormEditor({
     column: string,
     source: FieldOptionsFrom | null,
   ) => {
-    patchDraft({
+    setDraft((prev) => ({
+      ...prev,
       body: {
-        ...draft.body,
-        fields: draft.body.fields.map((f) => {
+        ...prev.body,
+        fields: prev.body.fields.map((f) => {
           if (f.column !== column) return f;
           if (!source) {
             const { optionsFrom: _omit, ...rest } = f;
@@ -248,7 +279,10 @@ export function FormEditor({
           return { ...rest, optionsFrom: source };
         }),
       },
-    });
+    }));
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   /** 数据集选项源写入/清除（wire-form-entry-advanced）：source=null 时
@@ -258,10 +292,11 @@ export function FormEditor({
     column: string,
     source: FieldOptionsFromDataset | null,
   ) => {
-    patchDraft({
+    setDraft((prev) => ({
+      ...prev,
       body: {
-        ...draft.body,
-        fields: draft.body.fields.map((f) => {
+        ...prev.body,
+        fields: prev.body.fields.map((f) => {
           if (f.column !== column) return f;
           if (!source) {
             const { optionsFromDataset: _omit, ...rest } = f;
@@ -275,16 +310,20 @@ export function FormEditor({
           return { ...rest, optionsFromDataset: source };
         }),
       },
-    });
+    }));
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   /** 选值回填写入/清除（wire-form-entry-advanced）：fill=null 时 fillFrom
    *  键整体不落。 */
   const setFieldFillFrom = (column: string, fill: FieldFillFrom | null) => {
-    patchDraft({
+    setDraft((prev) => ({
+      ...prev,
       body: {
-        ...draft.body,
-        fields: draft.body.fields.map((f) => {
+        ...prev.body,
+        fields: prev.body.fields.map((f) => {
           if (f.column !== column) return f;
           if (!fill) {
             const { fillFrom: _omit, ...rest } = f;
@@ -293,16 +332,20 @@ export function FormEditor({
           return { ...f, fillFrom: fill };
         }),
       },
-    });
+    }));
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   /** 计算字段写入/清除（wire-form-entry-advanced）：rule=null 时 computed
    *  键整体不落。 */
   const setFieldComputed = (column: string, rule: FieldComputed | null) => {
-    patchDraft({
+    setDraft((prev) => ({
+      ...prev,
       body: {
-        ...draft.body,
-        fields: draft.body.fields.map((f) => {
+        ...prev.body,
+        fields: prev.body.fields.map((f) => {
           if (f.column !== column) return f;
           if (!rule) {
             const { computed: _omit, ...rest } = f;
@@ -311,17 +354,24 @@ export function FormEditor({
           return { ...f, computed: rule };
         }),
       },
-    });
+    }));
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   /** 提交闸约束列表写入/清除（wire-form-entry-advanced）：null=整体键不落。 */
   const setSpecConstraints = (next: FormConstraint[] | null) => {
-    if (next == null) {
-      const { constraints: _omit, ...rest } = draft.body;
-      patchDraft({ body: rest });
-      return;
-    }
-    patchDraft({ body: { ...draft.body, constraints: next } });
+    setDraft((prev) => {
+      if (next == null) {
+        const { constraints: _omit, ...rest } = prev.body;
+        return { ...prev, body: rest };
+      }
+      return { ...prev, body: { ...prev.body, constraints: next } };
+    });
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   /** 保存：结构自检（零请求拦截）→ PUT 版本链；datasetId 为空的构建中间态
@@ -440,9 +490,7 @@ export function FormEditor({
               value={draft.body.datasetId ?? ""}
               onChange={(e) => {
                 // 换数据集：字段保留但按新列清单如实标注缺失列（不静默删）。
-                patchDraft({
-                  body: { ...draft.body, datasetId: e.target.value || null },
-                });
+                patchBody({ datasetId: e.target.value || null });
               }}
               className="rounded border border-slate-300 px-2 py-1 text-sm"
             >
@@ -521,9 +569,7 @@ export function FormEditor({
                 value={draft.body.submitLabel ?? ""}
                 placeholder={t("console.form.editor.submitLabelPlaceholder")}
                 onChange={(e) =>
-                  patchDraft({
-                    body: { ...draft.body, submitLabel: e.target.value },
-                  })
+                  patchBody({ submitLabel: e.target.value })
                 }
                 className="w-40 rounded border border-slate-300 px-2 py-1 text-xs"
               />
@@ -538,9 +584,7 @@ export function FormEditor({
                 value={draft.body.successMessage ?? ""}
                 placeholder={t("console.form.editor.successMessagePlaceholder")}
                 onChange={(e) =>
-                  patchDraft({
-                    body: { ...draft.body, successMessage: e.target.value },
-                  })
+                  patchBody({ successMessage: e.target.value })
                 }
                 className="w-64 rounded border border-slate-300 px-2 py-1 text-xs"
               />

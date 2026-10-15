@@ -280,6 +280,177 @@ describe("RecordViewEditor（构建器落形）", () => {
         .map((el) => el.getAttribute("data-code")),
     ).toContain("keyColumnRequired");
   });
+
+  // wire-console-resilience 任务 4.3：多步连续配置一次走通——真实浏览器/E2E
+  // 里事件背靠背派发（不等 React 提交），此前的变更处理函数读渲染闭包里的
+  // 旧草稿会把前一步选择清掉（stale closure 复现形态）；修复后每步 onChange
+  // 立即写入草稿（函数式更新，草稿态单一来源）。用原生事件直发（不包 act、
+  // 事件间不等待）钉死该形态。
+  it("多步配置状态保持：事件背靠背派发后主数据集/键列/头部字段/段全保持，保存落形一致", async () => {
+    const { backend, datasetSelect } = await openEditor();
+
+    /**
+     * 原生 change 直发（E2E/真实浏览器形态——不经 act 包装），随后等本步的
+     * **实际效果**出现（真实浏览器里每次交互是独立任务，React 先提交再接受
+     * 下一次交互；等根节点等于没等——要钉死的是提交后下一步仍保留前一步）。
+     */
+    const fireChange = async (
+      el: HTMLElement,
+      value: string,
+      effect: () => void,
+    ) => {
+      (el as HTMLInputElement).value = value;
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      await waitFor(effect);
+    };
+
+    // 四步背靠背：选主数据集 → 选键列 → 勾头部字段 → 加段选段数据集。
+    await fireChange(datasetSelect, "ds-batch", () => {
+      expect(
+        (screen.getByTestId("editor-recordview-key-column") as HTMLSelectElement)
+          .options.length,
+      ).toBeGreaterThan(1);
+    });
+    await fireChange(
+      screen.getByTestId("editor-recordview-key-column"),
+      "批次号",
+      () => {
+        expect(
+          (screen.getByTestId("editor-recordview-dataset") as HTMLSelectElement)
+            .value,
+        ).toBe("ds-batch");
+      },
+    );
+    // 勾选是受控 checkbox：用点击（React 的 value tracker 会正确处理）而非
+    // 手工置 checked——后者对受控组件不触发 onChange。
+    fireEvent.click(
+      screen
+        .getAllByTestId("editor-recordview-header-column")
+        .find((el) => el.getAttribute("data-column") === "产品名称")!,
+    );
+    await screen.findByTestId("editor-recordview-field");
+    screen.getByTestId("editor-recordview-add-section").click();
+    await screen.findByTestId("editor-recordview-section-dataset");
+    await fireChange(
+      screen.getByTestId("editor-recordview-section-dataset"),
+      "ds-spray",
+      () => {
+        expect(
+          (screen.getByTestId("editor-recordview-dataset") as HTMLSelectElement)
+            .value,
+        ).toBe("ds-batch");
+      },
+    );
+    // 段日期列（section dataset 换集即清日期列，本步在其后）。
+    await fireChange(
+      screen.getByTestId("editor-recordview-section-date-column"),
+      "施药日期",
+      () => {
+        expect(
+          (screen.getByTestId(
+            "editor-recordview-section-dataset",
+          ) as HTMLSelectElement).value,
+        ).toBe("ds-spray");
+      },
+    );
+
+    // 每一步的先前选择全部保持（任一被清即失败）。
+    expect(
+      (screen.getByTestId("editor-recordview-dataset") as HTMLSelectElement)
+        .value,
+    ).toBe("ds-batch");
+    expect(
+      (screen.getByTestId("editor-recordview-key-column") as HTMLSelectElement)
+        .value,
+    ).toBe("批次号");
+    expect(
+      screen
+        .getAllByTestId("editor-recordview-field")
+        .map((el) => el.getAttribute("data-column")),
+    ).toEqual(["产品名称"]);
+    expect(
+      (screen.getByTestId("editor-recordview-section-title") as HTMLInputElement)
+        .value,
+    ).toBe("");
+    expect(
+      (screen.getByTestId(
+        "editor-recordview-section-dataset",
+      ) as HTMLSelectElement).value,
+    ).toBe("ds-spray");
+    expect(
+      (screen.getByTestId(
+        "editor-recordview-section-date-column",
+      ) as HTMLSelectElement).value,
+    ).toBe("施药日期");
+
+    // 段标题补上（背靠背里继续输入不丢段配置）→ 保存。
+    // 段标题是受控 input：用 fireEvent.change（React 的 value tracker 会正确
+    // 处理；手工置 value 再派 change 对受控组件会被回滚）。
+    fireEvent.change(screen.getByTestId("editor-recordview-section-title"), {
+      target: { value: "打药记录" },
+    });
+    await waitFor(() => {
+      expect(
+        (screen.getByTestId(
+          "editor-recordview-section-title",
+        ) as HTMLInputElement).value,
+      ).toBe("打药记录");
+    });
+    fireEvent.click(screen.getByTestId("editor-recordview-save"));
+    await screen.findByTestId("editor-recordview-saved-version");
+
+    // spec 与界面配置一致（保存后草稿不被归一化清写）。
+    const put = backend.calls.find((c) => c.method === "PUT");
+    expect(put?.url.pathname).toBe("/api/v1/artifacts/41");
+    expect(put?.body).toEqual({
+      spec: {
+        title: "批次溯源页",
+        spec: {
+          datasetId: "ds-batch",
+          keyColumn: "批次号",
+          headerFields: [{ column: "产品名称" }],
+          sections: [
+            {
+              title: "打药记录",
+              datasetId: "ds-spray",
+              dateColumn: "施药日期",
+              filters: [],
+              limit: 200,
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it("多步配置状态保持（act 形态回归）：勾列后逐步交互 datasetId 仍在（fireEvent 路径零漂移）", async () => {
+    const { datasetSelect } = await openEditor();
+
+    fireEvent.change(datasetSelect, { target: { value: "ds-batch" } });
+    fireEvent.change(await screen.findByTestId("editor-recordview-key-column"), {
+      target: { value: "批次号" },
+    });
+    fireEvent.click(headerCheckbox("产品名称"));
+    fireEvent.click(screen.getByTestId("editor-recordview-add-section"));
+    fireEvent.change(screen.getByTestId("editor-recordview-section-dataset"), {
+      target: { value: "ds-spray" },
+    });
+
+    // 既有 fireEvent（act 包裹）路径同样全保持——正常路径零漂移。
+    expect(
+      (screen.getByTestId("editor-recordview-dataset") as HTMLSelectElement)
+        .value,
+    ).toBe("ds-batch");
+    expect(
+      (screen.getByTestId("editor-recordview-key-column") as HTMLSelectElement)
+        .value,
+    ).toBe("批次号");
+    expect(
+      screen
+        .getAllByTestId("editor-recordview-field")
+        .map((el) => el.getAttribute("data-column")),
+    ).toEqual(["产品名称"]);
+  });
 });
 
 describe("RecordViewEditor（试预览 4.2）", () => {

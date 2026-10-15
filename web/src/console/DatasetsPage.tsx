@@ -510,10 +510,26 @@ export function DatasetsPage({ planCode }: { planCode: string }) {
 /**
  * 免费档配额条（wire-free-tier-data-gate D6）：内联呈现「已用 X/N 集、
  * 每集 ≤M 行」；触达上限时转 amber 并附升档引导（非整页墙）。
+ * 档位未知降级（wire-console-resilience D4）：max_* 任一为 null/undefined
+ * （fail-closed 口径）→ 中性提示行——不渲染数值条/amber 态/升档 CTA
+ * （数值未知时 CTA 语义不成立），绝不抛错；有值路径逐字不变。
  */
 function QuotaBar({ quota }: { quota: DatasetQuota }) {
   const { t } = useTranslation();
-  const exhausted = quota.used_datasets >= quota.max_datasets;
+  // max 未知（null）时比较无意义——按「永不触达」占位，走下方 unknown 降级。
+  const exhausted =
+    quota.max_datasets != null && quota.used_datasets >= quota.max_datasets;
+  if (quota.max_datasets == null || quota.max_rows_per_dataset == null) {
+    return (
+      <div
+        data-testid="datasets-quota"
+        data-unknown="true"
+        className="mt-3 max-w-2xl rounded-md border border-slate-200 bg-slate-50/60 px-3 py-2 text-xs text-slate-600"
+      >
+        {t("console.datasets.quota.unknown")}
+      </div>
+    );
+  }
   return (
     <div
       data-testid="datasets-quota"

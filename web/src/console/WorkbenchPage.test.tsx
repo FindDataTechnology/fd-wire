@@ -90,6 +90,16 @@ const SEEDED_WORKBENCH: WorkbenchSummary = {
   },
 };
 
+/** 档位未知（max_* 为 null 的 fail-closed 口径）——D4 降级态。 */
+const UNKNOWN_QUOTA_WORKBENCH: WorkbenchSummary = {
+  ...SEEDED_WORKBENCH,
+  free_quota: {
+    used_datasets: 0,
+    max_datasets: null,
+    max_rows_per_dataset: null,
+  } as unknown as WorkbenchSummary["free_quota"],
+};
+
 /** 触限的免费档聚合（used=max）：内联升档提示在场、页面不拦截。 */
 const EXHAUSTED_WORKBENCH: WorkbenchSummary = {
   ...SEEDED_WORKBENCH,
@@ -388,5 +398,37 @@ describe("WorkbenchPage（导航接线 + 落地偏好）", () => {
           undefined,
     );
     expect(landingPuts).toEqual([]);
+  });
+});
+
+describe("WorkbenchPage 配额条：档位未知 null 降级（D4）", () => {
+  it("max_* 为 null → 中性提示行，不崩、不渲染升档引导", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installConsoleBackend([], { workbench: UNKNOWN_QUOTA_WORKBENCH })
+        .fetchImpl,
+    );
+    render(<WorkbenchPage />);
+
+    expect(await screen.findByTestId("workbench-root")).toBeTruthy();
+    const bar = screen.getByTestId("workbench-quota");
+    expect(bar.getAttribute("data-unknown")).toBe("true");
+    expect(bar.textContent).toContain("当前档位限额信息不可用");
+    expect(screen.queryByTestId("workbench-quota-upgrade")).toBeNull();
+  });
+
+  it("限额齐全 → 数值条零漂移（触限 amber + 升档引导在场）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installConsoleBackend([], { workbench: EXHAUSTED_WORKBENCH }).fetchImpl,
+    );
+    render(<WorkbenchPage />);
+
+    expect(await screen.findByTestId("workbench-root")).toBeTruthy();
+    const bar = screen.getByTestId("workbench-quota");
+    expect(bar.getAttribute("data-unknown")).toBeNull();
+    expect(bar.getAttribute("data-exhausted")).toBe("true");
+    expect(bar.textContent).toContain("已用 3/3");
+    expect(screen.getByTestId("workbench-quota-upgrade")).toBeTruthy();
   });
 });

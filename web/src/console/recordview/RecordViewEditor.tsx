@@ -182,8 +182,15 @@ export function RecordViewEditor({
     setStructureErrors([]);
   };
 
+  // ── 草稿态单一来源（wire-console-resilience D5）：body 变更一律走
+  // setDraft 函数式更新（从 prev 派生），绝不读渲染闭包里的 draft 快照——
+  // 事件连发（真实浏览器/E2E 背靠背派发）时闭包里是上一次提交的旧本体，
+  // 展开回写会把前一步未及提交的选择（主数据集/键列/勾选）清掉。
   const patchBody = (patch: Partial<RecordViewSpecBody>) => {
-    patchDraft({ body: { ...draft.body, ...patch } });
+    setDraft((prev) => ({ ...prev, body: { ...prev.body, ...patch } }));
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   /** 换主数据集：键列失效清空、headerFields 保留但按新列清单如实标注
@@ -194,55 +201,88 @@ export function RecordViewEditor({
 
   /** 勾列成头部字段：新字段插入后按数据集列序稳定重排。 */
   const toggleHeaderColumn = (column: DatasetColumn, checked: boolean) => {
-    const fields = checked
-      ? [...draft.body.headerFields, { column: column.name }]
-      : draft.body.headerFields.filter((f) => f.column !== column.name);
-    const order = new Map(mainColumns.map((c, i) => [c.name, i]));
-    fields.sort(
-      (a, b) => (order.get(a.column) ?? 999) - (order.get(b.column) ?? 999),
-    );
-    patchBody({ headerFields: fields });
+    setDraft((prev) => {
+      const fields = checked
+        ? [...prev.body.headerFields, { column: column.name }]
+        : prev.body.headerFields.filter((f) => f.column !== column.name);
+      const order = new Map(mainColumns.map((c, i) => [c.name, i]));
+      fields.sort(
+        (a, b) => (order.get(a.column) ?? 999) - (order.get(b.column) ?? 999),
+      );
+      return { ...prev, body: { ...prev.body, headerFields: fields } };
+    });
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   const patchHeaderField = (column: string, label: string) => {
-    patchBody({
-      headerFields: draft.body.headerFields.map((f) =>
-        f.column === column
-          ? label.trim()
-            ? { ...f, label }
-            : { column: f.column }
-          : f,
-      ),
-    });
+    setDraft((prev) => ({
+      ...prev,
+      body: {
+        ...prev.body,
+        headerFields: prev.body.headerFields.map((f) =>
+          f.column === column
+            ? label.trim()
+              ? { ...f, label }
+              : { column: f.column }
+            : f,
+        ),
+      },
+    }));
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   const patchSection = (index: number, patch: Partial<RecordViewSection>) => {
-    patchBody({
-      sections: draft.body.sections.map((s, i) =>
-        i === index ? { ...s, ...patch } : s,
-      ),
-    });
+    setDraft((prev) => ({
+      ...prev,
+      body: {
+        ...prev.body,
+        sections: prev.body.sections.map((s, i) =>
+          i === index ? { ...s, ...patch } : s,
+        ),
+      },
+    }));
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   const addSection = () => {
-    patchBody({
-      sections: [
-        ...draft.body.sections,
-        {
-          title: "",
-          datasetId: "",
-          dateColumn: "",
-          filters: [],
-          limit: RECORD_VIEW_LIMITS.limitDefault,
-        },
-      ],
-    });
+    setDraft((prev) => ({
+      ...prev,
+      body: {
+        ...prev.body,
+        sections: [
+          ...prev.body.sections,
+          {
+            title: "",
+            datasetId: "",
+            dateColumn: "",
+            filters: [],
+            limit: RECORD_VIEW_LIMITS.limitDefault,
+          },
+        ],
+      },
+    }));
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   const removeSection = (index: number) => {
-    patchBody({
-      sections: draft.body.sections.filter((_, i) => i !== index),
-    });
+    setDraft((prev) => ({
+      ...prev,
+      body: {
+        ...prev.body,
+        sections: prev.body.sections.filter((_, i) => i !== index),
+      },
+    }));
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   const patchFilter = (
@@ -250,28 +290,62 @@ export function RecordViewEditor({
     filterIndex: number,
     patch: Partial<RecordViewFilter>,
   ) => {
-    patchSection(sectionIndex, {
-      filters: draft.body.sections[sectionIndex]!.filters.map((f, i) =>
-        i === filterIndex ? { ...f, ...patch } : f,
-      ),
-    });
+    setDraft((prev) => ({
+      ...prev,
+      body: {
+        ...prev.body,
+        sections: prev.body.sections.map((s, i) =>
+          i === sectionIndex
+            ? {
+                ...s,
+                filters: s.filters.map((f, fi) =>
+                  fi === filterIndex ? { ...f, ...patch } : f,
+                ),
+              }
+            : s,
+        ),
+      },
+    }));
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   const addFilter = (sectionIndex: number) => {
-    patchSection(sectionIndex, {
-      filters: [
-        ...draft.body.sections[sectionIndex]!.filters,
-        { column: "", op: "eq", value: "" },
-      ],
-    });
+    setDraft((prev) => ({
+      ...prev,
+      body: {
+        ...prev.body,
+        sections: prev.body.sections.map((s, i) =>
+          i === sectionIndex
+            ? {
+                ...s,
+                filters: [...s.filters, { column: "", op: "eq", value: "" }],
+              }
+            : s,
+        ),
+      },
+    }));
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   const removeFilter = (sectionIndex: number, filterIndex: number) => {
-    patchSection(sectionIndex, {
-      filters: draft.body.sections[sectionIndex]!.filters.filter(
-        (_, i) => i !== filterIndex,
-      ),
-    });
+    setDraft((prev) => ({
+      ...prev,
+      body: {
+        ...prev.body,
+        sections: prev.body.sections.map((s, i) =>
+          i === sectionIndex
+            ? { ...s, filters: s.filters.filter((_, fi) => fi !== filterIndex) }
+            : s,
+        ),
+      },
+    }));
+    setSavedVersion(null);
+    setServerError(null);
+    setStructureErrors([]);
   };
 
   /** 保存：草稿校验（零请求拦截，与后端保存校验同规镜像）→ PUT 版本链；

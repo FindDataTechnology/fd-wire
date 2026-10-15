@@ -392,15 +392,24 @@ def test_customer_create_validations(admin_env):
         headers=AUTH,
     )
     assert resp.status_code == 409
-    # 同名同档重复开户（自动代建路径）→ 409，且不重复建 sub2api 账户
-    first = create_customer(client, "重复客户", "free")
+    # 同名（跨档也算）重复开户 → 422 如实拒（wire-console-resilience D3：
+    # 客户名全局唯一守卫，在建户动作之前拦截），且不重复建 sub2api 账户
+    create_customer(client, "重复客户", "free")
     calls_before = len(admin_env.sub2api.users)
     resp = client.post(
         "/internal/admin/customers",
         json={"name": "重复客户", "plan_code": "free"},
         headers=AUTH,
     )
-    assert resp.status_code == 409
+    assert resp.status_code == 422
+    assert "客户名已存在" in resp.json()["detail"]
+    # 跨档同名同样 422（守卫按单 name，不含档位条件）
+    resp = client.post(
+        "/internal/admin/customers",
+        json={"name": "重复客户", "plan_code": "basic"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 422
     assert len(admin_env.sub2api.users) == calls_before
     # caller 身份映射键占用冲突 → 409
     resp = client.post(
