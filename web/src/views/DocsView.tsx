@@ -38,6 +38,16 @@ const FORM_STEPS = [
   "docs.forms.step5",
 ] as const;
 
+/** 单记录公开页步骤（wire-record-view 任务 6.1）：创建→配模板→试预览→
+ *  发布分享→二维码（含实时反映口径）。 */
+const RECORD_VIEW_STEPS = [
+  "docs.recordView.step1",
+  "docs.recordView.step2",
+  "docs.recordView.step3",
+  "docs.recordView.step4",
+  "docs.recordView.step5",
+] as const;
+
 /** 实体语义层步骤（wire-entity-layer 任务 3.3）：声明实体→建关系→AI 构建带
  *  图谱语义→v1 边界如实说明（物化 join 非目标）。 */
 const ENTITY_STEPS = [
@@ -524,7 +534,9 @@ export function DocsView() {
 
       {/* 六、表单（wire-form-builder 任务 5.1）：把「收数据」做成成熟表单分享
           给他人填写的全流程教程——创建/绑定/配字段/试填/发布分享/修正历史
-          回滚，面向客户的口径（照 docs.localData 的步骤条组织）。 */}
+          回滚，面向客户的口径（照 docs.localData 的步骤条组织）。
+          进阶录入（wire-form-entry-advanced 任务 6.1）：动态选项/选值回填/
+          计算字段/提交闸四小节 + 公开选项端点数据暴露边界说明（zh/en）。 */}
       <section data-testid="docs-forms" className="space-y-4">
         <h2 className="text-xl font-semibold">{t("docs.forms.title")}</h2>
         <p className="max-w-3xl text-sm text-slate-500">
@@ -540,12 +552,104 @@ export function DocsView() {
             ))}
           </ol>
         </div>
+        <div
+          data-testid="docs-forms-advanced"
+          className="rounded-lg border border-slate-200 p-5"
+        >
+          <h3 className="font-medium">{t("docs.forms.advancedTitle")}</h3>
+          <div className="mt-3 grid gap-4 lg:grid-cols-2">
+            <div data-testid="docs-forms-dynamic">
+              <h4 className="text-xs font-medium text-slate-600">
+                {t("docs.forms.dynamicTitle")}
+              </h4>
+              <p className="mt-1 text-xs text-slate-500">
+                {t("docs.forms.dynamicDesc")}
+              </p>
+            </div>
+            <div data-testid="docs-forms-fill">
+              <h4 className="text-xs font-medium text-slate-600">
+                {t("docs.forms.fillTitle")}
+              </h4>
+              <p className="mt-1 text-xs text-slate-500">
+                {t("docs.forms.fillDesc")}
+              </p>
+            </div>
+            <div data-testid="docs-forms-computed">
+              <h4 className="text-xs font-medium text-slate-600">
+                {t("docs.forms.computedTitle")}
+              </h4>
+              <p className="mt-1 text-xs text-slate-500">
+                {t("docs.forms.computedDesc")}
+              </p>
+            </div>
+            <div data-testid="docs-forms-gate">
+              <h4 className="text-xs font-medium text-slate-600">
+                {t("docs.forms.gateTitle")}
+              </h4>
+              <p className="mt-1 text-xs text-slate-500">
+                {t("docs.forms.gateDesc")}
+              </p>
+            </div>
+            {/* 公开选项面边界（文档红线）：全宽单列——如实的数据暴露说明。 */}
+            <div
+              data-testid="docs-forms-options-boundary"
+              className="rounded border border-amber-100 bg-amber-50/40 p-3 lg:col-span-2"
+            >
+              <h4 className="text-xs font-medium text-amber-700">
+                {t("docs.forms.optionsBoundaryTitle")}
+              </h4>
+              <p className="mt-1 text-xs text-slate-500">
+                {t("docs.forms.optionsBoundaryDesc")}
+              </p>
+            </div>
+          </div>
+        </div>
         <a
           href="#/console/artifacts"
           data-testid="docs-forms-console-link"
           className="inline-block text-sm text-slate-600 underline hover:text-slate-900"
         >
           {t("docs.forms.consoleLink")}
+        </a>
+      </section>
+
+      {/* 六a、单记录公开页（wire-record-view 任务 6.1）：按键展示的公开
+          扫码页全流程（创建→配模板→试预览→发布分享→二维码）+ 公开实时
+          读面的暴露边界如实说明（仅钉死版本声明的查询、令牌门为产物级而
+          非记录级、k 可枚举、限流与缓存口径、撤销=归档即失效——文档红线：
+          无「按记录隔离」的误导表述）。 */}
+      <section data-testid="docs-record-view" className="space-y-4">
+        <h2 className="text-xl font-semibold">{t("docs.recordView.title")}</h2>
+        <p className="max-w-3xl text-sm text-slate-500">
+          {t("docs.recordView.intro")}
+        </p>
+        <div className="rounded-lg border border-slate-200 p-5">
+          <h3 className="font-medium">{t("docs.recordView.stepsTitle")}</h3>
+          <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-sm text-slate-500">
+            {RECORD_VIEW_STEPS.map((key, i) => (
+              <li key={key} data-testid={`docs-record-view-step-${i + 1}`}>
+                {t(key)}
+              </li>
+            ))}
+          </ol>
+        </div>
+        <div
+          data-testid="docs-record-view-boundary"
+          className="rounded-lg border border-amber-100 bg-amber-50/40 p-5"
+        >
+          <h3 className="font-medium text-amber-700">
+            {t("docs.recordView.boundaryTitle")}
+          </h3>
+          <p className="mt-2 text-sm text-slate-500">
+            {t("docs.recordView.boundaryDesc")}
+          </p>
+        </div>
+        <a
+          href="#/console/artifacts"
+          data-testid="docs-record-view-console-link"
+          className="inline-block text-sm text-slate-600 underline hover:text-slate-900"
+        >
+          {t("docs.recordView.consoleLink")}
         </a>
       </section>
 

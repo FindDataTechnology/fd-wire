@@ -144,6 +144,8 @@ describe("WorkbenchPage（聚合渲染）", () => {
     const artifacts = screen.getByTestId("workbench-section-artifacts");
     expect(artifacts.textContent).toContain("4 个活跃产物");
     const kindBadges = screen.getAllByTestId("workbench-kind-badge");
+    // wire-record-view：展示序追加 record-view（api/web 两处一致；旧响应
+    // by_kind 缺键时徽标兜底 0）。
     expect(kindBadges.map((b) => b.getAttribute("data-kind"))).toEqual([
       "dashboard",
       "form",
@@ -151,6 +153,7 @@ describe("WorkbenchPage（聚合渲染）", () => {
       "research_report",
       "alert_rule",
       "refresh_schedule",
+      "record-view",
     ]);
     expect(kindBadges[0]!.textContent).toContain("2");
     const artifactRow = screen.getByTestId("workbench-recent-artifact");

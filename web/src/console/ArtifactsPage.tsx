@@ -36,6 +36,7 @@ import {
   createBlankAlertRule,
   createBlankDashboard,
   createBlankForm,
+  createBlankRecordView,
   createDashboardShareLink,
   createFormShareLink,
   fetchArtifactVersion,
@@ -68,6 +69,8 @@ import {
 import { formatServerDate, truncate } from "./util";
 import { DashboardPane } from "./dashboard/DashboardPane";
 import { FormPane } from "./form/FormPane";
+import { RecordViewPane } from "./recordview/RecordViewPane";
+import { RecordViewShareDialog } from "./recordview/RecordViewShareDialog";
 import { ArtifactVisibilitySection } from "./ArtifactVisibilitySection";
 
 const BUFFER_STORAGE_PREFIX = "wire-web-artifact-buffer-";
@@ -79,6 +82,7 @@ const KIND_BADGE_CLASS: Record<string, string> = {
   research_report: "bg-sky-50 text-sky-700 ring-sky-200",
   alert_rule: "bg-rose-50 text-rose-700 ring-rose-200",
   refresh_schedule: "bg-teal-50 text-teal-700 ring-teal-200",
+  "record-view": "bg-cyan-50 text-cyan-700 ring-cyan-200",
 };
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
@@ -145,11 +149,19 @@ export function ArtifactsPage({
   );
   // 表单视图展开的产物 id（wire-form-builder：form kind 内嵌入口）。
   const [formFor, setFormFor] = useState<number | null>(null);
+  // 单记录页视图展开的产物 id（wire-record-view 任务 4.1：record-view kind
+  // 内嵌入口——查看态试预览 + 构建器切换）。
+  const [recordViewFor, setRecordViewFor] = useState<number | null>(null);
   const [historyFor, setHistoryFor] = useState<number | null>(null);
   // 分享弹层展开的产物 id（wire-dashboard-share / wire-form-builder：
   // published dashboard/form 专属——kind 随打开行分派）。
   const [shareFor, setShareFor] = useState<number | null>(null);
   const [shareKind, setShareKind] = useState<"dashboard" | "form">("dashboard");
+  // 单记录页分享+二维码弹层的产物 id（wire-record-view 任务 4.3：record-view
+  // 专属弹层——键值选择器/URL/QR 懒加载，不复用 ShareLinkDialog）。
+  const [shareRecordViewFor, setShareRecordViewFor] = useState<number | null>(
+    null,
+  );
   const [actionError, setActionError] = useState<string | null>(null);
   // 新建看板表单开合（wire-dashboard-blank-create：免 cell 免 AI 的出生入口）。
   const [createOpen, setCreateOpen] = useState(false);
@@ -157,9 +169,15 @@ export function ArtifactsPage({
   const [createFormOpen, setCreateFormOpen] = useState(false);
   // 新建告警规则表单开合（wire-alert-evaluation：免 AI 的规则出生路径）。
   const [createAlertOpen, setCreateAlertOpen] = useState(false);
+  // 新建单记录页表单开合（wire-record-view 任务 4.1：免 AI 的扫码页出生路径）。
+  const [createRecordViewOpen, setCreateRecordViewOpen] = useState(false);
   // 刚空白创建的产物 id：其看板/表单展开区直接进编辑态（创建即跳编辑器）。
   const [freshlyCreatedId, setFreshlyCreatedId] = useState<number | null>(null);
   const [freshlyFormId, setFreshlyFormId] = useState<number | null>(null);
+  // 刚空白创建的单记录页 id（创建即跳构建器）。
+  const [freshlyRecordViewId, setFreshlyRecordViewId] = useState<number | null>(
+    null,
+  );
   // 告警评估状态（wire-alert-evaluation）：进页对 alert_rule 行取一次的
   // map；null = 尚未到达（徽标暂不渲染），{} = 已到达或失败降级（无键即
   // 「未评估」——拉取失败静默降级，绝不阻塞页面）。
@@ -283,13 +301,24 @@ export function ArtifactsPage({
   }, []);
 
   /** 空白建告警规则成功（wire-alert-evaluation）：置顶+复位筛选+行展开
-   *  （selectedId）直接进 spec 编辑器——模板壳改 dataset/阈值后保存发布。 */
+   * （selectedId）直接进 spec 编辑器——模板壳改 dataset/阈值后保存发布。 */
   const handleAlertCreated = useCallback((detail: ArtifactDetail) => {
     setArtifacts((prev) => (prev ? [detail, ...prev] : prev));
     setKindFilter("all");
     setStatusFilter("all");
     setCreateAlertOpen(false);
     setSelectedId(detail.id);
+  }, []);
+
+  /** 空白建单记录页成功（wire-record-view 任务 4.1）：与建表单同款范式——
+   * 置顶 + 复位筛选 + 行展开（recordViewFor）直接进构建器。 */
+  const handleRecordViewCreated = useCallback((detail: ArtifactDetail) => {
+    setArtifacts((prev) => (prev ? [detail, ...prev] : prev));
+    setKindFilter("all");
+    setStatusFilter("all");
+    setCreateRecordViewOpen(false);
+    setFreshlyRecordViewId(detail.id);
+    setRecordViewFor(detail.id);
   }, []);
 
   return (
@@ -304,7 +333,7 @@ export function ArtifactsPage({
         <div className="flex items-center gap-2">
           {/* 空白建板入口（wire-dashboard-blank-create）：免费档无 cell 无 AI
               草稿时的唯一出生路径——标题输入 → POST → 直接进编辑器。 */}
-          {!createOpen && !createFormOpen && !createAlertOpen && (
+          {!createOpen && !createFormOpen && !createAlertOpen && !createRecordViewOpen && (
             <button
               type="button"
               data-testid="create-dashboard-open"
@@ -316,7 +345,7 @@ export function ArtifactsPage({
           )}
           {/* 空白建表单入口（wire-form-builder 任务 4.4）：与新建看板并列的
               出生路径——标题输入 → POST kind=form → 直接进构建器。 */}
-          {!createFormOpen && !createOpen && !createAlertOpen && (
+          {!createFormOpen && !createOpen && !createAlertOpen && !createRecordViewOpen && (
             <button
               type="button"
               data-testid="create-form-open"
@@ -329,7 +358,7 @@ export function ArtifactsPage({
           {/* 空白建告警规则入口（wire-alert-evaluation）：与建板/表单并列的
               规则出生路径——标题输入 → POST kind=alert_rule 模板壳 → 直接进
               spec 编辑器改 dataset/阈值 → 发布即武装评估。 */}
-          {!createAlertOpen && !createOpen && !createFormOpen && (
+          {!createAlertOpen && !createOpen && !createFormOpen && !createRecordViewOpen && (
             <button
               type="button"
               data-testid="create-alert-open"
@@ -337,6 +366,19 @@ export function ArtifactsPage({
               className="rounded bg-rose-600 px-3 py-1 text-xs text-white hover:bg-rose-500"
             >
               {t("console.artifacts.createAlert.button")}
+            </button>
+          )}
+          {/* 空白建单记录页入口（wire-record-view 任务 4.1）：与建板/表单并列
+              的扫码页出生路径——标题输入 → POST kind=record-view 最小空 spec
+              → 直接进构建器选主数据集/键列配模板。 */}
+          {!createRecordViewOpen && !createOpen && !createFormOpen && !createAlertOpen && (
+            <button
+              type="button"
+              data-testid="create-recordview-open"
+              onClick={() => setCreateRecordViewOpen(true)}
+              className="rounded bg-cyan-700 px-3 py-1 text-xs text-white hover:bg-cyan-600"
+            >
+              {t("console.artifacts.createRecordView.button")}
             </button>
           )}
           <label htmlFor="artifact-kind-filter" className="text-xs text-slate-500">
@@ -394,6 +436,13 @@ export function ArtifactsPage({
         <CreateAlertForm
           onCreated={handleAlertCreated}
           onCancel={() => setCreateAlertOpen(false)}
+        />
+      )}
+
+      {createRecordViewOpen && (
+        <CreateRecordViewForm
+          onCreated={handleRecordViewCreated}
+          onCancel={() => setCreateRecordViewOpen(false)}
         />
       )}
 
@@ -597,6 +646,35 @@ export function ArtifactsPage({
                         {t("console.dashboard.share.button")}
                       </button>
                     )}
+                    {artifact.kind === "record-view" && (
+                      // 单记录页视图入口（wire-record-view 任务 4.1）：record-view
+                      // kind 内嵌展开 = 查看态试预览 + 构建器入口。
+                      <button
+                        type="button"
+                        data-testid="artifact-recordview-view"
+                        onClick={() =>
+                          setRecordViewFor(
+                            artifact.id === recordViewFor ? null : artifact.id,
+                          )
+                        }
+                        className="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50"
+                      >
+                        {t("console.recordview.viewButton")}
+                      </button>
+                    )}
+                    {artifact.kind === "record-view" &&
+                      artifact.status === "published" && (
+                        // 单记录页分享+二维码入口（wire-record-view 任务 4.3）：
+                        // 仅 published record-view——专属弹层（键值选择/URL/QR）。
+                        <button
+                          type="button"
+                          data-testid="artifact-recordview-share"
+                          onClick={() => setShareRecordViewFor(artifact.id)}
+                          className="rounded border border-sky-300 px-2 py-1 text-xs text-sky-700 hover:bg-sky-50"
+                        >
+                          {t("console.recordview.share.button")}
+                        </button>
+                      )}
                     {artifact.status === "draft" && (
                       <button
                         type="button"
@@ -716,6 +794,15 @@ export function ArtifactsPage({
                     startEditing={artifact.id === freshlyFormId}
                   />
                 )}
+                {artifact.id === recordViewFor && (
+                  <RecordViewPane
+                    key={`record-view-${artifact.id}`}
+                    artifactId={artifact.id}
+                    onSaved={replaceArtifact}
+                    // 刚空白创建的单记录页直接进构建器（创建即跳编辑器）。
+                    startEditing={artifact.id === freshlyRecordViewId}
+                  />
+                )}
                 {artifact.status === "published" && (
                   // 产物公开分享选择器（wire-artifact-marketplace 5.1）：仅
                   // published 行挂载——四档可见性 + 开放模式 + 允许复制；
@@ -743,6 +830,14 @@ export function ArtifactsPage({
           artifactId={shareFor}
           kind={shareKind}
           onClose={() => setShareFor(null)}
+        />
+      )}
+
+      {shareRecordViewFor != null && (
+        <RecordViewShareDialog
+          key={`record-view-share-${shareRecordViewFor}`}
+          artifactId={shareRecordViewFor}
+          onClose={() => setShareRecordViewFor(null)}
         />
       )}
     </div>
@@ -1006,6 +1101,96 @@ function CreateAlertForm({
       </div>
       {error && (
         <p data-testid="create-alert-error" className="mt-1.5 text-[11px] text-red-600">
+          {error}
+        </p>
+      )}
+    </form>
+  );
+}
+
+/**
+ * 新建单记录页表单（wire-record-view 任务 4.1）：与新建表单同款范式——标题
+ * 输入 → POST /api/v1/artifacts {kind:"record-view", title}。空标题前端先拦
+ * （不发请求）；创建中禁用防重复提交；失败（422/网络等）后端 detail 如实
+ * 呈现、表单不关可改再试；成功交 onCreated（置顶 + 展开直接进构建器）。
+ */
+function CreateRecordViewForm({
+  onCreated,
+  onCancel,
+}: {
+  onCreated: (artifact: ArtifactDetail) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const [title, setTitle] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (creating) return;
+    const trimmed = title.trim();
+    if (!trimmed) {
+      setError(t("console.artifacts.createRecordView.titleRequired"));
+      return;
+    }
+    setCreating(true);
+    setError(null);
+    try {
+      onCreated(await createBlankRecordView(trimmed));
+    } catch (err) {
+      setError(apiErrorText(err, t("console.artifacts.createRecordView.failed")));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <form
+      data-testid="create-recordview-form"
+      className="mt-4 rounded-lg border border-slate-200 bg-white p-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <label htmlFor="create-recordview-title" className="block text-xs text-slate-500">
+        {t("console.artifacts.createRecordView.titleLabel")}
+      </label>
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <input
+          id="create-recordview-title"
+          data-testid="create-recordview-title"
+          value={title}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            setError(null);
+          }}
+          placeholder={t("console.artifacts.createRecordView.titlePlaceholder")}
+          disabled={creating}
+          className="w-64 rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+        />
+        <button
+          type="submit"
+          data-testid="create-recordview-submit"
+          disabled={creating}
+          className="rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {creating
+            ? t("console.artifacts.createRecordView.creating")
+            : t("console.artifacts.createRecordView.submit")}
+        </button>
+        <button
+          type="button"
+          data-testid="create-recordview-cancel"
+          disabled={creating}
+          onClick={onCancel}
+          className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {t("console.artifacts.createRecordView.cancel")}
+        </button>
+      </div>
+      {error && (
+        <p data-testid="create-recordview-error" className="mt-1.5 text-[11px] text-red-600">
           {error}
         </p>
       )}

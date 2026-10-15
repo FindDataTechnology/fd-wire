@@ -24,6 +24,11 @@
                                                面板 query 同形入参 → 同一执行
                                                路径出试取快照，所见即所刷；
                                                不落任何版本）
+- ``POST /api/v1/artifacts/{id}/record-view/preview`` record-view 示例键值
+                                               试预览（wire-record-view 任务
+                                               4.2：console 身份按当前版本
+                                               spec、与公开取数端点同一组装
+                                               函数取数；不验令牌不生成链接）
 - ``POST /api/v1/artifacts``                    空白创建（wire-dashboard-blank-create；
                                                wire-form-builder 扩 kind=form——
                                                白名单 dashboard/form，title
@@ -38,6 +43,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..ai.db import get_db
@@ -56,7 +62,7 @@ from ..datasets.ingest import (
     EngineUnavailable,
     get_engine_client_factory,
 )
-from . import query_contract, refresh, service
+from . import query_contract, record_view_runtime, refresh, service
 from .models import ArtifactStatus
 from .schemas import (
     ArtifactCreateIn,
@@ -438,3 +444,86 @@ def query_preview(
     if error is not None:  # 形状/投影列不存在等快照失败
         raise HTTPException(status_code=400, detail=error)
     return QueryPreviewOut(snapshot=snapshot, query=query)
+
+
+class RecordViewPreviewIn(BaseModel):
+    """record-view 试预览请求体：``key`` = 示例记录键值（如批次号）。"""
+
+    key: str
+
+
+@router.post("/api/v1/artifacts/{artifact_id}/record-view/preview")
+def record_view_preview(
+    artifact_id: int,
+    payload: RecordViewPreviewIn,
+    customer_id: str = Depends(require_console_customer_id),
+    db: Session = Depends(get_db),
+    datasets_db: Session = Depends(get_datasets_db),
+    engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
+) -> dict:
+    """示例键值试预览（wire-record-view 任务 4.2 后端侧——console 身份）：
+
+    按**当前版本** spec 经与公开取数端点**同一组装函数**
+    （``record_view_runtime.build_record_view_payload``）取数渲染预览——
+    试预览所见即扫码所得；不验令牌、不生成公开链接（draft 亦可预览，
+    构建器边配边看）。响应形状与公开端点一致（``expires_at`` 恒 null——
+    预览无令牌无到期可言）。
+
+    语义边界（如实）：他企/不存在 404；kind≠record-view 422；key 空白 422；
+    未绑数据集/键列的中间态 422（先完成配置）；主记录查询失效（keyColumn
+    漂移/引擎拒绝）400 带原因（console 是属主调试面——与公开端点的统一
+    404 分置）；section 失败单段 error 照常组装。
+    """
+    artifact = _artifact_or_404(db, artifact_id, customer_id)
+    if artifact.kind != service.RECORD_VIEW_KIND:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"产物 {artifact.id} 是 {artifact.kind}，仅单记录页"
+                "（record-view）支持试预览。"
+            ),
+        )
+    if not payload.key.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="key 必须是非空字符串（示例记录键值，如批次号）",
+        )
+    current = service.current_spec(db, artifact)
+    envelope = current if isinstance(current, dict) else {}
+    inner = envelope.get("spec")
+    dataset_id = inner.get("datasetId") if isinstance(inner, dict) else None
+    key_column = inner.get("keyColumn") if isinstance(inner, dict) else None
+    if (
+        not isinstance(dataset_id, str)
+        or not dataset_id.strip()
+        or not isinstance(key_column, str)
+        or not key_column.strip()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "产物尚未完成主数据集/键列配置（未绑数据集的中间态"
+                "不可预览）——请在构建器完成配置后重试。"
+            ),
+        )
+    try:
+        body = record_view_runtime.build_record_view_payload(
+            inner,
+            payload.key,
+            datasets_db=datasets_db,
+            customer_id=customer_id,
+            engine_factory=engine_factory,
+        )
+    except api_store.LocalQueryError as exc:  # keyColumn 漂移等——如实 400
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (EngineUnavailable, EngineCallError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    title = envelope.get("title")
+    if not isinstance(title, str) or not title.strip():
+        title = artifact.title
+    return {
+        "title": title,
+        "version": artifact.version,
+        "expires_at": None,
+        **body,
+    }

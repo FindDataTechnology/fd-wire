@@ -12,6 +12,7 @@ from ..ai.service import ConversationNotFound, get_customer_conversation
 from ..datasets.models import Dataset
 from .form_spec import validate_form_spec
 from .models import Artifact, ArtifactStatus, ArtifactVersion
+from .record_view_spec import validate_record_view_spec
 
 
 class ArtifactNotFound(LookupError):
@@ -55,6 +56,10 @@ FORM_KIND = "form"
 #: alert_rule 产物 kind 短名（保存时追加规则契约层的依据）
 ALERT_KIND = "alert_rule"
 
+#: record-view 产物 kind 短名（wire-record-view design D1：同 form 走 service
+#: 层常量路线——models.ARTIFACT_KINDS 校验面与 AI 门均不收录）
+RECORD_VIEW_KIND = "record-view"
+
 
 class InvalidAlertArtifactSpec(InvalidArtifactSpec):
     """alert_rule 规则契约未过校验（alerts.spec_validate）——路由层转 400
@@ -66,13 +71,17 @@ def validate_kind_spec(kind: str, spec: object) -> str | None:
 
     通用层先行（validate_spec：title 非空 + spec.spec 非空——既有口径
     零漂移）；kind=form 再追加 form 结构层（form_spec.validate_form_spec，
-    design D1 第①层）。dashboard 及其余 kind 语义不变（仅通用层）。
+    design D1 第①层）；kind=record-view 追加 record-view 结构层
+    （record_view_spec.validate_record_view_spec，wire-record-view 任务
+    1.1）。dashboard 及其余 kind 语义不变（仅通用层）。
     """
     error = validate_spec(spec)
     if error is not None:
         return error
     if kind == FORM_KIND and isinstance(spec, dict):
         return validate_form_spec(spec.get("spec"))
+    if kind == RECORD_VIEW_KIND and isinstance(spec, dict):
+        return validate_record_view_spec(spec.get("spec"))
     return None
 
 
@@ -94,6 +103,27 @@ def _validate_alert_spec(spec: object) -> None:
         raise InvalidAlertArtifactSpec(error)
 
 
+def _require_owned_dataset(
+    datasets_db: Session | None,
+    dataset_id: str,
+    *,
+    customer_id: str,
+    where: str | None = None,
+) -> None:
+    """单条数据集 id 的属主校验：本企业现存，否则 422（零半写）。
+
+    ``where`` 给定时附在错误文案后定位新键引用位（如
+    ``fields[2].optionsFromDataset.datasetId``——wire-form-entry-advanced）；
+    主 datasetId 沿用既有文案（不带定位，零漂移）。
+    """
+    dataset = (
+        datasets_db.get(Dataset, dataset_id) if datasets_db is not None else None
+    )
+    if dataset is None or dataset.customer_id != customer_id:
+        suffix = f"（{where}）" if where else ""
+        raise InvalidArtifactSpec(f"数据集 {dataset_id} 不存在{suffix}")
+
+
 def _require_form_dataset(
     spec: object, *, datasets_db: Session | None, customer_id: str
 ) -> None:
@@ -102,6 +132,12 @@ def _require_form_dataset(
     datasetId 为 null（构建中间态——可保存不可提交）直接放行；非空时必须
     在 datasets 库会话中命中**本企业**现存数据集，不存在或他企一律
     InvalidArtifactSpec（路由层 422，不泄露他企存在性）。
+
+    新键引用数据集同口径校验（wire-form-entry-advanced 任务 1.3）：
+    ``fields[].optionsFromDataset.datasetId`` 与 ``constraints[].probe.
+    datasetId``——本企业现存否则 422 定位引用位，零半写。fillFrom 的
+    引用源数据集即其指向 select 自身的 optionsFromDataset.datasetId
+    （保存校验保证引用成立），已被前一项覆盖，不重复查库。
 
     ``datasets_db`` 必须是 datasets 库会话（生产 wire_platform/wire_datasets
     分库——查 datasets 表不能走 ai 库会话，照 query_contract 先例由路由
@@ -112,18 +148,156 @@ def _require_form_dataset(
         return
     inner = spec.get("spec")
     dataset_id = inner.get("datasetId") if isinstance(inner, dict) else None
-    if dataset_id is None:
+    if dataset_id is not None:
+        _require_owned_dataset(datasets_db, dataset_id, customer_id=customer_id)
+    if not isinstance(inner, dict):
         return
-    dataset = (
-        datasets_db.get(Dataset, dataset_id) if datasets_db is not None else None
-    )
-    if dataset is None or dataset.customer_id != customer_id:
-        raise InvalidArtifactSpec(f"数据集 {dataset_id} 不存在")
+    fields = inner.get("fields")
+    for index, field in enumerate(fields if isinstance(fields, list) else []):
+        if not isinstance(field, dict):
+            continue
+        source = field.get("optionsFromDataset")
+        if isinstance(source, dict) and isinstance(source.get("datasetId"), str):
+            _require_owned_dataset(
+                datasets_db,
+                source["datasetId"],
+                customer_id=customer_id,
+                where=f"fields[{index}].optionsFromDataset.datasetId",
+            )
+    constraints = inner.get("constraints")
+    for index, constraint in enumerate(
+        constraints if isinstance(constraints, list) else []
+    ):
+        if not isinstance(constraint, dict):
+            continue
+        probe = constraint.get("probe")
+        if isinstance(probe, dict) and isinstance(probe.get("datasetId"), str):
+            _require_owned_dataset(
+                datasets_db,
+                probe["datasetId"],
+                customer_id=customer_id,
+                where=f"constraints[{index}].probe.datasetId",
+            )
 
 
 def operator_label(customer_id: str) -> str:
     """版本/留痕的操作者标注（控制台会话写入口径）。"""
     return f"console:{customer_id}"
+
+
+def _dataset_column_names(dataset: Dataset | None) -> set[str]:
+    """数据集列快照列名集合（columns_json [{name, type}]——漂移基线口径，
+    与 entity-layer 主键列校验同源）。"""
+    if dataset is None:
+        return set()
+    return {
+        column.get("name")
+        for column in (dataset.columns_json or [])
+        if isinstance(column, dict)
+    }
+
+
+def _require_column_in_snapshot(
+    columns: set[str], column: object, *, where: str, dataset_id: str
+) -> None:
+    """列 ∈ 数据集列快照校验（wire-record-view 保存时刻口径）：keyColumn、
+    headerFields.column、sections.dateColumn 与 filters 的 ``{fromField}``
+    都按此裁决（422 定位字段；同 entity-layer 主键列口径）。"""
+    if column not in columns:
+        raise InvalidArtifactSpec(
+            f"{where} 不在数据集 {dataset_id} 列快照内: {column!r}"
+        )
+
+
+def _require_record_view_datasets(
+    spec: object, *, datasets_db: Session | None, customer_id: str
+) -> None:
+    """record-view spec 的属主与列快照校验（wire-record-view 任务 1.2，
+    design「保存时刻列快照」——零引擎调用）。
+
+    datasetId 为 null（构建中间态——可保存不可分享）直接放行（结构校验已
+    保证该态下 keyColumn/headerFields/sections 全空）；非空时：
+
+    - 主 datasetId：本企业现存（``_require_owned_dataset`` 同 form 主键
+      口径，文案零漂移）；
+    - ``keyColumn`` ∈ 主集列快照；
+    - ``headerFields[].column`` ∈ 主集列快照（去重已在结构层拦）；
+    - 每个 ``sections[].datasetId``：本企业现存（422 定位引用位，可与主集
+      相同——同集复用已取行不重复查库）；
+    - 每个 ``sections[].dateColumn`` ∈ 该 section 数据集列快照；
+    - 每个 ``sections[].filters[].value.fromField`` ∈ 主集列快照（运行时
+      以主记录行该列值代入）。
+
+    section 的**过滤列**（filters.column）不在此裁决（design 定案：section
+    数据集列漂移的真相在取数时以单段 error 如实暴露，不静默空段）。
+    ``datasets_db`` 缺席时 fail-closed 拒存（同 ``_require_form_dataset``）。
+    """
+    if not isinstance(spec, dict):  # pragma: no cover - 前置校验已保证
+        return
+    inner = spec.get("spec")
+    if not isinstance(inner, dict):
+        return
+    dataset_id = inner.get("datasetId")
+    if not isinstance(dataset_id, str) or not dataset_id.strip():
+        return  # 未绑数据集中间态：结构校验已保证其余键全空
+    _require_owned_dataset(datasets_db, dataset_id, customer_id=customer_id)
+    dataset = (
+        datasets_db.get(Dataset, dataset_id) if datasets_db is not None else None
+    )
+    main_columns = _dataset_column_names(dataset)
+    _require_column_in_snapshot(
+        main_columns,
+        inner.get("keyColumn"),
+        where="spec.spec.keyColumn",
+        dataset_id=dataset_id,
+    )
+    for index, field in enumerate(
+        inner.get("headerFields") if isinstance(inner.get("headerFields"), list) else []
+    ):
+        if isinstance(field, dict):
+            _require_column_in_snapshot(
+                main_columns,
+                field.get("column"),
+                where=f"headerFields[{index}].column",
+                dataset_id=dataset_id,
+            )
+    # section 数据集列快照缓存（同集 section 复用——每数据集至多查一次）
+    section_columns: dict[str, set[str]] = {dataset_id: main_columns}
+    sections = inner.get("sections")
+    for index, section in enumerate(sections if isinstance(sections, list) else []):
+        if not isinstance(section, dict):
+            continue
+        where = f"sections[{index}]"
+        sec_dataset_id = section.get("datasetId")
+        if isinstance(sec_dataset_id, str) and sec_dataset_id.strip():
+            if sec_dataset_id not in section_columns:
+                _require_owned_dataset(
+                    datasets_db, sec_dataset_id, customer_id=customer_id, where=f"{where}.datasetId"
+                )
+                sec_dataset = (
+                    datasets_db.get(Dataset, sec_dataset_id)
+                    if datasets_db is not None
+                    else None
+                )
+                section_columns[sec_dataset_id] = _dataset_column_names(sec_dataset)
+            _require_column_in_snapshot(
+                section_columns[sec_dataset_id],
+                section.get("dateColumn"),
+                where=f"{where}.dateColumn",
+                dataset_id=sec_dataset_id,
+            )
+        filters = section.get("filters")
+        for f_index, flt in enumerate(filters if isinstance(filters, list) else []):
+            if not isinstance(flt, dict):
+                continue
+            value = flt.get("value")
+            if isinstance(value, dict) and isinstance(value.get("fromField"), str):
+                _require_column_in_snapshot(
+                    main_columns,
+                    value["fromField"],
+                    where=f"{where}.filters[{f_index}].value.fromField",
+                    dataset_id=dataset_id,
+                )
 
 
 def get_customer_artifact(db: Session, *, artifact_id: int, customer_id: str) -> Artifact:
@@ -200,9 +374,15 @@ def update_spec(
     form 产物在通用校验之上追加两层（wire-form-builder design D1，全部在
     版本行落库前——任何拒绝**零半写**）：结构层（validate_form_spec）+
     datasetId 属主层（``datasets_db``=datasets 库会话，datasetId 非空时验
-    存在且属本企业，见 _require_form_dataset）。alert_rule 产物追加规则
-    契约层（_validate_alert_spec，InvalidAlertArtifactSpec→路由层 400）。
-    dashboard 及其余 kind 仅走通用层（语义零漂移，``datasets_db`` 不参与）。
+    存在且属本企业，见 _require_form_dataset；wire-form-entry-advanced
+    起 optionsFromDataset/probe 引用数据集同口径校验）。record-view 产物
+    同构两层：结构层（record_view_spec）+ 属主与保存时刻列快照层
+    （_require_record_view_datasets——keyColumn/headerFields.column/
+    sections.dateColumn/filters 的 {fromField} 按 columns_json 校验，
+    wire-record-view 任务 1.2）。alert_rule 产物
+    追加规则契约层（_validate_alert_spec，InvalidAlertArtifactSpec→路由
+    层 400）。dashboard 及其余 kind 仅走通用层（语义零漂移，``datasets_db``
+    不参与）。
     """
     if artifact.status == ArtifactStatus.archived.value:
         raise ArtifactLocked(
@@ -213,6 +393,10 @@ def update_spec(
         raise InvalidArtifactSpec(error)
     if artifact.kind == FORM_KIND:
         _require_form_dataset(
+            spec, datasets_db=datasets_db, customer_id=artifact.customer_id
+        )
+    if artifact.kind == RECORD_VIEW_KIND:
+        _require_record_view_datasets(
             spec, datasets_db=datasets_db, customer_id=artifact.customer_id
         )
     if artifact.kind == ALERT_KIND:
@@ -355,18 +539,31 @@ def import_from_draft(
 
 #: 空白创建的 kind 白名单：dashboard（最小空板）/ form（最小空表单）/
 #: alert_rule（规则模板壳，wire-alert-evaluation——alert 此前唯一出生路径
-#: 是 AI 草稿转正，而 AI 构建要求 cell，免费档无门）。其余三类（复合指标/
-#: 研报/定时）结构强，仍只能由 AI 构建草稿转正产生。
-BLANK_CREATE_KINDS: tuple[str, ...] = ("dashboard", "form", "alert_rule")
+#: 是 AI 草稿转正，而 AI 构建要求 cell，免费档无门）/ record-view（最小空
+#: 单记录页，wire-record-view——公开读面产物同样要求 console 出生路径）。
+#: 其余三类（复合指标/研报/定时）结构强，仍只能由 AI 构建草稿转正产生。
+BLANK_CREATE_KINDS: tuple[str, ...] = ("dashboard", "form", "alert_rule", "record-view")
 
 
 def _blank_spec(kind: str, title: str) -> dict:
     """空白创建的最小 spec（kind 分派）：dashboard=空面板；form=零字段、
     datasetId=None（构建中间态——可保存不可提交，进构建器再绑定数据集）；
     alert_rule=规则模板壳（占位 dataset_id；出生版本不过规则契约层，首次
-    PUT 真实 spec 才校验——评估器对未修占位的 published 规则记 error 事件）。"""
+    PUT 真实 spec 才校验——评估器对未修占位的 published 规则记 error 事件）；
+    record-view=零头部零时间段、datasetId=None 的最小空页（wire-record-view
+    契约：未绑数据集的中间态可保存、不可生成分享）。"""
     if kind == FORM_KIND:
         return {"title": title, "spec": {"title": title, "datasetId": None, "fields": []}}
+    if kind == RECORD_VIEW_KIND:
+        return {
+            "title": title,
+            "spec": {
+                "datasetId": None,
+                "keyColumn": None,
+                "headerFields": [],
+                "sections": [],
+            },
+        }
     if kind == ALERT_KIND:
         return {
             "title": title,
@@ -399,7 +596,8 @@ def create_blank_artifact(
     """
     if kind not in BLANK_CREATE_KINDS:
         raise InvalidArtifactSpec(
-            "空白创建仅支持 dashboard、form、alert_rule（其他 kind 由 AI 构建产生）"
+            "空白创建仅支持 dashboard、form、alert_rule、record-view"
+            "（其他 kind 由 AI 构建产生）"
         )
     if not title.strip():
         raise InvalidArtifactSpec("title 必须是非空字符串")

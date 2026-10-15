@@ -70,6 +70,89 @@ export interface FieldOptionsFrom {
   fallback?: string[];
 }
 
+// ── 高级录入三新键（wire-form-entry-advanced）──────────────────────────────
+// 与 api 侧 artifacts/form_spec.py 同源冻结：optionsFromDataset（跨数据集
+// 动态选项）、fillFrom（选值回填）、computed（计算字段）、constraints
+//（提交闸）。三新键与既有键的互斥/引用规则在 validateFormSpec 草稿校验
+// 镜像后端保存校验（前端先拦，后端仍是唯一裁决面）。
+
+/** 数据集过滤算子白名单（optionsFromDataset.filters 与 probe.filters 共用，
+ *  为数据面查询 filters 算子的子集：eq|in|gt|gte|lt|lte）。 */
+export const DATASET_FILTER_OPS = [
+  "eq",
+  "in",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+] as const;
+export type DatasetFilterOp = (typeof DATASET_FILTER_OPS)[number];
+
+/** 过滤值：标量或标量数组（仅 in 允许数组）。 */
+export type DatasetFilterValue = string | number | boolean;
+
+/** optionsFromDataset 的字面量过滤条件（值不引用字段——{field} 引用是
+ *  probe.filters 专属）。 */
+export interface DatasetFilter {
+  column: string;
+  op: DatasetFilterOp;
+  value: DatasetFilterValue | DatasetFilterValue[];
+}
+
+/** 跨数据集动态选项源（select 专属、与静态 options 及 optionsFrom 互斥
+ *  恰有其一）：选项=引用数据集有效视图按 filters 过滤后 column 列的去重
+ *  非空值，按值升序，至多 limit 条（缺省 200、硬上限 500），超限截断
+ *  truncated 如实标注。 */
+export interface FieldOptionsFromDataset {
+  datasetId: string;
+  column: string;
+  filters?: DatasetFilter[];
+  limit?: number;
+}
+
+/** 选值回填：field 必须引用同表单内带 optionsFromDataset 的 select 字段
+ *  （不得自引用）；源 select 取值 v 时，从其引用数据集按「选项列=v」取
+ *  至多一行，将该行 column 值填入本字段作为可改写的默认值。 */
+export interface FieldFillFrom {
+  field: string;
+  column: string;
+}
+
+/** 计算字段（v1 仅 add_days 一 op）：date 引用同表单内另一 input=date
+ *  字段；days 引用同表单内 input=number 字段或非负整数字面量；不得自引用。
+ *  date/days 任一参与值有效才求值（YYYY-MM-DD + N 天，日历语义含闰年/
+ *  月末进位），产出为可改写默认值；失败留空不报错。 */
+export interface FieldComputed {
+  op: "add_days";
+  date: string;
+  days: string | number;
+}
+
+/** 提交闸 probe 过滤条件：与 DatasetFilter 同形，value 额外允许
+ *  `{field: <本表单字段列>}`（以提交 values 按其 input 类型解析代入）。 */
+export interface FormProbeFilter {
+  column: string;
+  op: DatasetFilterOp;
+  value: DatasetFilterValue | DatasetFilterValue[] | { field: string };
+}
+
+/** 存在性探测：对引用数据集有效视图按 limit=1 探测——expect "none" 探测
+ *  到任一行即拦截、"any" 零行即拦截（服务端执法，前端仅 UX 层）。 */
+export interface FormConstraintProbe {
+  datasetId: string;
+  filters: FormProbeFilter[];
+  expect: "none" | "any";
+}
+
+/** spec 级提交闸约束：when（可选，单条件显隐同形——真才执行探测）以提交
+ *  values 求值；命中拦截 422 带 id 与 message（逐字呈现）。 */
+export interface FormConstraint {
+  id: string;
+  message: string;
+  when?: FieldVisibleWhen;
+  probe: FormConstraintProbe;
+}
+
 export interface FormField {
   /** 目标数据集列名（提交 values 的键）。 */
   column: string;
@@ -85,6 +168,12 @@ export interface FormField {
   visibleWhenGroup?: FieldVisibleWhenGroup;
   /** select 可选选项联动（wire-form-linkage-v2）。 */
   optionsFrom?: FieldOptionsFrom;
+  /** select 可选跨数据集动态选项源（wire-form-entry-advanced）。 */
+  optionsFromDataset?: FieldOptionsFromDataset;
+  /** 可选选值回填（wire-form-entry-advanced；源须为动态选项 select）。 */
+  fillFrom?: FieldFillFrom;
+  /** 可选计算字段（wire-form-entry-advanced；v1 仅 add_days）。 */
+  computed?: FieldComputed;
 }
 
 /** 表单本体（信封的 spec 内层）。datasetId=null 为构建中间态（可保存不可提交）。 */
@@ -93,6 +182,8 @@ export interface FormSpecBody {
   fields: FormField[];
   submitLabel?: string;
   successMessage?: string;
+  /** 可选提交闸约束（wire-form-entry-advanced；≤10 条，服务端执法）。 */
+  constraints?: FormConstraint[];
 }
 
 /** 文案长度上限（与后端 form_spec 校验同源口径）。 */
@@ -131,7 +222,8 @@ export function fieldsFromColumns(
 }
 
 /** 信封组装：编辑器保存时把表单本体放回产物信封（saveArtifactSpec 入参）。
- *  submitLabel/successMessage 仅在非空时写入（缺省不落键）。 */
+ *  submitLabel/successMessage 仅在非空时写入（缺省不落键）；constraints
+ *  非空数组时写入（wire-form-entry-advanced）。 */
 export function buildFormEnvelope(
   title: string,
   body: FormSpecBody,
@@ -144,6 +236,9 @@ export function buildFormEnvelope(
   const successMessage = body.successMessage?.trim();
   if (submitLabel) spec.submitLabel = submitLabel;
   if (successMessage) spec.successMessage = successMessage;
+  if (body.constraints && body.constraints.length > 0) {
+    spec.constraints = body.constraints;
+  }
   return { title, spec };
 }
 
@@ -243,6 +338,189 @@ export function normalizeOptionsFrom(
   return { field: source.field, cases };
 }
 
+/** 过滤值形状收窄（optionsFromDataset 与 probe 共用）：标量或标量数组。 */
+function normalizeFilterValue(
+  raw: unknown,
+): DatasetFilterValue | DatasetFilterValue[] | undefined {
+  if (
+    typeof raw === "string" ||
+    typeof raw === "number" ||
+    typeof raw === "boolean"
+  ) {
+    return raw;
+  }
+  if (
+    Array.isArray(raw) &&
+    raw.every(
+      (v) =>
+        typeof v === "string" ||
+        typeof v === "number" ||
+        typeof v === "boolean",
+    )
+  ) {
+    return raw as DatasetFilterValue[];
+  }
+  return undefined;
+}
+
+/** 字面量过滤条件归一（optionsFromDataset.filters 用）：column 非空串、
+ *  op ∈ 白名单、value 标量或标量数组（仅 in 允许数组——越 op 携带数组的
+ *  归一到 undefined 由上层整键丢弃）。 */
+function normalizeDatasetFilter(raw: unknown): DatasetFilter | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const f = raw as Record<string, unknown>;
+  if (typeof f.column !== "string" || !f.column.trim()) return undefined;
+  if (
+    typeof f.op !== "string" ||
+    !DATASET_FILTER_OPS.includes(f.op as DatasetFilterOp)
+  ) {
+    return undefined;
+  }
+  const value = normalizeFilterValue(f.value);
+  if (value === undefined) return undefined;
+  return { column: f.column, op: f.op as DatasetFilterOp, value };
+}
+
+/** optionsFromDataset 逐键校验归一（wire-form-entry-advanced）：datasetId/
+ *  column 非空串、filters 逐条过条件规、limit 缺省或 1..500 整数；任一
+ *  不合法返回 undefined（整键丢弃）。引用存在性/属主属保存校验面。 */
+export function normalizeOptionsFromDataset(
+  raw: unknown,
+): FieldOptionsFromDataset | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const source = raw as Record<string, unknown>;
+  if (typeof source.datasetId !== "string" || !source.datasetId.trim()) {
+    return undefined;
+  }
+  if (typeof source.column !== "string" || !source.column.trim()) {
+    return undefined;
+  }
+  let filters: DatasetFilter[] | undefined;
+  if (source.filters !== undefined) {
+    if (!Array.isArray(source.filters)) return undefined;
+    const list: DatasetFilter[] = [];
+    for (const entry of source.filters) {
+      const filter = normalizeDatasetFilter(entry);
+      if (!filter) return undefined;
+      list.push(filter);
+    }
+    filters = list;
+  }
+  if (source.limit !== undefined) {
+    if (
+      typeof source.limit !== "number" ||
+      !Number.isInteger(source.limit) ||
+      source.limit < 1 ||
+      source.limit > 500
+    ) {
+      return undefined;
+    }
+  }
+  return {
+    datasetId: source.datasetId,
+    column: source.column,
+    ...(filters ? { filters } : {}),
+    ...(source.limit !== undefined ? { limit: source.limit } : {}),
+  };
+}
+
+/** fillFrom 逐键校验归一：field/column 非空串；非法整键丢弃（引用类型
+ *  属保存校验面——解析层不裁决，历史已存 spec 照常呈现）。 */
+export function normalizeFillFrom(raw: unknown): FieldFillFrom | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const source = raw as Record<string, unknown>;
+  if (typeof source.field !== "string" || !source.field.trim()) return undefined;
+  if (typeof source.column !== "string" || !source.column.trim()) return undefined;
+  return { field: source.field, column: source.column };
+}
+
+/** computed 逐键校验归一：op 固定 add_days、date 非空串、days 为非负整数
+ *  字面量（number）或字段引用（非空 string）；非法整键丢弃。 */
+export function normalizeComputed(
+  raw: unknown,
+): FieldComputed | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const source = raw as Record<string, unknown>;
+  if (source.op !== "add_days") return undefined;
+  if (typeof source.date !== "string" || !source.date.trim()) return undefined;
+  const days = source.days;
+  if (typeof days === "number") {
+    if (!Number.isInteger(days) || days < 0) return undefined;
+  } else if (typeof days !== "string" || !days.trim()) {
+    return undefined;
+  }
+  return { op: "add_days", date: source.date, days };
+}
+
+/** probe 过滤条件归一：value 额外允许 {field: 非空串}（提交 values 代入）。 */
+function normalizeProbeFilter(raw: unknown): FormProbeFilter | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const f = raw as Record<string, unknown>;
+  if (typeof f.column !== "string" || !f.column.trim()) return undefined;
+  if (
+    typeof f.op !== "string" ||
+    !DATASET_FILTER_OPS.includes(f.op as DatasetFilterOp)
+  ) {
+    return undefined;
+  }
+  const value = f.value;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const ref = (value as Record<string, unknown>).field;
+    if (typeof ref !== "string" || !ref.trim()) return undefined;
+    return { column: f.column, op: f.op as DatasetFilterOp, value: { field: ref } };
+  }
+  const literal = normalizeFilterValue(value);
+  if (literal === undefined) return undefined;
+  return { column: f.column, op: f.op as DatasetFilterOp, value: literal };
+}
+
+/** constraints 归一（宽容逐键）：id/message 非空、when 可选（过单条件规）、
+ *  probe 形状（datasetId/filters 逐条/expect 枚举）；任一不合法整列表
+ *  丢弃（回退无 constraints 呈现——运行时零闸，服务端保存校验兜底拦截）。 */
+export function normalizeConstraints(
+  raw: unknown,
+): FormConstraint[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const list: FormConstraint[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") return undefined;
+    const c = entry as Record<string, unknown>;
+    if (typeof c.id !== "string" || !c.id.trim()) return undefined;
+    if (typeof c.message !== "string" || !c.message.trim()) return undefined;
+    const probeRaw = c.probe;
+    if (!probeRaw || typeof probeRaw !== "object") return undefined;
+    const probe = probeRaw as Record<string, unknown>;
+    if (
+      typeof probe.datasetId !== "string" ||
+      !probe.datasetId.trim()
+    ) {
+      return undefined;
+    }
+    if (!Array.isArray(probe.filters)) return undefined;
+    const filters: FormProbeFilter[] = [];
+    for (const f of probe.filters) {
+      const filter = normalizeProbeFilter(f);
+      if (!filter) return undefined;
+      filters.push(filter);
+    }
+    if (probe.expect !== "none" && probe.expect !== "any") return undefined;
+    const when =
+      c.when === undefined ? undefined : normalizeVisibleWhen(c.when);
+    if (c.when !== undefined && !when) return undefined;
+    list.push({
+      id: c.id,
+      message: c.message,
+      ...(when ? { when } : {}),
+      probe: {
+        datasetId: probe.datasetId,
+        filters,
+        expect: probe.expect,
+      },
+    });
+  }
+  return list;
+}
+
 /** 宽容解析产物 spec → 表单本体：同时接受信封（产物详情原样）与本体
  *  （内层直给）两种输入；无 fields 数组视为非表单 spec，返回 null。
  *  字段逐个归一（缺 label 回退列名、非法 input 回退 text），绝不整单失败。 */
@@ -271,6 +549,13 @@ export function parseFormSpec(raw: unknown): FormSpecBody | null {
     // text 的历史形状照旧呈现，不带联动）。
     const optionsFrom =
       input === "select" ? normalizeOptionsFrom(f.optionsFrom) : undefined;
+    // optionsFromDataset 同为 select 专属键（wire-form-entry-advanced）。
+    const optionsFromDataset =
+      input === "select"
+        ? normalizeOptionsFromDataset(f.optionsFromDataset)
+        : undefined;
+    const fillFrom = normalizeFillFrom(f.fillFrom);
+    const computed = normalizeComputed(f.computed);
     fields.push({
       column: f.column,
       label: typeof f.label === "string" && f.label ? f.label : f.column,
@@ -280,8 +565,12 @@ export function parseFormSpec(raw: unknown): FormSpecBody | null {
       ...(visibleWhen ? { visibleWhen } : {}),
       ...(visibleWhenGroup ? { visibleWhenGroup } : {}),
       ...(optionsFrom ? { optionsFrom } : {}),
+      ...(optionsFromDataset ? { optionsFromDataset } : {}),
+      ...(fillFrom ? { fillFrom } : {}),
+      ...(computed ? { computed } : {}),
     });
   }
+  const constraints = normalizeConstraints(inner.constraints);
   return {
     datasetId: typeof inner.datasetId === "string" ? inner.datasetId : null,
     fields,
@@ -291,6 +580,7 @@ export function parseFormSpec(raw: unknown): FormSpecBody | null {
     ...(typeof inner.successMessage === "string" && inner.successMessage
       ? { successMessage: inner.successMessage }
       : {}),
+    ...(constraints ? { constraints } : {}),
   };
 }
 
@@ -313,7 +603,18 @@ export type FormSpecErrorCode =
   | "optionsFromBad"
   | "optionsExclusive"
   | "optionsFromSelf"
-  | "optionsFromMissing";
+  | "optionsFromMissing"
+  // wire-form-entry-advanced（三新键+constraints）草稿校验错误码。
+  | "optionsFromDatasetBad"
+  | "fillFromBad"
+  | "fillFromSelf"
+  | "fillFromSource"
+  | "computedBad"
+  | "computedSelf"
+  | "computedDateRef"
+  | "computedDaysRef"
+  | "constraintBad"
+  | "constraintIdDuplicate";
 
 /** 单条件形状校验（单条件与组内条件共用；不含引用存在性）：field 非空
  *  string、op ∈ 枚举、empty 族不得带 value、其余算子 value 为非空标量。 */
@@ -417,6 +718,225 @@ function optionsFromError(
   return null;
 }
 
+/** constraints 数量与文案长度上限（与 api 侧保存校验同源口径）。 */
+export const FORM_CONSTRAINT_LIMITS = {
+  message: 500,
+  count: 10,
+  filters: 10,
+} as const;
+
+/** optionsFromDataset 的草稿校验（wire-form-entry-advanced）：datasetId/
+ *  column 非空、filters 逐条形状（op 白名单/标量或数组值）、limit 缺省或
+ *  1..500 整数 → "optionsFromDatasetBad"（引用数据集存在性/属主由服务端
+ *  保存校验裁决，此处不查）。 */
+function optionsFromDatasetError(
+  field: FormField,
+): FormSpecErrorCode | null {
+  const source = field.optionsFromDataset;
+  if (!source || typeof source !== "object") return "optionsFromDatasetBad";
+  if (typeof source.datasetId !== "string" || !source.datasetId.trim()) {
+    return "optionsFromDatasetBad";
+  }
+  if (typeof source.column !== "string" || !source.column.trim()) {
+    return "optionsFromDatasetBad";
+  }
+  if (source.filters !== undefined) {
+    if (
+      !Array.isArray(source.filters) ||
+      source.filters.length > FORM_CONSTRAINT_LIMITS.filters
+    ) {
+      return "optionsFromDatasetBad";
+    }
+    for (const filter of source.filters) {
+      if (!filter || filterShapeBad(filter)) return "optionsFromDatasetBad";
+    }
+  }
+  if (source.limit !== undefined) {
+    if (
+      typeof source.limit !== "number" ||
+      !Number.isInteger(source.limit) ||
+      source.limit < 1 ||
+      source.limit > 500
+    ) {
+      return "optionsFromDatasetBad";
+    }
+  }
+  return null;
+}
+
+/** 字面量过滤条件形状断言（optionsFromDataset.filters 用）。 */
+function filterShapeBad(filter: unknown): boolean {
+  if (!filter || typeof filter !== "object") return true;
+  const f = filter as Record<string, unknown>;
+  if (typeof f.column !== "string" || !f.column.trim()) return true;
+  if (
+    typeof f.op !== "string" ||
+    !DATASET_FILTER_OPS.includes(f.op as DatasetFilterOp)
+  ) {
+    return true;
+  }
+  return normalizeFilterValue(f.value) === undefined;
+}
+
+/** fillFrom 的草稿校验：形状非法 → "fillFromBad"；自引用 → "fillFromSelf"；
+ *  源字段不存在或非「带 optionsFromDataset 的 select」→ "fillFromSource"
+ *  （同表单引用裁决面——列是否在引用数据集快照中由服务端保存校验裁决）。 */
+function fillFromError(
+  field: FormField,
+  fields: FormField[],
+): FormSpecErrorCode | null {
+  const source = field.fillFrom;
+  if (!source || typeof source !== "object") return "fillFromBad";
+  if (
+    typeof source.field !== "string" ||
+    !source.field.trim() ||
+    typeof source.column !== "string" ||
+    !source.column.trim()
+  ) {
+    return "fillFromBad";
+  }
+  if (source.field === field.column) return "fillFromSelf";
+  const target = fields.find((f) => f.column === source.field);
+  if (
+    !target ||
+    target.input !== "select" ||
+    target.optionsFromDataset === undefined
+  ) {
+    return "fillFromSource";
+  }
+  return null;
+}
+
+/** computed 的草稿校验：形状非法（op 越枚举/date 空串/days 非非负整数字面
+ *  量或空引用）→ "computedBad"；自引用（date/days 引用自身）→
+ *  "computedSelf"；date 引用不存在或非 input=date 字段 → "computedDateRef"；
+ *  days 引用不存在或非 input=number 字段 → "computedDaysRef"。 */
+function computedFieldError(
+  field: FormField,
+  fields: FormField[],
+): FormSpecErrorCode | null {
+  const computed = field.computed;
+  if (!computed || typeof computed !== "object") return "computedBad";
+  if (computed.op !== "add_days") return "computedBad";
+  if (typeof computed.date !== "string" || !computed.date.trim()) {
+    return "computedBad";
+  }
+  if (typeof computed.days === "number") {
+    if (!Number.isInteger(computed.days) || computed.days < 0) {
+      return "computedBad";
+    }
+  } else if (typeof computed.days !== "string" || !computed.days.trim()) {
+    return "computedBad";
+  }
+  if (computed.date === field.column) return "computedSelf";
+  if (typeof computed.days === "string" && computed.days === field.column) {
+    return "computedSelf";
+  }
+  const dateField = fields.find((f) => f.column === computed.date);
+  if (!dateField || dateField.input !== "date") return "computedDateRef";
+  if (typeof computed.days === "string") {
+    const daysField = fields.find((f) => f.column === computed.days);
+    if (!daysField || daysField.input !== "number") return "computedDaysRef";
+  }
+  return null;
+}
+
+/** probe 过滤条件形状断言（value 额外允许 {field: 非空串}）。 */
+function probeFilterShapeBad(filter: unknown): boolean {
+  if (filterShapeBad(filter)) {
+    // 先按字面量规过一遍可排除非对象/列/op 问题；再单看 {field} 引用形态。
+    if (!filter || typeof filter !== "object") return true;
+    const f = filter as Record<string, unknown>;
+    if (typeof f.column !== "string" || !f.column.trim()) return true;
+    if (
+      typeof f.op !== "string" ||
+      !DATASET_FILTER_OPS.includes(f.op as DatasetFilterOp)
+    ) {
+      return true;
+    }
+    const value = f.value;
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const ref = (value as Record<string, unknown>).field;
+      return typeof ref !== "string" || !ref.trim();
+    }
+    return true;
+  }
+  return false;
+}
+
+/** constraints 的草稿校验（spec 级，wire-form-entry-advanced）：列表 ≤10、
+ *  id 非空唯一、message 非空 ≤500、when 可选（单条件同形且引用存在）、
+ *  probe 形状（datasetId 非空、filters ≤10 逐条含 {field} 引用形态、
+ *  expect ∈ none|any）——任一非法 → "constraintBad"；id 重复 →
+ *  "constraintIdDuplicate"。 */
+function constraintsErrors(
+  constraints: unknown,
+  allColumns: Set<string>,
+): FormSpecErrorCode[] {
+  const errors: FormSpecErrorCode[] = [];
+  if (!Array.isArray(constraints) || constraints.length === 0) {
+    return errors;
+  }
+  if (constraints.length > FORM_CONSTRAINT_LIMITS.count) {
+    errors.push("constraintBad");
+    return errors;
+  }
+  const seenIds = new Set<string>();
+  for (const constraint of constraints) {
+    if (!constraint || typeof constraint !== "object") {
+      errors.push("constraintBad");
+      continue;
+    }
+    const c = constraint as Record<string, unknown>;
+    if (typeof c.id !== "string" || !c.id.trim()) errors.push("constraintBad");
+    else if (seenIds.has(c.id)) errors.push("constraintIdDuplicate");
+    else seenIds.add(c.id);
+    if (
+      typeof c.message !== "string" ||
+      !c.message.trim() ||
+      c.message.length > FORM_CONSTRAINT_LIMITS.message
+    ) {
+      errors.push("constraintBad");
+    }
+    if (c.when !== undefined) {
+      if (
+        conditionShapeBad(c.when) ||
+        !(c.when as FieldVisibleWhen).field ||
+        !allColumns.has((c.when as FieldVisibleWhen).field)
+      ) {
+        errors.push("constraintBad");
+      }
+    }
+    const probe = c.probe;
+    if (!probe || typeof probe !== "object") {
+      errors.push("constraintBad");
+      continue;
+    }
+    const p = probe as Record<string, unknown>;
+    if (typeof p.datasetId !== "string" || !p.datasetId.trim()) {
+      errors.push("constraintBad");
+    }
+    if (
+      !Array.isArray(p.filters) ||
+      p.filters.length === 0 ||
+      p.filters.length > FORM_CONSTRAINT_LIMITS.filters
+    ) {
+      errors.push("constraintBad");
+    } else {
+      for (const filter of p.filters) {
+        if (probeFilterShapeBad(filter)) {
+          errors.push("constraintBad");
+          break;
+        }
+      }
+    }
+    if (p.expect !== "none" && p.expect !== "any") {
+      errors.push("constraintBad");
+    }
+  }
+  return errors;
+}
+
 /** 结构自检（保存前；与后端 form_spec 规则同源）：title 非空+上限、字段
  *  结构合法、input 枚举、column 唯一、select 非空 options、文案长度上限。
  *  datasetId 非空时的存在性/属主由服务端裁决（422 如实呈现），此处不查。 */
@@ -453,13 +973,25 @@ export function validateFormSpec(
     if (seen.has(field.column)) errors.push("columnDuplicate");
     seen.add(field.column);
     if (field.input === "select") {
+      // 选项三源互斥恰有其一（wire-form-entry-advanced）：静态 options /
+      // 选项联动 optionsFrom / 数据集源 optionsFromDataset——两源并存即拒
+      // （optionsExclusive），零源即 selectOptions；单源时逐源形状校验。
+      const sourceCount = [
+        field.options,
+        field.optionsFrom,
+        field.optionsFromDataset,
+      ].filter((source) => source !== undefined).length;
+      if (sourceCount > 1) errors.push("optionsExclusive");
+      else if (sourceCount === 0) errors.push("selectOptions");
       if (field.optionsFrom !== undefined) {
-        // 选项联动（wire-form-linkage-v2）：select 与静态 options 互斥恰有
-        // 其一——带 optionsFrom 时不再走静态 options 缺失检查。
-        if (field.options !== undefined) errors.push("optionsExclusive");
         const sourceError = optionsFromError(field, allColumns);
         if (sourceError) errors.push(sourceError);
-      } else {
+      }
+      if (field.optionsFromDataset !== undefined) {
+        const datasetError = optionsFromDatasetError(field);
+        if (datasetError) errors.push(datasetError);
+      }
+      if (sourceCount === 1 && field.options !== undefined) {
         const options = (field.options ?? []).filter((o) => o.trim());
         if (options.length === 0) errors.push("selectOptions");
       }
@@ -479,6 +1011,21 @@ export function validateFormSpec(
     // 由 api 侧 422 文案承担，web 侧错误码如实呈现）。
     if (field.visibleWhen !== undefined && field.visibleWhenGroup !== undefined) {
       errors.push("conditionExclusive");
+    }
+    // 三新键（wire-form-entry-advanced）：回填/计算的形状与引用校验。
+    if (field.fillFrom !== undefined) {
+      const fillError = fillFromError(field, body.fields);
+      if (fillError) errors.push(fillError);
+    }
+    if (field.computed !== undefined) {
+      const computedErr = computedFieldError(field, body.fields);
+      if (computedErr) errors.push(computedErr);
+    }
+  }
+  // 提交闸 constraints（wire-form-entry-advanced）：形状/数量/引用同规校验。
+  if (body.constraints !== undefined) {
+    for (const code of constraintsErrors(body.constraints, allColumns)) {
+      errors.push(code);
     }
   }
   if ((body.submitLabel?.trim().length ?? 0) > FORM_TEXT_LIMITS.submitLabel) {
@@ -570,10 +1117,17 @@ export function resolveSelectOptions(
  *  all 空组恒真、any 空组恒假——保存校验已拦 1..10）。**不递归**：条件只看
  *  values，不看控制字段自身的可见性（控制字段值在 raw values 即参与比较）。
  * 选项联动：select 解析后选项为空（含静态 options 为空的防御位）→ 并入
- *  隐藏集（不可填即不可见，与条件隐藏取并集）。 */
+ *  隐藏集（不可填即不可见，与条件隐藏取并集）。
+ *
+ * 动态选项源（wire-form-entry-advanced）：optionsFromDataset 字段的选项
+ * 由运行时异步解析（console 会话查询/公开选项端点）——经 dynamicOptions
+ * 传入「已解析字段的选项表」（键在场=已解析）：已解析且为空 → 并入隐藏
+ * 集；未解析（加载中/出错）→ 不隐藏（错误态呈现可读错误，绝不静默空白）。
+ * 省略 dynamicOptions（旧行为）时该类字段不参与空选项隐藏裁决。 */
 export function evaluateFieldVisibility(
   fields: FormField[],
   values: Record<string, unknown>,
+  dynamicOptions?: Record<string, string[]>,
 ): Set<string> {
   const hidden = new Set<string>();
   for (const field of fields) {
@@ -592,6 +1146,14 @@ export function evaluateFieldVisibility(
   }
   for (const field of fields) {
     if (field.input !== "select") continue;
+    if (field.optionsFromDataset) {
+      if (dynamicOptions && field.column in dynamicOptions) {
+        if ((dynamicOptions[field.column] ?? []).length === 0) {
+          hidden.add(field.column);
+        }
+      }
+      continue;
+    }
     if (resolveSelectOptions(field, values).length === 0) {
       hidden.add(field.column);
     }
@@ -623,14 +1185,20 @@ const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
  *  行为逐字不变。number 收数值或可 parseFloat 的数字串（NaN/Inf 拒）并
  *  归一为数值；date 须 YYYY-MM-DD（regex，拒绝时间部分）；select 须 ∈
  *  options；text 收标量（数字/布尔 stringify，对象/数组拒）；非必填缺省
- *  跳过。 */
+ *  跳过。
+ *
+ * 动态选项源（wire-form-entry-advanced）：optionsFromDataset 字段的 select
+ *  成员裁决以 dynamicOptions[column]（运行时已解析选项）为准——键不在场
+ *  （未解析）按空集裁决（非空值如实报 select，防未解析值溜进载荷）。
+ * 服务端提交路径仍以提交时刻实时解析裁决（防篡改），此处仅 UX 先拦。 */
 export function validateFormValues(
   fields: FormField[],
   raw: Record<string, unknown>,
+  dynamicOptions?: Record<string, string[]>,
 ): FormValuesValidation {
   const values: Record<string, unknown> = {};
   const errors: Record<string, FormValueErrorCode> = {};
-  const hidden = evaluateFieldVisibility(fields, raw);
+  const hidden = evaluateFieldVisibility(fields, raw, dynamicOptions);
   for (const field of fields) {
     const value = raw[field.column];
     if (hidden.has(field.column)) {
@@ -669,8 +1237,11 @@ export function validateFormValues(
       case "select": {
         // 选项联动（wire-form-linkage-v2）：按当前 raw values 解析后的选项
         // 集裁决成员（服务端公开提交同规 422，客户端先拦）；解析为空的
-        // 字段已在 hidden 集中走隐藏分支。
-        const options = resolveSelectOptions(field, raw);
+        // 字段已在 hidden 集中走隐藏分支。动态选项源（wire-form-entry-
+        // advanced）以运行时已解析选项表裁决。
+        const options = field.optionsFromDataset
+          ? (dynamicOptions?.[field.column] ?? [])
+          : resolveSelectOptions(field, raw);
         if (options.includes(text)) values[field.column] = text;
         else errors[field.column] = "select";
         break;
@@ -682,4 +1253,107 @@ export function validateFormValues(
     }
   }
   return { values, errors };
+}
+
+// ── 运行时求值纯函数（wire-form-entry-advanced，与 api 侧同端口径）──────
+
+/** YYYY-MM-DD + N 天（日历语义：闰年/月末进位正确；UTC 运算避开时区
+ *  漂移）。输入非法（形状/月日越界如 2026-02-30/负数或非整天数）返回
+ *  null——求值失败留空不报错。 */
+export function addDaysToDate(date: string, days: number): string | null {
+  if (!Number.isInteger(days) || days < 0) return null;
+  const match = DATE_RE.exec(date);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const base = new Date(Date.UTC(year, month - 1, day));
+  // 日历校验：如 2026-02-30 会被 Date 归一到 3 月——如实视为非法。
+  if (
+    base.getUTCFullYear() !== year ||
+    base.getUTCMonth() !== month - 1 ||
+    base.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  const next = new Date(base.getTime() + days * 86_400_000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${next.getUTCFullYear()}-${pad(next.getUTCMonth() + 1)}-${pad(next.getUTCDate())}`;
+}
+
+/** computed 字段当前默认值求值（双端同规）：date 引用字段值须为合法
+ *  YYYY-MM-DD、days 为非负整数字面量或引用字段值可解析为非负整数——
+ *  任一参与值缺失/非法返回 null（留空不报错，required 由必填校验拦截）。 */
+export function evaluateComputedField(
+  field: Pick<FormField, "computed">,
+  values: Record<string, unknown>,
+): string | null {
+  const computed = field.computed;
+  if (!computed || computed.op !== "add_days") return null;
+  const dateRaw = values[computed.date];
+  const dateText = dateRaw == null ? "" : String(dateRaw).trim();
+  if (!DATE_RE.test(dateText)) return null;
+  let days: number;
+  if (typeof computed.days === "number") {
+    days = computed.days;
+  } else {
+    const daysRaw = values[computed.days];
+    const daysText = daysRaw == null ? "" : String(daysRaw).trim();
+    if (!/^\d+$/.test(daysText)) return null;
+    days = Number(daysText);
+  }
+  return addDaysToDate(dateText, days);
+}
+
+/** 运行时动态选项解析状态（optionsFromDataset 字段逐列）。 */
+export interface DynamicOptionsEntry {
+  status: "loading" | "ready" | "error";
+  options: string[];
+  truncated: boolean;
+  /** status=error 时的可读错误文案（引用失效不静默空白）。 */
+  error?: string;
+}
+
+/** distinct 查询响应归一：非空字符串化、去重、按值升序、≤limit 裁剪并
+ *  如实标注截断（服务端已排序/去重时幂等；服务端 truncated 并入）。 */
+export function normalizeDistinctOptions(
+  values: unknown[],
+  limit: number,
+  responseTruncated = false,
+): { options: string[]; truncated: boolean } {
+  const seen = new Set<string>();
+  const list: string[] = [];
+  for (const value of values) {
+    if (value == null) continue;
+    const text = String(value).trim();
+    if (text === "" || seen.has(text)) continue;
+    seen.add(text);
+    list.push(text);
+  }
+  list.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const truncated = responseTruncated || list.length > limit;
+  return { options: list.slice(0, limit), truncated };
+}
+
+/** 选值回填查表（公开页 fills 映射路径）：fields[源字段].fills[声明列]
+ *  [选项值]——查不到返回 null（源行缺失留空不报错）。 */
+export function lookupSharedFill(
+  options: unknown,
+  sourceColumn: string,
+  declaredColumn: string,
+  optionValue: string,
+): string | null {
+  if (!options || typeof options !== "object") return null;
+  const fields = (options as { fields?: unknown }).fields;
+  if (!fields || typeof fields !== "object") return null;
+  const field = (fields as Record<string, unknown>)[sourceColumn];
+  if (!field || typeof field !== "object") return null;
+  const fills = (field as { fills?: unknown }).fills;
+  if (!fills || typeof fills !== "object") return null;
+  const column = (fills as Record<string, unknown>)[declaredColumn];
+  if (!column || typeof column !== "object") return null;
+  const value = (column as Record<string, unknown>)[optionValue];
+  if (typeof value !== "string" || value.trim() === "") return null;
+  return value;
 }

@@ -262,8 +262,10 @@ def test_ttl_days_option_three_states(client, db_session, monkeypatch) -> None:
     assert 90 * 24 * 3600 - 2 <= exp_90 - int(time.time()) <= 90 * 24 * 3600
     assert client.get(link_90["url"]).status_code == 200
 
-    # 非法值（不在枚举）：422，detail 列出全部合法值
-    for bad in (14, 1, 365, 0, -7):
+    # 非法值（不在枚举）：422，detail 列出全部合法值（0 档自
+    # wire-record-view D4 起合法——长效令牌，其行为在 test_record_view.py
+    # 的 0 档用例锚定）
+    for bad in (14, 1, 365, -7):
         rejected = client.post(
             f"/api/v1/artifacts/{artifact['id']}/share",
             headers=CUST,
@@ -271,7 +273,7 @@ def test_ttl_days_option_three_states(client, db_session, monkeypatch) -> None:
         )
         assert rejected.status_code == 422, bad
         detail = rejected.json()["detail"]
-        for legal in ("7", "30", "90"):
+        for legal in ("0", "7", "30", "90"):
             assert legal in detail
 
     # 显式选择压过 env 缺省（FD_WIRE_SHARE_TTL_SECONDS 不再生效）

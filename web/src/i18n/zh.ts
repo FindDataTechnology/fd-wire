@@ -270,6 +270,47 @@ const zh = {
       "发布并分享：发布后生成签名分享链接（有效期 7/30/90 天可选），发给填写者免登录打开、按链接钉死的版本字段填写提交；",
     step5:
       "收集与回滚：全部提交沉淀在数据集的修正历史（可归因到控制台或具体分享表单），逐条可回滚，客户源数据不受任何影响。",
+    // 进阶录入能力（wire-form-entry-advanced 任务 6.1）：动态选项/选值回填/
+    // 计算字段/提交闸四小节 + 公开选项端点数据暴露边界说明。
+    advancedTitle: "进阶录入能力",
+    dynamicTitle: "动态选项（跨数据集）",
+    dynamicDesc:
+      "下拉字段的选项源可指向本企业另一数据集的某一列：选项=该数据集有效视图（含修正）按可选过滤条件过滤后该列的去重非空值，按值升序、上限 1-500 条（缺省 200），超限如实标注「仅显示前 N 项」。控制台与公开分享页都会实时解析；提交时服务端按提交时刻的选项集裁决（伪造不在集内的值被拒）。引用数据集被删或列不在列快照中时，选项区呈现可读错误而非静默空白。与静态选项、同表单联动选项三源互斥恰选其一。",
+    fillTitle: "选值回填",
+    fillDesc:
+      "字段可配置「选值回填」：当本表单某动态选项下拉选定值 v 时，自动从其引用数据集按「选项列=v」取至多一行，把该行指定列的值填入本字段作为可改写的默认值。改选即以新回填值覆盖（回填=最新默认），手改在源值不变期间保留；源行缺失留空不报错。回填值随记录落库为快照——引用档案后续修改不追溯已提交的记录。",
+    computedTitle: "计算字段",
+    computedDesc:
+      "字段可配置计算规则 add_days（日期 + N 天）：日期取本表单另一日期字段的值，天数为非负整数字面量或本表单数字字段的值；参与值有效即自动算出日历语义的 YYYY-MM-DD（闰年/月末进位正确），作为可改写的默认值——自动重算会覆盖手改，但只在参与值再变时才重算；参与值缺失/非法时留空不报错。提交仅按日期格式校验，不强制等于重算值（可手动修正）。",
+    gateTitle: "提交闸（约束）",
+    gateDesc:
+      "表单可配至多 10 条提交闸：每条声明探测数据集 + 过滤条件（值可为本表单字段引用）+ 预期（探测到行即拦截 / 零行即拦拦截）+ 拦截提示文案，并可配生效条件（按提交值求值，真才探测）。提交闸由服务端统一执法：公开分享提交内建裁决；控制台表单提交自动携带表单产物 id（artifact_id），服务端按当前版本执行全量字段校验+提交闸——命中即拦截并逐字呈现拦截提示，数据集零写入。字段校验失败先于提交闸呈现。",
+    optionsBoundaryTitle: "公开选项解析端点的数据边界",
+    optionsBoundaryDesc:
+      "公开分享页的动态选项与回填走专用的选项解析端点：它只返回该表单版本声明了动态选项的字段之选项列去重值（升序、有界 ≤500）与回填映射（每选项值×声明回填列），不开放任何其他行/列查询；访问需持有效分享令牌（验签+钉死版本，无效一律 404），并有限流（缺省 120 次/小时/令牌）与短缓存。除此之外，公开提交面不读任何数据集行数据。",
+    consoleLink: "前往控制台「产物」→",
+  },
+  recordView: {
+    // 单记录公开页客户教程（wire-record-view 任务 6.1）：构建→发布→分享→
+    // 二维码用法 + 公开实时读面暴露边界如实说明（文档红线：不得出现
+    // 「按记录隔离」的误导表述）。
+    title: "单记录公开页",
+    intro:
+      "把「按一个键查一条记录与其时间轴」做成扫码即开的公开页：声明主数据集与键列（如批次号）、页头展示字段与若干时间轴段（引用数据集按声明过滤、按日期升序），发布后按键值生成链接与二维码——印在标签上，扫码即查、实时反映补录。适合服务溯源页、报告页、证书页等按键展示场景。",
+    stepsTitle: "建单记录页五步",
+    step1:
+      "创建：控制台「产物 → 新建单记录页」，起名即得草稿（未绑数据集的中间态可保存，配置完成才能分享）；",
+    step2:
+      "配置模板：选择主数据集与键列（建议取值唯一，如批次号），勾选页头展示字段（可改显示名），按需添加时间轴段（数据集/日期列/过滤条件——值可为字面量或引用主记录字段，如 {地块编号}），保存追加新版本；",
+    step3:
+      "试预览：构建器内选示例键值点「试预览」——与公开扫码页同构的时间轴（console 身份取数，不生成链接）；",
+    step4:
+      "发布并分享：发布后生成分享链接（有效期 7/30/90 天可选，或「不设期（印刷物）」档），选键值即得该键的完整公开页链接（#/share/record-view/…?t=…&k=…）；",
+    step5:
+      "二维码：分享面按所选键值纯前端生成二维码，可下载 PNG（高清）或 SVG——逐键生成、印在标签/单据上扫码即查；扫码取数实时反映有效视图（含修正），补录的记录下次扫码即出现（服务端有至多 60 秒短缓存）。",
+    boundaryTitle: "公开实时读面的暴露边界（如实说明）",
+    boundaryDesc:
+      "该公开页是平台的实时读面：它仅执行发布版本声明的查询（主记录键等值查询 + 各时间轴段声明的过滤），不开放任意查询、任意列或任意数据集。令牌门是产物级而非记录级——持有效链接令牌者可以查询该产物下任意键值；键值（k）不进令牌、可被枚举，请确保键值本身不构成秘密（如不用可猜测的流水号承载敏感记录）。同一令牌有滑动窗限流（缺省每小时 240 次）与 60 秒服务端短缓存；页面数据是钉死版本声明的查询在取数时刻的实时结果。撤销语义：产物归档或取消发布后，既有链接与二维码即失效（统一 404）；「不设期（印刷物）」档的链接本身不过期，撤销途径是归档或取消发布该产物。",
     consoleLink: "前往控制台「产物」→",
   },
   entities: {
@@ -574,7 +615,7 @@ const zh = {
     artifacts: {
       title: "产物",
       subtitle:
-        "跨会话持久化的六类产物——spec 每次保存追加新版本，草稿/已发布/已归档三态可流转。",
+        "跨会话持久化的七类产物——spec 每次保存追加新版本，草稿/已发布/已归档三态可流转。",
       loading: "产物加载中…",
       errorTitle: "产物加载失败",
       retry: "重试",
@@ -589,6 +630,7 @@ const zh = {
         research_report: "研究工作流",
         alert_rule: "告警",
         refresh_schedule: "定时刷新",
+        "record-view": "单记录页",
       },
       statusFilterLabel: "状态",
       statusAll: "全部状态",
@@ -639,6 +681,17 @@ const zh = {
         creating: "创建中…",
         cancel: "取消",
         titleRequired: "请输入告警规则标题。",
+        failed: "创建失败，请稍后重试。",
+      },
+      // 空白新建单记录页（wire-record-view 任务 4.1）：扫码页出生路径。
+      createRecordView: {
+        button: "新建单记录页",
+        titleLabel: "单记录页标题",
+        titlePlaceholder: "给新单记录页起个名字",
+        submit: "创建",
+        creating: "创建中…",
+        cancel: "取消",
+        titleRequired: "请输入单记录页标题。",
         failed: "创建失败，请稍后重试。",
       },
       viewer: {
@@ -938,6 +991,10 @@ const zh = {
           hidden: "该字段当前不可见，请勿携带值。",
         },
         submitFailed: "提交失败，请稍后重试。",
+        // 动态选项源（wire-form-entry-advanced）：加载/截断/失效如实呈现。
+        optionsLoading: "选项加载中…",
+        optionsTruncated: "选项过多，仅显示前 {{count}} 项（去重升序）。",
+        optionsLoadFailed: "选项加载失败，请稍后重试或联系表单所有者。",
       },
       editor: {
         titleLabel: "表单标题",
@@ -1001,6 +1058,54 @@ const zh = {
           "已配置静态选项——与选项联动互斥，请先清空选项。",
         optionsExclusiveWithLinked:
           "已配置选项联动——静态选项不可用，请先清除选项联动。",
+        // 高级录入三新键+提交闸（wire-form-entry-advanced 4.1/4.2）：
+        // 数据集选项源、选值回填、计算字段与 spec 级约束编辑器。
+        optionsDatasetToggle: "数据集选项",
+        optionsDatasetSourceLabel: "选项数据集",
+        optionsDatasetColumnLabel: "选项列",
+        optionsDatasetColumnPlaceholder: "选择列…",
+        optionsDatasetLimitLabel: "上限（1-500）",
+        optionsDatasetClear: "清除数据集选项",
+        optionsExclusiveWithDataset:
+          "数据集选项与静态选项/选项联动互斥——三源恰选其一。",
+        filterOps: {
+          eq: "等于",
+          in: "属于",
+          gt: "大于",
+          gte: "大于等于",
+          lt: "小于",
+          lte: "小于等于",
+        },
+        filterValuePlaceholder: "值（属于用逗号分隔）",
+        filterAdd: "添加过滤条件",
+        filterRemove: "移除",
+        fillFromToggle: "选值回填",
+        fillFromNoSource: "需先有配置「数据集选项」的下拉字段",
+        fillFromFieldLabel: "回填源字段",
+        fillFromColumnLabel: "回填列",
+        fillFromClear: "清除回填",
+        computedToggle: "计算字段",
+        computedOpLabel: "规则",
+        computedDateLabel: "日期字段",
+        computedDaysLabel: "天数",
+        computedDaysLiteral: "字面量",
+        computedClear: "清除计算",
+        constraintsTitle: "提交闸（约束）",
+        constraintsHint: "提交时服务端探测引用数据集裁决，命中即拦截（≤10 条）",
+        constraintsEmpty: "未配置提交闸。",
+        constraintAdd: "添加约束",
+        constraintRemove: "移除",
+        constraintIdLabel: "标识",
+        constraintMessageLabel: "拦截提示",
+        constraintExpectLabel: "预期",
+        constraintExpects: {
+          none: "探测到行即拦截",
+          any: "零行即拦截",
+        },
+        constraintProbeDatasetLabel: "探测数据集",
+        constraintWhenToggle: "按条件生效",
+        probeValueToLiteral: "改为字面量",
+        probeValueToField: "改为字段引用",
         inputTypes: {
           text: "文本",
           number: "数字",
@@ -1038,10 +1143,161 @@ const zh = {
           optionsFromBad:
             "存在非法的选项联动（控制字段缺失/cases 形状不对/选项列表须为非空字符串列表）。",
           optionsExclusive:
-            "下拉选择字段不能同时配置静态选项与选项联动（二选一）。",
+            "下拉选项三源（静态选项/选项联动/数据集选项）互斥——恰选其一，不能并存。",
           optionsFromSelf: "存在自引用的选项联动（控制字段不能是字段自身）。",
           optionsFromMissing: "存在引用了不存在字段的选项联动。",
+          // wire-form-entry-advanced（三新键+constraints）新错误码。
+          optionsFromDatasetBad:
+            "存在非法的数据集选项源（数据集/选项列缺失、过滤条件或上限形状不对——上限须为 1..500 整数）。",
+          fillFromBad: "存在非法的选值回填（源字段或回填列缺失）。",
+          fillFromSelf: "存在自引用的选值回填（源字段不能是字段自身）。",
+          fillFromSource:
+            "选值回填的源字段必须是本表单内配置了数据集选项源的下拉字段。",
+          computedBad:
+            "存在非法的计算字段（规则须为 add_days、天数须为非负整数字面量或数字字段引用）。",
+          computedSelf: "存在自引用的计算字段（参与字段不能是字段自身）。",
+          computedDateRef: "计算字段的日期引用必须是本表单内另一日期字段。",
+          computedDaysRef: "计算字段的天数引用必须是本表单内另一数字字段。",
+          constraintBad:
+            "存在非法的提交闸约束（标识/拦截提示/生效条件/探测形状不对，或超出 ≤10 条 / ≤10 过滤条件上限）。",
+          constraintIdDuplicate: "提交闸约束的标识（id）在表单内必须唯一。",
         },
+      },
+    },
+    // 单记录公开页（wire-record-view 任务 4/5）：record-view kind 的行展开
+    // 视图、共用运行时（公开扫码页与 console 试预览）、构建器（主数据集/
+    // 键列/头部/时间轴段）与分享+二维码弹层的文案。
+    recordview: {
+      viewButton: "打开单记录页",
+      editButton: "编辑单记录页",
+      paneTitle: "单记录页视图",
+      loading: "单记录页加载中…",
+      loadError: "单记录页加载失败。",
+      lockedBadge: "已归档 · 只读",
+      // 分享页公开呈现兜底（响应缺 title 时）。
+      untitled: "未命名单记录页",
+      // 公开分享页 og:description（链接预览卡片段落）。
+      ogDescription: "柏讯单记录页——扫码即查该记录与其时间轴",
+      viewHint: "输入键值（如批次号）按当前版本试查该记录页（console 身份，不生成公开链接）。",
+      unboundBody:
+        "该单记录页尚未绑定主数据集与键列——请先在编辑器中配置并保存，发布后才能生成分享链接。",
+      runtime: {
+        loading: "记录查询中…",
+        notFoundTitle: "无此记录",
+        notFoundBody: "未查到该键值的记录——请核对键值是否正确，或联系分享者。",
+        limitedTitle: "请求过于频繁",
+        limited: "访问过于频繁，请稍后再试。",
+        truncated: "已截断",
+        sectionEmpty: "暂无记录",
+        expand: "展开",
+        collapse: "收起",
+      },
+      editor: {
+        titleLabel: "页面标题",
+        datasetLabel: "主数据集",
+        datasetPlaceholder: "选择主数据集…",
+        datasetOption: "{{name}}（{{tier}} · {{rows}} 行）",
+        datasetOptionPlain: "{{name}}（{{rows}} 行）",
+        loadingDatasets: "数据集加载中…",
+        datasetsLoadFailed: "数据集列表加载失败。",
+        retry: "重试",
+        keyColumnLabel: "键列",
+        keyColumnPlaceholder: "选择键列…",
+        keyColumnHint: "建议取值唯一（如批次号）——取数按键等值查至多一行",
+        headerFieldsLabel: "头部字段",
+        headerFieldsHint: "勾选页头展示的主记录列（≤50 条，可改显示名）",
+        columnMissing: "该列已不在数据集中",
+        fieldLabelLabel: "显示名",
+        sectionsLabel: "时间轴段",
+        sectionsHint: "每段声明一个数据集与日期列（≤10 段）",
+        addSection: "添加段",
+        removeSection: "移除段",
+        emptySections: "尚未配置时间轴段——添加后按日期列升序展示关联记录。",
+        sectionTitleLabel: "段标题",
+        sectionDatasetLabel: "数据集",
+        sectionDateColumnLabel: "日期列",
+        dateColumnPlaceholder: "选择日期列…",
+        sectionLimitLabel: "上限",
+        filtersLabel: "过滤条件",
+        addFilter: "添加条件",
+        removeFilter: "移除",
+        filterColumnPlaceholder: "选择列…",
+        filterValuePlaceholder: "值（in 用逗号分隔）",
+        fromFieldPlaceholder: "选择主记录列…",
+        valueToLiteral: "改为字面值",
+        valueToFromField: "改引用主记录列",
+        filterOps: {
+          eq: "等于",
+          in: "属于",
+          gt: "大于",
+          gte: "大于等于",
+          lt: "小于",
+          lte: "小于等于",
+        },
+        save: "保存",
+        saving: "保存中…",
+        savedVersion: "已保存为版本 v{{version}}。",
+        saveFailed: "保存失败，请稍后重试。",
+        backToView: "返回查看",
+        dirtyLeaveConfirm: "有未保存的修改，确定离开？",
+        errors: {
+          titleRequired: "请输入页面标题。",
+          titleTooLong: "标题过长（≤200 字符）。",
+          unbound: "未绑定主数据集：请先选择主数据集，或清空键列/头部/时间轴配置。",
+          keyColumnRequired: "请选择键列。",
+          keyColumnMissing: "键列已不在主数据集列清单中。",
+          headerColumnMissing: "头部字段列已不在主数据集列清单中。",
+          headerColumnDuplicate: "头部字段列重复。",
+          headerLabelTooLong: "头部字段显示名过长（≤100 字符）。",
+          headerFieldsTooMany: "头部字段超过 50 条。",
+          sectionBad: "时间轴段标题不能为空（≤100 字符）。",
+          sectionDatasetMissing: "时间轴段未选择数据集。",
+          sectionDateColumnMissing: "时间轴段未选择日期列（或日期列已不在其数据集中）。",
+          sectionTooMany: "时间轴段超过 10 段。",
+          sectionLimitBad: "时间轴段上限须为 1-500 的整数。",
+          filterBad: "存在不完整的过滤条件（列/算子/值）。",
+          filtersTooMany: "单段过滤条件超过 10 条。",
+          fromFieldMissing: "过滤条件引用的主记录列不存在。",
+        },
+      },
+      preview: {
+        title: "试预览（示例键值，不生成链接）",
+        keyLabel: "示例键值",
+        keyPlaceholder: "选择或输入键值…",
+        manualKeyLabel: "手输",
+        button: "试预览",
+        keysLoading: "键值加载中…",
+        keysTruncated: "键值过多，仅显示前 {{count}} 项（可手输兜底）。",
+        keysLoadFailed: "键值加载失败，请稍后重试或手输键值。",
+        failed: "试预览失败，请稍后重试。",
+        unboundHint: "绑定主数据集并选择键列后可试预览。",
+      },
+      share: {
+        button: "生成分享链接",
+        dialogTitle: "单记录页分享",
+        keyLabel: "键值（扫码打开该键的记录页）",
+        manualKeyPlaceholder: "手输键值…",
+        ttlOptions: {
+          "0": "不设期（印刷物）",
+          "7": "7 天",
+          "30": "30 天",
+          "90": "90 天",
+        },
+        ttlNote: "调整有效期将重新生成链接。",
+        // 0 档印刷物提示（wire-record-view）：不设期 + 撤销语义如实说明。
+        perpetualNote:
+          "不设期档适合印刷物：链接本身不过期；产物归档或取消发布即整体失效（撤销=归档即失效）。",
+        noExpiry: "不设期（印刷物档）",
+        keysLoadFailed: "键值下拉加载失败——可手输键值。",
+        urlKeyHint: "选择键值后展示完整链接",
+        qrTitle: "二维码",
+        qrKeyHint: "选择键值后生成该键的二维码。",
+        qrLoading: "二维码生成中…",
+        qrFailed: "二维码生成失败，请稍后重试。",
+        qrDownloadPng: "下载 PNG（高清）",
+        qrDownloadSvg: "下载 SVG",
+        unbound:
+          "该单记录页未绑定主数据集或键列，暂不能分享——请先在编辑器中配置并发布。",
       },
     },
     // 定时刷新调度小节（wire-refresh-scheduler 任务 4.1）：derived 数据集

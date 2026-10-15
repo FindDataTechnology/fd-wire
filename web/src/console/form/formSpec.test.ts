@@ -14,10 +14,14 @@
 import { describe, expect, it } from "vitest";
 import type { DatasetColumn } from "../api";
 import {
+  addDaysToDate,
   buildFormEnvelope,
+  evaluateComputedField,
   evaluateFieldVisibility,
   fieldFromColumn,
   fieldsFromColumns,
+  lookupSharedFill,
+  normalizeDistinctOptions,
   parseFormSpec,
   resolveSelectOptions,
   suggestInputType,
@@ -25,6 +29,7 @@ import {
   validateFormValues,
   type FieldVisibleWhen,
   type FormField,
+  type FormSpecBody,
 } from "./formSpec";
 
 const COLUMNS: DatasetColumn[] = [
@@ -1146,5 +1151,495 @@ describe("validateFormValues（动态选项联动感知）", () => {
     expect(skipped.errors).toEqual({});
     expect(skipped.values).toEqual({ region: "华北" });
     expect("city" in skipped.values).toBe(false);
+  });
+});
+
+// ── wire-form-entry-advanced：三新键+constraints 草稿校验与求值 ──────────────
+
+/** select 字段载荷构造（三源互斥/形状校验共用）。 */
+const advSelectBody = (city: Record<string, unknown>) => ({
+  datasetId: null as string | null,
+  fields: [
+    { column: "region", label: "大区", input: "text" as const },
+    { column: "city", label: "城市", input: "select" as const, ...city },
+  ],
+});
+
+describe("validateFormSpec（选项三源互斥恰有其一）", () => {
+  it("optionsFromDataset 单源零错误；与静态/联动任一并存→optionsExclusive；零源→selectOptions", () => {
+    expect(
+      validateFormSpec("t", advSelectBody({
+        optionsFromDataset: { datasetId: "ds-a", column: "name" },
+      })),
+    ).toEqual([]);
+    expect(
+      validateFormSpec("t", advSelectBody({
+        options: ["x"],
+        optionsFromDataset: { datasetId: "ds-a", column: "name" },
+      })),
+    ).toContain("optionsExclusive");
+    expect(
+      validateFormSpec("t", advSelectBody({
+        optionsFrom: { field: "region", cases: { a: ["x"] } },
+        optionsFromDataset: { datasetId: "ds-a", column: "name" },
+      })),
+    ).toContain("optionsExclusive");
+    expect(
+      validateFormSpec("t", advSelectBody({})),
+    ).toContain("selectOptions");
+  });
+
+  it("optionsFromDatasetBad：datasetId/column 缺失、limit 越界或非整数、过滤算子越白名单", () => {
+    expect(
+      validateFormSpec("t", advSelectBody({
+        optionsFromDataset: { column: "name" } as never,
+      })),
+    ).toContain("optionsFromDatasetBad");
+    expect(
+      validateFormSpec("t", advSelectBody({
+        optionsFromDataset: { datasetId: "ds-a" } as never,
+      })),
+    ).toContain("optionsFromDatasetBad");
+    for (const limit of [0, 501, 7.5]) {
+      expect(
+        validateFormSpec("t", advSelectBody({
+          optionsFromDataset: { datasetId: "ds-a", column: "name", limit },
+        })),
+      ).toContain("optionsFromDatasetBad");
+    }
+    expect(
+      validateFormSpec("t", advSelectBody({
+        optionsFromDataset: {
+          datasetId: "ds-a",
+          column: "name",
+          filters: [{ column: "crop", op: "ne" as never, value: "x" }],
+        },
+      })),
+    ).toContain("optionsFromDatasetBad");
+    // 边界合法：limit 1 与 500、合法过滤与数组值（in）零错误。
+    expect(
+      validateFormSpec("t", advSelectBody({
+        optionsFromDataset: {
+          datasetId: "ds-a",
+          column: "name",
+          limit: 500,
+          filters: [{ column: "crop", op: "in", value: ["a", "b"] }],
+        },
+      })),
+    ).toEqual([]);
+  });
+});
+
+describe("validateFormSpec（fillFrom / computed 引用校验）", () => {
+  const base = (extra: Record<string, unknown>) => ({
+    datasetId: null as string | null,
+    fields: [
+      {
+        column: "pesticide",
+        label: "农药",
+        input: "select" as const,
+        optionsFromDataset: { datasetId: "ds-a", column: "name" },
+      },
+      { column: "record_on", label: "记录日期", input: "date" as const },
+      { column: "days", label: "天数", input: "number" as const },
+      { column: "deadline", label: "截止", input: "date" as const, ...extra },
+    ],
+  });
+
+  it("fillFrom：合法源零错误；形状缺列→fillFromBad；自引用→fillFromSelf；非动态选项源→fillFromSource", () => {
+    expect(
+      validateFormSpec("t", base({ fillFrom: { field: "pesticide", column: "interval" } })),
+    ).toEqual([]);
+    expect(
+      validateFormSpec("t", base({ fillFrom: { field: "pesticide" } as never })),
+    ).toContain("fillFromBad");
+    expect(
+      validateFormSpec("t", base({ fillFrom: { field: "deadline", column: "interval" } })),
+    ).toContain("fillFromSelf");
+    // 源是普通 text 字段（非动态选项 select）
+    expect(
+      validateFormSpec("t", {
+        datasetId: null,
+        fields: [
+          { column: "region", label: "大区", input: "text" },
+          {
+            column: "note",
+            label: "备注",
+            input: "text",
+            fillFrom: { field: "region", column: "interval" },
+          },
+        ],
+      }),
+    ).toContain("fillFromSource");
+    // 源是 select 但带静态 options（非 optionsFromDataset）——同样拒绝
+    expect(
+      validateFormSpec("t", {
+        datasetId: null,
+        fields: [
+          { column: "kind", label: "类型", input: "select", options: ["a"] },
+          {
+            column: "note",
+            label: "备注",
+            input: "text",
+            fillFrom: { field: "kind", column: "interval" },
+          },
+        ],
+      }),
+    ).toContain("fillFromSource");
+  });
+
+  it("computed：合法（字段引用/字面量）零错误；自引用→computedSelf；日期引用非 date→computedDateRef；天数引用非 number→computedDaysRef", () => {
+    expect(
+      validateFormSpec("t", base({ computed: { op: "add_days", date: "record_on", days: "days" } })),
+    ).toEqual([]);
+    expect(
+      validateFormSpec("t", base({ computed: { op: "add_days", date: "record_on", days: 7 } })),
+    ).toEqual([]);
+    expect(
+      validateFormSpec("t", base({ computed: { op: "add_days", date: "deadline", days: 7 } })),
+    ).toContain("computedSelf");
+    expect(
+      validateFormSpec("t", base({ computed: { op: "add_days", date: "deadline", days: "deadline" } })),
+    ).toContain("computedSelf");
+    expect(
+      validateFormSpec("t", base({ computed: { op: "add_days", date: "days", days: 7 } })),
+    ).toContain("computedDateRef");
+    expect(
+      validateFormSpec("t", base({ computed: { op: "add_days", date: "record_on", days: "record_on" } })),
+    ).toContain("computedDaysRef");
+    expect(
+      validateFormSpec("t", base({ computed: { op: "sub_days", date: "record_on", days: 7 } as never })),
+    ).toContain("computedBad");
+    expect(
+      validateFormSpec("t", base({ computed: { op: "add_days", date: "record_on", days: -1 } })),
+    ).toContain("computedBad");
+  });
+});
+
+describe("validateFormSpec（constraints 草稿校验）", () => {
+  const constraint = (over: Record<string, unknown>) => ({
+    id: "no-harvest",
+    message: "尚处安全间隔期，禁止采收",
+    probe: {
+      datasetId: "ds-spray",
+      filters: [
+        { column: "plot", op: "eq", value: { field: "plot" } },
+        { column: "deadline", op: "gte", value: { field: "record_on" } },
+      ],
+      expect: "none",
+    },
+    ...over,
+  });
+  const body = (...list: unknown[]) => ({
+    datasetId: null as string | null,
+    fields: [
+      { column: "plot", label: "地块", input: "text" as const },
+      { column: "record_on", label: "记录日期", input: "date" as const },
+    ],
+    constraints: list as never,
+  });
+
+  it("合法约束（含 {field} 引用与字面量混合）零错误", () => {
+    expect(validateFormSpec("t", body(constraint({})))).toEqual([]);
+  });
+
+  it("constraintBad：id 空/message 空/expect 越枚举/过滤空/when 引用缺失逐类可断言", () => {
+    expect(validateFormSpec("t", body(constraint({ id: " " })))).toContain("constraintBad");
+    expect(validateFormSpec("t", body(constraint({ message: "" })))).toContain("constraintBad");
+    expect(
+      validateFormSpec("t", body(constraint({ probe: { ...constraint({}).probe, expect: "some" } }))),
+    ).toContain("constraintBad");
+    expect(
+      validateFormSpec("t", body(constraint({ probe: { ...constraint({}).probe, filters: [] } }))),
+    ).toContain("constraintBad");
+    expect(
+      validateFormSpec("t", body(constraint({ when: { field: "nope", op: "eq", value: "x" } }))),
+    ).toContain("constraintBad");
+  });
+
+  it("constraintIdDuplicate：id 重复即拒；≤10 条上限", () => {
+    expect(
+      validateFormSpec("t", body(constraint({}), constraint({ id: "no-harvest" }))),
+    ).toContain("constraintIdDuplicate");
+    const eleven = Array.from({ length: 11 }, (_, i) =>
+      constraint({ id: `c-${i}` }),
+    );
+    expect(validateFormSpec("t", body(...eleven))).toContain("constraintBad");
+  });
+});
+
+describe("addDaysToDate / evaluateComputedField（add_days 双端口径）", () => {
+  const computedField = (days: string | number): FormField =>
+    ({
+      column: "deadline",
+      label: "截止",
+      input: "date",
+      computed: { op: "add_days", date: "record_on", days },
+    }) as FormField;
+
+  it("日历语义：常规加法/闰年/月末进位/年界", () => {
+    expect(addDaysToDate("2026-10-15", 7)).toBe("2026-10-22");
+    expect(addDaysToDate("2024-02-28", 2)).toBe("2024-03-01"); // 闰年二月
+    expect(addDaysToDate("2023-02-28", 2)).toBe("2023-03-02"); // 平年二月
+    expect(addDaysToDate("2026-01-31", 1)).toBe("2026-02-01"); // 月末进位
+    expect(addDaysToDate("2026-12-31", 1)).toBe("2027-01-01"); // 年界
+    expect(addDaysToDate("2026-10-15", 0)).toBe("2026-10-15"); // 零天恒等
+  });
+
+  it("非法输入返回 null：形状/月日越界/负数/非整数", () => {
+    expect(addDaysToDate("2026-02-30", 1)).toBeNull(); // 日历不存在
+    expect(addDaysToDate("2026-13-01", 1)).toBeNull();
+    expect(addDaysToDate("2026-1-1", 1)).toBeNull();
+    expect(addDaysToDate("2026-10-15T09", 1)).toBeNull();
+    expect(addDaysToDate("2026-10-15", -1)).toBeNull();
+    expect(addDaysToDate("2026-10-15", 1.5)).toBeNull();
+  });
+
+  it("evaluateComputedField：参与值缺失/非法留空 null；字面量与字段引用同规", () => {
+    expect(
+      evaluateComputedField(computedField(7), { record_on: "2026-10-15" }),
+    ).toBe("2026-10-22");
+    expect(
+      evaluateComputedField(computedField("days"), {
+        record_on: "2024-02-28",
+        days: "2",
+      }),
+    ).toBe("2024-03-01");
+    // 参与值缺失/非法 → null（不报错）
+    expect(evaluateComputedField(computedField(7), {})).toBeNull();
+    expect(
+      evaluateComputedField(computedField(7), { record_on: "2026-02-30" }),
+    ).toBeNull();
+    expect(
+      evaluateComputedField(computedField("days"), { record_on: "2026-10-15", days: "" }),
+    ).toBeNull();
+    expect(
+      evaluateComputedField(computedField("days"), { record_on: "2026-10-15", days: "7.5" }),
+    ).toBeNull();
+    expect(
+      evaluateComputedField(computedField("days"), { record_on: "2026-10-15", days: "-1" }),
+    ).toBeNull();
+    // 数字类型参与值同样可解析
+    expect(
+      evaluateComputedField(computedField("days"), { record_on: "2026-10-15", days: 3 }),
+    ).toBe("2026-10-18");
+  });
+});
+
+describe("normalizeDistinctOptions（去重/升序/上限/截断标注）", () => {
+  it("去重非空、按值升序、≤limit 裁剪并如实标注截断", () => {
+    expect(
+      normalizeDistinctOptions(["b", "a", "b", null, " ", "a", "c"], 10),
+    ).toEqual({ options: ["a", "b", "c"], truncated: false });
+    expect(
+      normalizeDistinctOptions(["b", "a", "c"], 2),
+    ).toEqual({ options: ["a", "b"], truncated: true });
+    // 服务端已截断标注如实并入（即使本地未超限）
+    expect(
+      normalizeDistinctOptions(["a"], 10, true),
+    ).toEqual({ options: ["a"], truncated: true });
+    // 数值标量 stringify 后参与排序
+    expect(
+      normalizeDistinctOptions([2, 10, 1], 10).options,
+    ).toEqual(["1", "10", "2"]);
+  });
+});
+
+describe("动态选项源的显隐与成员裁决（dynamicOptions 参数）", () => {
+  const fields: FormField[] = [
+    { column: "city", label: "城市", input: "text" },
+    {
+      column: "pesticide",
+      label: "农药",
+      input: "select",
+      optionsFromDataset: { datasetId: "ds-a", column: "name" },
+    },
+  ];
+
+  it("已解析空选项 → 并入隐藏；未解析（loading/error）→ 不隐藏", () => {
+    expect(evaluateFieldVisibility(fields, {}, { pesticide: [] })).toContain(
+      "pesticide",
+    );
+    expect(evaluateFieldVisibility(fields, {}, {})).not.toContain("pesticide");
+    // 不传 dynamicOptions（旧行为）→ 不参与空选项隐藏
+    expect(evaluateFieldVisibility(fields, {})).not.toContain("pesticide");
+  });
+
+  it("validateFormValues：成员按已解析选项裁决；未解析按空集如实拒", () => {
+    const ok = validateFormValues(fields, { pesticide: "abamectin" }, {
+      pesticide: ["abamectin", "chlorpyrifos"],
+    });
+    expect(ok.values).toEqual({ pesticide: "abamectin" });
+    const forged = validateFormValues(fields, { pesticide: "forged" }, {
+      pesticide: ["abamectin"],
+    });
+    expect(forged.errors.pesticide).toBe("select");
+    const unresolved = validateFormValues(fields, { pesticide: "abamectin" }, {});
+    expect(unresolved.errors.pesticide).toBe("select");
+    // 已解析空集 → 字段隐藏：空值跳过、required 不查
+    const hidden = validateFormValues(
+      [{ ...fields[1], required: true }, fields[0]],
+      { city: "沪" },
+      { pesticide: [] },
+    );
+    expect(hidden.errors).toEqual({});
+    expect(hidden.values).toEqual({ city: "沪" });
+  });
+});
+
+describe("lookupSharedFill（公开页 fills 映射查表）", () => {
+  const payload = {
+    fields: {
+      pesticide: {
+        options: ["abamectin"],
+        truncated: false,
+        fills: {
+          interval_days: { abamectin: "3", chlorpyrifos: "7" },
+        },
+      },
+    },
+  };
+
+  it("命中返回值；源行缺失/形状缺失/空串一律 null（留空不报错）", () => {
+    expect(
+      lookupSharedFill(payload, "pesticide", "interval_days", "abamectin"),
+    ).toBe("3");
+    expect(
+      lookupSharedFill(payload, "pesticide", "interval_days", "missing-row"),
+    ).toBeNull();
+    expect(
+      lookupSharedFill(payload, "pesticide", "nope", "abamectin"),
+    ).toBeNull();
+    expect(lookupSharedFill(null, "a", "b", "c")).toBeNull();
+  });
+});
+
+describe("parseFormSpec（三新键+constraints 宽容解析）", () => {
+  it("合法新键原样保留；非法整键丢弃；constraints 非法整列表丢弃", () => {
+    const parsed = parseFormSpec({
+      datasetId: "ds-form",
+      fields: [
+        {
+          column: "pesticide",
+          label: "农药",
+          input: "select",
+          optionsFromDataset: {
+            datasetId: "ds-a",
+            column: "name",
+            filters: [{ column: "crop", op: "eq", value: "蔬菜" }],
+            limit: 50,
+          },
+        },
+        {
+          column: "interval",
+          label: "间隔期",
+          input: "number",
+          fillFrom: { field: "pesticide", column: "interval_days" },
+        },
+        {
+          column: "deadline",
+          label: "截止",
+          input: "date",
+          computed: { op: "add_days", date: "record_on", days: 7 },
+        },
+        // 非 select 携带 optionsFromDataset → 丢弃
+        { column: "x", label: "X", input: "text", optionsFromDataset: { datasetId: "a", column: "b" } },
+        // 非法 computed（op 越枚举）→ 丢弃
+        { column: "y", label: "Y", input: "date", computed: { op: "sub", date: "record_on", days: 1 } as never },
+      ],
+      constraints: [
+        {
+          id: "g1",
+          message: "禁止",
+          probe: {
+            datasetId: "ds-b",
+            filters: [{ column: "p", op: "eq", value: { field: "plot" } }],
+            expect: "none",
+          },
+        },
+      ],
+    });
+    expect(parsed?.fields[0]?.optionsFromDataset).toEqual({
+      datasetId: "ds-a",
+      column: "name",
+      filters: [{ column: "crop", op: "eq", value: "蔬菜" }],
+      limit: 50,
+    });
+    expect(parsed?.fields[1]?.fillFrom).toEqual({
+      field: "pesticide",
+      column: "interval_days",
+    });
+    expect(parsed?.fields[2]?.computed).toEqual({
+      op: "add_days",
+      date: "record_on",
+      days: 7,
+    });
+    expect("optionsFromDataset" in (parsed?.fields[3] ?? {})).toBe(false);
+    expect("computed" in (parsed?.fields[4] ?? {})).toBe(false);
+    expect(parsed?.constraints).toHaveLength(1);
+    expect(parsed?.constraints?.[0]?.probe.expect).toBe("none");
+
+    // constraints 任一条目非法 → 整列表丢弃（回退无闸呈现）
+    const dropped = parseFormSpec({
+      datasetId: null,
+      fields: [],
+      constraints: [{ id: "", message: "x", probe: { datasetId: "a", filters: [], expect: "none" } }],
+    });
+    expect(dropped?.constraints).toBeUndefined();
+  });
+
+  it("buildFormEnvelope：constraints 非空数组才写入信封", () => {
+    const body: FormSpecBody = {
+      datasetId: null,
+      fields: [],
+      constraints: [{ id: "g", message: "m", probe: { datasetId: "d", filters: [{ column: "c", op: "eq", value: 1 }], expect: "any" } }],
+    };
+    expect(buildFormEnvelope("t", body).spec.constraints).toHaveLength(1);
+    expect(
+      buildFormEnvelope("t", { ...body, constraints: [] }).spec.constraints,
+    ).toBeUndefined();
+    expect(
+      buildFormEnvelope("t", { datasetId: null, fields: [] }).spec.constraints,
+    ).toBeUndefined();
+  });
+});
+
+// ------------------------------ 6.3 双端一致性配对用例 ------------------------------
+// 与 api/tests/test_share_form_options.py（选项端点首轮用例）、
+// api/tests/test_form_entry_advanced.py（when 矩阵/提交闸）同一组夹具与
+// 期望值：药A(间隔7)/药B(间隔10)/除草剂(被 filters 滤除)；computed 基准
+// 2026-10-15 + 7 = 2026-10-22。两端任何一侧改动求值口径，此块先红。
+describe("双端一致性配对用例（与后端同夹具同期望）", () => {
+  it("normalizeDistinctOptions：去重升序；超 limit 截断如实", () => {
+    expect(normalizeDistinctOptions(["药B", "药A", "药A"], 200))
+      .toEqual({ options: ["药A", "药B"], truncated: false });
+    expect(normalizeDistinctOptions(["药B", "药A", "除草剂"], 2))
+      .toEqual({ options: ["药A", "药B"], truncated: true });
+  });
+
+  it("lookupSharedFill：fills 字符串口径（数值列 7 → \"7\"）", () => {
+    const payload = {
+      fields: {
+        pesticide: {
+          options: ["药A", "药B"],
+          truncated: false,
+          fills: { interval_days: { 药A: "7", 药B: "10" } },
+        },
+      },
+    };
+    expect(
+      lookupSharedFill(payload, "pesticide", "interval_days", "药A"),
+    ).toBe("7");
+    expect(
+      lookupSharedFill(payload, "pesticide", "interval_days", "药B"),
+    ).toBe("10");
+    expect(
+      lookupSharedFill(payload, "pesticide", "interval_days", "除草剂"),
+    ).toBeNull();
+  });
+
+  it("addDaysToDate：2026-10-15 + 7 = 2026-10-22（后端禁采闸同基准日）", () => {
+    expect(addDaysToDate("2026-10-15", 7)).toBe("2026-10-22");
+    expect(addDaysToDate("2024-02-28", 2)).toBe("2024-03-01");
   });
 });

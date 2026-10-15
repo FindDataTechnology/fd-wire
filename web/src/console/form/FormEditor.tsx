@@ -20,6 +20,15 @@
 // 控制字段下拉（其他字段）+cases 映射行（控制值→选项组，选项组沿用现行
 // 逗号分隔编辑控件）+可选 fallback（与静态 options 互斥，配了静态选项则
 // 入口禁用并提示，切入联动即清 options 键——select 恰有其一）。
+//
+// 高级录入（wire-form-entry-advanced）：③select 第三源「数据集选项」——
+// 数据集下拉（本企业列表）+列下拉+可选过滤条件（字面量）+上限（1..500），
+// 三源互斥切入即清其余源键；④字段卡「选值回填」（源字段限本表单动态选项
+// select+列下拉限引用集列）；⑤字段卡「计算字段」（op 固定 add_days、日期
+// 字段下拉限 date、天数=字面量或 number 字段下拉）；⑥spec 级「提交闸」
+// 约束编辑器（id/message/when/probe（数据集+过滤（字面或 {field} 引用）/
+// expect）增删改，≤10 条/≤10 filters）。草稿允许中间态（空下拉等），保存
+// 自检（validateFormSpec 镜像扩展）前端即拦。
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -31,18 +40,27 @@ import {
   type DatasetColumn,
 } from "../api";
 import {
+  DATASET_FILTER_OPS,
   FIELD_CONDITION_OPS,
   FORM_INPUT_TYPES,
   buildFormEnvelope,
   fieldFromColumn,
   validateFormSpec,
+  type DatasetFilter,
+  type DatasetFilterOp,
+  type DatasetFilterValue,
   type FieldConditionOp,
   type FieldConditionGroupMode,
+  type FieldComputed,
+  type FieldFillFrom,
   type FieldOptionsFrom,
+  type FieldOptionsFromDataset,
   type FieldVisibleWhen,
   type FieldVisibleWhenGroup,
+  type FormConstraint,
   type FormField,
   type FormInputType,
+  type FormProbeFilter,
   type FormSpecBody,
   type FormSpecErrorCode,
 } from "./formSpec";
@@ -136,6 +154,13 @@ export function FormEditor({
     datasets?.find((d) => d.id === draft.body.datasetId) ?? null;
   const columns: DatasetColumn[] = selectedDataset?.columns ?? [];
   const columnNames = new Set(columns.map((c) => c.name));
+  /** 任意数据集的列清单（选项源/回填/探测约束的列下拉共用）。 */
+  const columnsOf = (datasetId: string): DatasetColumn[] =>
+    datasets?.find((d) => d.id === datasetId)?.columns ?? [];
+  /** 本表单内带数据集选项源的 select 字段（回填源下拉候选）。 */
+  const dynamicSelectSources = draft.body.fields.filter(
+    (f) => f.input === "select" && f.optionsFromDataset !== undefined,
+  );
 
   const patchDraft = (patch: Partial<FormEditorDraft>) => {
     setDraft((prev) => ({ ...prev, ...patch }));
@@ -224,6 +249,79 @@ export function FormEditor({
         }),
       },
     });
+  };
+
+  /** 数据集选项源写入/清除（wire-form-entry-advanced）：source=null 时
+   *  optionsFromDataset 键整体不落；切入即清另两源键（三源恰有其一，保存
+   *  校验 optionsExclusive 兜底）。 */
+  const setFieldOptionsFromDataset = (
+    column: string,
+    source: FieldOptionsFromDataset | null,
+  ) => {
+    patchDraft({
+      body: {
+        ...draft.body,
+        fields: draft.body.fields.map((f) => {
+          if (f.column !== column) return f;
+          if (!source) {
+            const { optionsFromDataset: _omit, ...rest } = f;
+            return rest;
+          }
+          const {
+            options: _options,
+            optionsFrom: _linked,
+            ...rest
+          } = f;
+          return { ...rest, optionsFromDataset: source };
+        }),
+      },
+    });
+  };
+
+  /** 选值回填写入/清除（wire-form-entry-advanced）：fill=null 时 fillFrom
+   *  键整体不落。 */
+  const setFieldFillFrom = (column: string, fill: FieldFillFrom | null) => {
+    patchDraft({
+      body: {
+        ...draft.body,
+        fields: draft.body.fields.map((f) => {
+          if (f.column !== column) return f;
+          if (!fill) {
+            const { fillFrom: _omit, ...rest } = f;
+            return rest;
+          }
+          return { ...f, fillFrom: fill };
+        }),
+      },
+    });
+  };
+
+  /** 计算字段写入/清除（wire-form-entry-advanced）：rule=null 时 computed
+   *  键整体不落。 */
+  const setFieldComputed = (column: string, rule: FieldComputed | null) => {
+    patchDraft({
+      body: {
+        ...draft.body,
+        fields: draft.body.fields.map((f) => {
+          if (f.column !== column) return f;
+          if (!rule) {
+            const { computed: _omit, ...rest } = f;
+            return rest;
+          }
+          return { ...f, computed: rule };
+        }),
+      },
+    });
+  };
+
+  /** 提交闸约束列表写入/清除（wire-form-entry-advanced）：null=整体键不落。 */
+  const setSpecConstraints = (next: FormConstraint[] | null) => {
+    if (next == null) {
+      const { constraints: _omit, ...rest } = draft.body;
+      patchDraft({ body: rest });
+      return;
+    }
+    patchDraft({ body: { ...draft.body, constraints: next } });
   };
 
   /** 保存：结构自检（零请求拦截）→ PUT 版本链；datasetId 为空的构建中间态
@@ -519,10 +617,11 @@ export function FormEditor({
                       patchField(field.column, {
                         input,
                         // select 切入时给一组空 options 占位（保存前必须配齐；
-                        // 已配选项联动则不加——select 恰有其一）。
+                        // 已配选项联动/数据集源则不加——select 恰有其一）。
                         ...(input === "select" &&
                         !field.options &&
-                        !field.optionsFrom
+                        !field.optionsFrom &&
+                        !field.optionsFromDataset
                           ? { options: [] }
                           : {}),
                       });
@@ -536,11 +635,14 @@ export function FormEditor({
                     ))}
                   </select>
                 </div>
-                {/* select 选项源（wire-form-linkage-v2）：静态 options 与选项
-                    联动互斥恰有其一——配了静态选项则联动入口禁用并提示；
-                    切入联动即清 options 键（编辑器保证单源，保存校验
-                    optionsExclusive 兜底）。 */}
-                {field.input === "select" && !field.optionsFrom && (
+                {/* select 选项源（wire-form-linkage-v2 + wire-form-entry-advanced）：
+                    静态 options / 选项联动 optionsFrom / 数据集源
+                    optionsFromDataset 三源互斥恰有其一——配了静态选项则联动
+                    与数据集入口禁用并提示；切入任一动态源即清其余源键（编辑
+                    器保证单源，保存校验 optionsExclusive 兜底）。 */}
+                {field.input === "select" &&
+                  !field.optionsFrom &&
+                  !field.optionsFromDataset && (
                   <div className="mt-1.5 flex flex-wrap items-center gap-2">
                     <label className="text-[11px] text-slate-400">
                       {t("console.form.editor.fieldOptionsLabel")}
@@ -575,6 +677,23 @@ export function FormEditor({
                         }}
                       />
                       {t("console.form.editor.optionsFromToggle")}
+                    </label>
+                    <label className="flex items-center gap-1 text-[11px] text-slate-500">
+                      <input
+                        type="checkbox"
+                        data-testid="editor-field-options-dataset-toggle"
+                        disabled={(field.options ?? []).length > 0}
+                        onChange={(e) => {
+                          if (!e.target.checked) return;
+                          setFieldOptionsFromDataset(field.column, {
+                            datasetId: "",
+                            column: "",
+                            filters: [],
+                            limit: 200,
+                          });
+                        }}
+                      />
+                      {t("console.form.editor.optionsDatasetToggle")}
                     </label>
                     {(field.options ?? []).length > 0 && (
                       <span
@@ -756,6 +875,541 @@ export function FormEditor({
                         className="w-48 rounded border border-slate-300 px-2 py-1 text-xs"
                       />
                     </div>
+                  </div>
+                )}
+                {/* 数据集选项源（wire-form-entry-advanced 4.1）：select 第三源
+                    optionsFromDataset——数据集下拉（本企业列表）+列下拉（该集
+                    列快照）+可选过滤条件与上限；切入即清另两源键（三源恰有
+                    其一）。引用数据集已删/他企时保留占位选项，保存由服务端
+                    422 如实裁决。 */}
+                {field.input === "select" && field.optionsFromDataset && (
+                  <div
+                    data-testid="editor-field-options-dataset"
+                    className="mt-1.5 space-y-1"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="text-[11px] text-slate-400">
+                        {t("console.form.editor.optionsDatasetSourceLabel")}
+                      </label>
+                      <select
+                        data-testid="editor-field-options-dataset-id"
+                        value={field.optionsFromDataset.datasetId}
+                        onChange={(e) => {
+                          // 换数据集：列名随集走——重置 column（不静默保留
+                          // 旧集列名）。
+                          setFieldOptionsFromDataset(field.column, {
+                            ...field.optionsFromDataset!,
+                            datasetId: e.target.value,
+                            column: "",
+                          });
+                        }}
+                        className="rounded border border-slate-300 px-1.5 py-1 text-xs"
+                      >
+                        <option value="">
+                          {t("console.form.editor.datasetPlaceholder")}
+                        </option>
+                        {(datasets ?? []).map((dataset) => (
+                          <option key={dataset.id} value={dataset.id}>
+                            {dataset.name}
+                          </option>
+                        ))}
+                        {field.optionsFromDataset.datasetId &&
+                          !datasets?.some(
+                            (d) => d.id === field.optionsFromDataset!.datasetId,
+                          ) && (
+                            <option value={field.optionsFromDataset.datasetId}>
+                              {field.optionsFromDataset.datasetId}
+                            </option>
+                          )}
+                      </select>
+                      <label className="text-[11px] text-slate-400">
+                        {t("console.form.editor.optionsDatasetColumnLabel")}
+                      </label>
+                      <select
+                        data-testid="editor-field-options-dataset-column"
+                        value={field.optionsFromDataset.column}
+                        onChange={(e) =>
+                          setFieldOptionsFromDataset(field.column, {
+                            ...field.optionsFromDataset!,
+                            column: e.target.value,
+                          })
+                        }
+                        className="rounded border border-slate-300 px-1.5 py-1 text-xs"
+                      >
+                        <option value="">
+                          {t("console.form.editor.optionsDatasetColumnPlaceholder")}
+                        </option>
+                        {columnsOf(
+                          field.optionsFromDataset.datasetId,
+                        ).map((col) => (
+                          <option key={col.name} value={col.name}>
+                            {col.name}
+                          </option>
+                        ))}
+                        {field.optionsFromDataset.column &&
+                          !columnsOf(field.optionsFromDataset.datasetId).some(
+                            (col) => col.name === field.optionsFromDataset!.column,
+                          ) && (
+                            <option value={field.optionsFromDataset.column}>
+                              {field.optionsFromDataset.column}
+                            </option>
+                          )}
+                      </select>
+                      <label className="text-[11px] text-slate-400">
+                        {t("console.form.editor.optionsDatasetLimitLabel")}
+                      </label>
+                      <input
+                        data-testid="editor-field-options-dataset-limit"
+                        type="number"
+                        min={1}
+                        max={500}
+                        value={field.optionsFromDataset.limit ?? ""}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          setFieldOptionsFromDataset(field.column, {
+                            ...field.optionsFromDataset!,
+                            ...(raw === "" ? {} : { limit: Number(raw) }),
+                          });
+                        }}
+                        className="w-16 rounded border border-slate-300 px-1.5 py-1 text-xs"
+                      />
+                      <button
+                        type="button"
+                        data-testid="editor-field-options-dataset-clear"
+                        onClick={() =>
+                          setFieldOptionsFromDataset(field.column, null)
+                        }
+                        className="rounded border border-slate-300 px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100"
+                      >
+                        {t("console.form.editor.optionsDatasetClear")}
+                      </button>
+                    </div>
+                    <ul className="space-y-1">
+                      {(field.optionsFromDataset.filters ?? []).map(
+                        (filter, index) => (
+                          <li
+                            key={index}
+                            data-testid="editor-field-dataset-filter-row"
+                            data-index={index}
+                            className="flex flex-wrap items-center gap-2"
+                          >
+                            <select
+                              data-testid="editor-field-dataset-filter-column"
+                              value={filter.column}
+                              onChange={(e) =>
+                                setFieldOptionsFromDataset(field.column, {
+                                  ...field.optionsFromDataset!,
+                                  filters: (field.optionsFromDataset!.filters ??
+                                    []).map((f, i) =>
+                                    i === index ? { ...f, column: e.target.value } : f,
+                                  ),
+                                })
+                              }
+                              className="rounded border border-slate-300 px-1.5 py-1 text-xs"
+                            >
+                              <option value="">
+                                {t(
+                                  "console.form.editor.optionsDatasetColumnPlaceholder",
+                                )}
+                              </option>
+                              {columnsOf(
+                                field.optionsFromDataset!.datasetId,
+                              ).map((col) => (
+                                <option key={col.name} value={col.name}>
+                                  {col.name}
+                                </option>
+                              ))}
+                              {filter.column &&
+                                !columnsOf(
+                                  field.optionsFromDataset!.datasetId,
+                                ).some((col) => col.name === filter.column) && (
+                                  <option value={filter.column}>
+                                    {filter.column}
+                                  </option>
+                                )}
+                            </select>
+                            <select
+                              data-testid="editor-field-dataset-filter-op"
+                              value={filter.op}
+                              onChange={(e) =>
+                                setFieldOptionsFromDataset(field.column, {
+                                  ...field.optionsFromDataset!,
+                                  filters: (field.optionsFromDataset!.filters ??
+                                    []).map((f, i) =>
+                                    i === index
+                                      ? {
+                                          ...f,
+                                          op: e.target
+                                            .value as DatasetFilterOp,
+                                          value: parseFilterLiteral(
+                                            e.target.value as DatasetFilterOp,
+                                            filterValueText(f.value),
+                                          ),
+                                        }
+                                      : f,
+                                  ),
+                                })
+                              }
+                              className="rounded border border-slate-300 px-1.5 py-1 text-xs"
+                            >
+                              {DATASET_FILTER_OPS.map((op) => (
+                                <option key={op} value={op}>
+                                  {t(`console.form.editor.filterOps.${op}`)}
+                                </option>
+                              ))}
+                            </select>
+                            <input
+                              data-testid="editor-field-dataset-filter-value"
+                              value={filterValueText(filter.value)}
+                              placeholder={t(
+                                "console.form.editor.filterValuePlaceholder",
+                              )}
+                              onChange={(e) =>
+                                setFieldOptionsFromDataset(field.column, {
+                                  ...field.optionsFromDataset!,
+                                  filters: (field.optionsFromDataset!.filters ??
+                                    []).map((f, i) =>
+                                    i === index
+                                      ? {
+                                          ...f,
+                                          value: parseFilterLiteral(
+                                            f.op,
+                                            e.target.value,
+                                          ),
+                                        }
+                                      : f,
+                                  ),
+                                })
+                              }
+                              className="w-32 rounded border border-slate-300 px-2 py-1 text-xs"
+                            />
+                            <button
+                              type="button"
+                              data-testid="editor-field-dataset-filter-remove"
+                              onClick={() =>
+                                setFieldOptionsFromDataset(field.column, {
+                                  ...field.optionsFromDataset!,
+                                  filters: (field.optionsFromDataset!.filters ??
+                                    []).filter((_, i) => i !== index),
+                                })
+                              }
+                              className="rounded border border-slate-300 px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100"
+                            >
+                              {t("console.form.editor.filterRemove")}
+                            </button>
+                          </li>
+                        ),
+                      )}
+                    </ul>
+                    <button
+                      type="button"
+                      data-testid="editor-field-dataset-filter-add"
+                      disabled={
+                        (field.optionsFromDataset.filters ?? []).length >= 10
+                      }
+                      onClick={() =>
+                        setFieldOptionsFromDataset(field.column, {
+                          ...field.optionsFromDataset!,
+                          filters: [
+                            ...(field.optionsFromDataset!.filters ?? []),
+                            { column: "", op: "eq", value: "" },
+                          ],
+                        })
+                      }
+                      className="rounded border border-slate-300 px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100 disabled:opacity-50"
+                    >
+                      {t("console.form.editor.filterAdd")}
+                    </button>
+                    <span
+                      data-testid="editor-field-options-dataset-exclusive-hint"
+                      className="ml-1 text-[10px] text-slate-400"
+                    >
+                      {t("console.form.editor.optionsExclusiveWithDataset")}
+                    </span>
+                  </div>
+                )}
+                {/* 选值回填（wire-form-entry-advanced 4.1）：源字段下拉限本
+                    表单带数据集选项源的 select、列下拉限该引用集列；源字段
+                    变更即重置回填列（列随集走）。无候选源时入口禁用并提示。 */}
+                <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                  <label className="flex items-center gap-1 text-[11px] text-slate-500">
+                    <input
+                      type="checkbox"
+                      data-testid="editor-field-fill-from-toggle"
+                      checked={field.fillFrom !== undefined}
+                      disabled={
+                        dynamicSelectSources.filter(
+                          (f) => f.column !== field.column,
+                        ).length === 0 && field.fillFrom === undefined
+                      }
+                      onChange={(e) => {
+                        if (!e.target.checked) {
+                          setFieldFillFrom(field.column, null);
+                          return;
+                        }
+                        const source = dynamicSelectSources.find(
+                          (f) => f.column !== field.column,
+                        );
+                        setFieldFillFrom(field.column, {
+                          field: source?.column ?? "",
+                          column: "",
+                        });
+                      }}
+                    />
+                    {t("console.form.editor.fillFromToggle")}
+                  </label>
+                  {dynamicSelectSources.filter((f) => f.column !== field.column)
+                    .length === 0 &&
+                    field.fillFrom === undefined && (
+                      <span className="text-[10px] text-slate-300">
+                        {t("console.form.editor.fillFromNoSource")}
+                      </span>
+                    )}
+                </div>
+                {field.fillFrom && (
+                  <div
+                    data-testid="editor-field-fill-from"
+                    className="mt-1.5 flex flex-wrap items-center gap-2"
+                  >
+                    <label className="text-[11px] text-slate-400">
+                      {t("console.form.editor.fillFromFieldLabel")}
+                    </label>
+                    <select
+                      data-testid="editor-field-fill-from-field"
+                      value={field.fillFrom.field}
+                      onChange={(e) =>
+                        setFieldFillFrom(field.column, {
+                          field: e.target.value,
+                          column: "",
+                        })
+                      }
+                      className="rounded border border-slate-300 px-1.5 py-1 text-xs"
+                    >
+                      <option value="">
+                        {t("console.form.editor.conditionFieldPlaceholder")}
+                      </option>
+                      {dynamicSelectSources
+                        .filter((f) => f.column !== field.column)
+                        .map((source) => (
+                          <option key={source.column} value={source.column}>
+                            {source.label || source.column}
+                          </option>
+                        ))}
+                      {field.fillFrom.field &&
+                        !dynamicSelectSources.some(
+                          (f) =>
+                            f.column === field.fillFrom!.field &&
+                            f.column !== field.column,
+                        ) && (
+                          <option value={field.fillFrom.field}>
+                            {field.fillFrom.field}
+                          </option>
+                        )}
+                    </select>
+                    <label className="text-[11px] text-slate-400">
+                      {t("console.form.editor.fillFromColumnLabel")}
+                    </label>
+                    <select
+                      data-testid="editor-field-fill-from-column"
+                      value={field.fillFrom.column}
+                      onChange={(e) =>
+                        setFieldFillFrom(field.column, {
+                          ...field.fillFrom!,
+                          column: e.target.value,
+                        })
+                      }
+                      className="rounded border border-slate-300 px-1.5 py-1 text-xs"
+                    >
+                      <option value="">
+                        {t("console.form.editor.optionsDatasetColumnPlaceholder")}
+                      </option>
+                      {columnsOf(
+                        dynamicSelectSources.find(
+                          (f) => f.column === field.fillFrom!.field,
+                        )?.optionsFromDataset?.datasetId ?? "",
+                      ).map((col) => (
+                        <option key={col.name} value={col.name}>
+                          {col.name}
+                        </option>
+                      ))}
+                      {field.fillFrom.column &&
+                        !columnsOf(
+                          dynamicSelectSources.find(
+                            (f) => f.column === field.fillFrom!.field,
+                          )?.optionsFromDataset?.datasetId ?? "",
+                        ).some((col) => col.name === field.fillFrom!.column) && (
+                          <option value={field.fillFrom.column}>
+                            {field.fillFrom.column}
+                          </option>
+                        )}
+                    </select>
+                    <button
+                      type="button"
+                      data-testid="editor-field-fill-from-clear"
+                      onClick={() => setFieldFillFrom(field.column, null)}
+                      className="rounded border border-slate-300 px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100"
+                    >
+                      {t("console.form.editor.fillFromClear")}
+                    </button>
+                  </div>
+                )}
+                {/* 计算字段（wire-form-entry-advanced 4.1）：op 固定 add_days、
+                    日期字段下拉限本表单 date 字段、天数=字面量输入或本表单
+                    number 字段下拉（不得自引用——候选已排除自身）。 */}
+                <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                  <label className="flex items-center gap-1 text-[11px] text-slate-500">
+                    <input
+                      type="checkbox"
+                      data-testid="editor-field-computed-toggle"
+                      checked={field.computed !== undefined}
+                      disabled={
+                        draft.body.fields.filter(
+                          (f) =>
+                            f.input === "date" && f.column !== field.column,
+                        ).length === 0 && field.computed === undefined
+                      }
+                      onChange={(e) => {
+                        if (!e.target.checked) {
+                          setFieldComputed(field.column, null);
+                          return;
+                        }
+                        const dateField = draft.body.fields.find(
+                          (f) => f.input === "date" && f.column !== field.column,
+                        );
+                        setFieldComputed(field.column, {
+                          op: "add_days",
+                          date: dateField?.column ?? "",
+                          days: 0,
+                        });
+                      }}
+                    />
+                    {t("console.form.editor.computedToggle")}
+                  </label>
+                </div>
+                {field.computed && (
+                  <div
+                    data-testid="editor-field-computed"
+                    className="mt-1.5 flex flex-wrap items-center gap-2"
+                  >
+                    <label className="text-[11px] text-slate-400">
+                      {t("console.form.editor.computedOpLabel")}
+                    </label>
+                    <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">
+                      add_days
+                    </code>
+                    <label className="text-[11px] text-slate-400">
+                      {t("console.form.editor.computedDateLabel")}
+                    </label>
+                    <select
+                      data-testid="editor-field-computed-date"
+                      value={field.computed.date}
+                      onChange={(e) =>
+                        setFieldComputed(field.column, {
+                          ...field.computed!,
+                          date: e.target.value,
+                        })
+                      }
+                      className="rounded border border-slate-300 px-1.5 py-1 text-xs"
+                    >
+                      <option value="">
+                        {t("console.form.editor.conditionFieldPlaceholder")}
+                      </option>
+                      {draft.body.fields
+                        .filter(
+                          (f) =>
+                            f.input === "date" && f.column !== field.column,
+                        )
+                        .map((f) => (
+                          <option key={f.column} value={f.column}>
+                            {f.label || f.column}
+                          </option>
+                        ))}
+                      {field.computed.date &&
+                        !draft.body.fields.some(
+                          (f) =>
+                            f.column === field.computed!.date &&
+                            f.input === "date" &&
+                            f.column !== field.column,
+                        ) && (
+                          <option value={field.computed.date}>
+                            {field.computed.date}
+                          </option>
+                        )}
+                    </select>
+                    <label className="text-[11px] text-slate-400">
+                      {t("console.form.editor.computedDaysLabel")}
+                    </label>
+                    <select
+                      data-testid="editor-field-computed-days-mode"
+                      value={
+                        typeof field.computed.days === "number"
+                          ? "__literal"
+                          : field.computed.days
+                      }
+                      onChange={(e) =>
+                        setFieldComputed(field.column, {
+                          ...field.computed!,
+                          days:
+                            e.target.value === "__literal"
+                              ? 0
+                              : e.target.value,
+                        })
+                      }
+                      className="rounded border border-slate-300 px-1.5 py-1 text-xs"
+                    >
+                      <option value="__literal">
+                        {t("console.form.editor.computedDaysLiteral")}
+                      </option>
+                      {draft.body.fields
+                        .filter(
+                          (f) =>
+                            f.input === "number" && f.column !== field.column,
+                        )
+                        .map((f) => (
+                          <option key={f.column} value={f.column}>
+                            {f.label || f.column}
+                          </option>
+                        ))}
+                      {typeof field.computed.days === "string" &&
+                        field.computed.days !== "" &&
+                        !draft.body.fields.some(
+                          (f) =>
+                            f.column === field.computed!.days &&
+                            f.input === "number" &&
+                            f.column !== field.column,
+                        ) && (
+                          <option value={field.computed.days}>
+                            {field.computed.days}
+                          </option>
+                        )}
+                    </select>
+                    {typeof field.computed.days === "number" && (
+                      <input
+                        data-testid="editor-field-computed-days-literal"
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={field.computed.days}
+                        onChange={(e) =>
+                          setFieldComputed(field.column, {
+                            ...field.computed!,
+                            days: Math.max(
+                              0,
+                              Math.floor(Number(e.target.value) || 0),
+                            ),
+                          })
+                        }
+                        className="w-16 rounded border border-slate-300 px-1.5 py-1 text-xs"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      data-testid="editor-field-computed-clear"
+                      onClick={() => setFieldComputed(field.column, null)}
+                      className="rounded border border-slate-300 px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100"
+                    >
+                      {t("console.form.editor.computedClear")}
+                    </button>
                   </div>
                 )}
                 {/* 显隐条件（wire-form-field-linkage + wire-form-linkage-v2）：
@@ -959,6 +1613,517 @@ export function FormEditor({
           </ul>
         </div>
       </div>
+
+      {/* 提交闸约束编辑器（wire-form-entry-advanced 4.2）：spec 级
+          constraints 列表增删改——id/message/when（可选单条件）/probe
+          （数据集+过滤条件（值=字面或 {field} 引用）+expect none|any）；
+          ≤10 条/≤10 filters，保存自检 constraintBad/IdDuplicate 前端即拦。 */}
+      <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-xs font-semibold text-slate-600">
+            {t("console.form.editor.constraintsTitle")}
+          </h3>
+          <span className="text-[10px] text-slate-300">
+            {t("console.form.editor.constraintsHint")}
+          </span>
+          <button
+            type="button"
+            data-testid="editor-constraint-add"
+            disabled={(draft.body.constraints ?? []).length >= 10}
+            onClick={() =>
+              setSpecConstraints([
+                ...(draft.body.constraints ?? []),
+                {
+                  id: "",
+                  message: "",
+                  probe: {
+                    datasetId: "",
+                    filters: [{ column: "", op: "eq", value: "" }],
+                    expect: "none",
+                  },
+                },
+              ])
+            }
+            className="rounded border border-slate-300 px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100 disabled:opacity-50"
+          >
+            {t("console.form.editor.constraintAdd")}
+          </button>
+        </div>
+        {(draft.body.constraints ?? []).length === 0 && (
+          <p data-testid="editor-constraints-empty" className="mt-2 text-xs text-slate-400">
+            {t("console.form.editor.constraintsEmpty")}
+          </p>
+        )}
+        <ul className="mt-2 space-y-2">
+          {(draft.body.constraints ?? []).map((constraint, index) => (
+            <li
+              key={index}
+              data-testid="editor-constraint"
+              data-index={index}
+              className="space-y-1.5 rounded border border-slate-200 p-2.5"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="text-[11px] text-slate-400">
+                  {t("console.form.editor.constraintIdLabel")}
+                </label>
+                <input
+                  data-testid="editor-constraint-id"
+                  value={constraint.id}
+                  onChange={(e) =>
+                    setSpecConstraints(
+                      (draft.body.constraints ?? []).map((c, i) =>
+                        i === index ? { ...c, id: e.target.value } : c,
+                      ),
+                    )
+                  }
+                  className="w-28 rounded border border-slate-300 px-2 py-1 text-xs"
+                />
+                <label className="text-[11px] text-slate-400">
+                  {t("console.form.editor.constraintMessageLabel")}
+                </label>
+                <input
+                  data-testid="editor-constraint-message"
+                  value={constraint.message}
+                  onChange={(e) =>
+                    setSpecConstraints(
+                      (draft.body.constraints ?? []).map((c, i) =>
+                        i === index ? { ...c, message: e.target.value } : c,
+                      ),
+                    )
+                  }
+                  className="w-64 rounded border border-slate-300 px-2 py-1 text-xs"
+                />
+                <label className="text-[11px] text-slate-400">
+                  {t("console.form.editor.constraintExpectLabel")}
+                </label>
+                <select
+                  data-testid="editor-constraint-expect"
+                  value={constraint.probe.expect}
+                  onChange={(e) =>
+                    setSpecConstraints(
+                      (draft.body.constraints ?? []).map((c, i) =>
+                        i === index
+                          ? {
+                              ...c,
+                              probe: {
+                                ...c.probe,
+                                expect: e.target.value as "none" | "any",
+                              },
+                            }
+                          : c,
+                      ),
+                    )
+                  }
+                  className="rounded border border-slate-300 px-1.5 py-1 text-xs"
+                >
+                  <option value="none">
+                    {t("console.form.editor.constraintExpects.none")}
+                  </option>
+                  <option value="any">
+                    {t("console.form.editor.constraintExpects.any")}
+                  </option>
+                </select>
+                <button
+                  type="button"
+                  data-testid="editor-constraint-remove"
+                  onClick={() =>
+                    setSpecConstraints(
+                      (draft.body.constraints ?? []).filter((_, i) => i !== index),
+                    )
+                  }
+                  className="ml-auto rounded border border-slate-300 px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100"
+                >
+                  {t("console.form.editor.constraintRemove")}
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="text-[11px] text-slate-400">
+                  {t("console.form.editor.constraintProbeDatasetLabel")}
+                </label>
+                <select
+                  data-testid="editor-constraint-probe-dataset"
+                  value={constraint.probe.datasetId}
+                  onChange={(e) => {
+                    // 换数据集：过滤列随集走——列名重置。
+                    setSpecConstraints(
+                      (draft.body.constraints ?? []).map((c, i) =>
+                        i === index
+                          ? {
+                              ...c,
+                              probe: {
+                                ...c.probe,
+                                datasetId: e.target.value,
+                                filters: c.probe.filters.map(() => ({
+                                  column: "",
+                                  op: "eq" as const,
+                                  value: "" as const,
+                                })),
+                              },
+                            }
+                          : c,
+                      ),
+                    );
+                  }}
+                  className="rounded border border-slate-300 px-1.5 py-1 text-xs"
+                >
+                  <option value="">
+                    {t("console.form.editor.datasetPlaceholder")}
+                  </option>
+                  {(datasets ?? []).map((dataset) => (
+                    <option key={dataset.id} value={dataset.id}>
+                      {dataset.name}
+                    </option>
+                  ))}
+                  {constraint.probe.datasetId &&
+                    !datasets?.some(
+                      (d) => d.id === constraint.probe.datasetId,
+                    ) && (
+                      <option value={constraint.probe.datasetId}>
+                        {constraint.probe.datasetId}
+                      </option>
+                    )}
+                </select>
+                <label className="flex items-center gap-1 text-[11px] text-slate-500">
+                  <input
+                    type="checkbox"
+                    data-testid="editor-constraint-when-toggle"
+                    checked={constraint.when !== undefined}
+                    onChange={(e) => {
+                      const others = draft.body.fields;
+                      setSpecConstraints(
+                        (draft.body.constraints ?? []).map((c, i) => {
+                          if (i !== index) return c;
+                          if (!e.target.checked) {
+                            const { when: _omit, ...rest } = c;
+                            return rest;
+                          }
+                          return {
+                            ...c,
+                            when: {
+                              field: others[0]?.column ?? "",
+                              op: "eq",
+                              value: "",
+                            },
+                          };
+                        }),
+                      );
+                    }}
+                  />
+                  {t("console.form.editor.constraintWhenToggle")}
+                </label>
+              </div>
+              {constraint.when && (
+                <div
+                  data-testid="editor-constraint-when"
+                  className="flex flex-wrap items-center gap-2"
+                >
+                  <ConditionControls
+                    testIdPrefix="editor-constraint-when"
+                    cond={constraint.when}
+                    fields={draft.body.fields}
+                    selfColumn=""
+                    onChange={(next) =>
+                      setSpecConstraints(
+                        (draft.body.constraints ?? []).map((c, i) =>
+                          i === index ? { ...c, when: next } : c,
+                        ),
+                      )
+                    }
+                    t={t}
+                  />
+                </div>
+              )}
+              <ul className="space-y-1">
+                {constraint.probe.filters.map((filter, filterIndex) => {
+                  const refName = isFieldRefValue(filter.value)
+                    ? filter.value.field
+                    : "";
+                  return (
+                  <li
+                    key={filterIndex}
+                    data-testid="editor-probe-filter-row"
+                    data-index={filterIndex}
+                    className="flex flex-wrap items-center gap-2"
+                  >
+                    <select
+                      data-testid="editor-probe-filter-column"
+                      value={filter.column}
+                      onChange={(e) =>
+                        setSpecConstraints(
+                          (draft.body.constraints ?? []).map((c, i) =>
+                            i === index
+                              ? {
+                                  ...c,
+                                  probe: {
+                                    ...c.probe,
+                                    filters: c.probe.filters.map((f, fi) =>
+                                      fi === filterIndex
+                                        ? { ...f, column: e.target.value }
+                                        : f,
+                                    ),
+                                  },
+                                }
+                              : c,
+                          ),
+                        )
+                      }
+                      className="rounded border border-slate-300 px-1.5 py-1 text-xs"
+                    >
+                      <option value="">
+                        {t("console.form.editor.optionsDatasetColumnPlaceholder")}
+                      </option>
+                      {columnsOf(constraint.probe.datasetId).map((col) => (
+                        <option key={col.name} value={col.name}>
+                          {col.name}
+                        </option>
+                      ))}
+                      {filter.column &&
+                        !columnsOf(constraint.probe.datasetId).some(
+                          (col) => col.name === filter.column,
+                        ) && (
+                          <option value={filter.column}>{filter.column}</option>
+                        )}
+                    </select>
+                    <select
+                      data-testid="editor-probe-filter-op"
+                      value={filter.op}
+                      onChange={(e) =>
+                        setSpecConstraints(
+                          (draft.body.constraints ?? []).map((c, i) =>
+                            i === index
+                              ? {
+                                  ...c,
+                                  probe: {
+                                    ...c.probe,
+                                    filters: c.probe.filters.map((f, fi) =>
+                                      fi === filterIndex
+                                        ? {
+                                            ...f,
+                                            op: e.target
+                                              .value as DatasetFilterOp,
+                                            value: parseFilterLiteral(
+                                              e.target.value as DatasetFilterOp,
+                                              filterValueText(f.value),
+                                            ),
+                                          }
+                                        : f,
+                                    ),
+                                  },
+                                }
+                              : c,
+                          ),
+                        )
+                      }
+                      className="rounded border border-slate-300 px-1.5 py-1 text-xs"
+                    >
+                      {DATASET_FILTER_OPS.map((op) => (
+                        <option key={op} value={op}>
+                          {t(`console.form.editor.filterOps.${op}`)}
+                        </option>
+                      ))}
+                    </select>
+                    {isFieldRefValue(filter.value) ? (
+                      <>
+                        <select
+                          data-testid="editor-probe-filter-value-field"
+                          value={filter.value.field}
+                          onChange={(e) =>
+                            setSpecConstraints(
+                              (draft.body.constraints ?? []).map((c, i) =>
+                                i === index
+                                  ? {
+                                      ...c,
+                                      probe: {
+                                        ...c.probe,
+                                        filters: c.probe.filters.map((f, fi) =>
+                                          fi === filterIndex
+                                            ? {
+                                                ...f,
+                                                value: { field: e.target.value },
+                                              }
+                                            : f,
+                                        ),
+                                      },
+                                    }
+                                  : c,
+                              ),
+                            )
+                          }
+                          className="rounded border border-slate-300 px-1.5 py-1 text-xs"
+                        >
+                          <option value="">
+                            {t("console.form.editor.conditionFieldPlaceholder")}
+                          </option>
+                          {draft.body.fields.map((f) => (
+                            <option key={f.column} value={f.column}>
+                              {f.label || f.column}
+                            </option>
+                          ))}
+                          {refName &&
+                            !draft.body.fields.some(
+                              (f) => f.column === refName,
+                            ) && (
+                              <option value={refName}>
+                                {refName}
+                              </option>
+                            )}
+                        </select>
+                        <button
+                          type="button"
+                          data-testid="editor-probe-filter-value-to-literal"
+                          onClick={() =>
+                            setSpecConstraints(
+                              (draft.body.constraints ?? []).map((c, i) =>
+                                i === index
+                                  ? {
+                                      ...c,
+                                      probe: {
+                                        ...c.probe,
+                                        filters: c.probe.filters.map((f, fi) =>
+                                          fi === filterIndex
+                                            ? { ...f, value: "" }
+                                            : f,
+                                        ),
+                                      },
+                                    }
+                                  : c,
+                              ),
+                            )
+                          }
+                          className="rounded border border-slate-300 px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100"
+                        >
+                          {t("console.form.editor.probeValueToLiteral")}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <input
+                          data-testid="editor-probe-filter-value"
+                          value={filterValueText(filter.value)}
+                          placeholder={t(
+                            "console.form.editor.filterValuePlaceholder",
+                          )}
+                          onChange={(e) =>
+                            setSpecConstraints(
+                              (draft.body.constraints ?? []).map((c, i) =>
+                                i === index
+                                  ? {
+                                      ...c,
+                                      probe: {
+                                        ...c.probe,
+                                        filters: c.probe.filters.map((f, fi) =>
+                                          fi === filterIndex
+                                            ? {
+                                                ...f,
+                                                value: parseFilterLiteral(
+                                                  f.op,
+                                                  e.target.value,
+                                                ),
+                                              }
+                                            : f,
+                                        ),
+                                      },
+                                    }
+                                  : c,
+                              ),
+                            )
+                          }
+                          className="w-32 rounded border border-slate-300 px-2 py-1 text-xs"
+                        />
+                        <button
+                          type="button"
+                          data-testid="editor-probe-filter-value-to-field"
+                          onClick={() =>
+                            setSpecConstraints(
+                              (draft.body.constraints ?? []).map((c, i) =>
+                                i === index
+                                  ? {
+                                      ...c,
+                                      probe: {
+                                        ...c.probe,
+                                        filters: c.probe.filters.map((f, fi) =>
+                                          fi === filterIndex
+                                            ? {
+                                                ...f,
+                                                value: {
+                                                  field:
+                                                    draft.body.fields[0]
+                                                      ?.column ?? "",
+                                                },
+                                              }
+                                            : f,
+                                        ),
+                                      },
+                                    }
+                                  : c,
+                              ),
+                            )
+                          }
+                          className="rounded border border-slate-300 px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100"
+                        >
+                          {t("console.form.editor.probeValueToField")}
+                        </button>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      data-testid="editor-probe-filter-remove"
+                      disabled={constraint.probe.filters.length <= 1}
+                      onClick={() =>
+                        setSpecConstraints(
+                          (draft.body.constraints ?? []).map((c, i) =>
+                            i === index
+                              ? {
+                                  ...c,
+                                  probe: {
+                                    ...c.probe,
+                                    filters: c.probe.filters.filter(
+                                      (_, fi) => fi !== filterIndex,
+                                    ),
+                                  },
+                                }
+                              : c,
+                          ),
+                        )
+                      }
+                      className="rounded border border-slate-300 px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100 disabled:opacity-50"
+                    >
+                      {t("console.form.editor.filterRemove")}
+                    </button>
+                  </li>
+                  );
+                })}
+              </ul>
+              <button
+                type="button"
+                data-testid="editor-probe-filter-add"
+                disabled={constraint.probe.filters.length >= 10}
+                onClick={() =>
+                  setSpecConstraints(
+                    (draft.body.constraints ?? []).map((c, i) =>
+                      i === index
+                        ? {
+                            ...c,
+                            probe: {
+                              ...c.probe,
+                              filters: [
+                                ...c.probe.filters,
+                                { column: "", op: "eq", value: "" },
+                              ],
+                            },
+                          }
+                        : c,
+                    ),
+                  )
+                }
+                className="rounded border border-slate-300 px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100 disabled:opacity-50"
+              >
+                {t("console.form.editor.filterAdd")}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }
@@ -1072,6 +2237,41 @@ function parseOptionListText(text: string): string[] {
     .split(",")
     .map((option) => option.trim())
     .filter((option) => option !== "");
+}
+
+/** 过滤值 → 文本（编辑控件呈现）：数组逗号拼接、标量 stringify；
+ *  {field} 引用形态不走文本呈现（引用分支用专用下拉）。 */
+function filterValueText(value: unknown): string {
+  if (Array.isArray(value)) return value.map((v) => String(v)).join(", ");
+  if (value && typeof value === "object") return "";
+  return String(value ?? "");
+}
+
+/** 文本 → 过滤值（字面量解析）：in 算子按逗号拆分数组；数值形态解析为
+ *  number（比较族算子需要），其余保持字符串。 */
+function parseFilterLiteral(
+  op: DatasetFilterOp,
+  text: string,
+): DatasetFilter["value"] {
+  const scalar = (part: string): DatasetFilterValue => {
+    const trimmed = part.trim();
+    return /^-?\d+(\.\d+)?$/.test(trimmed) ? Number(trimmed) : trimmed;
+  };
+  if (op === "in") {
+    return text
+      .split(",")
+      .map((part) => part.trim())
+      .filter((part) => part !== "")
+      .map(scalar);
+  }
+  return scalar(text);
+}
+
+/** probe 过滤值是否为 {field} 引用形态（类型收窄守卫）。 */
+function isFieldRefValue(
+  value: FormProbeFilter["value"],
+): value is { field: string } {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 /** cases 映射行改键（按 entries 序重建对象；草稿允许键重复/空白的中间态，

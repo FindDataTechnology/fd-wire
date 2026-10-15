@@ -10,7 +10,7 @@
 // （optionsFrom 级联解析、选项变化清值不进载荷、空选项按隐藏）+ 公开提交
 // 防篡改（客户端拦截 + 服务端 422 文案呈现）。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "../../i18n";
 import i18n from "../../i18n";
 import { FormRuntime } from "./FormRuntime";
@@ -787,5 +787,455 @@ describe("FormRuntime（选项联动：动态选项+清值+空选项隐藏+防�
       (within(fieldOf("city")).getByTestId("form-field-input") as HTMLInputElement)
         .value,
     ).toBe("京");
+  });
+});
+
+// --------------------------------- 高级录入（wire-form-entry-advanced）
+
+describe("FormRuntime（动态选项+选值回填+计算字段：console 全链路）", () => {
+  const CATALOG = {
+    id: "ds-catalog",
+    key: "ds_catalog",
+    name: "投入品档案",
+    source_kind: "upload" as const,
+    connector_id: null,
+    source_ref: null,
+    columns: [
+      { name: "pesticide", type: "TEXT" },
+      { name: "interval_days", type: "INTEGER" },
+    ],
+    row_count: 3,
+    size_bytes: 120,
+    sync_cron: null,
+    sync_status: "ok" as const,
+    paused_reason: null,
+    created_at: "2026-10-01T08:00:00",
+    updated_at: "2026-10-01T08:00:00",
+  };
+
+  const ADV_SPEC: FormSpecBody = {
+    datasetId: "ds-form-1",
+    fields: [
+      {
+        column: "pesticide",
+        label: "农药",
+        input: "select",
+        optionsFromDataset: { datasetId: "ds-catalog", column: "pesticide" },
+      },
+      {
+        column: "interval_days",
+        label: "安全间隔期",
+        input: "number",
+        fillFrom: { field: "pesticide", column: "interval_days" },
+      },
+      { column: "record_on", label: "记录日期", input: "date" },
+      {
+        column: "deadline",
+        label: "截止日期",
+        input: "date",
+        computed: { op: "add_days", date: "record_on", days: "interval_days" },
+      },
+    ],
+  };
+
+  function installAdv() {
+    const backend = installConsoleBackend([], {
+      datasets: [DATASET, CATALOG],
+      datasetRows: {
+        "ds-catalog": {
+          columns: CATALOG.columns,
+          rows: [
+            { pesticide: "chlorpyrifos", interval_days: 7 },
+            { pesticide: "abamectin", interval_days: 3 },
+            // 同名第二行：回填按 limit=1 取首行（3），不受此行影响
+            { pesticide: "abamectin", interval_days: 99 },
+          ],
+        },
+      },
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    return backend;
+  }
+
+  function pesticideSelect(): HTMLSelectElement {
+    return within(fieldOf("pesticide")).getByTestId(
+      "form-field-input",
+    ) as HTMLSelectElement;
+  }
+
+  function inputOf(column: string): HTMLInputElement {
+    return within(fieldOf(column)).getByTestId(
+      "form-field-input",
+    ) as HTMLInputElement;
+  }
+
+  function catalogQueryPosts(backend: ReturnType<typeof installAdv>) {
+    return backend.calls.filter(
+      (c) =>
+        c.method === "POST" && c.url.pathname === "/api/v1/datasets/ds-catalog/query",
+    );
+  }
+
+  it("动态选项解析：会话身份 distinct 查询 → 去重升序选项进下拉", async () => {
+    const backend = installAdv();
+    render(
+      <FormRuntime spec={ADV_SPEC} endpoint={{ kind: "console", datasetId: "ds-form-1" }} />,
+    );
+
+    await waitFor(() => {
+      expect([...pesticideSelect().options].map((o) => o.value)).toEqual([
+        "",
+        "abamectin",
+        "chlorpyrifos",
+      ]);
+    });
+    // 请求形状：distinct_column + limit 缺省 200，会话 Bearer
+    const distinct = catalogQueryPosts(backend).find(
+      (c) => (c.body as { distinct_column?: string }).distinct_column === "pesticide",
+    );
+    expect(distinct).toBeTruthy();
+    expect(distinct?.headers["authorization"]).toMatch(/^Bearer /);
+    expect((distinct?.body as { limit?: number }).limit).toBe(200);
+  });
+
+  it("选值回填：选中→等值查 limit=1 行回填；手改保留；改选以新回填覆盖", async () => {
+    const backend = installAdv();
+    render(
+      <FormRuntime spec={ADV_SPEC} endpoint={{ kind: "console", datasetId: "ds-form-1" }} />,
+    );
+    await waitFor(() => {
+      expect(pesticideSelect().options.length).toBeGreaterThan(1);
+    });
+    expect(inputOf("interval_days").value).toBe("");
+
+    fireEvent.change(pesticideSelect(), { target: { value: "abamectin" } });
+    await waitFor(() => {
+      expect(inputOf("interval_days").value).toBe("3");
+    });
+    // 回填查询：filters=[选项列 eq 选中值]，limit=1
+    const fillQuery = catalogQueryPosts(backend).find(
+      (c) =>
+        (c.body as { distinct_column?: string }).distinct_column === undefined &&
+        (
+          (c.body as { filters?: Array<{ value?: unknown }> }).filters ?? []
+        )[0]?.value === "abamectin",
+    );
+    expect(fillQuery).toBeTruthy();
+    expect((fillQuery?.body as { limit?: number }).limit).toBe(1);
+
+    // 手改间隔期：源值未变 → 手改保留（不触发回填覆盖）
+    fireEvent.change(inputOf("interval_days"), { target: { value: "5" } });
+    expect(inputOf("interval_days").value).toBe("5");
+
+    // 改选 chlorpyrifos：以新回填覆盖（=7）
+    fireEvent.change(pesticideSelect(), { target: { value: "chlorpyrifos" } });
+    await waitFor(() => {
+      expect(inputOf("interval_days").value).toBe("7");
+    });
+  });
+
+  it("计算字段：日期+天数齐 → 自动算出（闰年口径）；手改保留；参与值再变 → 重算覆盖", async () => {
+    installAdv();
+    render(
+      <FormRuntime spec={ADV_SPEC} endpoint={{ kind: "console", datasetId: "ds-form-1" }} />,
+    );
+    await waitFor(() => {
+      expect(pesticideSelect().options.length).toBeGreaterThan(1);
+    });
+
+    fireEvent.change(pesticideSelect(), { target: { value: "abamectin" } });
+    await waitFor(() => {
+      expect(inputOf("interval_days").value).toBe("3");
+    });
+    // 参与值缺一（日期未填）→ 计算字段留空
+    expect(inputOf("deadline").value).toBe("");
+
+    // 2024 闰年：02-28 + 3 天 = 03-02
+    fireEvent.change(inputOf("record_on"), { target: { value: "2024-02-28" } });
+    await waitFor(() => {
+      expect(inputOf("deadline").value).toBe("2024-03-02");
+    });
+
+    // 手改截止日期：参与值不变 → 手改保留
+    fireEvent.change(inputOf("deadline"), { target: { value: "2024-03-10" } });
+    expect(inputOf("deadline").value).toBe("2024-03-10");
+
+    // 参与值再变（改选 chlorpyrifos → 间隔 7）：重算覆盖手改（02-28 + 7 = 03-06）
+    fireEvent.change(pesticideSelect(), { target: { value: "chlorpyrifos" } });
+    await waitFor(() => {
+      expect(inputOf("interval_days").value).toBe("7");
+    });
+    await waitFor(() => {
+      expect(inputOf("deadline").value).toBe("2024-03-06");
+    });
+  });
+
+  it("console 提交携带 artifact_id：endpoint.artifactId → corrections 载荷带字符串 id", async () => {
+    const backend = installAdv();
+    render(
+      <FormRuntime
+        spec={ADV_SPEC}
+        endpoint={{ kind: "console", datasetId: "ds-form-1", artifactId: 31 }}
+      />,
+    );
+    await waitFor(() => {
+      expect(pesticideSelect().options.length).toBeGreaterThan(1);
+    });
+
+    fireEvent.change(pesticideSelect(), { target: { value: "abamectin" } });
+    await waitFor(() => {
+      expect(inputOf("interval_days").value).toBe("3");
+    });
+    fireEvent.change(inputOf("record_on"), { target: { value: "2026-10-15" } });
+    await waitFor(() => {
+      expect(inputOf("deadline").value).toBe("2026-10-18");
+    });
+    fireEvent.click(screen.getByTestId("form-submit"));
+
+    expect(await screen.findByTestId("form-success")).toBeTruthy();
+    const post = findCorrectionPost(backend);
+    expect(post?.body).toEqual({
+      op: "insert",
+      values: {
+        pesticide: "abamectin",
+        interval_days: 3,
+        record_on: "2026-10-15",
+        deadline: "2026-10-18",
+      },
+      artifact_id: "31",
+    });
+  });
+
+  it("截断如实标注：limit=1 → 仅首项 + truncated 提示", async () => {
+    installAdv();
+    render(
+      <FormRuntime
+        spec={{
+          ...ADV_SPEC,
+          fields: ADV_SPEC.fields.map((f) =>
+            f.column === "pesticide"
+              ? {
+                  ...f,
+                  optionsFromDataset: {
+                    ...f.optionsFromDataset!,
+                    limit: 1,
+                  },
+                }
+              : f,
+          ),
+        }}
+        endpoint={{ kind: "console", datasetId: "ds-form-1" }}
+      />,
+    );
+    await waitFor(() => {
+      expect([...pesticideSelect().options].map((o) => o.value)).toEqual([
+        "",
+        "abamectin",
+      ]);
+    });
+    expect(
+      within(fieldOf("pesticide")).getByTestId("form-field-options-truncated")
+        .textContent,
+    ).toContain("1");
+  });
+
+  it("引用失效如实：distinct 查询 4xx → 选项区可读错误（不静默空白）", async () => {
+    const backend = installAdv();
+    const original = backend.fetchImpl;
+    vi.stubGlobal(
+      "fetch",
+      ((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), "http://console.test");
+        if (
+          url.pathname === "/api/v1/datasets/ds-catalog/query" &&
+          (init?.body as string | undefined)?.includes("distinct_column")
+        ) {
+          return Promise.resolve({
+            ok: false,
+            status: 400,
+            json: () =>
+              Promise.resolve({ detail: "列 name 不在数据集列快照中" }),
+          });
+        }
+        return original(input, init);
+      }) as unknown as typeof fetch,
+    );
+    render(
+      <FormRuntime spec={ADV_SPEC} endpoint={{ kind: "console", datasetId: "ds-form-1" }} />,
+    );
+    expect(
+      (await screen.findByTestId("form-field-options-error")).textContent,
+    ).toContain("列 name 不在数据集列快照中");
+  });
+});
+
+describe("FormRuntime（公开选项端点：动态选项+fills 回填+免登录）", () => {
+  const OPTIONS_URL = "/api/v1/share/form/9/options?t=tok-abc&v=2";
+  const SUBMIT_URL = "/api/v1/share/form/9/submit?t=tok-abc&v=2";
+
+  const OPTIONS_PAYLOAD = {
+    fields: {
+      pesticide: {
+        options: ["abamectin", "chlorpyrifos"],
+        truncated: false,
+        fills: {
+          interval_days: { abamectin: "3", chlorpyrifos: "7" },
+        },
+      },
+    },
+  };
+
+  const PUBLIC_SPEC: FormSpecBody = {
+    datasetId: "ds-form-1",
+    fields: [
+      {
+        column: "pesticide",
+        label: "农药",
+        input: "select",
+        optionsFromDataset: { datasetId: "ds-catalog", column: "pesticide" },
+      },
+      {
+        column: "interval_days",
+        label: "安全间隔期",
+        input: "number",
+        fillFrom: { field: "pesticide", column: "interval_days" },
+      },
+    ],
+  };
+
+  /** 分 URL 打公开端点假 fetch：GET options / POST submit 各自状态。 */
+  function stubShareFetch(options: {
+    optionsStatus?: number;
+    optionsBody?: unknown;
+    submitStatus?: number;
+    submitBody?: unknown;
+  }): PublicCall[] {
+    const calls: PublicCall[] = [];
+    vi.stubGlobal(
+      "fetch",
+      ((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), "http://share.test");
+        const headers: Record<string, string> = {};
+        new Headers(init?.headers as HeadersInit | undefined).forEach((v, k) => {
+          headers[k.toLowerCase()] = v;
+        });
+        calls.push({
+          url: String(input),
+          method: (init?.method ?? "GET").toUpperCase(),
+          headers,
+          body:
+            typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+        });
+        if (url.pathname === "/api/v1/share/form/9/options") {
+          const status = options.optionsStatus ?? 200;
+          return Promise.resolve({
+            ok: status < 400,
+            status,
+            json: () =>
+              Promise.resolve(options.optionsBody ?? OPTIONS_PAYLOAD),
+          } as unknown as Response);
+        }
+        const status = options.submitStatus ?? 201;
+        return Promise.resolve({
+          ok: status < 400,
+          status,
+          json: () =>
+            Promise.resolve(
+              options.submitBody ?? { ok: true, message: "已收到" },
+            ),
+        } as unknown as Response);
+      }) as unknown as typeof fetch,
+    );
+    return calls;
+  }
+
+  function pesticideSelect(): HTMLSelectElement {
+    return within(fieldOf("pesticide")).getByTestId(
+      "form-field-input",
+    ) as HTMLSelectElement;
+  }
+
+  it("选项端点解析：GET 免登录（无 Authorization）→ 选项进下拉；fills 回填免请求", async () => {
+    const calls = stubShareFetch({});
+    render(
+      <FormRuntime
+        spec={PUBLIC_SPEC}
+        endpoint={{ kind: "public", url: SUBMIT_URL, optionsUrl: OPTIONS_URL }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect([...pesticideSelect().options].map((o) => o.value)).toEqual([
+        "",
+        "abamectin",
+        "chlorpyrifos",
+      ]);
+    });
+    // 选项端点只 GET 一次、绝不携带登录头
+    const optionCalls = calls.filter((c) => c.url.includes("/options"));
+    expect(optionCalls).toHaveLength(1);
+    expect(optionCalls[0]?.method).toBe("GET");
+    expect(optionCalls[0]?.headers["authorization"]).toBeUndefined();
+
+    // 选值回填走 fills 映射（零额外请求）
+    fireEvent.change(pesticideSelect(), { target: { value: "chlorpyrifos" } });
+    await waitFor(() => {
+      expect(
+        (within(fieldOf("interval_days")).getByTestId("form-field-input") as HTMLInputElement)
+          .value,
+      ).toBe("7");
+    });
+    expect(
+      calls.filter((c) => c.url.includes("/options")).length,
+    ).toBe(1);
+  });
+
+  it("提交闸 422：constraint message 逐字呈现、零清空", async () => {
+    stubShareFetch({
+      submitStatus: 422,
+      submitBody: {
+        detail: "提交闸 no-harvest：尚处安全间隔期，禁止采收",
+      },
+    });
+    render(
+      <FormRuntime
+        spec={PUBLIC_SPEC}
+        endpoint={{ kind: "public", url: SUBMIT_URL, optionsUrl: OPTIONS_URL }}
+      />,
+    );
+    await waitFor(() => {
+      expect(pesticideSelect().options.length).toBeGreaterThan(1);
+    });
+
+    fireEvent.change(pesticideSelect(), { target: { value: "abamectin" } });
+    fireEvent.click(screen.getByTestId("form-submit"));
+
+    expect(
+      (await screen.findByTestId("form-submit-error")).textContent,
+    ).toContain("提交闸 no-harvest：尚处安全间隔期，禁止采收");
+    expect(pesticideSelect().value).toBe("abamectin");
+  });
+
+  it("选项端点失效错误如实呈现（error 字段 → 可读标注，不静默空白）", async () => {
+    stubShareFetch({
+      optionsBody: {
+        fields: {
+          pesticide: {
+            options: [],
+            truncated: false,
+            error: "引用数据集已删除",
+          },
+        },
+      },
+    });
+    render(
+      <FormRuntime
+        spec={PUBLIC_SPEC}
+        endpoint={{ kind: "public", url: SUBMIT_URL, optionsUrl: OPTIONS_URL }}
+      />,
+    );
+    expect(
+      (await screen.findByTestId("form-field-options-error")).textContent,
+    ).toContain("引用数据集已删除");
   });
 });

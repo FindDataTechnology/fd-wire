@@ -922,3 +922,288 @@ describe("FormEditor（选项联动编辑）", () => {
     expect(backend.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
   });
 });
+
+// ── wire-form-entry-advanced：三新键配置 + 提交闸约束编辑器 ─────────────────
+
+describe("FormEditor（数据集选项源/回填/计算/提交闸）", () => {
+  /** 打开编辑器并绑 ds-sales、勾 city+amount+reported_on 三列。 */
+  async function openWithFields() {
+    const { backend, datasetSelect } = await openEditor();
+    fireEvent.change(datasetSelect, { target: { value: "ds-sales" } });
+    fireEvent.click(columnCheckbox("city"));
+    fireEvent.click(columnCheckbox("amount"));
+    fireEvent.click(columnCheckbox("reported_on"));
+    return { backend };
+  }
+
+  /** 把指定字段切成 select 并切入数据集选项源（返回该块所在字段行）。 */
+  function enableDatasetOptions(column: string) {
+    const row = fieldRow(column);
+    fireEvent.change(within(row).getByTestId("editor-field-input"), {
+      target: { value: "select" },
+    });
+    fireEvent.click(
+      within(row).getByTestId("editor-field-options-dataset-toggle"),
+    );
+    return row;
+  }
+
+  function lastPutBody(backend: ReturnType<typeof install>) {
+    const put = backend.calls
+      .filter((c) => c.method === "PUT")
+      .at(-1);
+    return put?.body as { spec: { spec: Record<string, unknown> } };
+  }
+
+  it("数据集选项源配置：数据集+列+上限 → 保存落形（optionsFromDataset）", async () => {
+    const { backend } = await openWithFields();
+    const row = enableDatasetOptions("city");
+    fireEvent.change(within(row).getByTestId("editor-field-options-dataset-id"), {
+      target: { value: "ds-visits" },
+    });
+    fireEvent.change(
+      within(row).getByTestId("editor-field-options-dataset-column"),
+      { target: { value: "visitor" },
+      },
+    );
+    fireEvent.change(within(row).getByTestId("editor-field-options-dataset-limit"), {
+      target: { value: "50" },
+    });
+
+    // 切入数据集源即清静态 options 占位键（三源恰有其一）
+    expect(within(row).queryByTestId("editor-field-options")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      (await screen.findByTestId("editor-form-saved-version")).textContent,
+    ).toContain("v2");
+    const spec = lastPutBody(backend).spec.spec as {
+      fields: Array<Record<string, unknown>>;
+    };
+    expect(spec.fields.find((f) => f.column === "city")).toMatchObject({
+      input: "select",
+      optionsFromDataset: {
+        datasetId: "ds-visits",
+        column: "visitor",
+        filters: [],
+        limit: 50,
+      },
+    });
+    expect("options" in (spec.fields.find((f) => f.column === "city") ?? {})).toBe(
+      false,
+    );
+  });
+
+  it("三源互斥：静态选项已配 → 数据集入口禁用；过滤条件行可增删并落形", async () => {
+    await openWithFields();
+    const row = fieldRow("city");
+    fireEvent.change(within(row).getByTestId("editor-field-input"), {
+      target: { value: "select" },
+    });
+    // 静态 options 非空 → 联动与数据集入口均禁用
+    fireEvent.change(within(row).getByTestId("editor-field-options"), {
+      target: { value: "上海, 北京" },
+    });
+    expect(
+      (within(row).getByTestId("editor-field-options-dataset-toggle") as HTMLInputElement)
+        .disabled,
+    ).toBe(true);
+
+    // 清空静态选项后切入数据集源，加一行过滤（列 visitor / 属于 / a,b）
+    fireEvent.change(within(row).getByTestId("editor-field-options"), {
+      target: { value: "" },
+    });
+    fireEvent.click(
+      within(row).getByTestId("editor-field-options-dataset-toggle"),
+    );
+    fireEvent.change(within(row).getByTestId("editor-field-options-dataset-id"), {
+      target: { value: "ds-visits" },
+    });
+    fireEvent.change(
+      within(row).getByTestId("editor-field-options-dataset-column"),
+      { target: { value: "visitor" } },
+    );
+    fireEvent.click(within(row).getByTestId("editor-field-dataset-filter-add"));
+    fireEvent.change(
+      within(row).getByTestId("editor-field-dataset-filter-column"),
+      { target: { value: "visitor" } },
+    );
+    fireEvent.change(within(row).getByTestId("editor-field-dataset-filter-op"), {
+      target: { value: "in" },
+    });
+    fireEvent.change(within(row).getByTestId("editor-field-dataset-filter-value"), {
+      target: { value: "alice, 42" },
+    });
+
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      (await screen.findByTestId("editor-form-saved-version")).textContent,
+    ).toContain("v2");
+  });
+
+  it("选值回填配置：源字段限动态选项 select、列随引用集 → 保存落形", async () => {
+    const { backend } = await openWithFields();
+    const cityRow = enableDatasetOptions("city");
+    fireEvent.change(within(cityRow).getByTestId("editor-field-options-dataset-id"), {
+      target: { value: "ds-visits" },
+    });
+    fireEvent.change(
+      within(cityRow).getByTestId("editor-field-options-dataset-column"),
+      { target: { value: "visitor" } },
+    );
+    const amountRow = fieldRow("amount");
+    fireEvent.click(
+      within(amountRow).getByTestId("editor-field-fill-from-toggle"),
+    );
+    fireEvent.change(
+      within(amountRow).getByTestId("editor-field-fill-from-field"),
+      { target: { value: "city" } },
+    );
+    fireEvent.change(
+      within(amountRow).getByTestId("editor-field-fill-from-column"),
+      { target: { value: "visitor" } },
+    );
+
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      (await screen.findByTestId("editor-form-saved-version")).textContent,
+    ).toContain("v2");
+    const spec = lastPutBody(backend).spec.spec as {
+      fields: Array<Record<string, unknown>>;
+    };
+    expect(spec.fields.find((f) => f.column === "amount")).toMatchObject({
+      fillFrom: { field: "city", column: "visitor" },
+    });
+  });
+
+  it("计算字段配置：日期字段下拉限 date、天数可字面量 → 保存落形；可切字段引用", async () => {
+    const { backend } = await openWithFields();
+    const amountRow = fieldRow("amount");
+    fireEvent.click(
+      within(amountRow).getByTestId("editor-field-computed-toggle"),
+    );
+    fireEvent.change(within(amountRow).getByTestId("editor-field-computed-date"), {
+      target: { value: "reported_on" },
+    });
+    fireEvent.change(
+      within(amountRow).getByTestId("editor-field-computed-days-literal"),
+      { target: { value: "7" } },
+    );
+
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      (await screen.findByTestId("editor-form-saved-version")).textContent,
+    ).toContain("v2");
+    const spec = lastPutBody(backend).spec.spec as {
+      fields: Array<Record<string, unknown>>;
+    };
+    expect(spec.fields.find((f) => f.column === "amount")).toMatchObject({
+      computed: { op: "add_days", date: "reported_on", days: 7 },
+    });
+  });
+
+  it("提交闸约束编辑器：id/message/探测数据集/过滤（字面与 {field} 引用）/expect → 保存落形", async () => {
+    const { backend } = await openWithFields();
+    fireEvent.click(screen.getByTestId("editor-constraint-add"));
+    const constraint = screen.getByTestId("editor-constraint");
+    fireEvent.change(within(constraint).getByTestId("editor-constraint-id"), {
+      target: { value: "no-harvest" },
+    });
+    fireEvent.change(
+      within(constraint).getByTestId("editor-constraint-message"),
+      { target: { value: "尚处安全间隔期，禁止采收" } },
+    );
+    fireEvent.change(
+      within(constraint).getByTestId("editor-constraint-probe-dataset"),
+      { target: { value: "ds-visits" } },
+    );
+    const filterRow = within(constraint).getByTestId("editor-probe-filter-row");
+    fireEvent.change(
+      within(filterRow).getByTestId("editor-probe-filter-column"),
+      { target: { value: "visitor" } },
+    );
+    // 值切到字段引用再选 city
+    fireEvent.click(
+      within(filterRow).getByTestId("editor-probe-filter-value-to-field"),
+    );
+    fireEvent.change(
+      within(filterRow).getByTestId("editor-probe-filter-value-field"),
+      { target: { value: "city" } },
+    );
+
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      (await screen.findByTestId("editor-form-saved-version")).textContent,
+    ).toContain("v2");
+    const spec = lastPutBody(backend).spec.spec as {
+      constraints?: Array<Record<string, unknown>>;
+    };
+    expect(spec.constraints).toEqual([
+      {
+        id: "no-harvest",
+        message: "尚处安全间隔期，禁止采收",
+        probe: {
+          datasetId: "ds-visits",
+          filters: [{ column: "visitor", op: "eq", value: { field: "city" } }],
+          expect: "none",
+        },
+      },
+    ]);
+  });
+
+  it("非法配置前端即拦：空 id 约束 / fillFrom 指向非动态选项 select → 保存零请求", async () => {
+    const { backend } = await openWithFields();
+    // 约束 id 留空
+    fireEvent.click(screen.getByTestId("editor-constraint-add"));
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      screen
+        .getAllByTestId("editor-form-error")
+        .some((el) => el.getAttribute("data-code") === "constraintBad"),
+    ).toBe(true);
+    expect(backend.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+  });
+
+  it("fillFrom 指向非动态选项 select（带静态 options）→ fillFromSource 前端拦截", async () => {
+    const { backend } = await installAndRenderInvalid({
+      datasetId: "ds-sales",
+      fields: [
+        {
+          column: "city",
+          label: "城市",
+          input: "select",
+          options: ["上海"],
+        },
+        {
+          column: "amount",
+          label: "金额",
+          input: "number",
+          fillFrom: { field: "city", column: "visitor" },
+        },
+      ],
+    } as FormSpecBody);
+    fireEvent.click(screen.getByTestId("editor-form-save"));
+    expect(
+      screen
+        .getAllByTestId("editor-form-error")
+        .some((el) => el.getAttribute("data-code") === "fillFromSource"),
+    ).toBe(true);
+    expect(backend.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+  });
+
+  /** 装假后端并以给定非法初态渲染编辑器（保存自检断言用）。 */
+  async function installAndRenderInvalid(body: FormSpecBody) {
+    const backend = install();
+    render(
+      <FormEditor
+        artifactId={31}
+        initial={{ title: "门店日报表", body }}
+        onSaved={vi.fn()}
+        onExit={vi.fn()}
+      />,
+    );
+    // 等数据集列表就绪（保存自检不依赖列表，但保持与其他用例同构）
+    await screen.findByTestId("editor-form-dataset");
+    return { backend };
+  }
+});

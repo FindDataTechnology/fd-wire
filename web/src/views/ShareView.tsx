@@ -20,15 +20,18 @@ import {
   ConsoleApiError,
   fetchSharedDashboard,
   fetchSharedForm,
+  sharedFormOptionsUrl,
   sharedFormSubmitUrl,
 } from "../console/api";
 import { DashboardRenderer } from "../console/dashboard/DashboardRenderer";
 import { parseDashboardSpec } from "../console/dashboard/spec";
 import { FormRuntime } from "../console/form/FormRuntime";
 import { parseFormSpec } from "../console/form/formSpec";
+import { RecordViewRuntime } from "../console/recordview/RecordViewRuntime";
 
-/** 分享模式：按路由路径分派（dashboard=只读看板；form=可填写表单）。 */
-export type ShareMode = "dashboard" | "form";
+/** 分享模式：按路由路径分派（dashboard=只读看板；form=可填写表单；
+ *  record-view=单记录公开页——wire-record-view 任务 5.1 第三 mode）。 */
+export type ShareMode = "dashboard" | "form" | "record-view";
 
 /** 四态：加载中 / 就绪 / 链接无效（含网络错）/ 分享未开通（503）。 */
 type ShareState =
@@ -48,6 +51,7 @@ export function ShareView({
   token,
   version,
   mode = "dashboard",
+  recordKey = "",
 }: {
   /** 路由段里的产物 id（数字字符串；非法时交给服务端 404）。 */
   artifactId: string;
@@ -57,9 +61,18 @@ export function ShareView({
   version: string | null;
   /** 分享模式（路由分派；缺省看板——既有深链零漂移）。 */
   mode?: ShareMode;
+  /** 键值 k（record-view 专属：扫码/输键取数；缺失即空串——服务端按
+   *  键等值查零行落「无此记录」态，如实呈现）。 */
+  recordKey?: string;
 }) {
   const { t } = useTranslation();
   const [state, setState] = useState<ShareState>({ kind: "loading" });
+  // record-view 就绪抬升面（RecordViewRuntime 拥有取数与四态，title/version
+  // 上抬供页脚署名/og/docTitle；非就绪态（含「无此记录」）保持 null）。
+  const [recordMeta, setRecordMeta] = useState<{
+    title: string;
+    version: number;
+  } | null>(null);
 
   // noindex 红线：进入即插、离开移除（SPA 其他视图不受影响）。
   useEffect(() => {
@@ -78,13 +91,20 @@ export function ShareView({
   // 不执行 JS 的爬虫读不到（SPA 静态壳无 SSR，如需爬虫全覆盖另走入口
   // nginx 注入，见 proposal Non-Goals）。og 与 noindex 不冲突：og 服务聊天
   // 卡片预览，noindex 管不入搜索目录。
-  const ogTitle = state.kind === "ready" ? state.title : null;
+  const ogTitle =
+    state.kind === "ready"
+      ? state.title
+      : mode === "record-view"
+        ? (recordMeta?.title ?? null)
+        : null;
   useEffect(() => {
     if (ogTitle == null) return;
     const ogDescription =
       mode === "form"
         ? t("console.form.ogDescription")
-        : t("console.dashboard.share.ogDescription");
+        : mode === "record-view"
+          ? t("console.recordview.ogDescription")
+          : t("console.dashboard.share.ogDescription");
     const metas = (
       [
         ["og:title", ogTitle],
@@ -108,6 +128,15 @@ export function ShareView({
 
   useEffect(() => {
     let alive = true;
+    // record-view：取数与四态在 RecordViewRuntime（k 进端点、令牌验签同规），
+    // 本层不走 dashboard/form 的 spec 快照 fetch——仅复位抬升面。
+    if (mode === "record-view") {
+      setState({ kind: "loading" });
+      setRecordMeta(null);
+      return () => {
+        alive = false;
+      };
+    }
     setState({ kind: "loading" });
     const numericVersion =
       version != null && version !== "" ? Number(version) : null;
@@ -173,17 +202,21 @@ export function ShareView({
     return () => {
       alive = false;
     };
-  }, [artifactId, token, version, mode, t]);
+  }, [artifactId, token, version, mode, recordKey, t]);
 
   // document.title 前缀「分享 · 」：进页面即生效，就绪后带上板名。
   const pageTitle =
     state.kind === "ready"
       ? state.title
-      : state.kind === "disabled"
-        ? t("console.dashboard.share.disabledTitle")
-        : state.kind === "invalid"
-          ? t("console.dashboard.share.invalidTitle")
-          : t("console.dashboard.share.loading");
+      : mode === "record-view" && recordMeta != null
+        ? recordMeta.title
+        : state.kind === "disabled"
+          ? t("console.dashboard.share.disabledTitle")
+          : state.kind === "invalid"
+            ? t("console.dashboard.share.invalidTitle")
+            : mode === "record-view"
+              ? t("console.recordview.runtime.loading")
+              : t("console.dashboard.share.loading");
   useEffect(() => {
     document.title = t("console.dashboard.share.docTitle", {
       title: pageTitle,
@@ -215,81 +248,117 @@ export function ShareView({
       </header>
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">
-        {state.kind === "loading" && (
-          <p data-testid="share-loading" className="mt-6 text-sm text-slate-400">
-            {t("console.dashboard.share.loading")}
-          </p>
-        )}
-
-        {state.kind === "invalid" && (
-          <div
-            data-testid="share-invalid"
-            className="mx-auto mt-16 max-w-md rounded-lg border border-slate-200 bg-white p-8 text-center"
-          >
-            <h1 className="text-lg font-semibold text-slate-800">
-              {t("console.dashboard.share.invalidTitle")}
-            </h1>
-            <p className="mt-2 text-sm text-slate-500">
-              {t("console.dashboard.share.invalidBody")}
-            </p>
-          </div>
-        )}
-
-        {state.kind === "disabled" && (
-          <div
-            data-testid="share-disabled"
-            className="mx-auto mt-16 max-w-md rounded-lg border border-slate-200 bg-white p-8 text-center"
-          >
-            <h1 className="text-lg font-semibold text-slate-800">
-              {t("console.dashboard.share.disabledTitle")}
-            </h1>
-            <p className="mt-2 text-sm text-slate-500">
-              {t("console.dashboard.share.disabledBody")}
-            </p>
-          </div>
-        )}
-
-        {state.kind === "ready" && mode === "dashboard" && (
-          <div data-testid="share-dashboard">
+        {mode === "record-view" ? (
+          // 单记录公开页（wire-record-view 5.1）：运行时拥有取数（裸 fetch 绝
+          // 不带 Authorization）与内容四态（加载/就绪/无此记录/链接无效——
+          // 复用本层品牌顶栏/页脚/noindex 框架）；就绪时上抬 title/version。
+          <div data-testid="share-record-view">
             <h1
-              data-testid="share-dashboard-title"
+              data-testid="share-record-view-title"
               className="text-lg font-semibold text-slate-900"
             >
-              {state.title}
+              {recordMeta?.title ?? t("console.recordview.untitled")}
             </h1>
             <div className="mt-4">
-              <DashboardRenderer spec={state.spec} />
-            </div>
-          </div>
-        )}
-
-        {state.kind === "ready" && mode === "form" && (
-          <div data-testid="share-form">
-            <h1
-              data-testid="share-form-title"
-              className="text-lg font-semibold text-slate-900"
-            >
-              {state.title}
-            </h1>
-            <div className="mt-4">
-              <FormRuntime
-                spec={parseFormSpec(state.spec) ?? { datasetId: null, fields: [] }}
+              <RecordViewRuntime
+                key={`${artifactId}:${token}:${recordKey}`}
                 endpoint={{
                   kind: "public",
-                  url: sharedFormSubmitUrl(
-                    Number(artifactId),
-                    token,
-                    version != null && version !== "" ? Number(version) : null,
-                  ),
+                  artifactId: Number(artifactId),
+                  token,
+                  recordKey,
                 }}
+                onLoaded={(meta) => setRecordMeta(meta)}
               />
             </div>
           </div>
+        ) : (
+          <>
+            {state.kind === "loading" && (
+              <p data-testid="share-loading" className="mt-6 text-sm text-slate-400">
+                {t("console.dashboard.share.loading")}
+              </p>
+            )}
+
+            {state.kind === "invalid" && (
+              <div
+                data-testid="share-invalid"
+                className="mx-auto mt-16 max-w-md rounded-lg border border-slate-200 bg-white p-8 text-center"
+              >
+                <h1 className="text-lg font-semibold text-slate-800">
+                  {t("console.dashboard.share.invalidTitle")}
+                </h1>
+                <p className="mt-2 text-sm text-slate-500">
+                  {t("console.dashboard.share.invalidBody")}
+                </p>
+              </div>
+            )}
+
+            {state.kind === "disabled" && (
+              <div
+                data-testid="share-disabled"
+                className="mx-auto mt-16 max-w-md rounded-lg border border-slate-200 bg-white p-8 text-center"
+              >
+                <h1 className="text-lg font-semibold text-slate-800">
+                  {t("console.dashboard.share.disabledTitle")}
+                </h1>
+                <p className="mt-2 text-sm text-slate-500">
+                  {t("console.dashboard.share.disabledBody")}
+                </p>
+              </div>
+            )}
+
+            {state.kind === "ready" && mode === "dashboard" && (
+              <div data-testid="share-dashboard">
+                <h1
+                  data-testid="share-dashboard-title"
+                  className="text-lg font-semibold text-slate-900"
+                >
+                  {state.title}
+                </h1>
+                <div className="mt-4">
+                  <DashboardRenderer spec={state.spec} />
+                </div>
+              </div>
+            )}
+
+            {state.kind === "ready" && mode === "form" && (
+              <div data-testid="share-form">
+                <h1
+                  data-testid="share-form-title"
+                  className="text-lg font-semibold text-slate-900"
+                >
+                  {state.title}
+                </h1>
+                <div className="mt-4">
+                  <FormRuntime
+                    spec={parseFormSpec(state.spec) ?? { datasetId: null, fields: [] }}
+                    endpoint={{
+                      kind: "public",
+                      url: sharedFormSubmitUrl(
+                        Number(artifactId),
+                        token,
+                        version != null && version !== "" ? Number(version) : null,
+                      ),
+                      // wire-form-entry-advanced：动态选项/回填走公开选项解析
+                      // 端点（钉死版本；免登录绝不携带 Authorization）。
+                      optionsUrl: sharedFormOptionsUrl(
+                        Number(artifactId),
+                        token,
+                        version != null && version !== "" ? Number(version) : null,
+                      ),
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </>
         )}
       </main>
 
       {/* 页脚署名（wire-share-branding）：就绪态三段「{标题} · 由 寻数·柏讯
-          提供 · 版本 v{n}」；非就绪态（loading/invalid/disabled）产品署名。 */}
+          提供 · 版本 v{n}」；非就绪态（loading/invalid/disabled）产品署名。
+          record-view 以抬升 meta 裁决（found=false 等非就绪态产品署名）。 */}
       <footer
         data-testid="share-footer"
         className="border-t border-slate-200 bg-white py-4 text-center text-xs text-slate-400"
@@ -299,7 +368,12 @@ export function ShareView({
               title: state.title,
               version: state.version,
             })
-          : t("console.dashboard.share.footer")}
+          : mode === "record-view" && recordMeta != null
+            ? t("console.dashboard.share.footerVersion", {
+                title: recordMeta.title,
+                version: recordMeta.version,
+              })
+            : t("console.dashboard.share.footer")}
       </footer>
     </div>
   );

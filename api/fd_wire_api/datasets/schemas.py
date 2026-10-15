@@ -125,9 +125,12 @@ class CorrectionIn(BaseModel):
 
     - ``{op:"update", row_id, column, value}`` 改值
     - ``{op:"delete", row_id}`` 删行
-    - ``{op:"insert", values}`` 加行
+    - ``{op:"insert", values, artifact_id?}`` 加行
 
-    ``row_id`` = 预览行的 ``__row_id``（行锚，引擎算）。
+    ``row_id`` = 预览行的 ``__row_id``（行锚，引擎算）。``artifact_id``
+    （wire-form-entry-advanced design D1，仅 insert 可带）：表单运行时提交
+    携带时服务端按该 form 产物**当前版本**执行全量字段校验+提交闸（统一
+    执法点，与公开 submit 同规）；不携带时行为与现状逐字一致。
     """
 
     op: Literal["update", "delete", "insert"]
@@ -135,6 +138,7 @@ class CorrectionIn(BaseModel):
     column: str | None = None
     value: Any = None
     values: dict[str, Any] | None = None
+    artifact_id: int | None = None
 
 
 class CorrectionOut(BaseModel):

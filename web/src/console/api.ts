@@ -10,6 +10,11 @@ import { API_BASE } from "../catalog/api";
 import { loadSession } from "./auth";
 // 纯类型引用（契约试取入参 = 面板 query 同形）：spec.ts 零依赖，无环。
 import type { DashboardPanelQuery } from "./dashboard/spec";
+// record-view 响应归一（recordViewSpec.ts 只类型引用本模块——无运行时环）。
+import {
+  normalizeRecordViewPayload,
+  type RecordViewPayload,
+} from "./recordview/recordViewSpec";
 
 export type MessageRole = "user" | "assistant" | "tool_trace";
 
@@ -20,6 +25,9 @@ export const ARTIFACT_KINDS = [
   "research_report",
   "alert_rule",
   "refresh_schedule",
+  // wire-record-view 任务 1.3 展示序追加：与 api 侧 workbench.WORKBENCH_KINDS
+  // 两处一致（AI 生成门 ARTIFACT_TOOL_KINDS 不收录该 kind）。
+  "record-view",
 ] as const;
 
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
@@ -348,7 +356,14 @@ export interface Correction {
 export type CorrectionInput =
   | { op: "update"; row_id: string; column: string; value: unknown }
   | { op: "delete"; row_id: string }
-  | { op: "insert"; values: Record<string, unknown> };
+  | {
+      op: "insert";
+      values: Record<string, unknown>;
+      /** wire-form-entry-advanced：携带时服务端按该 form 产物当前版本执行
+       *  表单字段校验+提交闸（本企业 + kind=form + spec.datasetId 与目标集
+       *  一致才生效；不携带时行为与现状逐字一致）。 */
+      artifact_id?: string;
+    };
 
 export type SyncRecordStatus = "ok" | "failed" | "drift" | "quota";
 
@@ -680,6 +695,9 @@ export interface DatasetQueryInput {
   limit?: number;
   offset?: number;
   count_only?: boolean;
+  /** 去重列（wire-form-entry-advanced 动态选项解析）：携带时响应为
+   *  distinct 形态（values 数组替代 rows——见 DatasetDistinctResult）。 */
+  distinct_column?: string;
   raw?: boolean;
 }
 
@@ -701,6 +719,42 @@ export function queryDataset(
     method: "POST",
     body: input,
   }) as Promise<DatasetQueryResult>;
+}
+
+// ── 动态选项解析（wire-form-entry-advanced 任务 5.1 web 面）────────────────
+// 契约：console 运行时以会话身份走既有数据面查询端点
+// POST /api/v1/datasets/{id}/query，body {filters, distinct_column, limit}——
+// 响应为 distinct 形态 {distinct_column, values, count, total, truncated}；
+// 值为引擎/api 档归一后的标量（前端统一 stringify 呈现）。
+
+/** distinct 查询响应（携带 distinct_column 时 rows 替换为 values 数组）。 */
+export interface DatasetDistinctResult {
+  distinct_column: string;
+  /** 去重值（服务端按值升序；元素可为 string|number|boolean|null）。 */
+  values: unknown[];
+  count: number;
+  total: number;
+  limit: number;
+  offset: number;
+  truncated: boolean;
+}
+
+/** 数据集列去重值查询（表单动态选项 console 解析路径；limit 由调用方给
+ *  1..500，服务端可能不截断——前端兜底再裁剪并如实标注）。 */
+export function queryDatasetDistinct(
+  datasetId: string,
+  input: { filters?: QueryFilter[]; column: string; limit?: number },
+): Promise<DatasetDistinctResult> {
+  return requestJson(`${API_BASE}/v1/datasets/${datasetId}/query`, {
+    method: "POST",
+    body: {
+      ...(input.filters && input.filters.length > 0
+        ? { filters: input.filters }
+        : {}),
+      distinct_column: input.column,
+      limit: input.limit ?? 200,
+    },
+  }) as Promise<DatasetDistinctResult>;
 }
 
 /** 生成一次性配对令牌（15 分钟、单次；明文仅此一次）。 */
@@ -1261,6 +1315,41 @@ export function createBlankAlertRule(title: string): Promise<ArtifactDetail> {
   }) as Promise<ArtifactDetail>;
 }
 
+// ── 单记录公开页（wire-record-view 任务 4.1/4.2/4.3 web 面）────────────────
+// 契约（api 仓 service 层 RECORD_VIEW_KIND 路线，同 form）：
+// - POST /api/v1/artifacts body {kind:"record-view", title} → 201
+//   ArtifactDetail（draft v1，spec = 最小空信封 {title, spec:{datasetId:null,
+//   keyColumn:null, headerFields:[], sections:[]}}）；未绑数据集中间态可保存、
+//   不可生成分享。spec 结构与草稿校验镜像见
+//   console/recordview/recordViewSpec.ts。
+// - 试预览 POST /api/v1/artifacts/{id}/record-view/preview body {key}
+//   （console 会话身份）：按服务端当前版本 spec 组装返回与公开取数同形的
+//   载荷（expires_at 恒 null），不生成公开链接。
+
+/** 单记录公开页产物 kind 常量（与 api 侧 service 层同源）。 */
+export const RECORD_VIEW_KIND = "record-view";
+
+/** 空白新建单记录页：选主数据集/键列配模板的扫码页出生路径。 */
+export function createBlankRecordView(title: string): Promise<ArtifactDetail> {
+  return requestJson(`${API_BASE}/v1/artifacts`, {
+    method: "POST",
+    body: { kind: RECORD_VIEW_KIND, title },
+  }) as Promise<ArtifactDetail>;
+}
+
+/** 试预览（console 会话身份；响应同公开取数形状、expires_at 恒 null）。 */
+export async function previewRecordView(
+  id: number,
+  key: string,
+): Promise<RecordViewPayload> {
+  return normalizeRecordViewPayload(
+    await requestJson(
+      `${API_BASE}/v1/artifacts/${id}/record-view/preview`,
+      { method: "POST", body: { key } },
+    ),
+  );
+}
+
 // ── 源包（wire-source-packs 任务 3.3）──────────────────────────────────
 // 契约（tasks.md 2.1/2.2）：GET /api/v1/packs 与 GET /api/v1/packs/{id} 为
 // 公开端点（匿名可读——目录公开通道，不过计量轨道）；详情响应为平铺分页
@@ -1505,6 +1594,62 @@ export function sharedFormSubmitUrl(
   return `${API_BASE}/v1/share/form/${id}/submit?${params}`;
 }
 
+// ── 公开表单选项解析端点（wire-form-entry-advanced 任务 2.3/5.1 web 面）──────
+// 契约：GET /api/v1/share/form/{id}/options?t=&v=（无鉴权端点——绝不携带
+// 登录头，照 fetchSharedForm 模式裸 fetch）：令牌验签+钉死版本，仅返回该
+// 版本声明了 optionsFromDataset 的字段之选项去重值（升序、截断标注）与
+// fillFrom 回填映射（fills 键=fillFrom 声明列 → 选项值 → 值）；失败统一
+// 404（令牌/发布态/版本行任一不满足）；未声明动态选项的表单返回空集。
+
+/** 公开选项端点单字段载荷：去重选项 + 截断标注 + 回填映射 + 失效错误。 */
+export interface SharedFormFieldOptions {
+  options: string[];
+  truncated: boolean;
+  /** 引用数据集已删除/列不在快照等失效态的可读错误（不静默空白）。 */
+  error?: string;
+  /** 回填映射：fillFrom 声明列 → 选项值 → 该行该列取值。 */
+  fills?: Record<string, Record<string, string>>;
+}
+
+/** 公开选项端点载荷（fields 键 = 声明动态选项的 select 字段 column）。 */
+export interface SharedFormOptions {
+  fields: Record<string, SharedFormFieldOptions>;
+}
+
+/** 公开选项解析端点地址（t/v 进 query；v 同 submit 的钉死版本语义）。 */
+export function sharedFormOptionsUrl(
+  id: number,
+  token: string,
+  version: number | null,
+): string {
+  const params = new URLSearchParams({ t: token });
+  if (version != null) params.set("v", String(version));
+  return `${API_BASE}/v1/share/form/${id}/options?${params}`;
+}
+
+/** 公开取分享表单选项（无鉴权端点——绝不携带登录头；404=令牌/版本失效
+ *  统一口径，错误语义与 fetchSharedForm 一致）。 */
+export async function fetchSharedFormOptions(
+  id: number,
+  token: string,
+  version?: number | null,
+): Promise<SharedFormOptions> {
+  const url = sharedFormOptionsUrl(id, token, version ?? null);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+  } catch (err) {
+    if (err instanceof ConsoleApiError) throw err;
+    throw new ConsoleApiError(
+      `network error fetching ${url}: ${(err as Error).message}`,
+    );
+  }
+  return readResponse(response, url) as Promise<SharedFormOptions>;
+}
+
 /** 公开写端点（无鉴权头、无会话）：公开表单提交等——错误语义与 requestJson
  *  完全一致（ConsoleApiError 带 status/detail，如 422 字段级原因、429 限流）。 */
 export async function postPublicJson(url: string, body: unknown): Promise<unknown> {
@@ -1525,6 +1670,111 @@ export async function postPublicJson(url: string, body: unknown): Promise<unknow
     );
   }
   return readResponse(response, url);
+}
+
+/** 公开读端点（无鉴权头、无会话，wire-form-entry-advanced）：公开选项解析
+ *  等——调用方传完整带 t/v 的地址；错误语义与 postPublicJson 一致。 */
+export async function fetchPublicJson(url: string): Promise<unknown> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+  } catch (err) {
+    if (err instanceof ConsoleApiError) throw err;
+    throw new ConsoleApiError(
+      `network error fetching ${url}: ${(err as Error).message}`,
+    );
+  }
+  return readResponse(response, url);
+}
+
+// ── 单记录公开页公开取数与分享（wire-record-view 任务 3/4.3 web 面）────────
+// 契约（api 仓 share 模块，proposal 冻结形状）：
+// - GET /api/v1/share/record-view/{id}?t=<令牌>&k=<urlencoded 键值>（无鉴权
+//   端点——裸 fetch 绝不带 Authorization）：验签+钉死版本后按 spec 声明查询
+//   组装，返回 {title, version, expires_at, found, header[], sections[]}；
+//   found=false 为「无此记录」态（200 非错误）；令牌/发布态错统一 404；
+//   secret 未配置 503；限流 429 带 Retry-After。header value 与 rows 单元格
+//   可为数字/字符串（前端统一 String()，无查表）。
+// - POST /api/v1/artifacts/{id}/share 放行 kind=record-view：ttl_days 白名单
+//   在 7|30|90 基础上新增 **0**（0=不设期·印刷物档，expires_at 返回 null）。
+
+/** record-view 分享链接生成响应（0 档 expires_at 为 null——如实）。 */
+export interface RecordViewShareLink {
+  /** 数据端点相对路径（含 t 查询参数）——给接收者的公开页链接另行构造。 */
+  url: string;
+  expires_at: string | null;
+  /** 钉死的产物版本（生成时刻版本）。 */
+  version: number;
+}
+
+/** record-view 分享有效期四档：0=不设期（印刷物）+ 7/30/90 天。 */
+export const RECORD_VIEW_TTL_DAYS = [0, 7, 30, 90] as const;
+
+export type RecordViewTtlDays = (typeof RECORD_VIEW_TTL_DAYS)[number];
+
+/** 公开取数端点地址（t/k 进 query；k 由调用方 urlencode）。 */
+export function sharedRecordViewDataUrl(
+  id: number,
+  token: string,
+  key: string,
+): string {
+  const params = new URLSearchParams({ t: token, k: key });
+  return `${API_BASE}/v1/share/record-view/${id}?${params}`;
+}
+
+/** 生成单记录页分享链接（仅 published record-view；ttlDays 0=不设期档）。 */
+export function createRecordViewShareLink(
+  id: number,
+  ttlDays: RecordViewTtlDays = 30,
+): Promise<RecordViewShareLink> {
+  return requestJsonAnyMethod(
+    `${API_BASE}/v1/artifacts/${id}/share`,
+    "POST",
+    { body: { ttl_days: ttlDays } },
+  ) as Promise<RecordViewShareLink>;
+}
+
+/** 公开取单记录页数据（无鉴权端点——绝不携带登录头，扫码接收者直接打开；
+ *  404=链接无效/过期/产物下线统一口径；503=分享未配置；429=令牌限流）。
+ *  响应经 normalizeRecordViewPayload 归一（found=false 为 200 的「无此记录」
+ *  态，由页面如实呈现——不与 404 令牌态混淆）。 */
+export async function fetchSharedRecordView(
+  id: number,
+  token: string,
+  key: string,
+): Promise<RecordViewPayload> {
+  const url = sharedRecordViewDataUrl(id, token, key);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+  } catch (err) {
+    if (err instanceof ConsoleApiError) throw err;
+    throw new ConsoleApiError(
+      `network error fetching ${url}: ${(err as Error).message}`,
+    );
+  }
+  return normalizeRecordViewPayload(await readResponse(response, url));
+}
+
+/** 给接收者的公开页完整链接（分享面/二维码内容）：origin +
+ *  /#/share/record-view/{id}?t=…&k=…（t/k 均按分量 urlencode；随生成时刻
+ *  令牌钉死版本，产物归档/取消发布后指向统一 404 失效页）。 */
+export function buildRecordViewSharePageUrl(
+  origin: string,
+  id: number,
+  token: string,
+  key: string,
+): string {
+  return (
+    `${origin}/#/share/record-view/${id}` +
+    `?t=${encodeURIComponent(token)}&k=${encodeURIComponent(key)}`
+  );
 }
 
 // ── 仪表盘手动刷新（wire-dashboard-refresh 任务 2.1 web 面；

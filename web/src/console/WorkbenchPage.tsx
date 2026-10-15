@@ -398,7 +398,9 @@ export function WorkbenchPage() {
                     className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 ring-1 ring-slate-200"
                   >
                     {labelOrRaw(t, `console.artifacts.kinds.${kind}`)}{" "}
-                    {summary.artifacts.by_kind[kind]}
+                    {/* 新收录 kind 在旧版响应缺键时兜底 0（wire-record-view：
+                        api/web 展示序两处一致追加，后端 by_kind 未上线过渡期）。 */}
+                    {summary.artifacts.by_kind[kind] ?? 0}
                   </span>
                 ))}
               </div>

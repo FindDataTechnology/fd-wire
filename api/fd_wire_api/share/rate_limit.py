@@ -30,6 +30,14 @@ from collections import deque
 #: 缺省限流阈值：每令牌每小时 60 次
 DEFAULT_RATE_PER_HOUR = 60
 
+#: 选项解析端点缺省限流阈值：每令牌每小时 120 次（wire-form-entry-advanced
+#: design D3——读面阈值宽于提交面）
+DEFAULT_OPTIONS_RATE_PER_HOUR = 120
+
+#: record-view 公开取数端点缺省限流阈值：每令牌每小时 240 次
+#: （wire-record-view design D3——读面无写入滥用面，宽于 form 提交/选项面）
+DEFAULT_RECORDVIEW_RATE_PER_HOUR = 240
+
 #: 滑动窗宽度（秒）——「N 次 / 小时」口径的窗口本身
 WINDOW_SECONDS = 3600.0
 
@@ -40,14 +48,35 @@ def rate_per_hour() -> int:
     未配置/空白 → 缺省 60；非整数或非正数 → 同样回退 60（非法配置不放大
     也不归零限流——fail-closed 到缺省值）。
     """
-    raw = os.getenv("FD_WIRE_SHARE_SUBMIT_RATE_PER_HOUR", "").strip()
+    return _env_rate("FD_WIRE_SHARE_SUBMIT_RATE_PER_HOUR", DEFAULT_RATE_PER_HOUR)
+
+
+def options_rate_per_hour() -> int:
+    """选项解析端点阈值：逐请求惰性读 ``FD_WIRE_SHARE_OPTIONS_RATE_PER_HOUR``
+    （wire-form-entry-advanced）；缺省 120、非法回退同口径。"""
+    return _env_rate("FD_WIRE_SHARE_OPTIONS_RATE_PER_HOUR", DEFAULT_OPTIONS_RATE_PER_HOUR)
+
+
+def recordview_rate_per_hour() -> int:
+    """record-view 公开取数端点阈值：逐请求惰性读
+    ``FD_WIRE_SHARE_RECORDVIEW_RATE_PER_HOUR``（wire-record-view design
+    D3）；缺省 240、非法回退同口径（不放大也不归零）。"""
+    return _env_rate(
+        "FD_WIRE_SHARE_RECORDVIEW_RATE_PER_HOUR", DEFAULT_RECORDVIEW_RATE_PER_HOUR
+    )
+
+
+def _env_rate(name: str, default: int) -> int:
+    """env 阈值读取的共用口径：空白→缺省；非整数/非正数→缺省（不放大
+    也不归零限流——fail-closed 到缺省值）。"""
+    raw = os.getenv(name, "").strip()
     if not raw:
-        return DEFAULT_RATE_PER_HOUR
+        return default
     try:
         value = int(raw)
     except ValueError:
-        return DEFAULT_RATE_PER_HOUR
-    return value if value > 0 else DEFAULT_RATE_PER_HOUR
+        return default
+    return value if value > 0 else default
 
 
 def mac_segment(token: str) -> str:
@@ -63,10 +92,19 @@ def mac_segment(token: str) -> str:
 
 
 class SlidingWindowLimiter:
-    """进程内滑动窗限流器：键 → deque[命中时间戳]，全程持锁。"""
+    """进程内滑动窗限流器：键 → deque[命中时间戳]，全程持锁。
 
-    def __init__(self, window_seconds: float = WINDOW_SECONDS) -> None:
+    ``rate_fn`` 注入阈值读取函数（缺省提交面的 ``rate_per_hour``——
+    选项解析端点复用同一机器、独立 env 阈值，见 ``options_limiter``）。"""
+
+    def __init__(
+        self,
+        window_seconds: float = WINDOW_SECONDS,
+        *,
+        rate_fn=None,
+    ) -> None:
         self._window = float(window_seconds)
+        self._rate_fn = rate_fn if rate_fn is not None else rate_per_hour
         self._lock = threading.Lock()
         self._hits: dict[str, deque[float]] = {}
 
@@ -78,7 +116,7 @@ class SlidingWindowLimiter:
         至少 1（``Retry-After`` 响应头不出现 0/负值）。
         """
         current = time.time() if now is None else float(now)
-        limit = rate_per_hour()
+        limit = self._rate_fn()
         with self._lock:
             hits = self._hits.setdefault(key, deque())
             cutoff = current - self._window
@@ -99,12 +137,32 @@ class SlidingWindowLimiter:
 #: 进程内单例（现产单副本 api——多副本边界见模块 docstring）
 limiter = SlidingWindowLimiter()
 
+#: 选项解析端点单例（同机器、独立 env 阈值 FD_WIRE_SHARE_OPTIONS_RATE_
+#: PER_HOUR 缺省 120——wire-form-entry-advanced design D3）
+options_limiter = SlidingWindowLimiter(rate_fn=options_rate_per_hour)
+
+#: record-view 公开取数端点单例（同机器、独立 env 阈值 FD_WIRE_SHARE_
+#: RECORDVIEW_RATE_PER_HOUR 缺省 240——wire-record-view design D3）
+recordview_limiter = SlidingWindowLimiter(rate_fn=recordview_rate_per_hour)
+
 
 def allow(key: str, *, now: float | None = None) -> tuple[bool, int]:
     """单例捷径（路由层入口）。"""
     return limiter.allow(key, now=now)
 
 
+def allow_options(key: str, *, now: float | None = None) -> tuple[bool, int]:
+    """选项解析端点单例捷径。"""
+    return options_limiter.allow(key, now=now)
+
+
+def allow_recordview(key: str, *, now: float | None = None) -> tuple[bool, int]:
+    """record-view 公开取数端点单例捷径。"""
+    return recordview_limiter.allow(key, now=now)
+
+
 def reset() -> None:
-    """测试复位：清空限流窗（用例间隔离，不跨用例累计额度）。"""
+    """测试复位：清空全部限流窗（提交/选项/record-view 三桶——用例间隔离）。"""
     limiter.clear()
+    options_limiter.clear()
+    recordview_limiter.clear()

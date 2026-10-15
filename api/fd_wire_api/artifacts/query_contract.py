@@ -181,9 +181,17 @@ def _norm_cell(value: Any) -> Any:
 
 
 def _query_dataset(
-    db: Session, *, dataset_id: str, customer_id: str, query: dict, engine_factory: EngineClientFactory
+    db: Session,
+    *,
+    dataset_id: str,
+    customer_id: str,
+    query: dict,
+    engine_factory: EngineClientFactory,
+    distinct_column: str | None = None,
 ) -> dict:
-    """按数据集档位执行一次契约查询，返回引擎/本地查询响应（columns+rows）。
+    """按数据集档位执行一次契约查询，返回引擎/本地查询响应（columns+rows；
+    ``distinct_column`` 给定时返回 distinct 值响应——wire-form-entry-
+    advanced 动态选项解析复用，语义与数据面 query 端点同口径）。
 
     档位分流与数据面 query 端点同口径：``storage_tier=api`` 本地执行
     （零引擎调用、零计量），否则经引擎 query 工具（平台凭据轨道）。
@@ -196,17 +204,18 @@ def _query_dataset(
             filters=query["filters"],
             sort=query["sort"],
             limit=query["limit"],
+            distinct_column=distinct_column,
         )
+    arguments: dict = {
+        "dataset_key": dataset.key,
+        "filters": query["filters"],
+        "sort": query["sort"],
+        "limit": query["limit"],
+    }
+    if distinct_column is not None:
+        arguments["distinct_column"] = distinct_column
     client = engine_factory(customer_id)
-    return client.call(
-        TOOL_QUERY,
-        {
-            "dataset_key": dataset.key,
-            "filters": query["filters"],
-            "sort": query["sort"],
-            "limit": query["limit"],
-        },
-    )
+    return client.call(TOOL_QUERY, arguments)
 
 
 def _build_snapshot(query: dict, result: object) -> tuple[dict, str | None]:

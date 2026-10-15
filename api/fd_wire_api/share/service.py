@@ -82,8 +82,15 @@ def build_token(
 
     token = "{version}.{exp}.{mac}"——version/exp 明文随行（服务端重算 mac
     用），mac 覆盖三要素防篡改。
+
+    ``ttl == 0`` 是长效档（wire-record-view design D4）：exp 置 0（非
+    ``now+0``——0 是「无到期」哨兵，verify_token 对 exp==0 跳过过期校验）；
+    其余 ttl 照 ``now+ttl``。
     """
-    exp = int(time.time()) + ttl if now is None else now + ttl
+    if ttl == 0:
+        exp = 0
+    else:
+        exp = int(time.time()) + ttl if now is None else now + ttl
     return f"{version}.{exp}.{_mac(secret, artifact_id=artifact_id, version=version, exp=exp)}", exp
 
 
@@ -98,7 +105,9 @@ def verify_token(
       令牌绑定的版本不许分家）；
     - 签名：重算 mac 与令牌段常数时间比较（artifact_id 来自路径——
       换产物重放即失配）；
-    - 到期：exp 已过即失效。
+    - 到期：exp 已过即失效；**exp==0 是长效档哨兵**（wire-record-view
+      design D4——生成时选 0 档），跳过过期校验（mac 已覆盖 exp=0，
+      无令牌能伪造该哨兵；其余校验零变化）。
     """
     parts = token.split(".")
     if len(parts) != 3:
@@ -111,7 +120,7 @@ def verify_token(
         raise ShareLinkInvalid("v 参数与令牌内版本不一致")
     if not hmac.compare_digest(_mac(secret, artifact_id=artifact_id, version=version, exp=exp), parts[2]):
         raise ShareLinkInvalid("签名不匹配")
-    if int(time.time()) > exp:
+    if exp != 0 and int(time.time()) > exp:
         raise ShareLinkInvalid("令牌已过期")
     return version, exp
 

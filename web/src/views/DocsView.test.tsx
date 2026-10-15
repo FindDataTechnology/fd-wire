@@ -376,3 +376,57 @@ describe("DocsView（文档三节 · 如实呈现）", () => {
     expect(parseHash("#/docs")).toEqual({ name: "docs" });
   });
 });
+
+  // 进阶录入能力（wire-form-entry-advanced 任务 6.1）：四小节 + 公开选项面
+  // 数据暴露边界说明，zh/en 双语。
+  it("「表单」进阶小节：动态选项/选值回填/计算字段/提交闸 + 选项端点边界", () => {
+    render(<DocsView />);
+
+    const advanced = screen.getByTestId("docs-forms-advanced");
+    expect(advanced.textContent).toContain("进阶录入能力");
+    const dynamic = screen.getByTestId("docs-forms-dynamic");
+    expect(dynamic.textContent).toContain("动态选项");
+    expect(dynamic.textContent).toContain("去重");
+    expect(dynamic.textContent).toContain("升序");
+    expect(dynamic.textContent).toContain("三源互斥");
+    const fill = screen.getByTestId("docs-forms-fill");
+    expect(fill.textContent).toContain("选值回填");
+    expect(fill.textContent).toContain("可改写");
+    expect(fill.textContent).toContain("快照");
+    const computed = screen.getByTestId("docs-forms-computed");
+    expect(computed.textContent).toContain("计算字段");
+    expect(computed.textContent).toContain("add_days");
+    expect(computed.textContent).toContain("闰年");
+    const gate = screen.getByTestId("docs-forms-gate");
+    expect(gate.textContent).toContain("提交闸");
+    expect(gate.textContent).toContain("artifact_id");
+    expect(gate.textContent).toContain("服务端");
+    const boundary = screen.getByTestId("docs-forms-options-boundary");
+    expect(boundary.textContent).toContain("选项解析端点");
+    expect(boundary.textContent).toContain("令牌");
+    expect(boundary.textContent).toContain("限流");
+  });
+
+  it("表单进阶小节英文同步（docs.forms 双语键齐备）", () => {
+    i18n.changeLanguage("en");
+    render(<DocsView />);
+
+    const advanced = screen.getByTestId("docs-forms-advanced");
+    expect(advanced.textContent).toContain("Advanced entry capabilities");
+    expect(screen.getByTestId("docs-forms-dynamic").textContent).toContain(
+      "Dynamic options",
+    );
+    expect(screen.getByTestId("docs-forms-fill").textContent).toContain(
+      "Fill on selection",
+    );
+    expect(screen.getByTestId("docs-forms-computed").textContent).toContain(
+      "Computed fields",
+    );
+    expect(screen.getByTestId("docs-forms-gate").textContent).toContain(
+      "Submit gates",
+    );
+    expect(
+      screen.getByTestId("docs-forms-options-boundary").textContent,
+    ).toContain("options endpoint");
+    i18n.changeLanguage("zh");
+  });

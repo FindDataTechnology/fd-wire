@@ -288,6 +288,49 @@ const en: Translation = {
       "Publish and share: once published, generate a signed share link (7/30/90-day validity) and send it out — recipients open it without signing in and fill it per the version pinned to the link;",
     step5:
       "Collect and roll back: all submissions settle in the dataset's correction history (attributable to the console or the specific shared form) and can be reverted one by one; the customer source is never touched.",
+    // Advanced entry capabilities (wire-form-entry-advanced task 6.1): four
+    // capability sections (dynamic options / fill on selection / computed
+    // fields / submit gates) plus the public options-endpoint data boundary.
+    advancedTitle: "Advanced entry capabilities",
+    dynamicTitle: "Dynamic options (cross-dataset)",
+    dynamicDesc:
+      "A dropdown's option source can point at a column of another dataset in your company: the options are that column's distinct non-empty values over the dataset's effective view (corrections included), optionally filtered, sorted ascending and capped at 1-500 entries (default 200) — truncation is labeled honestly (\"showing the first N\"). Both the console and public share pages resolve them live; at submission the server rules against the option set resolved at that moment (a forged value outside the set is rejected). If the referenced dataset is deleted or the column is no longer in its column snapshot, the option area shows a readable error instead of a silent blank. Static, linked and dataset option sources are mutually exclusive — pick exactly one.",
+    fillTitle: "Fill on selection",
+    fillDesc:
+      "A field can be configured to fill on selection: when a dynamic-option dropdown in the same form takes value v, the field is auto-filled from the referenced dataset (at most one row where the options column equals v) with that row's declared column value — as an editable default. Re-selecting overwrites with the new fill (fill = latest default) while manual edits hold as long as the source value stays unchanged; a missing source row leaves the field empty without error. Filled values land with the record as a snapshot — later edits to the referenced archive never trace back to already-submitted records.",
+    computedTitle: "Computed fields",
+    computedDesc:
+      "A field can carry the computed rule add_days (date + N days): the date comes from another date field in the form and the days from a non-negative integer literal or another number field; whenever the participating values are valid the field auto-computes a calendar-correct YYYY-MM-DD (leap years and month ends carry properly) as an editable default — auto-recompute overwrites manual edits, but only when a participating value changes again; missing/invalid participants leave it empty without error. Submission only validates the date format — it does not force equality with the recomputed value (manual correction allowed).",
+    gateTitle: "Submit gates (constraints)",
+    gateDesc:
+      "A form can declare up to 10 submit gates: each names a probe dataset + filters (values may reference form fields), an expectation (any matching row blocks / zero matching rows block), a block message, and an optional activation condition (evaluated against the submitted values; the probe runs only when true). Gates are enforced server-side on both paths: public share submissions have the ruling built in, and console form submissions automatically carry the form artifact id (artifact_id) so the server runs full field validation plus the gates per the current version — a hit blocks the write with the block message shown verbatim and zero rows written. Field validation failures surface before gate verdicts.",
+    optionsBoundaryTitle: "The public options endpoint's data boundary",
+    optionsBoundaryDesc:
+      "Dynamic options and fills on the public share page go through a dedicated options endpoint: it returns only the distinct values of the options columns declared by that form version (ascending, bounded ≤500) plus the fill mappings (per option value × declared fill columns) — no other rows or columns are ever exposed; access requires a valid share token (signature + pinned version, anything else is a uniform 404) and is rate-limited (default 120 requests/hour/token) with a short cache. Beyond this endpoint, the public submission surface reads no dataset row data.",
+    consoleLink: "Open Console → Artifacts →",
+  },
+  recordView: {
+    // Record page tutorial (wire-record-view task 6.1): build → publish →
+    // share → QR usage, plus the honest exposure boundary of the public
+    // realtime read surface (documentation red line: no wording that implies
+    // per-record isolation).
+    title: "Public record pages",
+    intro:
+      "Turn \"look up one record and its timeline by a key\" into a scan-to-open public page: declare a main dataset and key column (e.g. a batch number), header fields, and timeline sections (referenced datasets filtered as declared, ascending by date). After publishing, generate links and QR codes per key value — print them on labels; scanning views live data that reflects later corrections. Fits service traceability pages, report pages, certificate pages and other keyed display scenarios.",
+    stepsTitle: "Build a record page in five steps",
+    step1:
+      "Create: Console → Artifacts → New record page; a title yields a draft (the unbound intermediate state can be saved; sharing needs a complete config);",
+    step2:
+      "Configure the template: pick the main dataset and key column (prefer unique values, e.g. a batch number), check header fields (labels editable), and add timeline sections as needed (dataset / date column / filters — values may be literals or references to main-record fields, e.g. {plot number}); saving appends a new version;",
+    step3:
+      "Preview: in the builder, pick a sample key and hit Preview — the same timeline the public scan page renders (console identity, no link generated);",
+    step4:
+      "Publish and share: after publishing, generate a share link (7/30/90-day validity, or the \"no expiry (print)\" tier); picking a key value yields that key's full public page link (#/share/record-view/…?t=…&k=…);",
+    step5:
+      "QR codes: the share panel generates a QR code for the selected key entirely in the browser — download PNG (HD) or SVG; generate per key and print on labels or documents. Scans read the live effective view (including corrections), so records added later appear on the next scan (server-side cache is at most 60 seconds).",
+    boundaryTitle: "Exposure boundary of the public realtime read surface (as it is)",
+    boundaryDesc:
+      "This public page is a realtime read surface: it executes only the queries declared by the published version (a key equality lookup on the main record plus each timeline section's declared filters) — no arbitrary queries, columns, or datasets. The token gate is at the artifact level, not per record — anyone holding a valid link token can query any key value of this artifact; the key (k) is not part of the token and can be enumerated, so make sure the key values themselves carry no secret (don't use guessable serials for sensitive records). Each token has a sliding-window rate limit (default 240 requests/hour) and a 60-second server-side cache; page data is the realtime result of the pinned version's declared queries at fetch time. Revocation: archiving or unpublishing the artifact invalidates existing links and QR codes (uniform 404); the \"no expiry (print)\" link itself never expires — the way to revoke is archiving or unpublishing the artifact.",
     consoleLink: "Open Console → Artifacts →",
   },
   entities: {
@@ -612,7 +655,7 @@ const en: Translation = {
     artifacts: {
       title: "Artifacts",
       subtitle:
-        "Six artifact kinds persisted across conversations — every spec save appends a new version, with a draft/published/archived lifecycle.",
+        "Seven artifact kinds persisted across conversations — every spec save appends a new version, with a draft/published/archived lifecycle.",
       loading: "Loading artifacts…",
       errorTitle: "Failed to load artifacts",
       retry: "Retry",
@@ -628,6 +671,7 @@ const en: Translation = {
         research_report: "Research workflow",
         alert_rule: "Alert rule",
         refresh_schedule: "Refresh schedule",
+        "record-view": "Record page",
       },
       statusFilterLabel: "Status",
       statusAll: "All statuses",
@@ -680,6 +724,18 @@ const en: Translation = {
         creating: "Creating…",
         cancel: "Cancel",
         titleRequired: "Please enter an alert rule title.",
+        failed: "Creation failed, please retry later.",
+      },
+      // Blank record page creation (wire-record-view task 4.1): the birth
+      // entry for scan-to-view pages — opens the builder right away.
+      createRecordView: {
+        button: "New record page",
+        titleLabel: "Record page title",
+        titlePlaceholder: "Name your new record page",
+        submit: "Create",
+        creating: "Creating…",
+        cancel: "Cancel",
+        titleRequired: "Please enter a record page title.",
         failed: "Creation failed, please retry later.",
       },
       viewer: {
@@ -992,6 +1048,13 @@ const en: Translation = {
           hidden: "This field is currently hidden — please clear its value.",
         },
         submitFailed: "Submission failed, please retry later.",
+        // Dynamic option sources (wire-form-entry-advanced): loading /
+        // truncation / broken references surfaced honestly.
+        optionsLoading: "Loading options…",
+        optionsTruncated:
+          "Too many options — showing the first {{count}} (deduped, ascending).",
+        optionsLoadFailed:
+          "Failed to load options — retry later or contact the form owner.",
       },
       editor: {
         titleLabel: "Form title",
@@ -1057,6 +1120,57 @@ const en: Translation = {
           "Static options are configured — mutually exclusive with linked options; clear them first.",
         optionsExclusiveWithLinked:
           "Linked options are configured — static options are unavailable; clear the linkage first.",
+        // Advanced entry keys + submit gates (wire-form-entry-advanced 4.1/4.2):
+        // dataset option source, fill-on-selection, computed fields and the
+        // spec-level constraint editor.
+        optionsDatasetToggle: "Dataset options",
+        optionsDatasetSourceLabel: "Options dataset",
+        optionsDatasetColumnLabel: "Options column",
+        optionsDatasetColumnPlaceholder: "Pick a column…",
+        optionsDatasetLimitLabel: "Limit (1-500)",
+        optionsDatasetClear: "Clear dataset options",
+        optionsExclusiveWithDataset:
+          "Dataset options are mutually exclusive with static/linked options — pick exactly one source.",
+        filterOps: {
+          eq: "equal to",
+          in: "one of",
+          gt: "greater than",
+          gte: "greater than or equal",
+          lt: "less than",
+          lte: "less than or equal",
+        },
+        filterValuePlaceholder: "Value (comma-separated for one-of)",
+        filterAdd: "Add filter",
+        filterRemove: "Remove",
+        fillFromToggle: "Fill on selection",
+        fillFromNoSource:
+          "Requires a dropdown field with dataset options first",
+        fillFromFieldLabel: "Fill source field",
+        fillFromColumnLabel: "Fill column",
+        fillFromClear: "Clear fill",
+        computedToggle: "Computed field",
+        computedOpLabel: "Rule",
+        computedDateLabel: "Date field",
+        computedDaysLabel: "Days",
+        computedDaysLiteral: "Literal",
+        computedClear: "Clear computed",
+        constraintsTitle: "Submit gates (constraints)",
+        constraintsHint:
+          "Probed against the referenced dataset server-side at submission; a hit blocks the write (max 10)",
+        constraintsEmpty: "No submit gates configured.",
+        constraintAdd: "Add constraint",
+        constraintRemove: "Remove",
+        constraintIdLabel: "ID",
+        constraintMessageLabel: "Block message",
+        constraintExpectLabel: "Expect",
+        constraintExpects: {
+          none: "any matching row blocks",
+          any: "zero matching rows block",
+        },
+        constraintProbeDatasetLabel: "Probe dataset",
+        constraintWhenToggle: "Conditional",
+        probeValueToLiteral: "Switch to literal",
+        probeValueToField: "Switch to field reference",
         inputTypes: {
           text: "Text",
           number: "Number",
@@ -1099,12 +1213,179 @@ const en: Translation = {
           optionsFromBad:
             "A linked-options rule is invalid (missing control field / bad cases shape / option lists must be non-empty string lists).",
           optionsExclusive:
-            "A dropdown field carries both static options and linked options (pick exactly one).",
+            "Dropdown option sources (static / linked / dataset) are mutually exclusive — pick exactly one.",
           optionsFromSelf:
             "A linked-options rule references its own field (self-reference is not allowed).",
           optionsFromMissing:
             "A linked-options rule references a field that does not exist in this form.",
+          // New error codes for the advanced entry keys + constraints
+          // (wire-form-entry-advanced).
+          optionsFromDatasetBad:
+            "A dataset option source is invalid (missing dataset/options column, bad filter shape, or the limit must be an integer within 1..500).",
+          fillFromBad:
+            "A fill-on-selection rule is invalid (missing source field or fill column).",
+          fillFromSelf:
+            "A fill-on-selection rule references its own field (self-reference is not allowed).",
+          fillFromSource:
+            "The fill-on-selection source field must be a dropdown in this form configured with a dataset option source.",
+          computedBad:
+            "A computed field is invalid (rule must be add_days; days must be a non-negative integer literal or a field reference).",
+          computedSelf:
+            "A computed field references its own field (self-reference is not allowed).",
+          computedDateRef:
+            "A computed field's date reference must be another date field in this form.",
+          computedDaysRef:
+            "A computed field's days reference must be another number field in this form.",
+          constraintBad:
+            "A submit gate constraint is invalid (bad ID / block message / condition / probe shape, or beyond the ≤10 constraints / ≤10 filters limits).",
+          constraintIdDuplicate:
+            "Submit gate constraint IDs must be unique within the form.",
         },
+      },
+    },
+    // Record page (wire-record-view tasks 4/5): row-expansion view, the shared
+    // runtime (public scan page and console preview), the builder (main
+    // dataset / key column / header / timeline sections) and the share + QR
+    // dialog copy.
+    recordview: {
+      viewButton: "Open record page",
+      editButton: "Edit record page",
+      paneTitle: "Record page view",
+      loading: "Loading the record page…",
+      loadError: "Failed to load the record page.",
+      lockedBadge: "Archived · read-only",
+      untitled: "Untitled record page",
+      ogDescription: "Wire record page — scan to view this record and its timeline",
+      viewHint:
+        "Enter a key value (e.g. a batch number) to preview this page per the current version (console identity, no public link is generated).",
+      unboundBody:
+        "This record page has no main dataset and key column yet — configure them in the editor and save; publish before generating share links.",
+      runtime: {
+        loading: "Looking up the record…",
+        notFoundTitle: "Record not found",
+        notFoundBody:
+          "No record matches this key — double-check the key value, or contact the owner.",
+        limitedTitle: "Too many requests",
+        limited: "Too many requests — please retry in a moment.",
+        truncated: "Truncated",
+        sectionEmpty: "No records",
+        expand: "Expand",
+        collapse: "Collapse",
+      },
+      editor: {
+        titleLabel: "Page title",
+        datasetLabel: "Main dataset",
+        datasetPlaceholder: "Pick the main dataset…",
+        datasetOption: "{{name}} ({{tier}} · {{rows}} rows)",
+        datasetOptionPlain: "{{name}} ({{rows}} rows)",
+        loadingDatasets: "Loading datasets…",
+        datasetsLoadFailed: "Failed to load the dataset list.",
+        retry: "Retry",
+        keyColumnLabel: "Key column",
+        keyColumnPlaceholder: "Pick the key column…",
+        keyColumnHint:
+          "Prefer a unique column (e.g. batch number) — lookup is a key equality query returning at most one row",
+        headerFieldsLabel: "Header fields",
+        headerFieldsHint:
+          "Check the main-record columns to show in the header (≤50, labels editable)",
+        columnMissing: "Column no longer in the dataset",
+        fieldLabelLabel: "Label",
+        sectionsLabel: "Timeline sections",
+        sectionsHint: "Each section declares a dataset and a date column (≤10)",
+        addSection: "Add section",
+        removeSection: "Remove",
+        emptySections:
+          "No timeline sections yet — add one to list related records ascending by its date column.",
+        sectionTitleLabel: "Section title",
+        sectionDatasetLabel: "Dataset",
+        sectionDateColumnLabel: "Date column",
+        dateColumnPlaceholder: "Pick the date column…",
+        sectionLimitLabel: "Limit",
+        filtersLabel: "Filters",
+        addFilter: "Add filter",
+        removeFilter: "Remove",
+        filterColumnPlaceholder: "Pick a column…",
+        filterValuePlaceholder: "Value (comma-separated for in)",
+        fromFieldPlaceholder: "Pick a main-record column…",
+        valueToLiteral: "Use literal",
+        valueToFromField: "Reference main-record column",
+        filterOps: {
+          eq: "equals",
+          in: "in",
+          gt: ">",
+          gte: "≥",
+          lt: "<",
+          lte: "≤",
+        },
+        save: "Save",
+        saving: "Saving…",
+        savedVersion: "Saved as version v{{version}}.",
+        saveFailed: "Save failed, please retry later.",
+        backToView: "Back to view",
+        dirtyLeaveConfirm: "There are unsaved changes — leave anyway?",
+        errors: {
+          titleRequired: "Please enter a page title.",
+          titleTooLong: "Title is too long (≤200 characters).",
+          unbound:
+            "No main dataset bound — pick one first, or clear the key column / header / timeline config.",
+          keyColumnRequired: "Please pick the key column.",
+          keyColumnMissing: "Key column is no longer in the main dataset's columns.",
+          headerColumnMissing:
+            "A header field column is no longer in the main dataset's columns.",
+          headerColumnDuplicate: "Duplicate header field column.",
+          headerLabelTooLong: "Header label too long (≤100 characters).",
+          headerFieldsTooMany: "More than 50 header fields.",
+          sectionBad: "Timeline section title must be non-empty (≤100 characters).",
+          sectionDatasetMissing: "A timeline section has no dataset selected.",
+          sectionDateColumnMissing:
+            "A timeline section has no date column (or the column is no longer in its dataset).",
+          sectionTooMany: "More than 10 timeline sections.",
+          sectionLimitBad: "Section limit must be an integer within 1-500.",
+          filterBad: "An incomplete filter (column/op/value).",
+          filtersTooMany: "More than 10 filters in one section.",
+          fromFieldMissing: "A filter references a main-record column that does not exist.",
+        },
+      },
+      preview: {
+        title: "Preview (sample key, no link generated)",
+        keyLabel: "Sample key",
+        keyPlaceholder: "Pick or type a key value…",
+        manualKeyLabel: "Manual",
+        button: "Preview",
+        keysLoading: "Loading key values…",
+        keysTruncated:
+          "Too many key values — showing the first {{count}} (manual input still works).",
+        keysLoadFailed:
+          "Failed to load key values — retry later or type one manually.",
+        failed: "Preview failed, please retry later.",
+        unboundHint:
+          "Bind a main dataset and pick a key column to enable preview.",
+      },
+      share: {
+        button: "Generate share link",
+        dialogTitle: "Record page sharing",
+        keyLabel: "Key value (scanning opens that key's page)",
+        manualKeyPlaceholder: "Type a key value…",
+        ttlOptions: {
+          "0": "No expiry (print)",
+          "7": "7 days",
+          "30": "30 days",
+          "90": "90 days",
+        },
+        ttlNote: "Changing the validity regenerates the link.",
+        perpetualNote:
+          "The no-expiry tier suits print: the link itself never expires; archiving or unpublishing the artifact revokes it as a whole (revoke = archive).",
+        noExpiry: "No expiry (print tier)",
+        keysLoadFailed: "Failed to load the key dropdown — type a key manually.",
+        urlKeyHint: "Pick a key value to show the full link",
+        qrTitle: "QR code",
+        qrKeyHint: "Pick a key value to generate its QR code.",
+        qrLoading: "Generating the QR code…",
+        qrFailed: "QR generation failed, please retry later.",
+        qrDownloadPng: "Download PNG (HD)",
+        qrDownloadSvg: "Download SVG",
+        unbound:
+          "This record page has no main dataset or key column and cannot be shared yet — configure and publish first.",
       },
     },
     // Scheduled refresh section (wire-refresh-scheduler task 4.1): shared by

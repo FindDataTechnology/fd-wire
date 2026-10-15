@@ -81,6 +81,7 @@ from .schemas import (
     UploadOut,
 )
 from .settings import get_settings
+from ..ai.db import get_db as get_ai_db
 from ..console.auth import require_console_customer_id
 from ..provenance.ledger import append_event
 
@@ -716,6 +717,47 @@ def preview_rows(
     return {**result, "page": page, "page_size": page_size}
 
 
+def _form_inner_for_correction(
+    ai_db: Session, artifact_id: int, *, customer_id: str, dataset_id: str
+) -> dict:
+    """corrections 携 ``artifact_id`` 时的表单归属裁决（design D1）。
+
+    本企业 + kind=form + 当前版本 ``spec.datasetId`` 与目标数据集一致——
+    任一不符 422 定位原因（不是 404：携带 artifact_id 是显式表单提交声明，
+    校验不符如实说明）。返回当前版本 spec 内层（字段校验+提交闸的依据）。
+    """
+    # 局部导入防环：artifacts 包 __init__ → routes → query_contract 引用
+    # 本模块的 _dataset_or_404（模块级导入会在本模块装载中途回环）
+    from ..artifacts import service as artifacts_service
+    from ..artifacts.models import Artifact
+
+    artifact = ai_db.get(Artifact, artifact_id)
+    if artifact is None or artifact.customer_id != customer_id:
+        raise HTTPException(
+            status_code=422, detail=f"表单产物 {artifact_id} 不存在"
+        )
+    if artifact.kind != "form":
+        raise HTTPException(
+            status_code=422,
+            detail=f"产物 {artifact_id} 是 {artifact.kind}，仅 form 产物可作为提交执法依据",
+        )
+    spec = artifacts_service.current_spec(ai_db, artifact)
+    inner = spec.get("spec") if isinstance(spec, dict) else None
+    if not isinstance(inner, dict) or not isinstance(inner.get("fields"), list):
+        raise HTTPException(
+            status_code=422,
+            detail=f"表单产物 {artifact_id} 当前版本 spec 非法（无字段定义）",
+        )
+    if inner.get("datasetId") != dataset_id:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"表单产物 {artifact_id} 绑定的数据集与目标数据集 {dataset_id} 不一致"
+            ),
+        )
+    return inner
+
+
 @router.post(
     "/api/v1/datasets/{dataset_id}/corrections",
     status_code=status.HTTP_201_CREATED,
@@ -726,6 +768,7 @@ def add_correction(
     payload: CorrectionIn,
     customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
+    ai_db: Session = Depends(get_ai_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> CorrectionOut:
     """修正三件套：改值/删行/加行，落覆盖层（云端不写回客户源）。
@@ -738,14 +781,39 @@ def add_correction(
     （wire-form-builder 2.1：表单运行时/公开提交与 corrections 端点同一
     实现，同闸同审计）；异常转译留在路由层，400/429/502 语义与下沉前
     逐字一致。update/delete 分支不动。
+
+    wire-form-entry-advanced D1：insert 请求携 ``artifact_id`` 时先过
+    ``_form_inner_for_correction`` 归属裁决，再按该 form 当前版本经共享
+    执法点 ``form_runtime.validate_form_submission`` 执行全量字段校验+
+    提交闸（命中 422 带 constraint id+message，零写入；归一后 values 落
+    insert）——与公开 submit 同一执法实现。不携带时行为与现状逐字一致。
     """
     dataset = _dataset_or_404(db, dataset_id, customer_id)
     if payload.op == "insert":
+        values = payload.values
+        if payload.artifact_id is not None:
+            # 局部导入防环（同 _form_inner_for_correction 注——query_contract
+            # 模块级引用本模块，此处顶层导入会在本模块装载中途回环）
+            from ..artifacts import form_runtime
+
+            inner = _form_inner_for_correction(
+                ai_db, payload.artifact_id, customer_id=customer_id, dataset_id=dataset.id
+            )
+            normalized, error = form_runtime.validate_form_submission(
+                inner,
+                payload.values or {},
+                datasets_db=db,
+                customer_id=customer_id,
+                engine_factory=engine_factory,
+            )
+            if error is not None:
+                raise HTTPException(status_code=422, detail=error)
+            values = normalized
         try:
             correction_id = service.submit_insert_correction(
                 db,
                 dataset=dataset,
-                values=payload.values,
+                values=values,
                 actor=_actor(customer_id),
                 engine_factory=engine_factory,
             )
@@ -756,6 +824,13 @@ def add_correction(
         except (EngineUnavailable, EngineCallError) as exc:
             raise _ensure_engine_ok(exc) from exc
         return CorrectionOut(correction_id=correction_id)
+    if payload.artifact_id is not None:
+        # artifact_id 是表单提交执法声明，仅对 insert 有语义（改值/删行不是
+        # 表单提交面）——如实拒，不静默忽略
+        raise HTTPException(
+            status_code=422,
+            detail="artifact_id 仅 insert 提交可携带（表单提交执法面）",
+        )
     if getattr(dataset, "storage_tier", service.TIER_CELL) == service.TIER_API:
         return _add_local_correction(db, dataset=dataset, payload=payload, customer_id=customer_id)
     if payload.op == "update":

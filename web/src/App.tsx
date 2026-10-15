@@ -42,6 +42,7 @@ export type Route =
   | { name: "admin"; section: AdminSection }
   | { name: "shareDashboard"; id: string; token: string | null; version: string | null }
   | { name: "shareForm"; id: string; token: string | null; version: string | null }
+  | { name: "shareRecordView"; id: string; token: string | null; recordKey: string | null }
   | { name: "login" };
 
 /** 控制台二级段 → tab（未知段回落默认 datasets）。 */
@@ -107,6 +108,17 @@ export function parseHash(rawHash: string): Route {
       version: query.get("v"),
     };
   }
+  if (head === "share" && second === "record-view" && third) {
+    // 单记录公开页深链 #/share/record-view/{id}?t=…&k=…（wire-record-view
+    // 任务 5.1）：无 v 参数（版本钉死在令牌内），k=键值（扫码/输键取数）；
+    // t 缺失/坏由 ShareView 如实落「链接无效或已过期」页，不在路由层拦截。
+    return {
+      name: "shareRecordView",
+      id: third,
+      token: query.get("t"),
+      recordKey: query.get("k"),
+    };
+  }
   if (head === "catalog") {
     if (segments.length >= 2) {
       const raw = segments.slice(1).join("/");
@@ -159,6 +171,16 @@ function renderRoute(route: Route) {
           token={route.token ?? ""}
           version={route.version}
           mode="form"
+        />
+      );
+    case "shareRecordView":
+      return (
+        <ShareView
+          artifactId={route.id}
+          token={route.token ?? ""}
+          version={null}
+          mode="record-view"
+          recordKey={route.recordKey ?? ""}
         />
       );
     case "login":
@@ -244,9 +266,14 @@ export function App() {
     );
   }
 
-  // 公开分享页（wire-dashboard-share / wire-form-builder）：独立极简壳——
-  // 自带「Wire」顶栏与「由柏讯分享」页脚，不进站点导航/控制台布局，无需登录。
-  if (route.name === "shareDashboard" || route.name === "shareForm") {
+  // 公开分享页（wire-dashboard-share / wire-form-builder / wire-record-view）：
+  // 独立极简壳——自带「Wire」顶栏与「由柏讯分享」页脚，不进站点导航/控制台
+  // 布局，无需登录。
+  if (
+    route.name === "shareDashboard" ||
+    route.name === "shareForm" ||
+    route.name === "shareRecordView"
+  ) {
     return <ErrorBoundary>{renderRoute(route)}</ErrorBoundary>;
   }
 

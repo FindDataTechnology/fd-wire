@@ -114,7 +114,14 @@ export function FormPane({
         <div className="mt-2">
           <FormRuntime
             spec={body}
-            endpoint={{ kind: "console", datasetId: body.datasetId }}
+            endpoint={{
+              kind: "console",
+              datasetId: body.datasetId,
+              // wire-form-entry-advanced：console 提交携带表单产物 id——
+              // 服务端按当前版本执行全量字段校验+提交闸（corrections 的
+              // artifact_id 语义）。
+              artifactId,
+            }}
           />
         </div>
       )}

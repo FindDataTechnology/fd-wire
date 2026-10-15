@@ -3613,6 +3613,7 @@ export function installConsoleBackend(
         sort?: Array<{ column: string; dir: string }>;
         limit?: number;
         offset?: number;
+        distinct_column?: string;
       };
       const data = rowsStore.get(dataset.id) ?? { columns: dataset.columns, rows: [] };
       let out = [...data.rows];
@@ -3624,13 +3625,47 @@ export function installConsoleBackend(
             case "eq": return cell === value;
             case "ne": return cell !== value;
             case "gt": return Number(cell) > Number(value);
+            case "gte": return Number(cell) >= Number(value);
             case "lt": return Number(cell) < Number(value);
+            case "lte": return Number(cell) <= Number(value);
+            case "in":
+              return Array.isArray(value) && value.some((v) => cell === v);
             case "like": return String(cell ?? "").includes(String(value ?? ""));
             case "isnull": return cell == null;
             case "notnull": return cell != null;
             default: return true;
           }
         });
+      }
+      // distinct 形态（wire-form-entry-advanced 动态选项解析）：去重非空值、
+      // 按值升序、limit 裁剪并如实标注 truncated——与 api 档 execute_query
+      // 的 distinct 响应同形（{distinct_column, values, count, …}）。
+      if (body.distinct_column) {
+        const distinct = body.distinct_column;
+        const seen = new Set<string>();
+        const values: string[] = [];
+        for (const row of out) {
+          const cell = row[distinct];
+          if (cell == null) continue;
+          const text = String(cell).trim();
+          if (text === "" || seen.has(text)) continue;
+          seen.add(text);
+          values.push(text);
+        }
+        values.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+        const limit = body.limit ?? 100;
+        return Promise.resolve(
+          jsonResponse({
+            columns: data.columns,
+            distinct_column: distinct,
+            values: values.slice(0, limit),
+            count: values.length,
+            total: out.length,
+            limit,
+            offset: 0,
+            truncated: values.length > limit,
+          }),
+        );
       }
       for (const s of [...(body.sort ?? [])].reverse()) {
         out.sort((a, b) => {

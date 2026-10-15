@@ -263,11 +263,12 @@ def packs_section(db: Session, *, customer_id: str) -> WorkbenchPacks:
     return WorkbenchPacks(subscribed=subscribed, recent=recent)
 
 
-#: 工作台展示面的产物类清单（六类，含表单构建器的 form——生产已有 form
-#: 产物）。注意与 artifacts.models.ARTIFACT_KINDS（五类，校验面口径）区分：
-#: 那边不加 form 是产物校验语义，展示面必须覆盖全部实际 kind，否则
-#: active_total 与 by_kind 徽标和会对不上。键序与 web api.ts 的
-#: ARTIFACT_KINDS 展示序一致。
+#: 工作台展示面的产物类清单（七类，含表单构建器的 form 与单记录公开页的
+#: record-view——wire-record-view 任务 1.3）。注意与 artifacts.models.
+#: ARTIFACT_KINDS（五类，校验面口径）区分：那边不加 form/record-view 是
+#: 产物校验语义（record-view 走 service 层常量路线，AI 门亦不收录），
+#: 展示面必须覆盖全部实际 kind，否则 active_total 与 by_kind 徽标和会对
+#: 不上。键序与 web api.ts 的 ARTIFACT_KINDS 展示序一致。
 WORKBENCH_KINDS: tuple[str, ...] = (
     "dashboard",
     "form",
@@ -275,6 +276,7 @@ WORKBENCH_KINDS: tuple[str, ...] = (
     "research_report",
     "alert_rule",
     "refresh_schedule",
+    "record-view",
 )
 
 
