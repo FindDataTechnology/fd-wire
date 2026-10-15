@@ -43,7 +43,7 @@ spec:
         - name: api
           # 不可变标签纪律（mcp-service-deploy spec：禁 latest/浮动标签）。
           # 出片 tag=law-ai-official 快照仓 sha（fd-wire-images 68242b8 = 真 4146d1b（wire-artifact-marketplace：看板/报告市场（只读看+可复制）+ 迁移 0036））。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-4ee9387
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-439e4c6
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
