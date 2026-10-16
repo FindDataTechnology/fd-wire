@@ -10,7 +10,7 @@
 
 ### Requirement: 签名分享链接
 
-published 且 kind∈{dashboard, form, record-view} 的产物MUST可生成签名
+published 且 kind∈{dashboard, form, record-view, doc} 的产物MUST可生成签名
 分享链接：令牌为 HMAC-SHA256(artifact_id|version|exp)，**有效期可选
 7/30/90/0 天（缺省 30 天，非法值 422 列合法项；0=不设期·印刷物档——生成
 面明示该语义与撤销途径）**，钉死生成时刻的版本（稳定快照分享，改版后
@@ -18,7 +18,8 @@ published 且 kind∈{dashboard, form, record-view} 的产物MUST可生成签名
 `/api/v1/share/dashboard/{id}`（只读渲染），form 链接路径为
 `/api/v1/share/form/{id}`（只读渲染+公开提交，见 form-apps），record-view
 链接路径为 `/api/v1/share/record-view/{id}`（只读渲染+按键实时取数，见
-record-view）；未配置 FD_WIRE_SHARE_SECRET 时分享整体禁用（503 带原因）。
+record-view），doc 链接路径为 `/api/v1/share/doc/{id}`（只读渲染，见
+rich-text-docs）；未配置 FD_WIRE_SHARE_SECRET 时分享整体禁用（503 带原因）。
 
 #### Scenario: 生成与打开
 - **WHEN** 客户对 published 仪表盘生成分享链接，接收者未登录打开
@@ -31,6 +32,10 @@ record-view）；未配置 FD_WIRE_SHARE_SECRET 时分享整体禁用（503 带�
 #### Scenario: 溯源页链接
 - **WHEN** 客户对 published 单记录公开页生成分享链接并选批次号出二维码
 - **THEN** 扫码免登录打开该批次的实时取数页（令牌钉死版本）
+
+#### Scenario: 文档链接
+- **WHEN** 客户对 published 文档生成分享链接，接收者未登录打开
+- **THEN** 免登录渲染该钉死版本的正文（无编辑入口，渲染安全底线适用）
 
 #### Scenario: 版本钉死
 - **WHEN** 分享后产物被编辑出新版本，旧链接打开
