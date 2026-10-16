@@ -210,12 +210,12 @@ def test_active_stock_and_new_columns(migrated_stock):
 
 
 def test_chain_head_follows_migration_chain(migrated_stock):
-    """链头随迁移链推进（wire-transform-pipelines 起 = 0032_transform_pipelines）。"""
+    """链头随迁移链推进（wire-rich-text-docs 起 = 0038_artifact_drafts）。"""
     db_url, _ = migrated_stock
     engine = create_engine(db_url)
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    assert version == "0037_billing_customer_name_uq"
+    assert version == "0038_artifact_drafts"
     engine.dispose()
 
 

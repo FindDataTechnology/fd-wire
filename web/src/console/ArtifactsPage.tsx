@@ -35,9 +35,11 @@ import {
   archiveArtifact,
   createBlankAlertRule,
   createBlankDashboard,
+  createBlankDoc,
   createBlankForm,
   createBlankRecordView,
   createDashboardShareLink,
+  createDocShareLink,
   createFormShareLink,
   fetchArtifactVersion,
   fetchArtifactVersions,
@@ -48,6 +50,7 @@ import {
   getAlertStates,
   publishArtifact,
   putPreferences,
+  RECORD_VIEW_TTL_DAYS,
   restoreArtifact,
   saveArtifactSpec,
   SHARE_TTL_DAYS,
@@ -64,6 +67,8 @@ import {
   type ArtifactVersionSummary,
   type Conversation,
   type DashboardShareLink,
+  type DocShareLink,
+  type RecordViewTtlDays,
   type ShareTtlDays,
 } from "./api";
 import { formatServerDate, truncate } from "./util";
@@ -71,6 +76,7 @@ import { DashboardPane } from "./dashboard/DashboardPane";
 import { FormPane } from "./form/FormPane";
 import { RecordViewPane } from "./recordview/RecordViewPane";
 import { RecordViewShareDialog } from "./recordview/RecordViewShareDialog";
+import { DocEditor } from "./doc/DocEditor";
 import { ArtifactVisibilitySection } from "./ArtifactVisibilitySection";
 
 const BUFFER_STORAGE_PREFIX = "wire-web-artifact-buffer-";
@@ -83,6 +89,8 @@ const KIND_BADGE_CLASS: Record<string, string> = {
   alert_rule: "bg-rose-50 text-rose-700 ring-rose-200",
   refresh_schedule: "bg-teal-50 text-teal-700 ring-teal-200",
   "record-view": "bg-cyan-50 text-cyan-700 ring-cyan-200",
+  // wire-rich-text-docs 任务 4.2：doc 徽标（琥珀——正文型产物与结构化看板分色）。
+  doc: "bg-amber-50 text-amber-700 ring-amber-200",
 };
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
@@ -152,6 +160,9 @@ export function ArtifactsPage({
   // 单记录页视图展开的产物 id（wire-record-view 任务 4.1：record-view kind
   // 内嵌入口——查看态试预览 + 构建器切换）。
   const [recordViewFor, setRecordViewFor] = useState<number | null>(null);
+  // 文档编辑器展开的产物 id（wire-rich-text-docs 任务 4.2：doc kind 内嵌
+  // 入口——分栏编辑器挂载即读写草稿层）。
+  const [docFor, setDocFor] = useState<number | null>(null);
   const [historyFor, setHistoryFor] = useState<number | null>(null);
   // 分享弹层展开的产物 id（wire-dashboard-share / wire-form-builder：
   // published dashboard/form 专属——kind 随打开行分派）。
@@ -162,6 +173,10 @@ export function ArtifactsPage({
   const [shareRecordViewFor, setShareRecordViewFor] = useState<number | null>(
     null,
   );
+  // 文档分享弹层的产物 id（wire-rich-text-docs 任务 4.2：doc 专属极简弹层
+  // ——无键值选择/二维码，仅 TTL 四档 + 复制链接；RecordViewShareDialog
+  // 是 record-view 专用形状，不复用）。
+  const [shareDocFor, setShareDocFor] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   // 新建看板表单开合（wire-dashboard-blank-create：免 cell 免 AI 的出生入口）。
   const [createOpen, setCreateOpen] = useState(false);
@@ -171,6 +186,8 @@ export function ArtifactsPage({
   const [createAlertOpen, setCreateAlertOpen] = useState(false);
   // 新建单记录页表单开合（wire-record-view 任务 4.1：免 AI 的扫码页出生路径）。
   const [createRecordViewOpen, setCreateRecordViewOpen] = useState(false);
+  // 新建文档表单开合（wire-rich-text-docs 任务 4.5：免 AI 的文档出生路径）。
+  const [createDocOpen, setCreateDocOpen] = useState(false);
   // 刚空白创建的产物 id：其看板/表单展开区直接进编辑态（创建即跳编辑器）。
   const [freshlyCreatedId, setFreshlyCreatedId] = useState<number | null>(null);
   const [freshlyFormId, setFreshlyFormId] = useState<number | null>(null);
@@ -178,6 +195,8 @@ export function ArtifactsPage({
   const [freshlyRecordViewId, setFreshlyRecordViewId] = useState<number | null>(
     null,
   );
+  // 刚空白创建的文档 id（创建即跳分栏编辑器）。
+  const [freshlyDocId, setFreshlyDocId] = useState<number | null>(null);
   // 告警评估状态（wire-alert-evaluation）：进页对 alert_rule 行取一次的
   // map；null = 尚未到达（徽标暂不渲染），{} = 已到达或失败降级（无键即
   // 「未评估」——拉取失败静默降级，绝不阻塞页面）。
@@ -321,6 +340,17 @@ export function ArtifactsPage({
     setRecordViewFor(detail.id);
   }, []);
 
+  /** 空白建文档成功（wire-rich-text-docs 任务 4.2）：与建表单同款范式——
+   *  置顶 + 复位筛选 + 行展开（docFor）直接进分栏编辑器。 */
+  const handleDocCreated = useCallback((detail: ArtifactDetail) => {
+    setArtifacts((prev) => (prev ? [detail, ...prev] : prev));
+    setKindFilter("all");
+    setStatusFilter("all");
+    setCreateDocOpen(false);
+    setFreshlyDocId(detail.id);
+    setDocFor(detail.id);
+  }, []);
+
   return (
     <div>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -333,7 +363,7 @@ export function ArtifactsPage({
         <div className="flex items-center gap-2">
           {/* 空白建板入口（wire-dashboard-blank-create）：免费档无 cell 无 AI
               草稿时的唯一出生路径——标题输入 → POST → 直接进编辑器。 */}
-          {!createOpen && !createFormOpen && !createAlertOpen && !createRecordViewOpen && (
+          {!createOpen && !createFormOpen && !createAlertOpen && !createRecordViewOpen && !createDocOpen && (
             <button
               type="button"
               data-testid="create-dashboard-open"
@@ -345,7 +375,7 @@ export function ArtifactsPage({
           )}
           {/* 空白建表单入口（wire-form-builder 任务 4.4）：与新建看板并列的
               出生路径——标题输入 → POST kind=form → 直接进构建器。 */}
-          {!createFormOpen && !createOpen && !createAlertOpen && !createRecordViewOpen && (
+          {!createFormOpen && !createOpen && !createAlertOpen && !createRecordViewOpen && !createDocOpen && (
             <button
               type="button"
               data-testid="create-form-open"
@@ -358,7 +388,7 @@ export function ArtifactsPage({
           {/* 空白建告警规则入口（wire-alert-evaluation）：与建板/表单并列的
               规则出生路径——标题输入 → POST kind=alert_rule 模板壳 → 直接进
               spec 编辑器改 dataset/阈值 → 发布即武装评估。 */}
-          {!createAlertOpen && !createOpen && !createFormOpen && !createRecordViewOpen && (
+          {!createAlertOpen && !createOpen && !createFormOpen && !createRecordViewOpen && !createDocOpen && (
             <button
               type="button"
               data-testid="create-alert-open"
@@ -371,7 +401,7 @@ export function ArtifactsPage({
           {/* 空白建单记录页入口（wire-record-view 任务 4.1）：与建板/表单并列
               的扫码页出生路径——标题输入 → POST kind=record-view 最小空 spec
               → 直接进构建器选主数据集/键列配模板。 */}
-          {!createRecordViewOpen && !createOpen && !createFormOpen && !createAlertOpen && (
+          {!createRecordViewOpen && !createOpen && !createFormOpen && !createAlertOpen && !createDocOpen && (
             <button
               type="button"
               data-testid="create-recordview-open"
@@ -379,6 +409,19 @@ export function ArtifactsPage({
               className="rounded bg-cyan-700 px-3 py-1 text-xs text-white hover:bg-cyan-600"
             >
               {t("console.artifacts.createRecordView.button")}
+            </button>
+          )}
+          {/* 空白建文档入口（wire-rich-text-docs 任务 4.5）：与建板/表单并列的
+              出生路径——标题输入 → POST kind=doc 空正文最小 spec → 直接进
+              分栏编辑器写作。 */}
+          {!createDocOpen && !createOpen && !createFormOpen && !createAlertOpen && !createRecordViewOpen && (
+            <button
+              type="button"
+              data-testid="create-doc-open"
+              onClick={() => setCreateDocOpen(true)}
+              className="rounded bg-amber-600 px-3 py-1 text-xs text-white hover:bg-amber-500"
+            >
+              {t("console.doc.create.button", "新建文档")}
             </button>
           )}
           <label htmlFor="artifact-kind-filter" className="text-xs text-slate-500">
@@ -443,6 +486,13 @@ export function ArtifactsPage({
         <CreateRecordViewForm
           onCreated={handleRecordViewCreated}
           onCancel={() => setCreateRecordViewOpen(false)}
+        />
+      )}
+
+      {createDocOpen && (
+        <CreateDocForm
+          onCreated={handleDocCreated}
+          onCancel={() => setCreateDocOpen(false)}
         />
       )}
 
@@ -675,6 +725,33 @@ export function ArtifactsPage({
                           {t("console.recordview.share.button")}
                         </button>
                       )}
+                    {artifact.kind === "doc" && (
+                      // 文档编辑器入口（wire-rich-text-docs 任务 4.2）：doc kind
+                      // 内嵌展开 = 分栏编辑器（Markdown 源 + 实时预览 + 草稿层
+                      // 自动保存 + 保存版本）。
+                      <button
+                        type="button"
+                        data-testid="artifact-doc-view"
+                        onClick={() =>
+                          setDocFor(artifact.id === docFor ? null : artifact.id)
+                        }
+                        className="rounded border border-amber-300 px-2 py-1 text-xs text-amber-700 hover:bg-amber-50"
+                      >
+                        {t("console.doc.viewButton", "打开文档")}
+                      </button>
+                    )}
+                    {artifact.kind === "doc" && artifact.status === "published" && (
+                      // 文档分享入口（wire-rich-text-docs 任务 4.2/D5）：仅
+                      // published doc——极简弹层（TTL 四档 + 复制链接）。
+                      <button
+                        type="button"
+                        data-testid="artifact-doc-share"
+                        onClick={() => setShareDocFor(artifact.id)}
+                        className="rounded border border-sky-300 px-2 py-1 text-xs text-sky-700 hover:bg-sky-50"
+                      >
+                        {t("console.doc.share.button", "生成分享链接")}
+                      </button>
+                    )}
                     {artifact.status === "draft" && (
                       <button
                         type="button"
@@ -803,10 +880,24 @@ export function ArtifactsPage({
                     startEditing={artifact.id === freshlyRecordViewId}
                   />
                 )}
-                {artifact.status === "published" && (
+                {artifact.id === docFor && (
+                  // 文档分栏编辑器（wire-rich-text-docs 任务 4.2）：挂载即读
+                  // 草稿层（无则回退当前版本 spec.text）；刚空白创建的文档
+                  // 直接聚焦正文（创建即跳编辑器）。
+                  <DocEditor
+                    key={`doc-${artifact.id}`}
+                    artifactId={artifact.id}
+                    onSaved={replaceArtifact}
+                    startEditing={artifact.id === freshlyDocId}
+                  />
+                )}
+                {artifact.status === "published" && artifact.kind !== "doc" && (
                   // 产物公开分享选择器（wire-artifact-marketplace 5.1）：仅
                   // published 行挂载——四档可见性 + 开放模式 + 允许复制；
                   // 非私有档由服务端再校验（409 双保险）。
+                  // wire-rich-text-docs 任务 4.3（design D5）：doc 不进市场/
+                  // 物化，隐藏可见性设置区——服务端 422 是兜底，UI 不给入口
+                  // 才能避免「看得见点不动」的假 UI。
                   <ArtifactVisibilitySection
                     key={`visibility-${artifact.id}`}
                     artifactId={artifact.id}
@@ -838,6 +929,14 @@ export function ArtifactsPage({
           key={`record-view-share-${shareRecordViewFor}`}
           artifactId={shareRecordViewFor}
           onClose={() => setShareRecordViewFor(null)}
+        />
+      )}
+
+      {shareDocFor != null && (
+        <DocShareDialog
+          key={`doc-share-${shareDocFor}`}
+          artifactId={shareDocFor}
+          onClose={() => setShareDocFor(null)}
         />
       )}
     </div>
@@ -1195,6 +1294,283 @@ function CreateRecordViewForm({
         </p>
       )}
     </form>
+  );
+}
+
+/**
+ * 新建文档表单（wire-rich-text-docs 任务 4.5）：与新建表单同款范式——标题
+ * 输入 → POST /api/v1/artifacts {kind:"doc", title}。空标题前端先拦（不发
+ * 请求）；创建中禁用防重复提交；失败（422/网络等）后端 detail 如实呈现、
+ * 表单不关可改再试；成功交 onCreated（置顶 + 展开直接进分栏编辑器）。
+ */
+function CreateDocForm({
+  onCreated,
+  onCancel,
+}: {
+  onCreated: (artifact: ArtifactDetail) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const [title, setTitle] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (creating) return;
+    const trimmed = title.trim();
+    if (!trimmed) {
+      setError(t("console.doc.create.titleRequired", "请先填写文档标题"));
+      return;
+    }
+    setCreating(true);
+    setError(null);
+    try {
+      onCreated(await createBlankDoc(trimmed));
+    } catch (err) {
+      setError(apiErrorText(err, t("console.doc.create.failed", "创建文档失败，请重试")));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <form
+      data-testid="create-doc-form"
+      className="mt-4 rounded-lg border border-slate-200 bg-white p-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <label htmlFor="create-doc-title" className="block text-xs text-slate-500">
+        {t("console.doc.create.titleLabel", "文档标题")}
+      </label>
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <input
+          id="create-doc-title"
+          data-testid="create-doc-title"
+          value={title}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            setError(null);
+          }}
+          placeholder={t("console.doc.create.titlePlaceholder", "如：季度经营说明")}
+          disabled={creating}
+          className="w-64 rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+        />
+        <button
+          type="submit"
+          data-testid="create-doc-submit"
+          disabled={creating}
+          className="rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {creating
+            ? t("console.doc.create.creating", "创建中…")
+            : t("console.doc.create.submit", "创建")}
+        </button>
+        <button
+          type="button"
+          data-testid="create-doc-cancel"
+          disabled={creating}
+          onClick={onCancel}
+          className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {t("console.doc.create.cancel", "取消")}
+        </button>
+      </div>
+      {error && (
+        <p data-testid="create-doc-error" className="mt-1.5 text-[11px] text-red-600">
+          {error}
+        </p>
+      )}
+    </form>
+  );
+}
+
+/**
+ * 文档分享弹层（wire-rich-text-docs 任务 4.2/D5）：doc 无键值（不像
+ * record-view 需要键选择器/二维码），故极简——TTL 四档（0|7|30|90 同
+ * record-view 白名单，0=不设期·印刷物）+ 复制完整公开链接。打开即生成；
+ * 改选 TTL 重新生成（令牌随生成时刻钉死版本）。展示链接自构：origin +
+ * /#/share/doc/{id}?t=…&v={version}（t 从响应数据端点 url 解出）。
+ */
+function DocShareDialog({
+  artifactId,
+  onClose,
+}: {
+  artifactId: number;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [ttlDays, setTtlDays] = useState<RecordViewTtlDays>(30);
+  const [result, setResult] = useState<DocShareLink | null>(null);
+  const [shareUrl, setShareUrl] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setResult(null);
+    setShareUrl("");
+    setError(null);
+    setCopied(false);
+    createDocShareLink(artifactId, ttlDays)
+      .then((res) => {
+        if (!alive) return;
+        setResult(res);
+        // t 从数据端点 url 的 query 解出（相对路径也能被 URL 解析出 search）。
+        const token =
+          new URL(res.url, window.location.origin).searchParams.get("t") ?? "";
+        setShareUrl(
+          `${window.location.origin}/#/share/doc/${artifactId}` +
+            `?t=${encodeURIComponent(token)}&v=${res.version}`,
+        );
+      })
+      .catch((err: unknown) => {
+        // 服务端 detail 如实呈现（403 状态说明 / 503 未配置 secret 原因）。
+        if (alive) {
+          setError(apiErrorText(err, t("console.doc.share.failed", "生成分享链接失败，请稍后重试。")));
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [artifactId, ttlDays, t]);
+
+  /** 到期展示：0 档（expires_at=null）呈「不设期（印刷物）」——不定死文案，
+   *  复用 record-view 同语义键位。 */
+  const expiresText = result
+    ? result.expires_at == null
+      ? t("console.doc.share.noExpiry", "不设期（印刷物档）")
+      : formatServerDate(result.expires_at)
+    : ttlDays === 0
+      ? t("console.doc.share.noExpiry", "不设期（印刷物档）")
+      : formatServerDate(
+          new Date(Date.now() + ttlDays * 86_400_000).toISOString().slice(0, 19),
+        );
+
+  const copyLink = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+    } catch {
+      /* 剪贴板不可用（如非安全上下文）：如实不提示已复制 */
+    }
+  };
+
+  return (
+    <div
+      data-testid="doc-share-dialog"
+      className="fixed inset-0 z-40 flex items-center justify-center p-4"
+    >
+      <button
+        type="button"
+        aria-label={t("console.dashboard.share.close")}
+        data-testid="doc-share-backdrop"
+        onClick={onClose}
+        className="absolute inset-0 bg-slate-900/30"
+      />
+      <div className="relative w-full max-w-lg rounded-lg border border-slate-200 bg-white p-5 shadow-xl">
+        <div className="flex items-center gap-2">
+          <h2 data-testid="doc-share-title" className="text-sm font-semibold">
+            {t("console.doc.share.dialogTitle", "文档分享")}
+          </h2>
+          <button
+            type="button"
+            data-testid="doc-share-close"
+            onClick={onClose}
+            className="ml-auto rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+          >
+            {t("console.dashboard.share.close")}
+          </button>
+        </div>
+
+        {error && (
+          <p data-testid="doc-share-error" className="mt-4 text-xs text-red-600">
+            {error}
+          </p>
+        )}
+
+        {!error && (
+          <div data-testid="doc-share-ttl" className="mt-4">
+            <p className="text-xs font-medium text-slate-600">
+              {t("console.doc.share.ttlLabel", "有效期")}
+            </p>
+            <div
+              role="radiogroup"
+              aria-label={t("console.doc.share.ttlLabel", "有效期")}
+              className="mt-1.5 flex flex-wrap gap-4"
+            >
+                {RECORD_VIEW_TTL_DAYS.map((days) => (
+                <label key={days} className="flex items-center gap-1 text-xs text-slate-700">
+                  <input
+                    type="radio"
+                    data-testid="doc-share-ttl-option"
+                    data-days={days}
+                    name={`doc-share-ttl-${artifactId}`}
+                    checked={ttlDays === days}
+                    onChange={() => setTtlDays(days)}
+                  />
+                  {/* 档位文案复用 record-view 分享的既有键（同一 TTL 白名单
+                      0|7|30|90、同一语义——不为同义文案重复造键）。 */}
+                  {t(`console.recordview.share.ttlOptions.${days}`)}
+                </label>
+              ))}
+            </div>
+            <p className="mt-1 text-[11px] text-slate-400">
+              {t("console.recordview.share.ttlNote")}
+            </p>
+          </div>
+        )}
+
+        {!error && result == null && (
+          <p data-testid="doc-share-generating" className="mt-4 text-xs text-slate-400">
+            {t("console.dashboard.share.generating")}
+          </p>
+        )}
+
+        {result != null && (
+          <div className="mt-4 space-y-3">
+            <div>
+              <p className="text-xs font-medium text-slate-600">
+                {t("console.dashboard.share.urlLabel")}
+              </p>
+              {/* readonly 输入框承载完整链接：可选中复制、长链接不撑破布局。 */}
+              <input
+                data-testid="doc-share-url"
+                readOnly
+                value={shareUrl}
+                onFocus={(e) => e.currentTarget.select()}
+                className="mt-1 w-full rounded border border-slate-300 bg-slate-50 px-2 py-1.5 font-mono text-[11px] text-slate-700"
+              />
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  data-testid="doc-share-copy"
+                  disabled={!shareUrl}
+                  onClick={() => void copyLink()}
+                  className="rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700 disabled:opacity-50"
+                >
+                  {t("console.doc.share.copy", "复制链接")}
+                </button>
+                {copied && (
+                  <span data-testid="doc-share-copied" className="text-[11px] text-emerald-600">
+                    {t("console.doc.share.copied", "已复制到剪贴板。")}
+                  </span>
+                )}
+              </div>
+            </div>
+            <p data-testid="doc-share-expires" className="text-xs text-slate-500">
+              {t("console.dashboard.share.expiresLabel")}：{expiresText}
+            </p>
+            <p className="text-[11px] text-slate-400">
+              {t("console.dashboard.share.versionNote", { version: result.version })}
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

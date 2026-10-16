@@ -1,10 +1,13 @@
 // 公开分享页（/#/share/dashboard/{id}?t=&v=，wire-dashboard-share 任务 2.1；
-// wire-form-builder 任务 4.5 起 /#/share/form/{id}?t=&v= 同框架分派）。
-// - 免登录只读：调公开端点 GET /api/v1/share/{dashboard|form}/{id}?t=&v=
+// wire-form-builder 任务 4.5 起 /#/share/form/{id}?t=&v=、wire-rich-text-docs
+// 任务 5.2 起 /#/share/doc/{id}?t=&v= 同框架分派）。
+// - 免登录只读：调公开端点 GET /api/v1/share/{dashboard|form|doc}/{id}?t=&v=
 //   （无 Bearer）；dashboard 态 → parseDashboardSpec 宽容解析标题 +
 //   DashboardRenderer 复用渲染；form 态 → parseFormSpec + FormRuntime
 //   （public endpoint，t/v 透传进 submit 地址——提交成功/失败态在组件内
-//   呈现，公开提交免登录且绝不携带 Authorization）。
+//   呈现，公开提交免登录且绝不携带 Authorization）；doc 态 → MarkdownView
+//   渲染钉死版本正文（「渲染安全底线」对编辑预览与公开分享页同样适用——
+//   零 innerHTML 的同一渲染器，正文里的 <script> 只会是文本）。
 // - 品牌面（wire-share-branding）：四态同一顶栏双语品牌锁定（寻数·柏讯 /
 //   Wire，双语锁定即两语言下文案相同）链产品首页；页脚就绪态
 //   「{标题} · 由 寻数·柏讯 提供 · 版本 v{n}」、非就绪态产品署名；
@@ -23,15 +26,73 @@ import {
   sharedFormOptionsUrl,
   sharedFormSubmitUrl,
 } from "../console/api";
+import { API_BASE } from "../catalog/api";
 import { DashboardRenderer } from "../console/dashboard/DashboardRenderer";
 import { parseDashboardSpec } from "../console/dashboard/spec";
+import { MarkdownView } from "../console/doc/md";
 import { FormRuntime } from "../console/form/FormRuntime";
 import { parseFormSpec } from "../console/form/formSpec";
 import { RecordViewRuntime } from "../console/recordview/RecordViewRuntime";
 
 /** 分享模式：按路由路径分派（dashboard=只读看板；form=可填写表单；
- *  record-view=单记录公开页——wire-record-view 任务 5.1 第三 mode）。 */
-export type ShareMode = "dashboard" | "form" | "record-view";
+ *  record-view=单记录公开页——wire-record-view 任务 5.1 第三 mode；
+ *  doc=只读正文页——wire-rich-text-docs 任务 5.2 第四 mode）。 */
+export type ShareMode = "dashboard" | "form" | "record-view" | "doc";
+
+/** doc 公开端点载荷（GET /api/v1/share/doc/{id}?t&v）。expires_at 0 档
+ *  （不设期·印刷物）为 null——分享页不展示到期时间，字段仅为契约完整。 */
+interface SharedDoc {
+  title: string;
+  /** 产物信封原样 {title, spec:{format:"markdown", text}}。 */
+  spec: Record<string, unknown>;
+  version: number;
+  expires_at: string | null;
+}
+
+/** 公开取分享文档（无鉴权端点——绝不携带登录头，未登录接收者直接打开）。
+ *  与 fetchSharedDashboard 同构就地实现（api.ts 是并行改动面，分享页不
+ *  依赖其新增导出）：同一 API_BASE、同一错误语义——404=链接无效/过期/
+ *  产物下线（服务端统一口径，不区分原因）；503=分享功能未配置。 */
+async function fetchSharedDoc(
+  id: number,
+  token: string,
+  version: number | null,
+): Promise<SharedDoc> {
+  const params = new URLSearchParams({ t: token });
+  if (version != null) params.set("v", String(version));
+  const url = `${API_BASE}/v1/share/doc/${id}?${params}`;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+  } catch (err) {
+    if (err instanceof ConsoleApiError) throw err;
+    throw new ConsoleApiError(
+      `network error fetching ${url}: ${(err as Error).message}`,
+    );
+  }
+  if (!response.ok) {
+    // detail 不解析：无效页文案与失败原因无关（不泄露验签细节），503 由
+    // 状态码分派到「分享功能未开通」——与 api.ts readResponse 行为等价。
+    throw new ConsoleApiError(
+      `console api ${response.status} for ${url}`,
+      response.status,
+    );
+  }
+  return (await response.json()) as SharedDoc;
+}
+
+/** doc 钉死版本信封正文抽取：{title, spec:{format, text}} → text。宽容
+ *  读取（非字符串/缺席回空串渲染空文档而非崩页——服务端已保证形状，此处
+ *  只是前端防御位，绝不因此伪造内容）。 */
+function docTextOf(envelope: Record<string, unknown>): string {
+  const inner = envelope.spec;
+  if (typeof inner !== "object" || inner === null) return "";
+  const text = (inner as Record<string, unknown>).text;
+  return typeof text === "string" ? text : "";
+}
 
 /** 四态：加载中 / 就绪 / 链接无效（含网络错）/ 分享未开通（503）。 */
 type ShareState =
@@ -104,7 +165,9 @@ export function ShareView({
         ? t("console.form.ogDescription")
         : mode === "record-view"
           ? t("console.recordview.ogDescription")
-          : t("console.dashboard.share.ogDescription");
+          : mode === "doc"
+            ? t("console.doc.ogDescription")
+            : t("console.dashboard.share.ogDescription");
     const metas = (
       [
         ["og:title", ogTitle],
@@ -141,23 +204,30 @@ export function ShareView({
     const numericVersion =
       version != null && version !== "" ? Number(version) : null;
     // 标题：响应 title 优先，缺失回落 spec 宽容解析（信封/本体皆可），
-    // 兜底占位按 mode 取「未命名看板/表单」。
+    // 兜底占位按 mode 取「未命名看板/表单/文档」。
     const resolveTitle = (spec: Record<string, unknown>, rawTitle: string) => {
       // form 信封内层无标题字段——标题只认响应 title；dashboard 回落 v1
-      // 解析（legacy 形态无 title 字段，回落空由兜底占位）。
+      // 解析（legacy 形态无 title 字段，回落空由兜底占位）；doc 回落信封
+      // 外层 title（响应 title 已优先取钉死版本信封 title，此为双保险）。
       const parsedTitle =
         mode === "form"
           ? ""
-          : (() => {
-              const parsed = parseDashboardSpec(spec);
-              return parsed.kind === "v1" ? parsed.title : "";
-            })();
+          : mode === "doc"
+            ? typeof spec.title === "string"
+              ? spec.title
+              : ""
+            : (() => {
+                const parsed = parseDashboardSpec(spec);
+                return parsed.kind === "v1" ? parsed.title : "";
+              })();
       return (
         (typeof rawTitle === "string" && rawTitle.trim()) ||
         parsedTitle ||
         (mode === "form"
           ? t("console.form.untitled")
-          : t("console.dashboard.share.untitled"))
+          : mode === "doc"
+            ? t("console.doc.untitled")
+            : t("console.dashboard.share.untitled"))
       );
     };
     const ready = (spec: Record<string, unknown>, rawTitle: string, v: number) => {
@@ -170,6 +240,23 @@ export function ShareView({
     };
     if (mode === "form") {
       fetchSharedForm(Number(artifactId), token, numericVersion)
+        .then((data) => {
+          if (!alive) return;
+          ready(data.spec, data.title, data.version);
+        })
+        .catch((err: unknown) => {
+          if (!alive) return;
+          setState(
+            err instanceof ConsoleApiError && err.status === 503
+              ? { kind: "disabled" }
+              : { kind: "invalid" },
+          );
+        });
+    } else if (mode === "doc") {
+      // doc=静态快照读面（无取数/提交）：与 dashboard 同款 fetch + 四态；
+      // 归档即失效（服务端 404）与改版不串版（服务端按 v 钉死）都在服务端，
+      // 本层只如实落无效页。
+      fetchSharedDoc(Number(artifactId), token, numericVersion)
         .then((data) => {
           if (!alive) return;
           ready(data.spec, data.title, data.version);
@@ -204,7 +291,7 @@ export function ShareView({
     };
   }, [artifactId, token, version, mode, recordKey, t]);
 
-  // document.title 前缀「分享 · 」：进页面即生效，就绪后带上板名。
+  // document.title 前缀「分享 · 」：进页面即生效，就绪后带上标题。
   const pageTitle =
     state.kind === "ready"
       ? state.title
@@ -216,7 +303,9 @@ export function ShareView({
             ? t("console.dashboard.share.invalidTitle")
             : mode === "record-view"
               ? t("console.recordview.runtime.loading")
-              : t("console.dashboard.share.loading");
+              : mode === "doc"
+                ? t("console.doc.loading")
+                : t("console.dashboard.share.loading");
   useEffect(() => {
     document.title = t("console.dashboard.share.docTitle", {
       title: pageTitle,
@@ -276,7 +365,9 @@ export function ShareView({
           <>
             {state.kind === "loading" && (
               <p data-testid="share-loading" className="mt-6 text-sm text-slate-400">
-                {t("console.dashboard.share.loading")}
+                {mode === "doc"
+                  ? t("console.doc.loading")
+                  : t("console.dashboard.share.loading")}
               </p>
             )}
 
@@ -349,6 +440,23 @@ export function ShareView({
                       ),
                     }}
                   />
+                </div>
+              </div>
+            )}
+
+            {state.kind === "ready" && mode === "doc" && (
+              // 正文只读页（wire-rich-text-docs 任务 5.2）：复用控制台同一
+              // 渲染器 MarkdownView（零 innerHTML——「渲染安全底线」对编辑
+              // 预览与公开分享页同样适用）；无编辑入口、无导出入口。
+              <div data-testid="share-doc">
+                <h1
+                  data-testid="share-doc-title"
+                  className="text-lg font-semibold text-slate-900"
+                >
+                  {state.title}
+                </h1>
+                <div className="mt-4">
+                  <MarkdownView source={docTextOf(state.spec)} />
                 </div>
               </div>
             )}

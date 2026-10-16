@@ -68,12 +68,13 @@ HEADERS_C = bearer(mint_id_token(SUB_C))
 
 URL = "/api/v1/workbench"
 
-#: 冻结的 by_kind 七键展示序（展示面口径：与 web ARTIFACT_KINDS 一致，含
-#: 表单构建器的 form 与单记录公开页的 record-view——wire-record-view 任务
-#: 1.3；校验面五类 tuple 不覆盖后两者）
+#: 冻结的 by_kind 八键展示序（展示面口径：与 web ARTIFACT_KINDS 一致，含
+#: 表单构建器的 form、单记录公开页的 record-view——wire-record-view 任务
+#: 1.3——与富文本文档的 doc——wire-rich-text-docs 任务 1.4；校验面五类
+#: tuple 不覆盖后三者）
 ALL_KINDS = [
     "dashboard", "form", "composite_indicator", "research_report",
-    "alert_rule", "refresh_schedule", "record-view",
+    "alert_rule", "refresh_schedule", "record-view", "doc",
 ]
 
 _BASE_TIME = datetime(2026, 10, 12, 8, 0, 0)
@@ -323,14 +324,14 @@ def test_aggregate_matches_seed(harness) -> None:
     assert first["name_en"] == get_pack("money-finance").name_en
     assert first["subscribed_at"] == at(15).isoformat()
 
-    # artifacts：活跃 6（archived 不计；form 计入总数与 by_kind）；七键全给
-    # （缺类零，record-view 键为 wire-record-view 追加）；最近倒序 ≤5
+    # artifacts：活跃 6（archived 不计；form 计入总数与 by_kind）；八键全给
+    # （缺类零，record-view / doc 键为后续变更追加）；最近倒序 ≤5
     # （form 恰好最旧被截断在 recent 之外）
     assert body["artifacts"]["active_total"] == 6
     assert body["artifacts"]["by_kind"] == {
         "dashboard": 2, "form": 1, "composite_indicator": 1,
         "research_report": 0, "alert_rule": 2, "refresh_schedule": 0,
-        "record-view": 0,
+        "record-view": 0, "doc": 0,
     }
     assert [item["title"] for item in body["artifacts"]["recent"]] == [
         "复合指标", "备用规则", "价格告警", "草稿看板", "经营看板",

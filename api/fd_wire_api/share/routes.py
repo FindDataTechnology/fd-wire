@@ -25,6 +25,9 @@
   422 字段级先于 429 的冻结序不变）→ datasets 库会话取数据集（统一 404）
   → 经 ``datasets.service.submit_insert_correction`` 落 insert 修正（actor=
   ``share-form:{artifact_id}``，与 corrections 端点同闸同审计）→ 201。
+- ``GET  /api/v1/share/doc/{artifact_id}?t=…&v=…``（公开无鉴权，同形）：
+  返回钉死版本 spec（Markdown 正文源文本原样——渲染在 web 侧，零 HTML，
+  见 wire-rich-text-docs D1/D2；noindex 亦由分享页负责）。
 - ``GET  /api/v1/share/record-view/{artifact_id}?t=…&k=…``（公开实时取数，
   wire-record-view 任务 3.1-3.3）：secret（503）→ 令牌验签+钉死版本+
   published+kind=record-view（统一 404；v 可缺席——URL 规范形态只带 t&k，
@@ -75,11 +78,13 @@ router = APIRouter(tags=["share"])
 _NOT_FOUND_DETAIL = "not found"
 
 #: 可分享 kind → 公开链接路径段（design D4：url 按 kind 分派；record-view
-#: 见 wire-record-view 任务 2.1）
+#: 见 wire-record-view 任务 2.1；doc 见 wire-rich-text-docs D5——正文快照
+#: 与看板同款静态读，不开放任何数据面）
 SHARE_KIND_PATHS: dict[str, str] = {
     "dashboard": "dashboard",
     "form": "form",
     "record-view": "record-view",
+    "doc": "doc",
 }
 
 
@@ -113,6 +118,20 @@ class SharedDashboardOut(BaseModel):
 
     无 iat 侧字段可算 shared_at——省略之，以 expires_at 供前端展示到期
     （0 档长效令牌为 null——wire-record-view D4，无到期可言）。
+    """
+
+    title: str
+    spec: Any
+    version: int
+    expires_at: str | None
+
+
+class SharedDocOut(BaseModel):
+    """公开打开文档结果：与 SharedDashboardOut 同形（前端同款消费）。
+
+    doc 的 spec 内是 Markdown 源文本（``{title, spec:{format, text}}``，
+    wire-rich-text-docs D1）——原样回传，渲染与 noindex 在 web 分享页；
+    服务端零 HTML 透传面（D2 安全底线不在后端重建）。
     """
 
     title: str
@@ -192,14 +211,15 @@ def create_share_link(
     except artifacts_service.ArtifactNotFound as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     # kind 门（design D4）：dashboard 只读渲染、form 只读渲染+公开提交、
-    # record-view 公开实时取数（wire-record-view 任务 2.1）；其余 kind
-    # （AI 产物四类等）仍不可分享。
+    # record-view 公开实时取数（wire-record-view 任务 2.1）、doc 正文快照
+    # （wire-rich-text-docs D5）；其余 kind（AI 产物四类等）仍不可分享。
     if artifact.kind not in SHARE_KIND_PATHS:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
                 f"产物 {artifact.id} 是 {artifact.kind}，仅仪表盘（dashboard）、"
-                "表单（form）与单记录页（record-view）产物支持生成分享链接。"
+                "表单（form）、单记录页（record-view）与文档（doc）产物支持"
+                "生成分享链接。"
             ),
         )
     if artifact.status != "published":
@@ -289,6 +309,61 @@ def open_shared_dashboard(
     if not isinstance(title, str) or not title.strip():
         title = artifact.title
     return SharedDashboardOut(
+        title=title,
+        spec=spec,
+        version=version,
+        expires_at=service.expires_at_iso(exp) if exp > 0 else None,
+    )
+
+
+# ----------------------------------------------------- doc 公开面（D5）
+
+
+@router.get(
+    "/api/v1/share/doc/{artifact_id}",
+    response_model=SharedDocOut,
+)
+def open_shared_doc(
+    artifact_id: int,
+    t: str | None = Query(default=None),
+    v: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> SharedDocOut:
+    """公开打开分享的文档（无鉴权）：钉死版本的 spec 快照（正文源文本原样）。
+
+    与公开 dashboard 端点同形同闸（缺 t/v、验签失败、版本不一致、过期、
+    产物非 published/不存在、版本行缺席——一律 404 统一 detail）。doc 是
+    静态快照读面：无取数、无提交，故不设限流与短缓存——限流只保护放大
+    底层查询/写入的公开面（record-view/form submit）；noindex 与正文渲染
+    属分享页职责（wire-rich-text-docs D2/5.2）。
+    """
+    try:
+        secret = service.require_share_secret()
+    except service.ShareDisabled as exc:
+        raise _share_disabled(exc) from exc
+    if t is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND_DETAIL)
+    try:
+        version, exp = service.verify_token(
+            secret, artifact_id=artifact_id, token=t, v_param=v
+        )
+    except service.ShareLinkInvalid:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND_DETAIL)
+    artifact = service.get_published_artifact(db, artifact_id)
+    # kind 复核：dashboard 令牌走不进 doc 路径，反之亦然（与 form 公开面
+    # 同款分置——令牌不携带 kind，路径是唯一分派面）
+    if artifact is None or artifact.kind != "doc":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND_DETAIL)
+    row = service.get_pinned_version(db, artifact_id, version)
+    if row is None:  # pragma: no cover - 正常链路版本行总在场，防御位
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND_DETAIL)
+    # 钉死版本的标题：优先取该版本 spec 信封的 title（快照自洽），
+    # 缺席时回退产物当前 title。
+    spec = dict(row.spec) if row.spec else {}
+    title = spec.get("title")
+    if not isinstance(title, str) or not title.strip():
+        title = artifact.title
+    return SharedDocOut(
         title=title,
         spec=spec,
         version=version,

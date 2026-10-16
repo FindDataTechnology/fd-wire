@@ -617,7 +617,7 @@ const zh = {
     artifacts: {
       title: "产物",
       subtitle:
-        "跨会话持久化的七类产物——spec 每次保存追加新版本，草稿/已发布/已归档三态可流转。",
+        "跨会话持久化的八类产物——spec 每次保存追加新版本，草稿/已发布/已归档三态可流转。",
       loading: "产物加载中…",
       errorTitle: "产物加载失败",
       retry: "重试",
@@ -633,6 +633,8 @@ const zh = {
         alert_rule: "告警",
         refresh_schedule: "定时刷新",
         "record-view": "单记录页",
+        // 富文本文档（wire-rich-text-docs 任务 6.1）：kind=doc 的行标签。
+        doc: "文档",
       },
       statusFilterLabel: "状态",
       statusAll: "全部状态",
@@ -694,6 +696,18 @@ const zh = {
         creating: "创建中…",
         cancel: "取消",
         titleRequired: "请输入单记录页标题。",
+        failed: "创建失败，请稍后重试。",
+      },
+      // 空白新建文档（wire-rich-text-docs 任务 6.1）：正文型产物的出生路径，
+      // 创建即进分栏编辑器（空正文最小 spec，D1）。
+      createDoc: {
+        button: "新建文档",
+        titleLabel: "文档标题",
+        titlePlaceholder: "给新文档起个名字",
+        submit: "创建",
+        creating: "创建中…",
+        cancel: "取消",
+        titleRequired: "请输入文档标题。",
         failed: "创建失败，请稍后重试。",
       },
       viewer: {
@@ -1300,6 +1314,56 @@ const zh = {
         qrDownloadSvg: "下载 SVG",
         unbound:
           "该单记录页未绑定主数据集或键列，暂不能分享——请先在编辑器中配置并发布。",
+      },
+    },
+    // 富文本文档（wire-rich-text-docs 任务 6.1）：doc kind 的行展开编辑面
+    // （分栏编辑器 + 草稿草稿层自动保存 + 保存版本）与分享面文案。
+    // 编辑器/分享对话框的并行实现（DocEditor 等）按此键位取文案。
+    doc: {
+      viewButton: "查看文档",
+      // 公开分享页兜底标题（响应缺 title 时）与加载态；og 卡片段落。
+      untitled: "未命名文档",
+      loading: "文档加载中…",
+      ogDescription: "柏讯文档——正文内容页",
+      editor: {
+        paneTitle: "富文本文档",
+        titleLabel: "文档标题",
+        textPlaceholder: "以 Markdown 书写正文…",
+        sourceLabel: "Markdown 源",
+        previewLabel: "实时预览",
+        saveVersion: "保存版本",
+        saving: "保存中…",
+        saved: "已保存",
+        unsaved: "未保存",
+        saveFailed: "保存失败，请稍后重试。",
+        retry: "重试",
+        archivedNotice:
+          "产物已归档（archived），文档只读——请先恢复为草稿再编辑。",
+        lockedBadge: "已归档 · 只读",
+        loading: "文档加载中…",
+        loadError: "文档加载失败。",
+      },
+      // 空白新建文档（与 console.artifacts.createDoc 同文案；编辑器面独立
+      // 取键，避免跨面耦合）。
+      create: {
+        button: "新建文档",
+        titleLabel: "文档标题",
+        titlePlaceholder: "给新文档起个名字",
+        submit: "创建",
+        creating: "创建中…",
+        cancel: "取消",
+        titleRequired: "请输入文档标题。",
+        failed: "创建失败，请稍后重试。",
+      },
+      // 文档分享链接生成面（TTL 档位/复制/失败如实呈现）。
+      share: {
+        button: "生成分享链接",
+        dialogTitle: "分享文档",
+        ttlLabel: "有效期",
+        noExpiry: "不设期（印刷物档）",
+        copy: "复制链接",
+        copied: "已复制到剪贴板。",
+        failed: "生成分享链接失败，请稍后重试。",
       },
     },
     // 定时刷新调度小节（wire-refresh-scheduler 任务 4.1）：derived 数据集

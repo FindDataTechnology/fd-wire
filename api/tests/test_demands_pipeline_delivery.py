@@ -750,5 +750,5 @@ def test_migration_head_adds_demand_columns(migrated_demands_sqlite):
     } <= columns
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    # 链头唯一且随链推进（wire-transform-pipelines 起链头=0032）
-    assert version == "0037_billing_customer_name_uq"
+    # 链头唯一且随链推进（wire-rich-text-docs 起链头=0038）
+    assert version == "0038_artifact_drafts"

@@ -659,7 +659,7 @@ const en: Translation = {
     artifacts: {
       title: "Artifacts",
       subtitle:
-        "Seven artifact kinds persisted across conversations — every spec save appends a new version, with a draft/published/archived lifecycle.",
+        "Eight artifact kinds persisted across conversations — every spec save appends a new version, with a draft/published/archived lifecycle.",
       loading: "Loading artifacts…",
       errorTitle: "Failed to load artifacts",
       retry: "Retry",
@@ -676,6 +676,8 @@ const en: Translation = {
         alert_rule: "Alert rule",
         refresh_schedule: "Refresh schedule",
         "record-view": "Record page",
+        // Rich-text documents (wire-rich-text-docs task 6.1): kind=doc row label.
+        doc: "Document",
       },
       statusFilterLabel: "Status",
       statusAll: "All statuses",
@@ -740,6 +742,19 @@ const en: Translation = {
         creating: "Creating…",
         cancel: "Cancel",
         titleRequired: "Please enter a record page title.",
+        failed: "Creation failed, please retry later.",
+      },
+      // Blank document creation (wire-rich-text-docs task 6.1): the birth entry
+      // for prose artifacts — creating jumps straight into the split editor
+      // (minimal empty-body spec, D1).
+      createDoc: {
+        button: "New document",
+        titleLabel: "Document title",
+        titlePlaceholder: "Name your new document",
+        submit: "Create",
+        creating: "Creating…",
+        cancel: "Cancel",
+        titleRequired: "Please enter a document title.",
         failed: "Creation failed, please retry later.",
       },
       viewer: {
@@ -1390,6 +1405,59 @@ const en: Translation = {
         qrDownloadSvg: "Download SVG",
         unbound:
           "This record page has no main dataset or key column and cannot be shared yet — configure and publish first.",
+      },
+    },
+    // Rich-text documents (wire-rich-text-docs task 6.1): the doc-kind row
+    // expansion (split editor + draft-layer autosave + save-version) and the
+    // share surface strings. The parallel editor/share-dialog implementation
+    // (DocEditor etc.) reads copy from exactly these keys.
+    doc: {
+      viewButton: "View document",
+      // Public share page fallback title (when the response omits one),
+      // loading state, and the og card blurb.
+      untitled: "Untitled document",
+      loading: "Loading the document…",
+      ogDescription: "A Baixun document — prose content page",
+      editor: {
+        paneTitle: "Rich-text document",
+        titleLabel: "Document title",
+        textPlaceholder: "Write the body in Markdown…",
+        sourceLabel: "Markdown source",
+        previewLabel: "Live preview",
+        saveVersion: "Save version",
+        saving: "Saving…",
+        saved: "Saved",
+        unsaved: "Unsaved",
+        saveFailed: "Save failed, please retry later.",
+        retry: "Retry",
+        archivedNotice:
+          "This artifact is archived — the document is read-only. Restore it to draft before editing.",
+        lockedBadge: "Archived · read-only",
+        loading: "Loading the document…",
+        loadError: "Failed to load the document.",
+      },
+      // Blank document creation (same copy as console.artifacts.createDoc; the
+      // editor surface takes its own keys to avoid cross-surface coupling).
+      create: {
+        button: "New document",
+        titleLabel: "Document title",
+        titlePlaceholder: "Name your new document",
+        submit: "Create",
+        creating: "Creating…",
+        cancel: "Cancel",
+        titleRequired: "Please enter a document title.",
+        failed: "Creation failed, please retry later.",
+      },
+      // Document share-link generation surface (TTL tier / copy / honest
+      // failure).
+      share: {
+        button: "Generate share link",
+        dialogTitle: "Share document",
+        ttlLabel: "Validity",
+        noExpiry: "No expiry (print-stock tier)",
+        copy: "Copy link",
+        copied: "Copied to clipboard.",
+        failed: "Failed to create the share link, please retry later.",
       },
     },
     // Scheduled refresh section (wire-refresh-scheduler task 4.1): shared by

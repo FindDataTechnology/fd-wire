@@ -150,12 +150,13 @@ describe("WorkbenchPage（聚合渲染）", () => {
     const packRow = screen.getByTestId("workbench-recent-pack");
     expect(packRow.textContent).toContain("宏观价格");
     expect(packRow.getAttribute("href")).toBe("#/console/packs");
-    // 看板与产物：活跃总数 + 六类 by_kind 徽标（含表单 form）+ 最近产物
+    // 看板与产物：活跃总数 + by_kind 徽标（展示序 = ARTIFACT_KINDS 八类）+ 最近产物
     const artifacts = screen.getByTestId("workbench-section-artifacts");
     expect(artifacts.textContent).toContain("4 个活跃产物");
     const kindBadges = screen.getAllByTestId("workbench-kind-badge");
     // wire-record-view：展示序追加 record-view（api/web 两处一致；旧响应
-    // by_kind 缺键时徽标兜底 0）。
+    // by_kind 缺键时徽标兜底 0）；wire-rich-text-docs 任务 4.4 展示序再追加
+    // doc（同「两处一致」纪律）。
     expect(kindBadges.map((b) => b.getAttribute("data-kind"))).toEqual([
       "dashboard",
       "form",
@@ -164,6 +165,7 @@ describe("WorkbenchPage（聚合渲染）", () => {
       "alert_rule",
       "refresh_schedule",
       "record-view",
+      "doc",
     ]);
     expect(kindBadges[0]!.textContent).toContain("2");
     const artifactRow = screen.getByTestId("workbench-recent-artifact");

@@ -29,6 +29,14 @@
                                                4.2：console 身份按当前版本
                                                spec、与公开取数端点同一组装
                                                函数取数；不验令牌不生成链接）
+- ``GET  /api/v1/artifacts/{id}/draft``        doc 草稿层读取（wire-rich-text-
+                                               docs 任务 2.2：编辑器打开优先
+                                               草稿层、无则回退当前版本
+                                               spec.text——响应 text=null 即
+                                               无草稿行）
+- ``PUT  /api/v1/artifacts/{id}/draft``        doc 草稿层自动保存（覆盖写、
+                                               不产生版本行——design D3；
+                                               限长与版本保存同一口径）
 - ``POST /api/v1/artifacts``                    空白创建（wire-dashboard-blank-create；
                                                wire-form-builder 扩 kind=form——
                                                白名单 dashboard/form，title
@@ -527,3 +535,92 @@ def record_view_preview(
         "expires_at": None,
         **body,
     }
+
+
+# --------------------------------------------------------- doc 草稿层端点
+
+
+# 草稿层请求/响应模型就地定义（schemas.py 归 shared 面，改动面留给本文件；
+# 形状只服务 draft 两端口——放 shared 反而扩大耦合面）。
+class DocDraftIn(BaseModel):
+    """doc 草稿层写入体：``text`` = Markdown 源文本（限长/类型在 service 层
+    统一裁决——与版本保存同一校验器，两路口径不分叉）。"""
+
+    text: str
+
+
+class DocDraftOut(BaseModel):
+    """doc 草稿层读写响应：无草稿行时 text/updated_at 均 null（编辑器据此
+    回退当前版本 spec.text——design D3 读路径）。"""
+
+    text: str | None
+    updated_at: str | None
+
+
+def _draft_out(row) -> DocDraftOut:
+    """草稿行 → 响应（None=无草稿层）。updated_at 用 ISO-8601（同
+    ``service.utc_now_iso`` 不留痕口径的字符串形态——响应面不塞 datetime
+    对象，前端免时区解析歧义）。"""
+    if row is None:
+        return DocDraftOut(text=None, updated_at=None)
+    return DocDraftOut(
+        text=row.text if isinstance(row.text, str) else None,
+        updated_at=row.updated_at.isoformat() if row.updated_at else None,
+    )
+
+
+@router.get("/api/v1/artifacts/{artifact_id}/draft", response_model=DocDraftOut)
+def get_doc_draft(
+    artifact_id: int,
+    customer_id: str = Depends(require_console_customer_id),
+    db: Session = Depends(get_db),
+) -> DocDraftOut:
+    """读 doc 草稿层（wire-rich-text-docs 任务 2.2 读路径）：编辑器打开时
+    优先展示草稿层（未落版的正文不丢）；无草稿行返回 text=null，由前端
+    回退当前版本 spec.text（本端点不替前端做合并——「优先草稿、回退版本」
+    的判定在前端一处）。
+
+    语义边界：他企/不存在 404（_artifact_or_404 不泄露存在性）；kind≠doc
+    422（草稿层只有正文型产物用得上）。draft 状态亦可读（草稿层本为
+    draft 而生）；archived 只读不拦读——归档文档仍可看内容。
+    """
+    artifact = _artifact_or_404(db, artifact_id, customer_id)
+    if artifact.kind != service.DOC_KIND:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"产物 {artifact.id} 是 {artifact.kind}，仅文档（doc）"
+                "有草稿层。"
+            ),
+        )
+    return _draft_out(service.get_doc_draft(db, artifact))
+
+
+@router.put("/api/v1/artifacts/{artifact_id}/draft", response_model=DocDraftOut)
+def put_doc_draft(
+    artifact_id: int,
+    payload: DocDraftIn,
+    customer_id: str = Depends(require_console_customer_id),
+    db: Session = Depends(get_db),
+) -> DocDraftOut:
+    """自动保存 doc 草稿层（wire-rich-text-docs 任务 2.1/2.2，design D3）：
+    **覆盖写**一行，绝不产生版本行——版本链是里程碑（显式「保存版本」走
+    ``PUT /api/v1/artifacts/{id}`` 追加），草稿层是工作区（高频自动保存）。
+
+    限长与类型校验复用版本保存同一校验器（doc_spec.validate_doc_text）：
+    超限/非字符串 422 载明上限，**零半写**（草稿行不落不半更）。
+
+    语义边界：他企/不存在 404；kind≠doc 422；oversize 422；archived 409
+    （与 update_artifact 同映射——先恢复再写）；响应回显落库正文与时刻
+    （前端「已保存」态的依据）。
+    """
+    artifact = _artifact_or_404(db, artifact_id, customer_id)
+    try:
+        row = service.save_doc_draft(
+            db, artifact=artifact, text=payload.text, customer_id=customer_id
+        )
+    except service.ArtifactLocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except service.InvalidArtifactSpec as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _draft_out(row)

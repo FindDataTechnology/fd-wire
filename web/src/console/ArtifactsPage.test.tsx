@@ -1640,3 +1640,275 @@ describe("ArtifactsPage（默认看板置顶：wire-personal-preferences）", ()
     expect(screen.queryByTestId("dashboard-pane")).toBeNull();
   });
 });
+
+// ── 富文本文档（wire-rich-text-docs 任务 4.2/4.3/4.5）──────────────────────
+// 契约：doc 行徽标（琥珀）+ 「打开文档」行展开挂 DocEditor（分栏编辑器）；
+// published doc 行出分享入口（doc 专属极简弹层）；「新建文档」入口 → POST
+// {kind:"doc", title} → 置顶 + 直接进编辑器；published doc **不渲染**可见性
+// 设置区（design D5：doc 不进市场——服务端 422 是兜底，UI 不给假入口）。
+
+const DOC_V1 = {
+  title: "季度经营说明",
+  spec: { format: "markdown", text: "# 正文\n\n第一版。" },
+};
+
+/** 在 install() 三产物之上补 doc 行：21 draft、22 published。 */
+function installDocRows() {
+  const backend = installConsoleBackend(CONVERSATIONS, {});
+  const seeds: LifecycleArtifactSeed[] = [
+    { id: 11, kind: "dashboard", title: "宏观仪表盘", status: "draft", version: 1, origin_conversation_id: 1, spec: V1_DASH, created_at: "2026-10-09T09:00:00", updated_at: "2026-10-10T09:00:00" },
+    { id: 12, kind: "alert_rule", title: "煤价周环比 >5% 告警（放宽到 8%）", status: "published", version: 2, origin_conversation_id: 2, versions: [{ spec: ALERT_V1 }, { spec: ALERT_V2 }], created_at: "2026-10-09T10:00:00", updated_at: "2026-10-10T10:00:00" },
+    { id: 13, kind: "refresh_schedule", title: "每日 08:00 刷新", status: "archived", version: 1, origin_conversation_id: null, spec: { title: "每日 08:00 刷新", spec: { cron: "0 8 * * *", timezone: "Asia/Shanghai" } }, created_at: "2026-10-09T11:00:00", updated_at: "2026-10-10T11:00:00" },
+  ];
+  for (const seed of seeds) backend.addLifecycleArtifact(seed);
+  backend.addLifecycleArtifact({
+    id: 21,
+    kind: "doc",
+    title: "季度经营说明",
+    status: "draft",
+    version: 1,
+    origin_conversation_id: null,
+    spec: DOC_V1,
+    created_at: "2026-10-11T09:00:00",
+    updated_at: "2026-10-11T09:30:00",
+  });
+  // published 文档：可见性区若误挂载会发 GET /artifacts/22/visibility——
+  // 页面测试钉死「不发该请求」（D5 隐藏证据）。
+  backend.addLifecycleArtifact({
+    id: 22,
+    kind: "doc",
+    title: "已发布文档",
+    status: "published",
+    version: 1,
+    origin_conversation_id: null,
+    spec: DOC_V1,
+    created_at: "2026-10-11T10:00:00",
+    updated_at: "2026-10-11T10:00:00",
+  });
+  vi.stubGlobal("fetch", backend.fetchImpl);
+  return backend;
+}
+
+/** 包装假后端：拦截 doc share POST（22 合法 → {url:"/api/v1/share/doc/…",
+ *  expires_at, version}，其余 403），透传其余（照 form 分享测试范式）。 */
+function withDocShareEndpoint(
+  backend: ReturnType<typeof installConsoleBackend>,
+): typeof fetch {
+  const original = backend.fetchImpl;
+  return ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://console.test");
+    const match = url.pathname.match(/^\/api\/v1\/artifacts\/(\d+)\/share$/);
+    if (match && (init?.method ?? "GET").toUpperCase() === "POST") {
+      const id = Number(match[1]);
+      const headers: Record<string, string> = {};
+      new Headers(init?.headers as HeadersInit | undefined).forEach((v, k) => {
+        headers[k.toLowerCase()] = v;
+      });
+      backend.calls.push({
+        method: "POST",
+        url,
+        headers,
+        body:
+          typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      });
+      if (id !== 22) {
+        return Promise.resolve(
+          localJson(
+            { detail: `产物 ${id} 不允许生成分享链接（仅已发布产物可分享）` },
+            403,
+          ),
+        );
+      }
+      return Promise.resolve(
+        localJson({
+          url: `/api/v1/share/doc/22?t=doc-token-22&v=1`,
+          expires_at: "2026-11-10T08:00:00",
+          version: 1,
+        }),
+      );
+    }
+    return original(input, init);
+  }) as unknown as typeof fetch;
+}
+
+describe("ArtifactsPage 富文本文档（wire-rich-text-docs 4.2/4.3/4.5）", () => {
+  beforeEach(() => {
+    i18n.changeLanguage("zh");
+    localStorage.clear();
+    sessionStorage.clear();
+    seedConsoleSession({ sub: "demo-customer" });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  it("doc 行徽标与筛选：呈「文档」徽标（data-kind=doc），kind=doc 筛选收窄到两行", async () => {
+    installDocRows();
+    render(<ArtifactsPage />);
+
+    const row21 = await waitFor(() => rowOf(21));
+    expect(
+      within(row21).getByTestId("artifact-kind-badge").textContent,
+    ).toContain("文档");
+    expect(
+      within(row21).getByTestId("artifact-kind-badge").getAttribute("data-kind"),
+    ).toBe("doc");
+
+    fireEvent.change(screen.getByTestId("artifact-kind-filter"), {
+      target: { value: "doc" },
+    });
+    expect(screen.getAllByTestId("artifact-item").length).toBe(2);
+  });
+
+  it("doc 行展开 = DocEditor 分栏编辑器（文本区 + 预览区 + 保存版本）；非 doc 行无该按钮", async () => {
+    installDocRows();
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+
+    expect(within(rowOf(11)).queryByTestId("artifact-doc-view")).toBeNull();
+    fireEvent.click(within(rowOf(21)).getByTestId("artifact-doc-view"));
+    expect(await screen.findByTestId("doc-editor")).toBeTruthy();
+    expect(screen.getByTestId("doc-editor-text")).toBeTruthy();
+    expect(screen.getByTestId("doc-editor-preview")).toBeTruthy();
+    expect(screen.getByTestId("doc-editor-save")).toBeTruthy();
+    // 版本正文已回填（草稿层无行 → 回退当前版本 spec.text）。
+    await waitFor(() => {
+      expect(
+        (screen.getByTestId("doc-editor-text") as HTMLTextAreaElement).value,
+      ).toContain("第一版。");
+    });
+
+    // 再点收起（toggle 同框）。
+    fireEvent.click(within(rowOf(21)).getByTestId("artifact-doc-view"));
+    expect(screen.queryByTestId("doc-editor")).toBeNull();
+  });
+
+  it("published doc 分享入口：POST /share + 展示自构链接 /#/share/doc/{id}?t&v + TTL 档可改选", async () => {
+    const backend = installDocRows();
+    vi.stubGlobal("fetch", withDocShareEndpoint(backend));
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+
+    // 入口分发：仅 published doc 行；draft doc 与 published 非 doc 行不出。
+    expect(within(rowOf(22)).getByTestId("artifact-doc-share")).toBeTruthy();
+    expect(within(rowOf(21)).queryByTestId("artifact-doc-share")).toBeNull();
+
+    fireEvent.click(within(rowOf(22)).getByTestId("artifact-doc-share"));
+    expect(await screen.findByTestId("doc-share-dialog")).toBeTruthy();
+
+    // 请求：POST /api/v1/artifacts/22/share，body ttl_days=30（缺省档）。
+    const posts = () =>
+      backend.calls.filter(
+        (c) =>
+          c.method === "POST" &&
+          /^\/api\/v1\/artifacts\/22\/share$/.test(c.url.pathname),
+      );
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]!.body).toEqual({ ttl_days: 30 });
+
+    // 展示链接自构：origin + #/share/doc/22?t=<响应 url 解出的 t>&v=<version>。
+    expect(
+      (await screen.findByTestId("doc-share-url") as HTMLInputElement).value,
+    ).toBe(`${window.location.origin}/#/share/doc/22?t=doc-token-22&v=1`);
+    expect(screen.getByTestId("doc-share-expires").textContent).toContain(
+      "到期时间",
+    );
+
+    // 复制（剪贴板可用时提示已复制）。
+    fireEvent.click(screen.getByTestId("doc-share-copy"));
+    expect(await screen.findByTestId("doc-share-copied")).toBeTruthy();
+
+    // TTL 四档（0|7|30|90，与 record-view 同源）：改选 90 重新生成。
+    const options = screen.getAllByTestId("doc-share-ttl-option");
+    expect(options.map((el) => el.getAttribute("data-days"))).toEqual([
+      "0",
+      "7",
+      "30",
+      "90",
+    ]);
+    // 档位文案落成中文（label 文案；不露出裸键名/空档位）。
+    expect(options[2]!.parentElement!.textContent).toContain("30 天");
+    expect(options[0]!.parentElement!.textContent).toContain("不设期");
+    fireEvent.click(options.find((el) => el.getAttribute("data-days") === "90")!);
+    await waitFor(() => expect(posts()).toHaveLength(2));
+    expect(posts()[1]!.body).toEqual({ ttl_days: 90 });
+  });
+
+  it("published doc 不渲染可见性设置区（D5 隐藏），且不发其读端点请求", async () => {
+    const backend = installDocRows();
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+
+    // published doc（22）行内无可见性区、也无发起读请求。
+    expect(
+      within(rowOf(22)).queryByTestId("artifact-visibility-section"),
+    ).toBeNull();
+    expect(
+      backend.calls.some((c) =>
+        /^\/api\/v1\/artifacts\/22\/visibility$/.test(c.url.pathname),
+      ),
+    ).toBe(false);
+  });
+
+  it("新建文档入口：标题 → POST {kind:'doc', title} → 置顶 + 直接进分栏编辑器", async () => {
+    const backend = installDocRows();
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+
+    fireEvent.click(screen.getByTestId("create-doc-open"));
+    expect(screen.getByTestId("create-doc-form")).toBeTruthy();
+
+    fireEvent.change(screen.getByTestId("create-doc-title"), {
+      target: { value: "年度报告" },
+    });
+    fireEvent.click(screen.getByTestId("create-doc-submit"));
+
+    // 创建即跳编辑器（空白文档的空正文——出生即可写作）。
+    expect(await screen.findByTestId("doc-editor-text")).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        (screen.getByTestId("doc-editor-title") as HTMLInputElement).value,
+      ).toBe("年度报告");
+    });
+
+    const post = backend.calls.find(
+      (c) => c.method === "POST" && c.url.pathname === "/api/v1/artifacts",
+    );
+    expect(post).toBeTruthy();
+    expect(post?.body).toEqual({ kind: "doc", title: "年度报告" });
+    expect(post?.headers["authorization"]).toMatch(/^Bearer /);
+
+    // 新行置顶 + 表单收起（3 基础行 + 21/22 两条 doc + 新建 = 6）。
+    const items = screen.getAllByTestId("artifact-item");
+    expect(items.length).toBe(6);
+    expect(items[0]!.getAttribute("data-artifact-id")).toBe("23");
+    expect(screen.queryByTestId("create-doc-form")).toBeNull();
+  });
+
+  it("新建文档空标题前端先拦：不发 POST、提示后可修正再创建", async () => {
+    const backend = installDocRows();
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+
+    fireEvent.click(screen.getByTestId("create-doc-open"));
+    fireEvent.click(screen.getByTestId("create-doc-submit"));
+    expect(screen.getByTestId("create-doc-error").textContent).toContain(
+      "请输入文档标题",
+    );
+    expect(
+      backend.calls.some(
+        (c) => c.method === "POST" && c.url.pathname === "/api/v1/artifacts",
+      ),
+    ).toBe(false);
+
+    fireEvent.change(screen.getByTestId("create-doc-title"), {
+      target: { value: "修正后的标题" },
+    });
+    fireEvent.click(screen.getByTestId("create-doc-submit"));
+    await screen.findByTestId("doc-editor-text");
+  });
+});

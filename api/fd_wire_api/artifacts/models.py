@@ -5,6 +5,9 @@
   来源会话指针）。
 - ``artifact_versions``：spec 版本链（append-only——每次保存追加一行，
   历史版本不可改写；当前 spec = 最大 version 那行）。
+- ``artifact_drafts``：doc 产物草稿层（wire-rich-text-docs design D3）——
+  自动保存的覆盖写落点，一对一连产物（唯一外键、产物删除级联清除），
+  SHALL NOT 参与版本链/状态机/分享钉版。
 
 表落在 ai 切片引擎（``AiBase``）：产物由会话草稿转正而来，
 ``origin_conversation_id`` 逻辑引用 ``ai_conversations``（不设跨模块
@@ -121,6 +124,44 @@ class ArtifactVersion(AiBase):
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用途
         return f"<ArtifactVersion artifact={self.artifact_id} v={self.version}>"
+
+
+# ── 草稿层（wire-rich-text-docs design D3）──────────────────────────────
+
+
+class ArtifactDraft(AiBase):
+    """doc 产物的草稿层：自动保存的**覆盖写**工作区（一对一连产物）。
+
+    为什么独立成表而非版本链的行（design D3）：版本链是 append-only 的对外
+    契约（分享钉版、市场快照、物化引用都依赖它）——自动保存若进版本链，
+    敲字期间会产生几百个版本，把历史炸掉、把分享钉版语义搅浑。分离后：
+    草稿层是「工作区」（高频覆盖写、不产生版本行），版本链是「里程碑」
+    （显式「保存版本」才追加）。
+
+    为什么一对一连产物（唯一约束而非多行历史）：工作区不需要历史——每个
+    产物只需要「最新未落版正文」一行；多行历史即版本链的退化复制品。
+
+    为什么独立表而非 ``artifacts`` 加列：产物表是全系统最热的表（列表/
+    工作台/市场都扫），为只有一个 kind 需要的功能给全局表加列是污染；
+    独立表 + 外键级联删除，热点路径零变化（design D3「表而非列」）。
+    """
+
+    __tablename__ = "artifact_drafts"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    #: 归属产物（一对一：unique 索引即工作区语义；产物删除级联清除草稿）
+    artifact_id: Mapped[int] = mapped_column(
+        ForeignKey("artifacts.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    #: 草稿正文（Markdown 源文本；限长校验与版本保存同一口径）
+    text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: 最后自动保存时刻（仅草稿层自用，不参与产物 updated_at 排序）
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive)
+    #: 写入者留痕（console:<customer_id>）
+    updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用途
+        return f"<ArtifactDraft artifact={self.artifact_id}>"
 
 
 # ── 产物市场三表（wire-artifact-marketplace；与 dataset 市场三表同构）────

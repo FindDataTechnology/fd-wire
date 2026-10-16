@@ -118,7 +118,7 @@ class ArtifactRecentItem(BaseModel):
 
 
 class WorkbenchArtifacts(BaseModel):
-    """产物段：活跃总数（draft+published）+ 五类分计数（缺类零）+ 最近 ≤5。"""
+    """产物段：活跃总数（draft+published）+ 八类分计数（缺类零）+ 最近 ≤5。"""
 
     active_total: int
     by_kind: dict[str, int]
@@ -263,12 +263,13 @@ def packs_section(db: Session, *, customer_id: str) -> WorkbenchPacks:
     return WorkbenchPacks(subscribed=subscribed, recent=recent)
 
 
-#: 工作台展示面的产物类清单（七类，含表单构建器的 form 与单记录公开页的
-#: record-view——wire-record-view 任务 1.3）。注意与 artifacts.models.
-#: ARTIFACT_KINDS（五类，校验面口径）区分：那边不加 form/record-view 是
-#: 产物校验语义（record-view 走 service 层常量路线，AI 门亦不收录），
-#: 展示面必须覆盖全部实际 kind，否则 active_total 与 by_kind 徽标和会对
-#: 不上。键序与 web api.ts 的 ARTIFACT_KINDS 展示序一致。
+#: 工作台展示面的产物类清单（八类，含表单构建器的 form、单记录公开页的
+#: record-view——wire-record-view 任务 1.3——与富文本文档的 doc——
+#: wire-rich-text-docs 任务 1.4）。注意与 artifacts.models.
+#: ARTIFACT_KINDS（五类，校验面口径）区分：那边不加 form/record-view/doc
+#: 是产物校验语义（它们走 service 层常量路线，AI 门亦不收录），展示面
+#: 必须覆盖全部实际 kind，否则 active_total 与 by_kind 徽标和会对不上。
+#: 键序与 web api.ts 的 ARTIFACT_KINDS 展示序一致。
 WORKBENCH_KINDS: tuple[str, ...] = (
     "dashboard",
     "form",
@@ -277,13 +278,14 @@ WORKBENCH_KINDS: tuple[str, ...] = (
     "alert_rule",
     "refresh_schedule",
     "record-view",
+    "doc",
 )
 
 
 def artifacts_section(db: Session, *, customer_id: str) -> WorkbenchArtifacts:
-    """产物段：活跃（draft+published）总数与六类分计数 + 最近 ≤5。
+    """产物段：活跃（draft+published）总数与八类分计数 + 最近 ≤5。
 
-    by_kind 六键全给（缺类零）；archived 不计（活跃口径覆盖计数与最近
+    by_kind 八键全给（缺类零）；archived 不计（活跃口径覆盖计数与最近
     列表两处）；库中出现清单外 kind 时如实附加键（不吞不虚构）。
     """
     active = Artifact.status.in_(ACTIVE_ARTIFACT_STATUSES)

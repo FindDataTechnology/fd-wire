@@ -28,6 +28,10 @@ export const ARTIFACT_KINDS = [
   // wire-record-view 任务 1.3 展示序追加：与 api 侧 workbench.WORKBENCH_KINDS
   // 两处一致（AI 生成门 ARTIFACT_TOOL_KINDS 不收录该 kind）。
   "record-view",
+  // wire-rich-text-docs 任务 4.4 展示序追加：同样必须与 api 侧
+  // workbench.WORKBENCH_KINDS 两处一致（该元组已含 doc）——两处漂移会让
+  // 列表筛选/工作台计数与产物实况不符。
+  "doc",
 ] as const;
 
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
@@ -1350,6 +1354,65 @@ export async function previewRecordView(
       { method: "POST", body: { key } },
     ),
   );
+}
+
+// ── 富文本文档（wire-rich-text-docs 任务 4.4 web 面，design D1/D3）────────
+// 契约（api 仓 artifacts service 层 DOC_KIND 路线，同 form/record-view）：
+// - POST /api/v1/artifacts body {kind:"doc", title} → 201 ArtifactDetail
+//   （draft v1，spec = 最小空文档信封 {title, spec:{format:"markdown",
+//   text:""}}）——出生即可进分栏编辑器写作。
+// - GET/PUT /api/v1/artifacts/{id}/draft → {text: string|null, updated_at:
+//   string|null}（草稿层：一对一的「工作区」行，自动保存覆盖写、**绝不**
+//   产生版本行；无草稿行 text/updated_at 均 null，编辑器回退当前版本
+//   spec.text——D3 读路径的「优先草稿、回退版本」判定在前端一处）。PUT
+//   超限 422、非 doc kind 422、archived 409（与版本保存同映射）。
+// - POST /api/v1/artifacts/{id}/share 放行 kind=doc（D5）：ttl_days 白名单
+//   0|7|30|90 与 record-view 同源，响应形状同 RecordViewShareLink。
+
+/** 富文本文档产物 kind 常量（与 api 侧 service 层 DOC_KIND 同源）。 */
+export const DOC_KIND = "doc";
+
+/** 空白新建文档：分栏编辑器的出生路径（spec 为 {format:"markdown",text:""}）。 */
+export function createBlankDoc(title: string): Promise<ArtifactDetail> {
+  return requestJson(`${API_BASE}/v1/artifacts`, {
+    method: "POST",
+    body: { kind: DOC_KIND, title },
+  }) as Promise<ArtifactDetail>;
+}
+
+/** doc 草稿层读写响应：null=尚未自动保存过（回退当前版本 spec.text）。 */
+export interface DocDraft {
+  text: string | null;
+  updated_at: string | null;
+}
+
+/** 读 doc 草稿层（编辑器打开路径；无草稿行 text=null 不回退由调用方判定）。 */
+export function fetchDocDraft(id: number): Promise<DocDraft> {
+  return requestJson(`${API_BASE}/v1/artifacts/${id}/draft`, {
+    method: "GET",
+  }) as Promise<DocDraft>;
+}
+
+/** 自动保存 doc 草稿层（覆盖写、不产生版本行；archived 409 / 超限 422）。 */
+export function saveDocDraft(id: number, text: string): Promise<DocDraft> {
+  return requestJsonAnyMethod(`${API_BASE}/v1/artifacts/${id}/draft`, "PUT", {
+    body: { text },
+  }) as Promise<DocDraft>;
+}
+
+/** 文档分享链接生成响应（形状与 record-view 同——同一个 share 机器）。 */
+export type DocShareLink = RecordViewShareLink;
+
+/** 生成文档分享链接（仅 published doc；ttlDays 0=不设期档，同 record-view）。 */
+export function createDocShareLink(
+  id: number,
+  ttlDays: RecordViewTtlDays = 30,
+): Promise<DocShareLink> {
+  return requestJsonAnyMethod(
+    `${API_BASE}/v1/artifacts/${id}/share`,
+    "POST",
+    { body: { ttl_days: ttlDays } },
+  ) as Promise<DocShareLink>;
 }
 
 // ── 源包（wire-source-packs 任务 3.3）──────────────────────────────────

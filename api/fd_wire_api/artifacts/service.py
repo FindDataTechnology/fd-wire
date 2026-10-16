@@ -7,11 +7,12 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..ai.models import AIDraftArtifact
+from ..ai.models import AIDraftArtifact, utc_now_naive
 from ..ai.service import ConversationNotFound, get_customer_conversation
 from ..datasets.models import Dataset
+from .doc_spec import BLANK_DOC_INNER, validate_doc_spec, validate_doc_text
 from .form_spec import validate_form_spec
-from .models import Artifact, ArtifactStatus, ArtifactVersion
+from .models import Artifact, ArtifactDraft, ArtifactStatus, ArtifactVersion
 from .record_view_spec import validate_record_view_spec
 
 
@@ -60,6 +61,11 @@ ALERT_KIND = "alert_rule"
 #: 层常量路线——models.ARTIFACT_KINDS 校验面与 AI 门均不收录）
 RECORD_VIEW_KIND = "record-view"
 
+#: doc 产物 kind 短名（wire-rich-text-docs design D1：同 form/record-view 走
+#: service 层常量路线——正文型产物不是 AI 五类工具产物，models.ARTIFACT_KINDS
+#: 校验面与 AI 门均不收录；结构校验在那层之上按 kind 分派追加 doc_spec）
+DOC_KIND = "doc"
+
 
 class InvalidAlertArtifactSpec(InvalidArtifactSpec):
     """alert_rule 规则契约未过校验（alerts.spec_validate）——路由层转 400
@@ -73,7 +79,10 @@ def validate_kind_spec(kind: str, spec: object) -> str | None:
     零漂移）；kind=form 再追加 form 结构层（form_spec.validate_form_spec，
     design D1 第①层）；kind=record-view 追加 record-view 结构层
     （record_view_spec.validate_record_view_spec，wire-record-view 任务
-    1.1）。dashboard 及其余 kind 语义不变（仅通用层）。
+    1.1）；kind=doc 追加正文契约层（doc_spec.validate_doc_spec——
+    format 恒 markdown + text 字符串 + 体积上限，wire-rich-text-docs
+    任务 1.2；草稿层 PUT 复用同一校验器，两路口径一致）。
+    dashboard 及其余 kind 语义不变（仅通用层）。
     """
     error = validate_spec(spec)
     if error is not None:
@@ -82,6 +91,8 @@ def validate_kind_spec(kind: str, spec: object) -> str | None:
         return validate_form_spec(spec.get("spec"))
     if kind == RECORD_VIEW_KIND and isinstance(spec, dict):
         return validate_record_view_spec(spec.get("spec"))
+    if kind == DOC_KIND and isinstance(spec, dict):
+        return validate_doc_spec(spec.get("spec"))
     return None
 
 
@@ -381,7 +392,9 @@ def update_spec(
     sections.dateColumn/filters 的 {fromField} 按 columns_json 校验，
     wire-record-view 任务 1.2）。alert_rule 产物
     追加规则契约层（_validate_alert_spec，InvalidAlertArtifactSpec→路由
-    层 400）。dashboard 及其余 kind 仅走通用层（语义零漂移，``datasets_db``
+    层 400）。doc 产物只走 kind 分派里的正文契约层（doc_spec，无数据集
+    依赖——不触 ``datasets_db``；wire-rich-text-docs 任务 1.2）。dashboard
+    及其余 kind 仅走通用层（语义零漂移，``datasets_db``
     不参与）。
     """
     if artifact.status == ArtifactStatus.archived.value:
@@ -540,9 +553,17 @@ def import_from_draft(
 #: 空白创建的 kind 白名单：dashboard（最小空板）/ form（最小空表单）/
 #: alert_rule（规则模板壳，wire-alert-evaluation——alert 此前唯一出生路径
 #: 是 AI 草稿转正，而 AI 构建要求 cell，免费档无门）/ record-view（最小空
-#: 单记录页，wire-record-view——公开读面产物同样要求 console 出生路径）。
-#: 其余三类（复合指标/研报/定时）结构强，仍只能由 AI 构建草稿转正产生。
-BLANK_CREATE_KINDS: tuple[str, ...] = ("dashboard", "form", "alert_rule", "record-view")
+#: 单记录页，wire-record-view——公开读面产物同样要求 console 出生路径）/
+#: doc（空正文最小文档，wire-rich-text-docs——正文型产物无条件可建：人写
+#: 文档不依赖任何 AI 构建物）。其余三类（复合指标/研报/定时）结构强，
+#: 仍只能由 AI 构建草稿转正产生。
+BLANK_CREATE_KINDS: tuple[str, ...] = (
+    "dashboard",
+    "form",
+    "alert_rule",
+    "record-view",
+    "doc",
+)
 
 
 def _blank_spec(kind: str, title: str) -> dict:
@@ -551,9 +572,15 @@ def _blank_spec(kind: str, title: str) -> dict:
     alert_rule=规则模板壳（占位 dataset_id；出生版本不过规则契约层，首次
     PUT 真实 spec 才校验——评估器对未修占位的 published 规则记 error 事件）；
     record-view=零头部零时间段、datasetId=None 的最小空页（wire-record-view
-    契约：未绑数据集的中间态可保存、不可生成分享）。"""
+    契约：未绑数据集的中间态可保存、不可生成分享）；doc=空正文最小文档
+    （wire-rich-text-docs：``{format:"markdown", text:""}``，出生即可进
+    分栏编辑器写作）。"""
     if kind == FORM_KIND:
         return {"title": title, "spec": {"title": title, "datasetId": None, "fields": []}}
+    if kind == DOC_KIND:
+        # 浅拷 BLANK_DOC_INNER：内造 spec 会随产物落库并被后续 PUT/草稿路径
+        # 读写，绝不能把模块常量本体交出去（调用方 mutate 即污染全进程）。
+        return {"title": title, "spec": dict(BLANK_DOC_INNER)}
     if kind == RECORD_VIEW_KIND:
         return {
             "title": title,
@@ -590,13 +617,13 @@ def create_blank_artifact(
     版本行 + operator 审计 + 初始状态留痕 + title 投影），仅来源会话指针
     为 None。
 
-    约束：kind 白名单 BLANK_CREATE_KINDS（dashboard/form）；title strip
-    后须非空——违者 InvalidArtifactSpec（路由层 422），且零半写（拒收不
-    落任何产物/版本行）。
+    约束：kind 白名单 BLANK_CREATE_KINDS（dashboard/form/alert_rule/
+    record-view/doc）；title strip 后须非空——违者 InvalidArtifactSpec
+    （路由层 422），且零半写（拒收不落任何产物/版本行）。
     """
     if kind not in BLANK_CREATE_KINDS:
         raise InvalidArtifactSpec(
-            "空白创建仅支持 dashboard、form、alert_rule、record-view"
+            "空白创建仅支持 dashboard、form、alert_rule、record-view、doc"
             "（其他 kind 由 AI 构建产生）"
         )
     if not title.strip():
@@ -638,3 +665,57 @@ def create_blank_artifact(
     db.commit()
     db.refresh(artifact)
     return artifact
+
+
+# ------------------------------------------------------------- 草稿层（doc）
+
+#: doc 草稿层是「工作区」不是「里程碑」（wire-rich-text-docs design D3）：
+#: 自动保存高频覆盖写这一行，**绝不**产生版本行；版本链只在显式保存
+#: （update_spec）时追加。草稿层 SHALL NOT 参与状态机/分享钉版/市场判定
+#: （读它的入口只有编辑器读路径一处）。
+
+
+def get_doc_draft(db: Session, artifact: Artifact) -> ArtifactDraft | None:
+    """读 doc 草稿层（无草稿行为 None——编辑器回退当前版本 spec.text）。"""
+    return db.scalar(
+        select(ArtifactDraft).where(ArtifactDraft.artifact_id == artifact.id)
+    )
+
+
+def save_doc_draft(
+    db: Session, *, artifact: Artifact, text: object, customer_id: str
+) -> ArtifactDraft:
+    """自动保存：UPSERT 草稿层一行（覆盖写，不产生版本行——design D3）。
+
+    正文口径与版本保存**完全一致**（doc_spec.validate_doc_text，wire-rich-
+    text-docs 任务 2.2）：同一个上限、同一段文案——不留下「草稿能存但版本
+    存不了」的错位（否则自动保存悄悄超限，点「保存版本」才炸）。
+
+    拒绝面：kind≠doc 一律 422（草稿层只有正文型产物用得上；其余 kind 的
+    中间态在各自构建器内，不入库）；archived 拒写（与 update_spec 同口径，
+    路由层 409——归档是只读位）。任何拒绝**零半写**（不改草稿行、不动
+    产物行）。
+    """
+    if artifact.kind != DOC_KIND:
+        raise InvalidArtifactSpec("仅 doc 产物支持草稿层")
+    if artifact.status == ArtifactStatus.archived.value:
+        raise ArtifactLocked("已归档产物不可写入草稿")
+    error = validate_doc_text(text)
+    if error is not None:
+        raise InvalidArtifactSpec(error)
+    row = get_doc_draft(db, artifact)
+    if row is None:
+        row = ArtifactDraft(
+            artifact_id=artifact.id,
+            text=text,
+            updated_at=utc_now_naive(),
+            updated_by=operator_label(customer_id),
+        )
+        db.add(row)
+    else:
+        row.text = text
+        row.updated_at = utc_now_naive()
+        row.updated_by = operator_label(customer_id)
+    db.commit()
+    db.refresh(row)
+    return row

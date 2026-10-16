@@ -633,6 +633,10 @@ export function installConsoleBackend(
       created_at: string;
       decided_at: string | null;
     }>;
+    /** doc 草稿层断言面（wire-rich-text-docs 6.2）：无行回 null。 */
+    getDocDraft: (
+      artifactId: number,
+    ) => { text: string; updated_at: string } | null;
   } {
   const store = new Map<number, StoredConversation>();
   let nextConversationId = 1;
@@ -1214,6 +1218,14 @@ export function installConsoleBackend(
 
   const lifecycleArtifacts = new Map<number, StoredLifecycleArtifact>();
   let nextLifecycleArtifactId = 1;
+
+  // ── doc 草稿层假后端状态（wire-rich-text-docs 任务 2.1/2.2，任务 6.2 的
+  //    console 测试面）：一对一连产物（覆盖写、绝不进版本链——design D3 的
+  //    硬约束在假后端同规）。缺省即无行（GET 返回 text=null，前端据此回退
+  //    当前版本 spec.text）。
+  const draftStore = new Map<number, { text: string; updated_at: string }>();
+  // 正文上限（对齐 api 缺省 FD_WIRE_DOC_MAX_BYTES=262144；测试注入超限用）。
+  const DRAFT_MAX_BYTES = 262144;
 
   function addLifecycleArtifact(seed: LifecycleArtifactSeed): void {
     const specList = seed.versions ?? [{ spec: seed.spec ?? {} }];
@@ -2666,12 +2678,15 @@ export function installConsoleBackend(
     }
 
     // ── 空白建板（wire-dashboard-blank-create 1.2）/ 空白建表单
-    //    （wire-form-builder 1.2）/ 空白建告警规则（wire-alert-evaluation）：
+    //    （wire-form-builder 1.2）/ 空白建告警规则（wire-alert-evaluation）/
+    //    空白建文档（wire-rich-text-docs 任务 6.2）：
     //    POST /api/v1/artifacts {kind, title} → 201 ArtifactDetail（draft v1）。
-    //    kind 白名单 (dashboard, form, alert_rule)——dashboard spec = 最小空板
-    //    {title, spec:{title, panels:[]}}；form spec = 最小空表单；alert_rule
-    //    spec = 规则模板壳（占位 dataset_id；信封形状逐端点对齐生产）；
-    //    title 非空，非法 422 带 detail，语义对齐 api 仓。 ──
+    //    kind 白名单 (dashboard, form, alert_rule, doc)——dashboard spec = 最小
+    //    空板 {title, spec:{title, panels:[]}}；form spec = 最小空表单；
+    //    alert_rule spec = 规则模板壳（占位 dataset_id；信封形状逐端点对齐
+    //    生产）；doc spec = 空正文最小文档 {title, spec:{format:"markdown",
+    //    text:""}}（任务 6.2 只加 doc，不改 record-view 既有行为——它本不在
+    //    此 mock 白名单内）；title 非空，非法 422 带 detail，语义对齐 api 仓。 ──
     if (path === "/api/v1/artifacts" && method === "POST") {
       if (options.failArtifactCreateStatus) {
         return Promise.resolve(
@@ -2692,13 +2707,14 @@ export function installConsoleBackend(
       if (
         payload.kind !== "dashboard" &&
         payload.kind !== "form" &&
-        payload.kind !== "alert_rule"
+        payload.kind !== "alert_rule" &&
+        payload.kind !== "doc"
       ) {
         return Promise.resolve(
           jsonResponse(
             {
               detail:
-                `kind 白名单仅支持 dashboard/form/alert_rule（当前 ${String(payload.kind)}）` +
+                `kind 白名单仅支持 dashboard/form/alert_rule/doc（当前 ${String(payload.kind)}）` +
                 "——其他类型仍由 AI 草稿转正产生",
             },
             422,
@@ -2718,15 +2734,17 @@ export function installConsoleBackend(
           ? { title, spec: { title, panels: [] } }
           : kind === "form"
             ? { title, spec: { title, datasetId: null, fields: [] } }
-            : {
-                title,
-                spec: {
-                  query: { dataset_id: "<数据集id>", columns: ["<列名>"] },
-                  aggregate: { func: "count" },
-                  condition: { op: "gt", value: 0 },
-                  intervalMinutes: 30,
-                },
-              };
+            : kind === "doc"
+              ? { title, spec: { format: "markdown", text: "" } }
+              : {
+                  title,
+                  spec: {
+                    query: { dataset_id: "<数据集id>", columns: ["<列名>"] },
+                    aggregate: { func: "count" },
+                    condition: { op: "gt", value: 0 },
+                    intervalMinutes: 30,
+                  },
+                };
       const created: StoredLifecycleArtifact = {
         id,
         customer_id: customerId,
@@ -2813,6 +2831,77 @@ export function installConsoleBackend(
         artifact.title = title.trim();
         artifact.updated_at = lifecycleNow();
         return Promise.resolve(jsonResponse(lifecycleDetail(artifact)));
+      }
+    }
+
+    // ── doc 草稿层（wire-rich-text-docs 任务 2.2/6.2）：GET/PUT
+    //    /api/v1/artifacts/{id}/draft——仅 doc kind（他 kind 422）；PUT 覆盖写
+    //    一行绝不进版本链（design D3）；archived 拒写 409；越权/不存在 404
+    //    （不泄露存在性）；超限 422 载明上限且零半写。──
+    match = path.match(/^\/api\/v1\/artifacts\/(\d+)\/draft$/);
+    if (match) {
+      const artifact = ownLifecycleArtifact(Number(match[1]), customerId);
+      if (!artifact) {
+        return Promise.resolve(jsonResponse({ detail: "artifact not found" }, 404));
+      }
+      if (artifact.kind !== "doc") {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail: `产物 ${artifact.id} 是 ${artifact.kind}，仅文档（doc）有草稿层。`,
+            },
+            422,
+          ),
+        );
+      }
+      if (method === "GET") {
+        const row = draftStore.get(artifact.id);
+        return Promise.resolve(
+          jsonResponse(
+            row
+              ? { text: row.text, updated_at: row.updated_at }
+              : { text: null, updated_at: null },
+          ),
+        );
+      }
+      if (method === "PUT") {
+        if (artifact.status === "archived") {
+          return Promise.resolve(
+            jsonResponse(
+              {
+                detail:
+                  `产物 ${artifact.id} 已归档（archived），不可编辑——请先恢复（restore）为草稿再修改。`,
+              },
+              409,
+            ),
+          );
+        }
+        const payload = (calls[calls.length - 1]!.body ?? {}) as { text?: unknown };
+        if (typeof payload.text !== "string") {
+          return Promise.resolve(
+            jsonResponse(
+              { detail: "spec.spec.text 必须是字符串（Markdown 源文本）" },
+              422,
+            ),
+          );
+        }
+        const bytes = new TextEncoder().encode(payload.text).length;
+        if (bytes > DRAFT_MAX_BYTES) {
+          return Promise.resolve(
+            jsonResponse(
+              {
+                detail:
+                  `正文超过上限 ${DRAFT_MAX_BYTES} 字节（Markdown 源文本按 UTF-8 计）`,
+              },
+              422,
+            ),
+          );
+        }
+        const updatedAt = lifecycleNow();
+        draftStore.set(artifact.id, { text: payload.text, updated_at: updatedAt });
+        return Promise.resolve(
+          jsonResponse({ text: payload.text, updated_at: updatedAt }),
+        );
       }
     }
 
@@ -4977,6 +5066,11 @@ export function installConsoleBackend(
     /** 准入申请断言面。 */
     getAccessRequests: () =>
       [...accessRequestsStore.values()].map((row) => ({ ...row })),
+    /** doc 草稿层断言面（wire-rich-text-docs 6.2）：无行回 null。 */
+    getDocDraft: (artifactId: number) => {
+      const row = draftStore.get(artifactId);
+      return row ? { ...row } : null;
+    },
   };
 }
 

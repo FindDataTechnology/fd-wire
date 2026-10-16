@@ -4,8 +4,9 @@
 // tabs, demand placeholder).
 // 页脚分发（wire-ux-consolidation 任务 1.2）：门户视图挂全量页脚，
 // #/console/* 挂紧凑页脚，#/admin 不渲染页脚。
-// 公开分享页（wire-dashboard-share）：#/share/dashboard/{id}?t=&v= 完全
-// 独立成壳（极简顶栏 + 分享页脚，noindex），不进上方任何布局。
+// 公开分享页（wire-dashboard-share；form/record-view/doc 后续变更同壳追加）：
+// #/share/{dashboard|form|record-view|doc}/{id}?t=&v= 完全独立成壳（极简顶栏
+// + 分享页脚，noindex），不进上方任何布局。
 // 登录件（wire-self-serve-launch 4.4/5.2）：
 // - Logto 回调走真实路径 /console/callback（App 挂载时检测 pathname 进入
 //   CallbackView，完成后回 hash 路由）；
@@ -42,6 +43,7 @@ export type Route =
   | { name: "admin"; section: AdminSection }
   | { name: "shareDashboard"; id: string; token: string | null; version: string | null }
   | { name: "shareForm"; id: string; token: string | null; version: string | null }
+  | { name: "shareDoc"; id: string; token: string | null; version: string | null }
   | { name: "shareRecordView"; id: string; token: string | null; recordKey: string | null }
   | { name: "login" };
 
@@ -103,6 +105,17 @@ export function parseHash(rawHash: string): Route {
     // 与看板分享同款分派——四态框架/品牌面/noindex 沿用，运行时换 FormRuntime。
     return {
       name: "shareForm",
+      id: third,
+      token: query.get("t"),
+      version: query.get("v"),
+    };
+  }
+  if (head === "share" && second === "doc" && third) {
+    // 公开文档深链 #/share/doc/{id}?t=…&v=…（wire-rich-text-docs 任务 5.2）：
+    // 与看板分享同款分派——四态框架/品牌面/noindex 沿用，正文换 MarkdownView；
+    // t/v 缺失/坏由 ShareView 如实落「链接无效或已过期」页，不在路由层拦截。
+    return {
+      name: "shareDoc",
       id: third,
       token: query.get("t"),
       version: query.get("v"),
@@ -171,6 +184,15 @@ function renderRoute(route: Route) {
           token={route.token ?? ""}
           version={route.version}
           mode="form"
+        />
+      );
+    case "shareDoc":
+      return (
+        <ShareView
+          artifactId={route.id}
+          token={route.token ?? ""}
+          version={route.version}
+          mode="doc"
         />
       );
     case "shareRecordView":
@@ -266,12 +288,13 @@ export function App() {
     );
   }
 
-  // 公开分享页（wire-dashboard-share / wire-form-builder / wire-record-view）：
-  // 独立极简壳——自带「Wire」顶栏与「由柏讯分享」页脚，不进站点导航/控制台
-  // 布局，无需登录。
+  // 公开分享页（wire-dashboard-share / wire-form-builder / wire-record-view /
+  // wire-rich-text-docs）：独立极简壳——自带「Wire」顶栏与「由柏讯分享」
+  // 页脚，不进站点导航/控制台布局，无需登录。
   if (
     route.name === "shareDashboard" ||
     route.name === "shareForm" ||
+    route.name === "shareDoc" ||
     route.name === "shareRecordView"
   ) {
     return <ErrorBoundary>{renderRoute(route)}</ErrorBoundary>;
