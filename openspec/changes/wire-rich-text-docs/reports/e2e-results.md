@@ -98,9 +98,30 @@ cd fd-wire/api && .venv/bin/python -m pytest tests/ -q
 cd fd-wire/web && npx vitest run
 ```
 
+## 8. 部署态复验（2026-10-17 生产，wire.finddatatech.cloud）
+
+出片 `sha-92b2409`（源真 sha `759cf50`，testaction002 build-pool 快照）滚版前
+**迁移 0038 已先行执行**（生产 PG `wire_platform`，`alembic_version=0038_artifact_drafts`，
+`artifact_drafts` 表/唯一索引/FK CASCADE 三件齐）；两 Deployment 滚起后以
+**platform-test 账号真登录**（真 Logto 流程）复walk：
+
+| 步骤 | 结果 |
+|---|---|
+| 生产控制台出「新建文档」+ 八类类型筛选 | ✅ |
+| 建文档（新建设单，标题「生产验收 · 库区水位月报」） | ✅ 直进分栏编辑器 |
+| 写作（标题/加粗/列表/围栏代码/外链）→ 自动保存 | ✅ 状态「已保存（19:36）」 |
+| 刷新不丢（reload 后重开编辑器） | ✅ 草稿 114 字全文恢复 |
+| 保存版本 v2 → 发布 → 生成分享链接 | ✅ 弹层出完整链接（钉 v2、30 天档） |
+| **未登录新标签打开分享链接** | ✅ 标题/H1/列表×2/代码块/外链（`noopener noreferrer`）全出，`<script>` 计数 0、无登录会话 |
+| 归档 → 旧链接 | ✅ 「链接无效或已过期」统一态 |
+| 恢复 | ✅ 回「草稿」态可继续编辑 |
+| 收尾 | 测试文档归档保留（demo 账号列表整洁；未做任何删除） |
+
 ## 遗留
 
-- [ ] 部署态复验：本记录为本地真栈验收；生产滚版后按记录同法抽验一次
-      （console 用真实 Logto 会话，公开面不变）。
-- [ ] IAB 宿主指针注入失效是本机工具链问题（非产品），如后续用 Playwright
-      headless 复跑可全链鼠标化。
+- [x] 部署态复验：见 §8（生产真登录全链通过）。
+- [ ] IAB 宿主指针注入失效是本机工具链问题（非产品）：本轮手验以「原生浏览器
+      语义入口（requestSubmit/原生 click）+ 真键盘键入」完成，所有断言均取自
+      真实 DOM/网络状态。如后续用 Playwright headless 复跑可全链鼠标化。
+- [ ] 分享页浏览器面（`#/share/doc`）的移动端宽度适配未单独走查（与既有
+      分享页同款响应式容器，风险低）。
