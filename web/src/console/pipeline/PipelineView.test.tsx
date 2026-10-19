@@ -168,7 +168,7 @@ describe("PipelineView（分层布局与节点卡，任务 2.1）", () => {
     expect(node.getByTestId("pipeline-node-tier").getAttribute("data-tier")).toBe(
       "cell",
     );
-    expect(node.getByTestId("pipeline-node-tier").textContent).toBe("cell");
+    expect(node.getByTestId("pipeline-node-tier").textContent).toBe("隔离单元");
     expect(node.getByTestId("pipeline-node-scheduled").textContent).toBe("定时");
     expect(
       node.getByTestId("pipeline-node-scheduled").getAttribute("title"),
@@ -296,7 +296,7 @@ describe("PipelineView 窄屏退化（<768px，任务 2.1/2.3）", () => {
     ).toEqual(["A 上传源", "B 上传源"]);
     expect(
       within(groups[1]!).getByTestId("pipeline-node-tier").textContent,
-    ).toBe("cell");
+    ).toBe("隔离单元");
     fireEvent.click(within(groups[1]!).getByTestId("pipeline-node"));
     expect(onOpen).toHaveBeenCalledWith("ds-2");
     // 无 SVG：不渲染画布/连线/列容器

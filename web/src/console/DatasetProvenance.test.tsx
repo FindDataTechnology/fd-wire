@@ -318,7 +318,7 @@ describe("DatasetDetail 溯源区块：事件时间线（任务 8.1）", () => {
     expect(rows.length).toBe(5);
     expect(
       screen.getAllByTestId("provenance-event-type").map((el) => el.textContent),
-    ).toEqual(["修正", "锚定封存", "cell 生命周期", "mystery.custom.type", "上传登记"]);
+    ).toEqual(["修正", "锚定封存", "隔离单元生命周期", "mystery.custom.type", "上传登记"]);
     // 操作者与序号徽标
     expect(
       screen.getAllByTestId("provenance-event-actor").map((el) => el.textContent),
