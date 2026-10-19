@@ -2,7 +2,7 @@
 // 三类面板渲染（kpi/line+bar/table）、空数据占位、坏面板隔离（不整板失败）、
 // 旧自由 JSON legacy 态、快照口径标注。
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import "../../i18n";
 import i18n from "../../i18n";
 import { DashboardRenderer } from "./DashboardRenderer";
@@ -69,7 +69,8 @@ const MIXED_SPEC = {
         },
       },
       { id: "e1", type: "kpi", title: "空指标", span: 1 },
-      { type: "pie", title: "坏类型" },
+      // 非法类型：v2 把 pie 纳入类型谱了，故换一个仍在谱外的类型做坏面板样本
+      { type: "sunburst", title: "坏类型" },
       "只是一个字符串",
     ],
   },
@@ -146,7 +147,7 @@ describe("DashboardRenderer（快照渲染）", () => {
     // 序号 1 起 + 原因文案
     expect(bads[0]?.getAttribute("data-index")).toBe("5");
     expect(bads[0]?.textContent).toContain("面板 #6");
-    expect(bads[0]?.textContent).toContain("kpi / line / bar / table");
+    expect(bads[0]?.textContent).toContain("图表类型谱");
     expect(bads[1]?.textContent).toContain("面板 #7");
     expect(bads[1]?.textContent).toContain("JSON 对象");
 
@@ -182,5 +183,261 @@ describe("DashboardRenderer（快照渲染）", () => {
     );
     expect(screen.queryByTestId("dashboard-title")).toBeNull();
     expect(screen.getByTestId("dashboard-snapshot-note")).toBeTruthy();
+  });
+});
+
+describe("v2 面板渲染（wire-chart-contract-v2 任务 2.x）", () => {
+  it("高级档类型与 time 轴面板正常渲染（不判坏面板）", () => {
+    render(
+      <DashboardRenderer
+        spec={{
+          title: "行情看板",
+          panels: [
+            {
+              id: "k",
+              type: "candlestick",
+              title: "K 线",
+              span: 3,
+              snapshot: {
+                columns: ["日期", "开盘", "最高", "最低", "收盘"],
+                rows: [["2026-01-02", 10, 12, 9, 11]],
+              },
+              encoding: { x: "日期", xType: "time" },
+            },
+            {
+              id: "p",
+              type: "pie",
+              title: "占比",
+              span: 1,
+              snapshot: { columns: ["类目", "值"], rows: [["A", 3]] },
+            },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getAllByTestId("dashboard-panel")).toHaveLength(2);
+    expect(screen.queryByTestId("dashboard-bad-panel")).toBeNull();
+    expect(screen.getAllByTestId("dashboard-chart")).toHaveLength(2);
+  });
+
+  it("raw_option 面板带「高级配置」徽标", () => {
+    render(
+      <DashboardRenderer
+        spec={{
+          title: "",
+          panels: [
+            {
+              id: "r",
+              type: "line",
+              title: "成品迁入",
+              span: 2,
+              raw_option: {
+                xAxis: { type: "time" },
+                series: [{ name: "值", type: "line", data: [[Date.UTC(2026, 0, 1), 1]] }],
+              },
+            },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByTestId("dashboard-panel-raw-badge").textContent).toBe("高级配置");
+    expect(screen.queryByTestId("dashboard-bad-panel")).toBeNull();
+  });
+
+  it("raw_option 含函数值 → 坏面板标注且指明原因", () => {
+    render(
+      <DashboardRenderer
+        spec={{
+          title: "",
+          panels: [
+            {
+              id: "bad",
+              type: "line",
+              title: "坏配置",
+              span: 1,
+              raw_option: { series: [{ formatter: () => 1 }] },
+            },
+          ],
+        }}
+      />,
+    );
+    const bad = screen.getByTestId("dashboard-bad-panel");
+    expect(bad.getAttribute("data-bad-reason")).toBe("bad_raw_option");
+    expect(bad.textContent).toContain("不可序列化");
+  });
+
+  it("声明高度的面板应用该高度；未声明保持 220", () => {
+    render(
+      <DashboardRenderer
+        spec={{
+          title: "",
+          panels: [
+            {
+              id: "tall",
+              type: "line",
+              title: "高图",
+              span: 1,
+              height: 400,
+              snapshot: { columns: ["x", "y"], rows: [["a", 1]] },
+            },
+            {
+              id: "normal",
+              type: "line",
+              title: "默认高",
+              span: 1,
+              snapshot: { columns: ["x", "y"], rows: [["a", 1]] },
+            },
+          ],
+        }}
+      />,
+    );
+    const [tall, normal] = screen.getAllByTestId("dashboard-chart");
+    expect((tall as HTMLElement).style.height).toBe("400px");
+    expect((normal as HTMLElement).style.height).toBe("220px");
+  });
+
+  it("多窗格高度不足 → 降级提示如实呈现", () => {
+    render(
+      <DashboardRenderer
+        spec={{
+          title: "",
+          panels: [
+            {
+              id: "panes",
+              type: "line",
+              title: "价格与量",
+              span: 3,
+              height: 90,
+              snapshot: {
+                columns: ["日期", "收盘", "量"],
+                rows: [["2026-01", 10, 100]],
+              },
+              panes: [{}, {}],
+            },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByTestId("dashboard-panes-degraded").textContent).toContain(
+      "只显示主图",
+    );
+  });
+});
+
+describe("工具栏（wire-chart-contract-v2 任务 3.1–3.5）", () => {
+  const CHART_SPEC = {
+    title: "看板",
+    panels: [
+      {
+        id: "l1",
+        type: "line",
+        title: "折线",
+        span: 2,
+        snapshot: { columns: ["月份", "值"], rows: [["7月", 1]] },
+      },
+      {
+        id: "k1",
+        type: "kpi",
+        title: "指标",
+        span: 1,
+        snapshot: { columns: ["value"], rows: [[1]] },
+      },
+    ],
+  };
+
+  it("默认不渲染工具栏（分享页红线靠默认值守住）", () => {
+    render(<DashboardRenderer spec={CHART_SPEC} />);
+    expect(screen.queryByTestId("dashboard-panel-toolbar")).toBeNull();
+    expect(screen.queryByTestId("panel-tool-export")).toBeNull();
+    expect(screen.getByTestId("dashboard-renderer").getAttribute("data-toolbar")).toBe("off");
+  });
+
+  it("toolbar=true 时图表面板出现工具栏，kpi 面板不出现", () => {
+    render(<DashboardRenderer spec={CHART_SPEC} toolbar />);
+    // 只有一个图表面板 → 一个工具栏
+    expect(screen.getAllByTestId("dashboard-panel-toolbar")).toHaveLength(1);
+    expect(screen.getByTestId("panel-tool-fullscreen")).toBeTruthy();
+    expect(screen.getByTestId("panel-tool-table")).toBeTruthy();
+    expect(screen.getByTestId("panel-tool-copy")).toBeTruthy();
+    expect(screen.getByTestId("dashboard-renderer").getAttribute("data-toolbar")).toBe("on");
+  });
+
+  it("图数切换：切到表格呈现快照同源数据，按钮文案随之切换", () => {
+    render(<DashboardRenderer spec={CHART_SPEC} toolbar />);
+    const toggle = screen.getByTestId("panel-tool-table");
+    expect(toggle.textContent).toBe("看表");
+
+    fireEvent.click(toggle);
+    expect(screen.getByTestId("dashboard-table")).toBeTruthy();
+    expect(screen.getByTestId("panel-tool-table").textContent).toBe("看图");
+    // 图表容器让位给表格
+    expect(screen.queryByTestId("dashboard-chart")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("panel-tool-table"));
+    expect(screen.getByTestId("dashboard-chart")).toBeTruthy();
+  });
+
+  it("全屏：点击后图表容器标记切换，再次点击恢复", () => {
+    render(<DashboardRenderer spec={CHART_SPEC} toolbar />);
+    const host = screen.getByTestId("dashboard-chart");
+    expect(host.getAttribute("data-fullscreen")).toBe("off");
+
+    fireEvent.click(screen.getByTestId("panel-tool-fullscreen"));
+    expect(screen.getByTestId("dashboard-chart").getAttribute("data-fullscreen")).toBe("on");
+
+    fireEvent.click(screen.getByTestId("panel-tool-fullscreen"));
+    expect(screen.getByTestId("dashboard-chart").getAttribute("data-fullscreen")).toBe("off");
+  });
+
+  it("raw_option 面板不可表格化时如实提示", () => {
+    render(
+      <DashboardRenderer
+        toolbar
+        spec={{
+          title: "",
+          panels: [
+            {
+              id: "r",
+              type: "line",
+              title: "无法表格化",
+              span: 1,
+              raw_option: { series: [{ name: "s" }] }, // 无 data
+            },
+          ],
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("panel-tool-table"));
+    expect(screen.getByTestId("dashboard-raw-not-tabular").textContent).toContain(
+      "无法转为表格",
+    );
+  });
+
+  it("raw_option 面板可表格化时按系列抽取", () => {
+    render(
+      <DashboardRenderer
+        toolbar
+        spec={{
+          title: "",
+          panels: [
+            {
+              id: "r",
+              type: "line",
+              title: "成品",
+              span: 1,
+              raw_option: {
+                xAxis: { type: "category", data: ["2024", "2025"] },
+                series: [{ name: "营收", type: "line", data: [1.2, 1.5] }],
+              },
+            },
+          ],
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("panel-tool-table"));
+    const table = screen.getByTestId("dashboard-table");
+    expect(table.textContent).toContain("营收");
+    expect(table.textContent).toContain("1.2");
+    expect(table.textContent).toContain("2024");
   });
 });

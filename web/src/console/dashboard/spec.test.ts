@@ -10,10 +10,18 @@ import {
   convertPanelType,
   duplicatePanel,
   generatePanelId,
+  isV2Panel,
   moveItem,
+  normalizeEncoding,
+  normalizeOverlays,
   normalizePanelQuery,
+  normalizePanes,
+  normalizeRawOption,
   parseDashboardSpec,
   panelTemplate,
+  DASHBOARD_ADVANCED_PANEL_TYPES,
+  DASHBOARD_BASE_PANEL_TYPES,
+  DASHBOARD_PANEL_TYPES,
   type DashboardPanel,
   type DashboardPanelQuery,
 } from "./spec";
@@ -74,7 +82,7 @@ describe("parseDashboardSpec（宽容校验三态）", () => {
       spec: {
         panels: [
           V1_BODY.panels[0],
-          { type: "pie", title: "坏类型" }, // type 不在枚举
+          { type: "waterfall", title: "坏类型" }, // type 不在枚举
           "只是一个字符串", // 非 JSON 对象
           null,
         ],
@@ -90,7 +98,7 @@ describe("parseDashboardSpec（宽容校验三态）", () => {
       "not_object",
     ]);
     expect(parsed.badPanels[0]?.index).toBe(1);
-    expect(parsed.badPanels[0]?.raw).toEqual({ type: "pie", title: "坏类型" });
+    expect(parsed.badPanels[0]?.raw).toEqual({ type: "waterfall", title: "坏类型" });
   });
 
   it("宽容归一：缺 id 自动补、span 非法回退 1、snapshot 列行数不齐截断补 null", () => {
@@ -487,5 +495,340 @@ describe("面板 query 契约（wire-dashboard-query-contract 任务 2.1）", ()
       "kpi",
     );
     expect(toKpi.panel.query).toEqual({ dataset_id: "ds_y", limit: 7 });
+  });
+});
+
+describe("v2 类型谱（wire-chart-contract-v2 任务 1.1）", () => {
+  it("两档类型完整且互不重叠，并集等于完整枚举", () => {
+    const base = new Set(DASHBOARD_BASE_PANEL_TYPES as readonly string[]);
+    const advanced = new Set(DASHBOARD_ADVANCED_PANEL_TYPES as readonly string[]);
+    expect(base.size).toBe(4);
+    expect(advanced.size).toBe(10);
+    // 不重叠
+    for (const t of advanced) expect(base.has(t)).toBe(false);
+    // 并集 == 完整枚举（漏一个就会让该类型既不可选也解析为坏面板）
+    expect([...base, ...advanced].sort()).toEqual(
+      [...DASHBOARD_PANEL_TYPES].sort(),
+    );
+  });
+
+  it("高级档类型可被解析（不再判坏面板）", () => {
+    const parsed = parseDashboardSpec({
+      spec: {
+        panels: DASHBOARD_ADVANCED_PANEL_TYPES.map((type, i) => ({
+          id: `a${i}`,
+          type,
+          title: String(type),
+        })),
+      },
+    });
+    expect(parsed.kind).toBe("v1");
+    if (parsed.kind !== "v1") return;
+    expect(parsed.panels.map((p) => p.type)).toEqual([
+      ...DASHBOARD_ADVANCED_PANEL_TYPES,
+    ]);
+    expect(parsed.badPanels).toEqual([]);
+  });
+});
+
+describe("encoding 编码通道（任务 1.2）", () => {
+  it("合法全字段原样归一", () => {
+    expect(
+      normalizeEncoding({
+        x: "日期",
+        y: ["CPI", "PPI"],
+        series: "地区",
+        size: "成交额",
+        xType: "time",
+        yType: "value",
+        xName: "月份",
+        yName: "同比",
+      }),
+    ).toEqual({
+      x: "日期",
+      y: ["CPI", "PPI"],
+      series: "地区",
+      size: "成交额",
+      xType: "time",
+      yType: "value",
+      xName: "月份",
+      yName: "同比",
+    });
+  });
+
+  it("轴类型非法回退默认（x→category、y→value），不丢其余字段", () => {
+    expect(normalizeEncoding({ x: "a", xType: "log2", yType: "ordinal" })).toEqual({
+      x: "a",
+      xType: "category",
+      yType: "value",
+    });
+    // 四种合法轴类型都收
+    for (const t of ["category", "value", "time", "log"] as const) {
+      expect(normalizeEncoding({ xType: t })?.xType).toBe(t);
+    }
+  });
+
+  it("列名非法丢弃：空串/非字符串不收；y 去重保序", () => {
+    expect(normalizeEncoding({ x: "", y: ["a", "a", 42, null, "b", ""] })).toEqual({
+      y: ["a", "b"],
+    });
+    expect(normalizeEncoding({ x: 42, series: null, size: { a: 1 } })).toBeUndefined();
+  });
+
+  it("无任何合法字段 → undefined（面板走 v1 回退分支）", () => {
+    expect(normalizeEncoding(undefined)).toBeUndefined();
+    expect(normalizeEncoding(null)).toBeUndefined();
+    expect(normalizeEncoding([])).toBeUndefined();
+    expect(normalizeEncoding({})).toBeUndefined();
+    expect(normalizeEncoding({ y: [] })).toBeUndefined();
+    expect(normalizeEncoding("encoding")).toBeUndefined();
+  });
+});
+
+describe("panes 多窗格（任务 1.3）", () => {
+  it("两个以上合法窗格才落字段；单窗格归一为 undefined", () => {
+    const two = normalizePanes([
+      { title: "价格", encoding: { x: "日期", xType: "time" } },
+      { title: "成交量", height: 1 },
+    ]);
+    expect(two).toHaveLength(2);
+    expect(two?.[0]?.encoding?.xType).toBe("time");
+    expect(two?.[1]?.height).toBe(1);
+
+    // 单窗格 = 无多窗格语义
+    expect(normalizePanes([{ title: "只有一格" }])).toBeUndefined();
+    expect(normalizePanes([])).toBeUndefined();
+    expect(normalizePanes("panes")).toBeUndefined();
+  });
+
+  it("坏窗格逐项丢弃；丢弃后不足两个同样不落字段", () => {
+    expect(
+      normalizePanes(["字符串", null, { title: "唯一合法格" }, 42]),
+    ).toBeUndefined();
+    const mixed = normalizePanes([
+      { title: "主" },
+      "坏项",
+      { title: "副" },
+    ]);
+    expect(mixed).toHaveLength(2);
+    expect(mixed?.map((p) => p.title)).toEqual(["主", "副"]);
+  });
+
+  it("窗格 height 只收正整数；非法值不落字段", () => {
+    const panes = normalizePanes([
+      { height: 0 },
+      { height: -3 },
+      { height: 2.5 },
+      { height: "3" },
+      { height: 4 },
+    ]);
+    // 前四项 height 均被丢弃，第五项保留 → 5 个窗格全合法（校验只对 height）
+    expect(panes).toHaveLength(5);
+    expect(panes?.map((p) => p.height)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      4,
+    ]);
+  });
+});
+
+describe("overlays 叠加层（任务 1.4）", () => {
+  it("三类各自归一并保留标签与线型", () => {
+    expect(
+      normalizeOverlays({
+        markLine: [
+          { value: 2.1, label: "更替水平", lineStyle: "dashed" },
+          { value: 50, axis: "y", lineStyle: "solid" },
+          { value: "2020-01", axis: "x" },
+        ],
+        markArea: [{ from: 2008, to: 2009, label: "危机" }],
+        markPoint: [{ x: "2020", y: 4.8, label: "峰值" }],
+      }),
+    ).toEqual({
+      markLine: [
+        { value: 2.1, label: "更替水平", lineStyle: "dashed" },
+        { value: 50, axis: "y", lineStyle: "solid" },
+        { value: "2020-01", axis: "x" },
+      ],
+      markArea: [{ from: 2008, to: 2009, label: "危机" }],
+      markPoint: [{ x: "2020", y: 4.8, label: "峰值" }],
+    });
+  });
+
+  it("非法项逐项丢弃：缺坐标/坐标类型越界/非对象项", () => {
+    expect(
+      normalizeOverlays({
+        markLine: [
+          { label: "无值" }, // 缺 value
+          { value: { a: 1 } }, // 坐标非数字非字符串
+          "字符串",
+          { value: 7, label: "合法" },
+        ],
+      }),
+    ).toEqual({ markLine: [{ value: 7, label: "合法" }] });
+    // 全非法 → 不落字段
+    expect(normalizeOverlays({ markLine: [{ value: null }] })).toBeUndefined();
+  });
+
+  it("线型白名单外丢弃该字段但保留线；axis 非 x/y 丢弃", () => {
+    expect(
+      normalizeOverlays({ markLine: [{ value: 1, lineStyle: "wavy", axis: "z" }] }),
+    ).toEqual({ markLine: [{ value: 1 }] });
+  });
+
+  it("无叠加层 → undefined（v1 面板零漂移）", () => {
+    expect(normalizeOverlays(undefined)).toBeUndefined();
+    expect(normalizeOverlays({})).toBeUndefined();
+    expect(normalizeOverlays([])).toBeUndefined();
+    expect(normalizeOverlays({ markLine: [] })).toBeUndefined();
+  });
+});
+
+describe("raw_option 逃生舱（任务 1.5）", () => {
+  it("纯 JSON 载荷原样收下", () => {
+    const raw = {
+      xAxis: { type: "time" },
+      series: [{ type: "line", data: [1, 2, 3] }],
+      markLine: { data: [{ yAxis: 2.1 }] },
+      tooltip: { valueFormatter: "(v) => v" }, // 字符串载荷合法（成品看板实态）
+    };
+    expect(normalizeRawOption(raw)).toEqual(raw);
+  });
+
+  it("拒绝函数、正则、Date 与类实例；数组正常递归", () => {
+    expect(normalizeRawOption({ f: () => 1 })).toBeNull();
+    expect(normalizeRawOption({ r: /x/ })).toBeNull();
+    expect(normalizeRawOption({ d: new Date() })).toBeNull();
+    expect(normalizeRawOption({ s: new Set([1]) })).toBeNull();
+    expect(normalizeRawOption({ nested: { deep: [{ bad: () => 1 }] } })).toBeNull();
+    expect(normalizeRawOption([{ a: 1 }])).toBeNull(); // 顶层数组不是 option 对象
+    expect(normalizeRawOption("raw")).toBeNull();
+    expect(normalizeRawOption(null)).toBeNull();
+  });
+
+  it("parse：含函数值的 raw_option 整面板记 bad_raw_option，其余面板不受影响", () => {
+    const parsed = parseDashboardSpec({
+      spec: {
+        panels: [
+          { id: "ok1", type: "line", title: "正常", snapshot: { columns: ["x", "y"], rows: [["a", 1]] } },
+          { id: "bad", type: "line", title: "坏 raw", raw_option: { series: [{ formatter: () => 1 }] } },
+          { id: "ok2", type: "candlestick", title: "K线", raw_option: { xAxis: { type: "time" } } },
+        ],
+      },
+    });
+    expect(parsed.kind).toBe("v1");
+    if (parsed.kind !== "v1") return;
+    expect(parsed.panels.map((p) => p.id)).toEqual(["ok1", "ok2"]);
+    expect(parsed.badPanels).toHaveLength(1);
+    expect(parsed.badPanels[0]?.reason).toBe("bad_raw_option");
+    expect(parsed.badPanels[0]?.index).toBe(1);
+    expect(parsed.panels[1]?.raw_option).toEqual({ xAxis: { type: "time" } });
+  });
+});
+
+describe("v2 面板形态判定与 v1 零漂移（任务 1.6）", () => {
+  it("v1 面板解析结果与升级前逐字段一致（不含任何 v2 字段）", () => {
+    const parsed = parseDashboardSpec({ spec: V1_BODY });
+    expect(parsed.kind).toBe("v1");
+    if (parsed.kind !== "v1") return;
+    // 关键：对象形状完全相同——多一个 encoding:undefined 都会破坏快照断言
+    expect(parsed.panels[0]).toEqual(V1_BODY.panels[0]);
+    expect(parsed.panels[1]).toEqual(V1_BODY.panels[1]);
+    expect(Object.keys(parsed.panels[0]!).sort()).toEqual(
+      Object.keys(V1_BODY.panels[0]!).sort(),
+    );
+    // isV2Panel 对 v1 面板恒 false
+    for (const panel of parsed.panels) expect(isV2Panel(panel)).toBe(false);
+  });
+
+  it("isV2Panel：任一 v2 字段在场即 true", () => {
+    const base: DashboardPanel = {
+      id: "p1",
+      type: "line",
+      title: "",
+      span: 1,
+    };
+    expect(isV2Panel(base)).toBe(false);
+    expect(isV2Panel({ ...base, encoding: { x: "a" } })).toBe(true);
+    expect(isV2Panel({ ...base, panes: [{}, {}] })).toBe(true);
+    expect(isV2Panel({ ...base, overlays: { markLine: [{ value: 1 }] } })).toBe(true);
+    expect(isV2Panel({ ...base, height: 300 })).toBe(true);
+    expect(isV2Panel({ ...base, raw_option: {} })).toBe(true);
+  });
+});
+
+describe("v2 字段在编辑 helpers 上的保留（任务 4.6）", () => {
+  /** 携带全部 v2 字段的面板。 */
+  const V2_PANEL: DashboardPanel = {
+    id: "v2",
+    type: "line",
+    title: "带副图的行情",
+    span: 3,
+    source: "ds_prices",
+    height: 420,
+    snapshot: {
+      columns: ["日期", "收盘", "量"],
+      rows: [["2026-01", 10, 100]],
+    },
+    encoding: { x: "日期", xType: "time", y: ["收盘"] },
+    panes: [
+      { title: "价格", encoding: { x: "日期", xType: "time", y: ["收盘"] } },
+      { title: "成交量", encoding: { y: ["量"] }, height: 1 },
+    ],
+    overlays: { markLine: [{ value: 2.1, label: "阈值", lineStyle: "dashed" }] },
+  };
+
+  it("convertPanelType：高级档互转保留 encoding/panes/overlays/height", () => {
+    const toBar = convertPanelType(V2_PANEL, "bar");
+    expect(toBar.needConfirm).toBe(false); // 非 kpi ↔ 图表
+    expect(toBar.panel.type).toBe("bar");
+    expect(toBar.panel.encoding).toEqual(V2_PANEL.encoding);
+    expect(toBar.panel.panes).toEqual(V2_PANEL.panes);
+    expect(toBar.panel.overlays).toEqual(V2_PANEL.overlays);
+    expect(toBar.panel.height).toBe(420);
+    // 不可变：原面板不动
+    expect(V2_PANEL.type).toBe("line");
+  });
+
+  it("convertPanelType：高级档 → kpi 需确认，且 v2 字段仍原样保留", () => {
+    const toKpi = convertPanelType(V2_PANEL, "kpi");
+    expect(toKpi.needConfirm).toBe(true);
+    expect(toKpi.panel.encoding).toEqual(V2_PANEL.encoding);
+    expect(toKpi.panel.panes).toEqual(V2_PANEL.panes);
+  });
+
+  it("duplicatePanel：深拷贝 panes/overlays，改副本不波及原件", () => {
+    const copy = duplicatePanel(V2_PANEL, ["v2"]);
+    expect(copy.id).not.toBe("v2");
+    expect(copy.panes).toEqual(V2_PANEL.panes);
+    expect(copy.overlays).toEqual(V2_PANEL.overlays);
+    expect(copy.encoding).toEqual(V2_PANEL.encoding);
+    expect(copy.height).toBe(420);
+
+    // 深拷贝独立性
+    copy.panes![1]!.title = "被改的副图";
+    copy.overlays!.markLine![0]!.value = 999;
+    copy.encoding!.y = ["被改"];
+    expect(V2_PANEL.panes![1]!.title).toBe("成交量");
+    expect(V2_PANEL.overlays!.markLine![0]!.value).toBe(2.1);
+    expect(V2_PANEL.encoding!.y).toEqual(["收盘"]);
+  });
+
+  it("duplicatePanel：raw_option 一并深拷贝（改副本不波及原件）", () => {
+    const rawPanel: DashboardPanel = {
+      id: "r",
+      type: "line",
+      title: "成品",
+      span: 1,
+      raw_option: { series: [{ name: "a", data: [1, 2] }] },
+    };
+    const copy = duplicatePanel(rawPanel, ["r"]);
+    expect(copy.raw_option).toEqual(rawPanel.raw_option);
+    (copy.raw_option!.series as Array<Record<string, unknown>>)[0]!.name = "mutated";
+    expect(
+      (rawPanel.raw_option!.series as Array<Record<string, unknown>>)[0]!.name,
+    ).toBe("a");
   });
 });

@@ -565,3 +565,161 @@ describe("DashboardEditor 查询契约徽标（wire-dashboard-query-contract 任
     expect(body.spec.spec.panels.find((p) => p.id === "n1")?.query).toBeUndefined();
   });
 });
+
+describe("编辑器 v2 扩面（wire-chart-contract-v2 任务 4.1–4.6）", () => {
+  it("添加面板的类型选择按两档分组（基础/高级）", () => {
+    install();
+    render(
+      <DashboardEditor artifactId={21} initial={INITIAL} onSaved={vi.fn()} onExit={vi.fn()} />,
+    );
+    const select = screen.getByTestId("editor-add-type");
+    const groups = Array.from(select.querySelectorAll("optgroup")).map((g) =>
+      g.getAttribute("label"),
+    );
+    expect(groups).toEqual(["基础图表", "高级图表"]);
+    // 高级档十个选项都在
+    const advanced = select.querySelectorAll("optgroup[label='高级图表'] option");
+    expect(advanced).toHaveLength(10);
+  });
+
+  it("选中高级档类型添加 → 面板带该类型与骨架快照", () => {
+    install();
+    render(
+      <DashboardEditor artifactId={21} initial={INITIAL} onSaved={vi.fn()} onExit={vi.fn()} />,
+    );
+    fireEvent.change(screen.getByTestId("editor-add-type"), {
+      target: { value: "candlestick" },
+    });
+    fireEvent.click(screen.getByTestId("editor-add-panel"));
+    const panels = screen.getAllByTestId("editor-panel");
+    expect(panels).toHaveLength(3);
+    const added = panels[2]!;
+    expect(added.getAttribute("data-panel-type")).toBe("candlestick");
+    // 骨架：日期 + 四价
+    const preview = screen.getByTestId("dashboard-renderer");
+    expect(preview).toBeTruthy();
+  });
+
+  it("编码表单：改 X 轴类型为时间轴并保存 → spec 含该 encoding", async () => {
+    const backend = install();
+    const onSaved = vi.fn();
+    render(
+      <DashboardEditor artifactId={21} initial={INITIAL} onSaved={onSaved} onExit={vi.fn()} />,
+    );
+    const row = editorPanel("l1");
+    const xType = within(row).getByTestId("editor-encoding-xtype");
+    fireEvent.change(xType, { target: { value: "time" } });
+
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+
+    const put = backend.calls.find((c) => c.method === "PUT");
+    const body = put?.body as {
+      spec: { title: string; spec: { panels: Array<Record<string, unknown>> } };
+    };
+    expect(body.spec.spec.panels[1]?.encoding).toMatchObject({ xType: "time" });
+    // 快照未被改写
+    expect(body.spec.spec.panels[1]?.snapshot).toEqual(INITIAL.panels[1]?.snapshot);
+  });
+
+  it("编码表单：Y 列多选勾选后写入 encoding.y", async () => {
+    const backend = install();
+    const initial: DashboardSpecV1 = {
+      title: "多列",
+      panels: [
+        {
+          id: "l1",
+          type: "line",
+          title: "双列",
+          span: 2,
+          snapshot: { columns: ["月份", "PMI", "CPI"], rows: [["7月", 49, 2]] },
+        },
+      ],
+    };
+    render(
+      <DashboardEditor artifactId={21} initial={initial} onSaved={vi.fn()} onExit={vi.fn()} />,
+    );
+    const row = editorPanel("l1");
+    const options = within(row).getAllByTestId("editor-encoding-y-option");
+    const cpi = options.find((el) => el.textContent === "CPI")!;
+    fireEvent.click(cpi);
+
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await waitFor(() => expect(backend.calls.some((c) => c.method === "PUT")).toBe(true));
+    const put = backend.calls.find((c) => c.method === "PUT");
+    const body = put?.body as {
+      spec: { title: string; spec: { panels: Array<Record<string, unknown>> } };
+    };
+    expect(body.spec.spec.panels[0]?.encoding).toMatchObject({ y: ["CPI"] });
+  });
+
+  it("叠加层表单：加一条阈值线并保存 → spec 含 overlays.markLine", async () => {
+    const backend = install();
+    render(
+      <DashboardEditor artifactId={21} initial={INITIAL} onSaved={vi.fn()} onExit={vi.fn()} />,
+    );
+    const row = editorPanel("l1");
+    fireEvent.click(within(row).getByTestId("editor-overlay-add-line"));
+    const valueInput = within(row).getByTestId("editor-overlay-line-value");
+    fireEvent.change(valueInput, { target: { value: "50" } });
+    const labelInput = within(row).getByTestId("editor-overlay-line-label");
+    fireEvent.change(labelInput, { target: { value: "荣枯线" } });
+
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await waitFor(() => expect(backend.calls.some((c) => c.method === "PUT")).toBe(true));
+    const put = backend.calls.find((c) => c.method === "PUT");
+    const body = put?.body as {
+      spec: { title: string; spec: { panels: Array<Record<string, unknown>> } };
+    };
+    expect(body.spec.spec.panels[1]?.overlays).toMatchObject({
+      markLine: [{ value: 50, label: "荣枯线" }],
+    });
+  });
+
+  it("面板高度：填写后保存 → spec 含该高度", async () => {
+    const backend = install();
+    render(
+      <DashboardEditor artifactId={21} initial={INITIAL} onSaved={vi.fn()} onExit={vi.fn()} />,
+    );
+    const row = editorPanel("l1");
+    fireEvent.change(within(row).getByTestId("editor-panel-height"), {
+      target: { value: "360" },
+    });
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await waitFor(() => expect(backend.calls.some((c) => c.method === "PUT")).toBe(true));
+    const put = backend.calls.find((c) => c.method === "PUT");
+    const body = put?.body as {
+      spec: { title: string; spec: { panels: Array<Record<string, unknown>> } };
+    };
+    expect(body.spec.spec.panels[1]?.height).toBe(360);
+  });
+
+  it("raw_option 面板：只读结构查看，无编码表单与绑定表单", () => {
+    install();
+    const initial: DashboardSpecV1 = {
+      title: "成品迁入",
+      panels: [
+        {
+          id: "raw1",
+          type: "line",
+          title: "成品图",
+          span: 3,
+          raw_option: { xAxis: { type: "time" }, series: [{ type: "line", data: [] }] },
+        },
+      ],
+    };
+    render(
+      <DashboardEditor artifactId={21} initial={initial} onSaved={vi.fn()} onExit={vi.fn()} />,
+    );
+    const row = editorPanel("raw1");
+    expect(within(row).getByTestId("editor-raw-option")).toBeTruthy();
+    expect(within(row).getByTestId("editor-raw-option-json").textContent).toContain(
+      '"type": "time"',
+    );
+    expect(within(row).queryByTestId("editor-panel-encoding")).toBeNull();
+    expect(within(row).queryByTestId("editor-panel-overlays")).toBeNull();
+    // 标题/高度仍可编辑
+    expect(within(row).getByTestId("editor-panel-title")).toBeTruthy();
+    expect(within(row).getByTestId("editor-panel-height")).toBeTruthy();
+  });
+});

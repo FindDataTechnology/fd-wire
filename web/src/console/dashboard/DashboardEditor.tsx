@@ -25,6 +25,8 @@ import {
   type Dataset,
 } from "../api";
 import {
+  DASHBOARD_ADVANCED_PANEL_TYPES,
+  DASHBOARD_BASE_PANEL_TYPES,
   DASHBOARD_PANEL_SPANS,
   DASHBOARD_PANEL_TYPES,
   buildArtifactEnvelope,
@@ -39,6 +41,14 @@ import {
 } from "./spec";
 import { DashboardRenderer } from "./DashboardRenderer";
 import { PanelQueryBinding } from "./PanelQueryBinding";
+import {
+  PanelEncodingForm,
+  PanelHeightForm,
+  PanelOverlaysForm,
+  RawOptionViewer,
+  showsEncodingForm,
+  showsOverlaysForm,
+} from "./PanelV2Forms";
 
 /** 表单输入 → 契约格子值：空 → null；完整数字样式 → number；其余（含
  *  输入中的 "3." 等未完成态）原样字符串——不打断受控输入。 */
@@ -349,12 +359,20 @@ export function DashboardEditor({
                 onChange={(e) => setAddType(e.target.value as DashboardPanelType)}
                 className="rounded border border-slate-300 px-1.5 py-0.5 text-xs"
               >
-                {DASHBOARD_PANEL_TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    {t(`console.dashboard.type.${type}`)}
-                  </option>
-                ))}
-              </select>
+                <optgroup label={t("console.dashboard.editor.typeGroupBase")}>
+                  {DASHBOARD_BASE_PANEL_TYPES.map((type) => (
+                    <option key={type} value={type}>
+                      {t(`console.dashboard.type.${type}`)}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label={t("console.dashboard.editor.typeGroupAdvanced")}>
+                  {DASHBOARD_ADVANCED_PANEL_TYPES.map((type) => (
+                    <option key={type} value={type}>
+                      {t(`console.dashboard.type.${type}`)}
+                    </option>
+                  ))}
+                </optgroup>              </select>
               <button
                 type="button"
                 data-testid="editor-add-panel"
@@ -487,18 +505,33 @@ export function DashboardEditor({
                     className="w-56 rounded border border-slate-300 px-2 py-1 font-mono text-xs"
                   />
                 </div>
-                {/* 绑定查询段（wire-panel-query-binding 任务 2.1）：未绑定 →
-                    「未绑定」+「绑定」入口；已绑定回填原值展开表单（试取/解绑
-                    见 PanelQueryBinding；query 随面板字段走既有保存链）。 */}
-                <PanelQueryBinding
-                  key={panel.id}
-                  panel={panel}
-                  datasets={datasets}
-                  datasetsLoading={datasetsLoading}
-                  datasetsError={datasetsError}
-                  onEnsureDatasets={ensureDatasets}
-                  onPatchPanel={patchPanel}
-                />
+                {/* v2 raw_option 面板（任务 4.5）：只读结构查看；不提供编码
+                    表单与查询绑定（其数据自含于配置，契约刷新对它一律 kept）。 */}
+                {panel.raw_option !== undefined ? (
+                  <RawOptionViewer panel={panel} />
+                ) : (
+                  <>
+                    {showsEncodingForm(panel) && (
+                      <PanelEncodingForm panel={panel} onPatch={(fn) => patchPanel(panel.id, fn)} />
+                    )}
+                    {showsOverlaysForm(panel) && (
+                      <PanelOverlaysForm panel={panel} onPatch={(fn) => patchPanel(panel.id, fn)} />
+                    )}
+                    {/* 绑定查询段（wire-panel-query-binding 任务 2.1）：未绑定 →
+                        「未绑定」+「绑定」入口；已绑定回填原值展开表单（试取/解绑
+                        见 PanelQueryBinding；query 随面板字段走既有保存链）。 */}
+                    <PanelQueryBinding
+                      key={panel.id}
+                      panel={panel}
+                      datasets={datasets}
+                      datasetsLoading={datasetsLoading}
+                      datasetsError={datasetsError}
+                      onEnsureDatasets={ensureDatasets}
+                      onPatchPanel={patchPanel}
+                    />
+                  </>
+                )}
+                <PanelHeightForm panel={panel} onPatch={(fn) => patchPanel(panel.id, fn)} />
                 {panel.type === "kpi" && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <label className="text-[11px] text-slate-400">

@@ -276,7 +276,9 @@ export function DashboardPane({
       ) : (
         <>
           <div className="mt-1">
-            <DashboardRenderer spec={detail.spec} />
+            {/* toolbar：控制台查看态启用面板工具栏（全屏/导出图/图数切换/
+                复制数据）。分享页与市场渲染不传该 prop，红线靠默认值守住。 */}
+            <DashboardRenderer spec={detail.spec} toolbar />
           </div>
           {/* 定时刷新小节（wire-refresh-scheduler 4.1）：查看态管理入口；
               archived 由调度器自动清理调度行，不再展示。 */}

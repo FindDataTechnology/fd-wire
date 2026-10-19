@@ -60,16 +60,16 @@ describe("DocsView（文档三节 · 如实呈现）", () => {
     }
   });
 
-  it("「上线中」徽标收缩为一项：cell 开通（需求单提交已上线不再挂徽标）", () => {
+  it("「上线中」徽标收缩为一项：隔离单元开通（需求单提交已上线不再挂徽标）", () => {
     render(<DocsView />);
 
     // 控制台（AI 对话构建/我的数据/产物）已上线（wire-self-serve-launch 7.3/7.4）；
-    // 需求单提交已上线（wire-ux-consolidation 4.1）——仅 cell 开通如实挂徽标
+    // 需求单提交已上线（wire-ux-consolidation 4.1）——仅隔离单元开通如实挂徽标
     expect(screen.queryByText("控制台分析构建")).toBeNull();
     const badges = screen.getAllByTestId("coming-soon-badge");
     expect(badges.length).toBe(1);
     expect(badges[0]!.textContent).toContain("上线中");
-    expect(screen.getByText(/cell 开通/)).toBeTruthy();
+    expect(screen.getByText(/隔离单元开通/)).toBeTruthy();
     expect(screen.getByText("需求单提交")).toBeTruthy();
   });
 
@@ -286,7 +286,7 @@ describe("DocsView（文档三节 · 如实呈现）", () => {
     expect(section.textContent).toContain("按客户所在城市统计订单金额");
     // v1 边界如实：物化为 cell 档能力，多关系组合 join 不在 v1。
     expect(section.textContent).toContain("当前边界");
-    expect(section.textContent).toContain("物化连接是 cell 档能力");
+    expect(section.textContent).toContain("物化连接是隔离单元档能力");
     expect(section.textContent).toContain("多关系组合 join");
     // 物化连接小节：两步（前置 + LEFT JOIN 语义/撞名前缀/免费档 403/旧 cell）。
     const materialize = screen.getByTestId("docs-entity-materialize");

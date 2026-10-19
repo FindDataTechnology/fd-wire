@@ -123,6 +123,16 @@ describe("ShareView（公开分享页三态 + noindex 红线）", () => {
     // 导出红线（wire-dashboard-export）：分享页零导出入口（渲染器不携带
     // 导出 UI，导出只在控制台查看态 DashboardPane 工具区）
     expect(screen.queryByTestId("dashboard-export-csv")).toBeNull();
+    // 面板工具栏红线（wire-chart-contract-v2 任务 3.5）：分享页不传 toolbar，
+    // 全屏/导出图/图数切换/复制数据一律不出现。
+    expect(screen.queryByTestId("dashboard-panel-toolbar")).toBeNull();
+    expect(screen.queryByTestId("panel-tool-fullscreen")).toBeNull();
+    expect(screen.queryByTestId("panel-tool-export")).toBeNull();
+    expect(screen.queryByTestId("panel-tool-table")).toBeNull();
+    expect(screen.queryByTestId("panel-tool-copy")).toBeNull();
+    expect(
+      screen.getByTestId("dashboard-renderer").getAttribute("data-toolbar"),
+    ).toBe("off");
 
     // 品牌顶栏：双语锁定 + 产品首页链接
     expectShareBrand();

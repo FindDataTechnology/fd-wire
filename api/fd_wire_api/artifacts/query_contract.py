@@ -144,6 +144,8 @@ def contract_refresh_plan(spec: object) -> list[tuple[int, dict, dict]]:
     """提取契约刷新计划：[(panel_index, panel, query)]（仅带合法 query 的面板）。
 
     panels 非数组（旧自由 JSON / legacy）→ 空计划（刷新走既有 AI 路径）。
+    **raw_option 面板不入计划**（wire-chart-contract-v2）：其数据自含于图表
+    配置本身（无独立 snapshot 列），查询契约无从回写，刷新时按 kept 保留。
     """
     panels = _panel_entries(spec)
     if panels is None:
@@ -151,6 +153,8 @@ def contract_refresh_plan(spec: object) -> list[tuple[int, dict, dict]]:
     plan: list[tuple[int, dict, dict]] = []
     for index, panel in enumerate(panels):
         if not isinstance(panel, dict):
+            continue
+        if panel.get("raw_option") is not None:
             continue
         query = parse_panel_query(panel.get("query"))
         if query is not None:

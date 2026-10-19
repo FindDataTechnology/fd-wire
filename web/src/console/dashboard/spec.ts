@@ -1,8 +1,9 @@
-// 仪表盘 spec v1 契约与宽容校验（wire-dashboard-renderer 任务 1）。
+// 仪表盘 spec 契约与宽容校验（wire-dashboard-renderer 任务 1；
+// wire-chart-contract-v2 扩展为 v2）。
 //
 // 存储形状：产物 spec 是信封 `{ title, spec: {…} }`（服务端最小校验口径，
 // 见 api 仓 artifacts/service.validate_spec——title 非空 + spec 非空对象）；
-// 仪表盘 v1 本体 = 信封内层 `{ title, panels: […] }`。parseDashboardSpec
+// 仪表盘本体 = 信封内层 `{ title, panels: […] }`。parseDashboardSpec
 // 同时接受信封（产物详情原样）与本体（编辑器预览）两种输入。
 //
 // 校验口径（宽容）：panels 里的非法面板逐个收集原因并跳过，不整板失败；
@@ -10,8 +11,53 @@
 // span 非法回退 1。旧自由 JSON（内层无 panels 数组）返回 legacy 态。
 // wire-dashboard-query-contract 任务 2.1：面板新增可选 query 引用（刷新
 // 契约，非渲染输入）——normalizePanelQuery 宽容归一，非法整体丢弃。
-export const DASHBOARD_PANEL_TYPES = ["kpi", "line", "bar", "table"] as const;
+//
+// v2（wire-chart-contract-v2）：面板在四类基础形态之上扩展类型谱，并新增
+// 可选 encoding（显式编码通道+轴类型）/ panes（共享时间轴的副图）/
+// overlays（阈值线与区间）/ height / raw_option（完整图表配置直通）。
+// **v1 是 v2 的子集**：无 v2 字段的面板解析后逐字段与升级前一致，渲染走
+// 既有「第一列 x、其余列系列、类目轴」回退分支——存量产物零迁移零漂移。
+export const DASHBOARD_PANEL_TYPES = [
+  // 基础档（v1 既有四类；编辑器保留类型互转与专属表单）
+  "kpi",
+  "line",
+  "bar",
+  "table",
+  // 高级档（v2 类型谱；表达力靠 encoding/overlays/raw_option 支撑）
+  "candlestick",
+  "scatter",
+  "pie",
+  "heatmap",
+  "gauge",
+  "radar",
+  "treemap",
+  "sankey",
+  "funnel",
+  "boxplot",
+] as const;
 export type DashboardPanelType = (typeof DASHBOARD_PANEL_TYPES)[number];
+
+/** 基础档类型（v1 语义：第一列 x / 其余列系列 / kpi 取首值 / table 整表）。 */
+export const DASHBOARD_BASE_PANEL_TYPES = [
+  "kpi",
+  "line",
+  "bar",
+  "table",
+] as const satisfies ReadonlyArray<DashboardPanelType>;
+
+/** 高级档类型（v2 新增十类）。 */
+export const DASHBOARD_ADVANCED_PANEL_TYPES = [
+  "candlestick",
+  "scatter",
+  "pie",
+  "heatmap",
+  "gauge",
+  "radar",
+  "treemap",
+  "sankey",
+  "funnel",
+  "boxplot",
+] as const satisfies ReadonlyArray<DashboardPanelType>;
 
 export const DASHBOARD_PANEL_SPANS = [1, 2, 3] as const;
 export type DashboardPanelSpan = (typeof DASHBOARD_PANEL_SPANS)[number];
@@ -34,6 +80,88 @@ export interface DashboardPanelConfig {
   xName?: string;
 }
 
+/** 轴类型白名单（v2 编码通道）。category=类目（v1 行为）、value=数值、
+ *  time=时间（快照首列按日期解析）、log=对数。 */
+export const DASHBOARD_AXIS_TYPES = [
+  "category",
+  "value",
+  "time",
+  "log",
+] as const;
+export type DashboardAxisType = (typeof DASHBOARD_AXIS_TYPES)[number];
+
+/**
+ * 显式编码通道（v2）：声明数据列 → 图形属性的映射，取代 v1「第一列当 x
+ * 轴、其余列当系列」的位置约定。全部字段可选——缺省的部分回退到 v1 约定。
+ */
+export interface DashboardPanelEncoding {
+  /** x 轴列名（缺省取快照首列）。 */
+  x?: string;
+  /** y 轴列名（每列一个系列；缺省取首列之外的全部列）。 */
+  y?: string[];
+  /** 系列分组列名（同列不同值拆成多个系列，用于长表形态）。 */
+  series?: string;
+  /** 大小通道列名（scatter 的 symbolSize / treemap 的取值）。 */
+  size?: string;
+  /** x 轴类型（缺省 category，与 v1 行为一致）。 */
+  xType?: DashboardAxisType;
+  /** y 轴类型（缺省 value）。 */
+  yType?: DashboardAxisType;
+  /** x 轴名（覆盖 config.xName）。 */
+  xName?: string;
+  /** y 轴名（覆盖 config.yName）。 */
+  yName?: string;
+}
+
+/** 叠加层：阈值线 / 区间高亮 / 事件点（v2）。 */
+export interface DashboardOverlayLine {
+  /** 参考线所在轴值（y 轴默认；axis 指定为 x 时按 x 轴值）。 */
+  value: string | number;
+  /** 线标签（缺省不显示标签）。 */
+  label?: string;
+  /** 线型。 */
+  lineStyle?: "solid" | "dashed" | "dotted";
+  /** 参考线方向：y=水平线（默认）、x=垂直线。 */
+  axis?: "x" | "y";
+}
+
+export interface DashboardOverlayArea {
+  /** 区间起点（含）。 */
+  from: string | number;
+  /** 区间终点（含）。 */
+  to: string | number;
+  /** 区间标签（缺省不显示）。 */
+  label?: string;
+}
+
+export interface DashboardOverlayPoint {
+  /** 点的 x 值（类目名或时间字符串）。 */
+  x: string | number;
+  /** 点的 y 值。 */
+  y: string | number;
+  /** 点标签（缺省取 y 值）。 */
+  label?: string;
+}
+
+export interface DashboardPanelOverlays {
+  markLine?: DashboardOverlayLine[];
+  markArea?: DashboardOverlayArea[];
+  markPoint?: DashboardOverlayPoint[];
+}
+
+/**
+ * 面板窗格（v2）：首个为主窗格，其余为副窗格，垂直堆叠并共享 x 轴刻度与
+ * 十字光标（主图+成交量+技术指标的既有行业范式）。窗格可各自声明编码与
+ * 叠加层；height 为相对权重（缺省主窗格 3、副窗格 1）。
+ */
+export interface DashboardPanelPane {
+  title?: string;
+  encoding?: DashboardPanelEncoding;
+  overlays?: DashboardPanelOverlays;
+  /** 相对高度权重（正整数，缺省 1）。 */
+  height?: number;
+}
+
 export interface DashboardPanel {
   id: string;
   type: DashboardPanelType;
@@ -47,6 +175,22 @@ export interface DashboardPanel {
   /** 查询契约引用（wire-dashboard-query-contract）：刷新按此确定性取数，
    * 非渲染输入——渲染永远读 snapshot；非法 query 在 parse 时整体丢弃。 */
   query?: DashboardPanelQuery;
+  // ── v2 字段（全部可选；缺省即 v1 语义）──────────────────────────────
+  /** 显式编码通道（缺省走「首列 x、其余列系列」回退）。 */
+  encoding?: DashboardPanelEncoding;
+  /** 多窗格（缺省单窗格；单元素数组归一为不落字段）。 */
+  panes?: DashboardPanelPane[];
+  /** 面板级叠加层（单窗格时生效；多窗格时各 pane 自带）。 */
+  overlays?: DashboardPanelOverlays;
+  /** 声明高度（px）；缺省沿用渲染器的默认固定高度（v1 视觉零漂移）。 */
+  height?: number;
+  /**
+   * 完整图表配置直通（v2 逃生舱）：承载类型化字段覆盖不到的图形能力，
+   * 也是存量成品看板零转换迁入的通道。必须可序列化（不含函数/正则/类
+   * 实例）——解析层校验不过则该面板整体跳过并标注。
+   * 与类型化字段共存时：类型化字段优先、raw_option 只补齐未覆盖部分。
+   */
+  raw_option?: Record<string, unknown>;
 }
 
 /** 仪表盘 v1 本体（信封的 spec 内层）。 */
@@ -60,7 +204,7 @@ export interface DashboardBadPanel {
   /** 在原 panels 数组里的序号（0 起）。 */
   index: number;
   /** 跳过原因（i18n 键之外的机器码，渲染层映射文案）。 */
-  reason: "not_object" | "bad_type";
+  reason: "not_object" | "bad_type" | "bad_raw_option";
   raw: unknown;
 }
 
@@ -119,6 +263,229 @@ function normalizeConfig(raw: unknown): DashboardPanelConfig | undefined {
     if (typeof record[key] === "string") config[key] = record[key] as string;
   }
   return Object.keys(config).length > 0 ? config : undefined;
+}
+
+// ── v2 归一（wire-chart-contract-v2）：全部宽容，非法项逐字段丢弃 ────────
+
+function isAxisType(value: unknown): value is DashboardAxisType {
+  return (
+    typeof value === "string" &&
+    (DASHBOARD_AXIS_TYPES as readonly string[]).includes(value)
+  );
+}
+
+/** 非空字符串才收（列名不允许空串——空串既不能定位列也无法表达意图）。 */
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/** 字符串数组归一：只留非空字符串、去重保序；空则不落字段。 */
+function normalizeStringList(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const entry of raw) {
+    const name = nonEmptyString(entry);
+    if (name !== undefined && !out.includes(name)) out.push(name);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/**
+ * 编码通道宽容归一：逐字段校验，非法字段丢弃；轴类型不在白名单回退
+ * （xType 回 category、yType 回 value——与 v1 隐含行为一致）。
+ * 归一后无任何字段则不落 encoding（面板照 v1 回退分支渲染）。
+ */
+export function normalizeEncoding(
+  raw: unknown,
+): DashboardPanelEncoding | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return undefined;
+  }
+  const record = raw as Record<string, unknown>;
+  const encoding: DashboardPanelEncoding = {};
+  const x = nonEmptyString(record.x);
+  if (x !== undefined) encoding.x = x;
+  const y = normalizeStringList(record.y);
+  if (y !== undefined) encoding.y = y;
+  const series = nonEmptyString(record.series);
+  if (series !== undefined) encoding.series = series;
+  const size = nonEmptyString(record.size);
+  if (size !== undefined) encoding.size = size;
+  // 轴类型：给值但不合法 → 回退默认（不丢编码通道本身）。
+  if (record.xType !== undefined) {
+    encoding.xType = isAxisType(record.xType) ? record.xType : "category";
+  }
+  if (record.yType !== undefined) {
+    encoding.yType = isAxisType(record.yType) ? record.yType : "value";
+  }
+  const xName = nonEmptyString(record.xName);
+  if (xName !== undefined) encoding.xName = xName;
+  const yName = nonEmptyString(record.yName);
+  if (yName !== undefined) encoding.yName = yName;
+  return Object.keys(encoding).length > 0 ? encoding : undefined;
+}
+
+const OVERLAY_LINE_STYLES = ["solid", "dashed", "dotted"] as const;
+
+/** 坐标值：数字或非空字符串（类目名 / 时间字符串）。 */
+function overlayCoord(value: unknown): string | number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  return nonEmptyString(value);
+}
+
+/** 叠加层宽容归一：三类逐项校验，非法项丢弃；全空则不落字段。 */
+export function normalizeOverlays(
+  raw: unknown,
+): DashboardPanelOverlays | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return undefined;
+  }
+  const record = raw as Record<string, unknown>;
+  const overlays: DashboardPanelOverlays = {};
+
+  if (Array.isArray(record.markLine)) {
+    const lines: DashboardOverlayLine[] = [];
+    for (const entry of record.markLine) {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        continue;
+      }
+      const item = entry as Record<string, unknown>;
+      const value = overlayCoord(item.value);
+      if (value === undefined) continue;
+      const line: DashboardOverlayLine = { value };
+      const label = nonEmptyString(item.label);
+      if (label !== undefined) line.label = label;
+      if (
+        typeof item.lineStyle === "string" &&
+        (OVERLAY_LINE_STYLES as readonly string[]).includes(item.lineStyle)
+      ) {
+        line.lineStyle = item.lineStyle as DashboardOverlayLine["lineStyle"];
+      }
+      if (item.axis === "x" || item.axis === "y") line.axis = item.axis;
+      lines.push(line);
+    }
+    if (lines.length > 0) overlays.markLine = lines;
+  }
+
+  if (Array.isArray(record.markArea)) {
+    const areas: DashboardOverlayArea[] = [];
+    for (const entry of record.markArea) {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        continue;
+      }
+      const item = entry as Record<string, unknown>;
+      const from = overlayCoord(item.from);
+      const to = overlayCoord(item.to);
+      if (from === undefined || to === undefined) continue;
+      const area: DashboardOverlayArea = { from, to };
+      const label = nonEmptyString(item.label);
+      if (label !== undefined) area.label = label;
+      areas.push(area);
+    }
+    if (areas.length > 0) overlays.markArea = areas;
+  }
+
+  if (Array.isArray(record.markPoint)) {
+    const points: DashboardOverlayPoint[] = [];
+    for (const entry of record.markPoint) {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        continue;
+      }
+      const item = entry as Record<string, unknown>;
+      const x = overlayCoord(item.x);
+      const value = overlayCoord(item.y);
+      if (x === undefined || value === undefined) continue;
+      const point: DashboardOverlayPoint = { x, y: value };
+      const label = nonEmptyString(item.label);
+      if (label !== undefined) point.label = label;
+      points.push(point);
+    }
+    if (points.length > 0) overlays.markPoint = points;
+  }
+
+  return Object.keys(overlays).length > 0 ? overlays : undefined;
+}
+
+/**
+ * 窗格宽容归一：逐项校验（非对象丢弃；encoding/overlays 各自归一；
+ * height 只收正整数）。不足两个合法窗格即视为无多窗格语义（不落字段）——
+ * 单窗格与不收 panes 在渲染上完全等价，落字段反而扩大存储面。
+ */
+export function normalizePanes(raw: unknown): DashboardPanelPane[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const panes: DashboardPanelPane[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const pane: DashboardPanelPane = {};
+    const title = nonEmptyString(record.title);
+    if (title !== undefined) pane.title = title;
+    const encoding = normalizeEncoding(record.encoding);
+    if (encoding !== undefined) pane.encoding = encoding;
+    const overlays = normalizeOverlays(record.overlays);
+    if (overlays !== undefined) pane.overlays = overlays;
+    if (
+      typeof record.height === "number" &&
+      Number.isInteger(record.height) &&
+      record.height > 0
+    ) {
+      pane.height = record.height;
+    }
+    panes.push(pane);
+  }
+  return panes.length >= 2 ? panes : undefined;
+}
+
+/**
+ * raw_option 可序列化校验（深度遍历）：检出函数、正则、类实例（非纯对象/
+ * 数组/原始值）即判不可序列化。返回首个问题的路径描述，null 表示通过。
+ *
+ * 为什么要查而不是直接 JSON.stringify：`JSON.stringify` 会把函数静默丢成
+ * undefined、把正则变成 `{}`——用户面对的是一张空白图而非可诊断的错误。
+ * 成品看板里确有 `"(v) => v"` 这类字符串（JSON 解析出来是字符串，不是
+ * 函数），它们是合法载荷；真正不可接受的只有解析后仍是非原始值的东西。
+ */
+function findUnserializable(value: unknown, path: string): string | null {
+  if (value === null) return null;
+  const kind = typeof value;
+  if (kind === "string" || kind === "number" || kind === "boolean") return null;
+  if (kind === "undefined") return null;
+  if (kind === "function") return `${path} 是函数`;
+  if (kind === "symbol" || kind === "bigint") return `${path} 是 ${kind}`;
+  if (value instanceof RegExp) return `${path} 是正则`;
+  if (value instanceof Date) return `${path} 是 Date`;
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i += 1) {
+      const problem = findUnserializable(value[i], `${path}[${i}]`);
+      if (problem) return problem;
+    }
+    return null;
+  }
+  if (kind === "object") {
+    const proto = Object.getPrototypeOf(value);
+    // 只接受纯对象与 null 原型；类实例（Map/Set/自定义类）一律拒绝。
+    if (proto !== Object.prototype && proto !== null) {
+      return `${path} 不是纯对象`;
+    }
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      const problem = findUnserializable(item, `${path}.${key}`);
+      if (problem) return problem;
+    }
+    return null;
+  }
+  return `${path} 类型不受支持`;
+}
+
+/**
+ * raw_option 归一：非对象不落；含不可序列化值返回 null 由调用方判坏面板；
+ * 通过则原样收下（内容的语义正确性归渲染层，解析层只保证可安全持有）。
+ */
+export function normalizeRawOption(raw: unknown): Record<string, unknown> | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  if (findUnserializable(raw, "raw_option") !== null) return null;
+  return raw as Record<string, unknown>;
 }
 
 /** 查询过滤算子白名单（与数据面 query 端点入参同界）。 */
@@ -248,18 +615,23 @@ export function normalizePanelQuery(raw: unknown): DashboardPanelQuery | undefin
 
 /**
  * 宽容解析仪表盘 spec：接受产物信封（`{title, spec:{title, panels}}`）或
- * v1 本体（`{title, panels}`）。内层无 panels 数组 → legacy 态（旧自由
+ * 本体（`{title, panels}`）。内层无 panels 数组 → legacy 态（旧自由
  * JSON，调用方整体只读呈现）；有 panels 数组 → v1 态，逐面板校验：
  * 非 JSON 对象 / type 不在枚举 → 收集进 badPanels 跳过；id 缺失自动补、
  * span 非法回退 1、snapshot/config 归一（不拒收）、query 宽容归一（非法
  * 整体丢弃——面板仍按 snapshot 渲染，不受影响）。
+ *
+ * v2（wire-chart-contract-v2）：encoding/panes/overlays/height/raw_option
+ * 逐项宽容归一，非法整体或逐项丢弃但不拒收面板；唯 raw_option 含不可
+ * 序列化值时**整面板**记 bad_raw_option 跳过（该配置无法安全持有，且
+ * 静默降级会让用户面对空白图而无从诊断）。
  */
 export function parseDashboardSpec(raw: unknown): DashboardParseResult {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return { kind: "legacy", raw: {} };
   }
   const envelope = raw as { title?: unknown; spec?: unknown };
-  // 信封解包：spec 字段是对象则视作 v1 本体所在；否则把整体当本体尝试。
+  // 信封解包：spec 字段是对象则视作本体所在；否则把整体当本体尝试。
   const body: Record<string, unknown> =
     typeof envelope.spec === "object" && envelope.spec !== null
       ? (envelope.spec as Record<string, unknown>)
@@ -282,6 +654,16 @@ export function parseDashboardSpec(raw: unknown): DashboardParseResult {
       badPanels.push({ index, reason: "bad_type", raw: entry });
       return;
     }
+    // raw_option 先校验：给出但不可序列化 → 整面板跳过（不静默降级）。
+    let rawOption: Record<string, unknown> | undefined;
+    if (record.raw_option !== undefined) {
+      const normalized = normalizeRawOption(record.raw_option);
+      if (normalized === null) {
+        badPanels.push({ index, reason: "bad_raw_option", raw: entry });
+        return;
+      }
+      rawOption = normalized;
+    }
     const title = typeof record.title === "string" ? record.title : "";
     // id 缺失/非字符串：自动补稳定 id（不拒收——AI 草稿常缺 id）。
     let id = typeof record.id === "string" && record.id ? record.id : "";
@@ -296,6 +678,16 @@ export function parseDashboardSpec(raw: unknown): DashboardParseResult {
     const config = normalizeConfig(record.config);
     const source = typeof record.source === "string" ? record.source : undefined;
     const query = normalizePanelQuery(record.query);
+    // v2 字段（缺省不落字段——v1 面板解析后的对象形状与升级前逐字段一致）
+    const encoding = normalizeEncoding(record.encoding);
+    const panes = normalizePanes(record.panes);
+    const overlays = normalizeOverlays(record.overlays);
+    const height =
+      typeof record.height === "number" &&
+      Number.isFinite(record.height) &&
+      record.height > 0
+        ? Math.round(record.height)
+        : undefined;
     panels.push({
       id,
       type: record.type,
@@ -305,6 +697,11 @@ export function parseDashboardSpec(raw: unknown): DashboardParseResult {
       ...(snapshot !== undefined ? { snapshot } : {}),
       ...(config !== undefined ? { config } : {}),
       ...(query !== undefined ? { query } : {}),
+      ...(encoding !== undefined ? { encoding } : {}),
+      ...(panes !== undefined ? { panes } : {}),
+      ...(overlays !== undefined ? { overlays } : {}),
+      ...(height !== undefined ? { height } : {}),
+      ...(rawOption !== undefined ? { raw_option: rawOption } : {}),
     });
   });
 
@@ -316,6 +713,19 @@ export function parseDashboardSpec(raw: unknown): DashboardParseResult {
         : "";
   return { kind: "v1", title, panels, badPanels };
 }
+
+/** 面板是否为 v2 形态（携带任一 v2 专有字段）。渲染层据此判定是否走
+ *  v1 回退分支；编辑器的 raw_option 只读分支同样以此为准。 */
+export function isV2Panel(panel: DashboardPanel): boolean {
+  return (
+    panel.encoding !== undefined ||
+    panel.panes !== undefined ||
+    panel.overlays !== undefined ||
+    panel.height !== undefined ||
+    panel.raw_option !== undefined
+  );
+}
+
 
 /** 面板 id 生成器：`p1`、`p2`… 跳过已占用值（编辑器增删移序用）。 */
 export function generatePanelId(existing: Iterable<string>): string {
@@ -342,7 +752,14 @@ export function moveItem<T>(items: T[], from: number, to: number): T[] {
   return next;
 }
 
-/** 各类型的新面板起始模板（编辑器「添加面板」用；数据留空由用户/预览如实呈现）。 */
+/**
+ * 各类型的新面板起始模板（编辑器「添加面板」用；数据留空由用户/预览如实
+ * 呈现）。
+ *
+ * 基础档沿用 v1 模板（形状与升级前逐字段一致）。高级档（v2）给最小可渲染
+ * 骨架：带 encoding 的图表类给类目轴 + 单系列两列快照；饼/仪表/漏斗等单维
+ * 类型给类目+数值；K 线给日期+四价空表（用户/绑定后填数）。
+ */
 export function panelTemplate(
   type: DashboardPanelType,
   existingIds: Iterable<string>,
@@ -372,6 +789,72 @@ export function panelTemplate(
       return {
         ...base,
         snapshot: { columns: ["列一", "列二"], rows: [] },
+      };
+    case "candlestick":
+      // 日期 + 开高低收（K 线标准四价；渲染层按此顺序取）。
+      return {
+        ...base,
+        snapshot: {
+          columns: ["日期", "开盘", "最高", "最低", "收盘"],
+          rows: [],
+        },
+        encoding: { x: "日期", xType: "time", yType: "value" },
+      };
+    case "scatter":
+      return {
+        ...base,
+        snapshot: { columns: ["x", "y"], rows: [] },
+        encoding: { x: "x", xType: "value", y: ["y"], yType: "value" },
+      };
+    case "pie":
+    case "funnel":
+      // 单维占比：类目 + 数值。
+      return {
+        ...base,
+        snapshot: { columns: ["类目", "数值"], rows: [] },
+        encoding: { x: "类目", y: ["数值"] },
+      };
+    case "gauge":
+      // 仪表盘只有一个值；快照仍两列以复用统一形状。
+      return {
+        ...base,
+        snapshot: { columns: ["指标", "数值"], rows: [] },
+        encoding: { x: "指标", y: ["数值"] },
+      };
+    case "heatmap":
+      return {
+        ...base,
+        snapshot: { columns: ["x", "y", "值"], rows: [] },
+        encoding: { x: "x", y: ["值"], series: "y" },
+      };
+    case "radar":
+      return {
+        ...base,
+        snapshot: { columns: ["维度", "数值"], rows: [] },
+        encoding: { x: "维度", y: ["数值"] },
+      };
+    case "treemap":
+      return {
+        ...base,
+        snapshot: { columns: ["节点", "数值"], rows: [] },
+        encoding: { x: "节点", y: ["数值"], size: "数值" },
+      };
+    case "sankey":
+      // 两列即两端节点 + 流量（源→目标）。
+      return {
+        ...base,
+        snapshot: { columns: ["源", "目标", "流量"], rows: [] },
+        encoding: { x: "源", series: "目标", size: "流量" },
+      };
+    case "boxplot":
+      // 箱线图五数概括：类目 + 最小值/下四分位/中位/上四分位/最大值。
+      return {
+        ...base,
+        snapshot: {
+          columns: ["类目", "min", "q1", "median", "q3", "max"],
+          rows: [],
+        },
+        encoding: { x: "类目" },
       };
   }
 }
