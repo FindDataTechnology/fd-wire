@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { AdminErrorBox, AdminStates } from "./AdminLayout";
 import {
   addVerifyNote,
+  CATALOG_PENDING_MAX_LIMIT,
   fetchCatalogPending,
   fetchReviewNotes,
   type IndicatorPendingItem,
@@ -14,24 +15,38 @@ import {
 
 type MirrorStatus = "registered" | "verified";
 
+/** 目录治理单页条数（与后端 limit 上限同值；规模现实见 api.ts 注释）。 */
+const PAGE_SIZE = CATALOG_PENDING_MAX_LIMIT;
+
 export function CatalogGovernancePage() {
   const { t } = useTranslation();
   const [status, setStatus] = useState<MirrorStatus>("registered");
+  // 分页（wire-admin-console-routing）：镜像规模实测 verified 3,421 条 /
+  // registered 54,132 条——全量拉取是一次性渲染白屏的直接成因，故只取本页。
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [items, setItems] = useState<IndicatorPendingItem[] | null>(null);
   const [error, setError] = useState<{ status?: number; message: string; detail?: string } | null>(null);
   const [notesByIndicator, setNotesByIndicator] = useState<Record<string, ReviewNote[]>>({});
   const [openId, setOpenId] = useState<string | null>(null);
 
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
   const load = useCallback(async () => {
     setError(null);
     setItems(null);
     try {
-      const response = await fetchCatalogPending(status);
+      const response = await fetchCatalogPending(status, {
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
+      });
       setItems(response.items);
+      // total 是状态匹配总数（非本页条数），页数由它算出，无需额外计数请求。
+      setTotal(response.total);
     } catch (err) {
       setError(err as { status?: number; message: string });
     }
-  }, [status]);
+  }, [status, page]);
 
   useEffect(() => {
     void load();
@@ -73,7 +88,12 @@ export function CatalogGovernancePage() {
             id="catalog-status"
             data-testid="catalog-status-filter"
             value={status}
-            onChange={(e) => setStatus(e.target.value as MirrorStatus)}
+            onChange={(e) => {
+              setStatus(e.target.value as MirrorStatus);
+              // 换状态即回到第 1 页：另一状态的页数与当前页码无关，留在原
+              // 页码会得到越界空页（total 变小则 items 为空）。
+              setPage(1);
+            }}
             className="rounded-md border border-slate-300 px-2 py-1 text-sm"
           >
             <option value="registered">{t("admin.catalog.registered")}</option>
@@ -174,6 +194,34 @@ export function CatalogGovernancePage() {
           </ul>
         )}
       </AdminStates>
+      {items != null && items.length > 0 && total > PAGE_SIZE && (
+        <div
+          data-testid="admin-catalog-pagination"
+          className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-500"
+        >
+          <span data-testid="admin-catalog-pagination-info">
+            {t("admin.catalog.pagination", { total, page, pages })}
+          </span>
+          <button
+            type="button"
+            data-testid="admin-catalog-prev-page"
+            disabled={page <= 1}
+            onClick={() => setPage((current) => Math.max(1, current - 1))}
+            className="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {t("admin.catalog.prev")}
+          </button>
+          <button
+            type="button"
+            data-testid="admin-catalog-next-page"
+            disabled={page >= pages}
+            onClick={() => setPage((current) => current + 1)}
+            className="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {t("admin.catalog.next")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

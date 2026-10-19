@@ -93,6 +93,10 @@ router = APIRouter(
 #: 镜像状态的合法取值（与 indicator_snapshots 的 CHECK 约束一致）
 _MIRROR_STATUSES = ("verified", "registered")
 
+#: 单页上限——与公开指标目录列表（catalog/service.py）的 page_size 上限同值，
+#: 使后台目录治理页与公开目录共用一套分页红线（规模再大也只按页取）。
+_CATALOG_PENDING_MAX_LIMIT = 100
+
 
 # ---------------------------------------------------------------------------
 # 客户管理（billing_customers / billing_plans：只读查询 + 开户记录）
@@ -543,23 +547,38 @@ def dispatch_demand_wanxing(
 @router.get("/catalog/pending", response_model=CatalogPendingOut)
 def catalog_pending(
     mirror_status: str = Query(default="registered", alias="status"),
+    limit: int = Query(default=_CATALOG_PENDING_MAX_LIMIT),
+    offset: int = Query(default=0),
 ) -> CatalogPendingOut:
-    """镜像目录列表（默认 registered=待治理；verified 可复查）。
+    """镜像目录列表（默认 registered=待治理；verified 可复查）分页只读。
 
     只读：镜像仅同步管道可写（spec wire-indicator-catalog），
     状态修改在权威库侧完成，本台只看不改。
+
+    分页：镜像规模可达万级（生产实测 registered 5.4 万条），全量返回会让
+    呈现层一次渲染全部条目（下滑丢内容），故按 limit/offset 取页并回 total
+    （匹配总数，不是本页条数）供前端算页数；limit 超限按上限收敛而非报错
+    ——超限是常见手写参数，如实截断比 422 更贴合人工翻阅意图。
     """
     if mirror_status not in _MIRROR_STATUSES:
         raise HTTPException(
             status_code=422,
             detail=f"status must be one of {list(_MIRROR_STATUSES)}",
         )
+    page_limit = min(max(1, limit), _CATALOG_PENDING_MAX_LIMIT)
+    page_offset = max(0, offset)
     with readonly_session() as session:
+        stmt = select(IndicatorSnapshot).where(
+            IndicatorSnapshot.status == mirror_status
+        )
+        total = session.execute(
+            select(func.count()).select_from(stmt.subquery())
+        ).scalar_one()
         rows = (
             session.execute(
-                select(IndicatorSnapshot)
-                .where(IndicatorSnapshot.status == mirror_status)
-                .order_by(IndicatorSnapshot.indicator_id)
+                stmt.order_by(IndicatorSnapshot.indicator_id)
+                .offset(page_offset)
+                .limit(page_limit)
             )
             .scalars()
             .all()
@@ -577,7 +596,7 @@ def catalog_pending(
             )
             for r in rows
         ]
-    return CatalogPendingOut(status=mirror_status, items=items, total=len(items))
+    return CatalogPendingOut(status=mirror_status, items=items, total=total)
 
 
 @router.post(

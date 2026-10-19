@@ -256,6 +256,53 @@ describe("UsageOverviewPage（用量分轨）", () => {
   });
 });
 
+describe("AdminLayout 顶栏出口（wire-admin-console-routing 任务 3.1）", () => {
+  it("后台顶栏并列两个出口：进控制台（#/console）与返回前台（#/）", async () => {
+    const backend = installAdminBackend({ bearerToken: TOKEN });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<AdminView section="customers" />);
+    await screen.findByTestId("admin-nav");
+
+    // 控制台出口落裸 #/console：只有裸入口走偏好落地序（置顶看板 >
+    // landing_tab），符合「管理员同时是客户」语义；点击即置分流标记，
+    // 使这次显式进入不再被角色分流送回后台。
+    const gotoConsole = screen.getByTestId("admin-goto-console");
+    expect(gotoConsole.getAttribute("href")).toBe("#/console");
+    // 与既有「返回前台」并列呈现（D2：二者目的不同，不合并）。
+    const exit = screen.getByTestId("admin-exit");
+    expect(exit.getAttribute("href")).toBe("#/");
+    expect(gotoConsole).not.toBe(exit);
+    // 样式与既有出口一致（照抄 admin-exit），文案取自既有 nav.console 键
+    expect(gotoConsole.className).toBe(exit.className);
+    expect(gotoConsole.textContent).toBe("控制台");
+    // 控制台出口挂在后台顶栏内（与登出/出口同容器）
+    expect(
+      screen.getByTestId("admin-topbar").contains(gotoConsole),
+    ).toBe(true);
+  });
+
+  it("后台六个分区任一页顶栏都带控制台出口（可达性不随分区变化）", async () => {
+    const backend = installAdminBackend({ bearerToken: TOKEN });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    for (const section of [
+      "customers",
+      "ledger",
+      "demands",
+      "catalog",
+      "usage",
+      "localdata",
+    ] as const) {
+      const { unmount } = render(<AdminView section={section} />);
+      await screen.findByTestId("admin-nav");
+      expect(
+        screen.getByTestId("admin-goto-console").getAttribute("href"),
+      ).toBe("#/console");
+      unmount();
+      cleanup();
+    }
+  });
+});
+
 describe("#/admin 路由解析", () => {
   it("五段解析与未知段回落客户页", () => {
     expect(parseHash("#/admin")).toEqual({ name: "admin", section: "customers" });

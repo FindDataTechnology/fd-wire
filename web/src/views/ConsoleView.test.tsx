@@ -469,3 +469,155 @@ describe("ConsoleView（个人偏好：跨端同步语义）", () => {
     expect(preferencePuts(backend)).toEqual([]);
   });
 });
+
+// 管理员控制台可达性（wire-admin-console-routing 任务 3.2-3.5）：分流保留
+// （裸 #/console 首落后台），但管理员同时是客户——落后台后必须还能进控制台，
+// 且其客户资产页与门户导航照常呈现。落地用例一律经 App 壳走真实 hash 链路。
+describe("ConsoleView（管理员控制台可达性）", () => {
+  /** 门户顶栏的控制台页签（App header；控制台侧栏各页签 hrerf 带子路径）。 */
+  const portalConsoleTab = () =>
+    document.querySelector('a[href="#/console"]') as HTMLAnchorElement | null;
+
+  /** 种管理员控制台会话（roles 含 wire-admin，客户资产面与普通客户同构）。 */
+  const seedAdmin = () =>
+    seedConsoleSession({ sub: "admin", roles: ["wire-admin"] });
+
+  /** 等 App 壳切到目标 hash 后的落地态（hashchange → 重渲染是异步的）。 */
+  const waitForHash = (hash: string) =>
+    waitFor(() => expect(window.location.hash).toBe(hash));
+
+  it("管理员裸登录落后台：#/console → #/admin（既有分流不变）", async () => {
+    vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
+    seedAdmin();
+    window.location.hash = "#/console";
+    render(<App />);
+
+    // 分流落地：hash 被改写为 #/admin，后台壳渲染。
+    await waitForHash("#/admin");
+    expect(await screen.findByTestId("admin-brand-bar")).toBeTruthy();
+    expect(screen.getByTestId("admin-nav")).toBeTruthy();
+    expect(screen.queryByTestId("console-topbar")).toBeNull();
+  });
+
+  it("管理员经后台出口进控制台：客户资产面可达（看板/产物/我的数据/实体/用量/团队/市场）", async () => {
+    vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
+    seedAdmin();
+    window.location.hash = "#/console";
+    const first = render(<App />);
+    await waitForHash("#/admin");
+    await screen.findByTestId("admin-nav");
+
+    // 点后台顶栏的控制台出口（走链接 href + onClick 置分流标记，与浏览器
+    // 点击一致）。落点是裸 #/console——唯一走偏好落地序的入口。
+    const exit = screen.getByTestId("admin-goto-console");
+    expect(exit.getAttribute("href")).toBe("#/console");
+    fireEvent.click(exit);
+    await waitFor(() => expect(window.location.hash).toBe("#/console"));
+
+    // 控制台壳渲染（顶栏 + 侧栏），七个客户资产页签与无该角色的客户一致。
+    expect(await screen.findByTestId("console-topbar")).toBeTruthy();
+    for (const tab of [
+      "artifacts",
+      "datasets",
+      "entities",
+      "usage",
+      "team",
+      "market",
+    ]) {
+      expect(screen.getByTestId(`console-nav-${tab}`)).toBeTruthy();
+    }
+    expect(await screen.findByTestId("upload-section")).toBeTruthy();
+    // 落地后门户顶栏照常呈现（控制台路由不被摘壳）。
+    expect(portalConsoleTab()).not.toBeNull();
+
+    // 可达性核心断言：从控制台回到裸 #/console（重挂载 = 真实导航），
+    // 不再被分流改跳后台——否则管理员在控制台与后台之间永远出不来。
+    first.unmount();
+    cleanup();
+    window.location.hash = "#/console";
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByTestId("console-topbar")).toBeTruthy(),
+    );
+    expect(window.location.hash).toBe("#/console");
+    expect(screen.queryByTestId("admin-brand-bar")).toBeNull();
+  });
+
+  it("管理员经文档页「前往控制台」入口直达控制台：不被改跳后台，门户导航在场", async () => {
+    vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
+    seedAdmin();
+    window.location.hash = "#/docs";
+    render(<App />);
+    expect(await screen.findByTestId("mcp-endpoint")).toBeTruthy();
+
+    // 入口保持裸 #/console（唯一走偏好落地序的入口）；点击置分流标记，
+    // 使这次显式进入不被角色分流改跳后台。
+    const link = screen.getByTestId("docs-quick-start-console-link");
+    expect(link.getAttribute("href")).toBe("#/console");
+    fireEvent.click(link);
+    await waitFor(() => expect(window.location.hash).toBe("#/console"));
+
+    expect(await screen.findByTestId("console-topbar")).toBeTruthy();
+    expect(window.location.hash).toBe("#/console");
+    expect(screen.queryByTestId("admin-brand-bar")).toBeNull();
+    // 落控制台后门户顶部导航照常呈现（不因角色分流而消失）。
+    expect(portalConsoleTab()).not.toBeNull();
+  });
+
+  it("普通客户（无 wire-admin）裸登录：落地仍是既有偏好序（不受分流影响）", async () => {
+    const backend = installConsoleBackend([], {
+      preferences: { "demo-customer": { ui_locale: "zh", landing_tab: "team" } },
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    seedConsoleSession({ sub: "demo-customer", roles: [] });
+    window.location.hash = "#/console";
+    render(<App />);
+
+    await screen.findByTestId("console-topbar");
+    await waitFor(() =>
+      expect(window.location.hash).toBe("#/console/team"),
+    );
+    expect(
+      screen.getByTestId("console-nav-team").className.includes("bg-slate-900"),
+    ).toBe(true);
+    expect(screen.queryByTestId("admin-brand-bar")).toBeNull();
+  });
+
+  it("管理员显式子路径 #/console/usage 直达：不被分流劫持（既有三号场景回归）", async () => {
+    vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
+    seedAdmin();
+    window.location.hash = "#/console/usage";
+    render(<App />);
+
+    await screen.findByTestId("console-topbar");
+    // hash 未被改写为 #/admin，停留在用量页。
+    expect(window.location.hash).toBe("#/console/usage");
+    expect(
+      screen.getByTestId("console-nav-usage").className.includes("bg-slate-900"),
+    ).toBe(true);
+    expect(screen.queryByTestId("admin-brand-bar")).toBeNull();
+  });
+
+  it("管理员落后台后手敲 #/admin 仍直达后台（显式后台路径从不走分流）", async () => {
+    vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
+    seedAdmin();
+    window.location.hash = "#/console";
+    const first = render(<App />);
+    await waitForHash("#/admin");
+
+    // 进控制台后重新手敲 #/admin：显式后台路径不走分流，也不被标记挡住。
+    first.unmount();
+    cleanup();
+    window.location.hash = "#/console";
+    const second = render(<App />);
+    await screen.findByTestId("console-topbar");
+    expect(window.location.hash).toBe("#/console");
+    second.unmount();
+    cleanup();
+    window.location.hash = "#/admin";
+    render(<App />);
+    await waitForHash("#/admin");
+    expect(await screen.findByTestId("admin-nav")).toBeTruthy();
+    expect(screen.queryByTestId("console-topbar")).toBeNull();
+  });
+});

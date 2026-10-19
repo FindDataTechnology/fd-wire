@@ -65,6 +65,15 @@ export class ConsoleAuthError extends Error {
 
 export const SESSION_STORAGE_KEY = "wire.console.session";
 export const PKCE_STORAGE_KEY = "wire.console.pkce";
+/**
+ * 管理员分流落地标记（wire-admin-console-routing 任务 3.2）：
+ * 裸 #/console 的角色分流把 wire-admin 会话送进 #/admin，而管理员同时是客户——
+ * 若不记这一笔，其从后台（或文档页）回到裸 #/console 会被同一条规则再送回
+ * 后台，控制台永不可达。故分流落地即置标记，标记在场时裸入口按普通客户的
+ * 偏好落地序处理；要后台则手敲 #/admin——显式直达从不走分流，不受本标记
+ * 影响。标记随登出/新登录清除（只属于那一次会话），换账号重新享有首登分流。
+ */
+export const ADMIN_SPLIT_STORAGE_KEY = "wire.console.adminSplit";
 /** 内部后台角色门禁（ID token roles claim；admin 双闸的前端半边）。 */
 export const ADMIN_ROLE = "wire-admin";
 /**
@@ -133,6 +142,36 @@ export function isExpired(session: ConsoleSession, skewMs = 60_000): boolean {
 /** admin 导航/页面共用：会话是否带内部后台角色。 */
 export function hasAdminRole(session: ConsoleSession | null): boolean {
   return !!session?.roles?.includes(ADMIN_ROLE);
+}
+
+/**
+ * 标记本次会话的裸 #/console 角色分流已落地过（管理员落后台后不再二次分流，
+ * 免得控制台恒不可达）。存储不可用时退化为「每次都分流」的旧行为。
+ */
+export function markAdminSplitDone(): void {
+  try {
+    sessionStorage.setItem(ADMIN_SPLIT_STORAGE_KEY, "1");
+  } catch {
+    /* 存储不可用时退化为每次分流（旧行为） */
+  }
+}
+
+/** 裸 #/console 的角色分流是否已在本次会话落地过。 */
+export function hasAdminSplitDone(): boolean {
+  try {
+    return sessionStorage.getItem(ADMIN_SPLIT_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** 清除分流落地标记（登出 / 新登录时：标记只属于那一次会话）。 */
+export function clearAdminSplitDone(): void {
+  try {
+    sessionStorage.removeItem(ADMIN_SPLIT_STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +456,8 @@ export async function completeLogin(
   dropPkce();
   const session = sessionFromTokens(tokens);
   saveSession(session);
+  // 新登录即重置分流标记：换账号登录仍享有首登分流（标记只属于那一次会话）。
+  clearAdminSplitDone();
   return { returnTo: pkce.returnTo || "/console", session };
 }
 
@@ -463,4 +504,6 @@ export async function refreshSession(
 export function logoutLocal(): void {
   clearSession();
   dropPkce();
+  // 分流标记随登出清除：换账号登录重新享有首登分流（标记只属于那一次会话）。
+  clearAdminSplitDone();
 }

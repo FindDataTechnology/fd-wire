@@ -21,9 +21,11 @@ import {
   establishSession,
   fetchAuthConfig,
   hasAdminRole,
+  hasAdminSplitDone,
   isExpired,
   loadSession,
   logoutLocal,
+  markAdminSplitDone,
   refreshSession,
   type ConsoleAuthConfig,
   type ConsoleAuthError,
@@ -69,6 +71,17 @@ const PREFERENCES_BOOT_TIMEOUT_MS = 2_000;
 function isBareConsoleHash(): boolean {
   return /^#\/console\/?$/.test(window.location.hash);
 }
+
+/**
+ * 裸 #/console 的 wire-admin 角色分流是否已落地过（wire-admin-console-routing
+ * 任务 3.2 / design D1：保留分流，补可达性）——标记借 sessionStorage 承载
+ * （auth.ts 的 mark/has/clearAdminSplitDone），随登出与新登录清除。
+ * 分流本身是既有需求（管理员裸登录落后台，省一次点击），但管理员同时是客户——
+ * 若每次裸入口都分流，其从后台（或文档页入口）回到裸 #/console 会被同一条规则
+ * 再送回 #/admin，控制台恒不可达。故分流只在本次会话首次生效：二次进入裸入口
+ * 按其偏好落地序走，与普通客户一致。要后台则手敲 #/admin——显式直达从不走分流，
+ * 不受本标记影响。
+ */
 
 /** locale 收敛（wire-personal-preferences）：server ui_locale 有值 → 覆盖
  *  本地 i18n；三键全空（首登）→ 领养：把当前本地语言上传一次，此后换设备
@@ -173,7 +186,13 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
       //（#/console/usage 等）不劫持。hash 赋值后照常 setPhase ready——
       // App 的 hashchange 会切路由、ConsoleView 随之卸载；suppress 挡住
       // 「admin 不在 console tabs 内」可能引发的写回。
-      if (isBareConsoleHash() && hasAdminRole(next)) {
+      // 可达性补丁（wire-admin-console-routing 任务 3.2 / design D1）：分流
+      // 保留，但只在本会话首次生效（adminSplitDone，见其注释）。管理员同时是
+      // 客户——若每次裸 #/console 都分流，其从后台（或文档页入口）回到裸入口
+      // 会被同一条规则再送回后台，控制台恒不可达。显式的 #/admin / #/console/xxx
+      // 直达从不走本分支，不受标记影响。
+      if (isBareConsoleHash() && hasAdminRole(next) && !hasAdminSplitDone()) {
+        markAdminSplitDone();
         suppressTabWriteRef.current = "datasets";
         window.location.hash = "#/admin";
         setPhase({ kind: "ready", session: next, keyOnce: establishment.keyOnce });

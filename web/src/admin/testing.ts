@@ -101,6 +101,10 @@ export interface AdminBackendOptions {
   plans?: AdminPlan[];
   /** 客户本地数据只读概览（/internal/datasets/overview 响应体）。 */
   datasetOverviews?: CustomerLocalDataOverview[];
+  /** 目录治理镜像条目覆盖（wire-admin-console-routing）：缺省单条既有桩；
+   *  传多条即按 status + limit/offset 真实切片（分页测试面——缺省行为与
+   *  改造前逐字节一致，既有单条断言不被打破）。 */
+  catalogItems?: CatalogPendingResponse["items"];
 }
 
 /** 「转生成工单」缺省成功响应（形状对齐 api 仓 export_workorder_service）。 */
@@ -459,21 +463,27 @@ export function installAdminBackend(options: AdminBackendOptions = {}): {
     // -- 目录治理 ------------------------------------------------------------
     if (path === "/internal/admin/catalog/pending" && method === "GET") {
       const status = url.searchParams.get("status") ?? "registered";
+      const all = options.catalogItems ?? [
+        {
+          indicator_id: "ind-reg-1",
+          code: "IND_REG_1",
+          name_zh: "待治理指标一",
+          name_en: "Pending One",
+          domain: "macro",
+          frequency: "monthly",
+          status,
+          synced_at: "2026-10-04T02:00:00+00:00",
+        },
+      ];
+      // 分页切片（wire-admin-console-routing）：与后端 limit/offset 契约同
+      // 语义——total 是**状态匹配总数**，items 只是本页切片。
+      const matched = all.filter((item) => item.status === status);
+      const limit = Number(url.searchParams.get("limit")) || matched.length;
+      const offset = Number(url.searchParams.get("offset")) || 0;
       const response: CatalogPendingResponse = {
         status,
-        items: [
-          {
-            indicator_id: "ind-reg-1",
-            code: "IND_REG_1",
-            name_zh: "待治理指标一",
-            name_en: "Pending One",
-            domain: "macro",
-            frequency: "monthly",
-            status,
-            synced_at: "2026-10-04T02:00:00+00:00",
-          },
-        ],
-        total: 1,
+        items: matched.slice(offset, offset + limit),
+        total: matched.length,
       };
       return Promise.resolve(jsonResponse(response));
     }

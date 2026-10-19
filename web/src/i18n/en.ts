@@ -2774,6 +2774,9 @@ const en: Translation = {
       noNotes: "No review notes yet.",
       notePlaceholder: "Enter a review note (caliber checks, extra hints…)",
       noteSubmit: "File note",
+      pagination: "{{total}} entries · page {{page}} / {{pages}}",
+      prev: "Previous",
+      next: "Next",
     },
     usage: {
       title: "Dual-track usage overview",

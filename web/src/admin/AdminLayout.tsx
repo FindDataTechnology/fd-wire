@@ -5,6 +5,7 @@
 // 注入；本组件只负责按登录角色呈现（入口显隐在 App 导航与 AdminView 门禁）。
 import { type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { markAdminSplitDone } from "../console/auth";
 
 export type AdminSection =
   | "customers"
@@ -138,6 +139,22 @@ export function AdminLayout({
           >
             {t("console.topbar.logout")}
           </button>
+          {/* 控制台出口（wire-admin-console-routing 任务 3.1 / design D2）：
+              后台是「管理者视角」，但管理员同时是客户——其看板/产物/我的数据
+              等第一人称资产只在控制台可达。此出口与「返回前台」并列而非合并：
+              二者目的不同（回门户浏览 vs 进控制台用资产），且取消分流会让
+              管理员每次登录多点一次，故保留分流 + 补出口。
+              落点是裸 #/console（而非显式子路径）：只有裸入口才走用户的偏好
+              落地序（置顶看板 > landing_tab），符合「管理员同时是客户」语义；
+              点击即置分流标记，使这次显式进入不再被角色分流送回后台。 */}
+          <a
+            href="#/console"
+            data-testid="admin-goto-console"
+            onClick={markAdminSplitDone}
+            className="rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:bg-slate-100"
+          >
+            {t("nav.console")}
+          </a>
           <a
             href="#/"
             data-testid="admin-exit"

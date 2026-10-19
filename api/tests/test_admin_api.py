@@ -724,6 +724,94 @@ def test_catalog_pending_and_verify_notes_append_only(admin_env):
         assert row == "registered"
 
 
+def _catalog_page(client, status: str, limit: int, offset: int) -> dict:
+    """取目录治理指定页（200 断言在调用方渲染失败信息时更明确）。"""
+    resp = client.get(
+        "/internal/admin/catalog/pending",
+        params={"status": status, "limit": limit, "offset": offset},
+        headers=AUTH,
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def test_catalog_pending_pagination_pages_disjoint_and_complete(admin_env):
+    """分页不重不漏：逐页 walk 的并集等于按 indicator_id 升序的前 N 条。
+
+    生产 registered 已达 5.4 万条，全量返回会让呈现层一次渲染全部条目；
+    分页正确性因此成为硬约束——每一页都必须落在同一条稳定排序序列上。
+    """
+    client = admin_env.client
+    ids = [f"pg-{i:03d}" for i in range(7)]
+    for indicator_id in ids:
+        add_snapshot(indicator_id, "registered")
+
+    first = _catalog_page(client, "registered", limit=2, offset=0)
+    assert first["status"] == "registered"
+    assert first["total"] == 7  # total 是匹配总数，不是本页条数
+    assert [i["indicator_id"] for i in first["items"]] == ids[:2]
+
+    # 逐页走遍：同一条稳定排序序列上不重不漏（相邻页既不留缝也不重叠）
+    walked: list[str] = []
+    cursor = 0
+    while cursor < first["total"]:
+        body = _catalog_page(client, "registered", limit=2, offset=cursor)
+        assert body["total"] == first["total"]  # 每页 total 恒定
+        page_ids = [i["indicator_id"] for i in body["items"]]
+        assert not set(page_ids) & set(walked)  # 与已走过的页不重
+        walked.extend(page_ids)
+        cursor += len(page_ids)
+    assert walked == sorted(ids)  # 不漏：整体等于全序前 N 条
+
+    # 翻过末页 → 空页，total 仍在（呈现层据此算页数而不额外发计数请求）
+    beyond = _catalog_page(client, "registered", limit=2, offset=first["total"])
+    assert beyond["items"] == []
+    assert beyond["total"] == first["total"]
+
+
+def test_catalog_pending_limit_capped_and_status_still_validated(admin_env):
+    """limit 超限按上限返回；非法 status 仍 422（分页参数不改校验口径）。"""
+    client = admin_env.client
+    for i in range(120):
+        add_snapshot(f"cap-{i:03d}", "registered")
+
+    body = _catalog_page(client, "registered", limit=500, offset=0)
+    assert len(body["items"]) == 100  # 单页上限与公开目录一致
+    assert body["total"] == 120  # 总数照实反映，不受截断影响
+
+    # 非法 status 先于分页生效（顺序不变：状态闸仍在最前）
+    assert (
+        client.get(
+            "/internal/admin/catalog/pending",
+            params={"status": "ghost", "limit": 10, "offset": 0},
+            headers=AUTH,
+        ).status_code
+        == 422
+    )
+
+
+def test_catalog_pending_both_statuses_paged_with_total(admin_env):
+    """verified 与 registered 两种状态均按页返回并带 total（不因规模不同而改口径）。"""
+    client = admin_env.client
+    for i in range(5):
+        add_snapshot(f"reg-{i:03d}", "registered")
+    for i in range(3):
+        add_snapshot(f"ver-{i:03d}", "verified")
+
+    for status, ids in (
+        ("registered", [f"reg-{i:03d}" for i in range(5)]),
+        ("verified", [f"ver-{i:03d}" for i in range(3)]),
+    ):
+        body = _catalog_page(client, status, limit=2, offset=0)
+        assert body["status"] == status
+        assert body["total"] == len(ids)
+        assert [i["indicator_id"] for i in body["items"]] == ids[:2]
+        assert all(i["status"] == status for i in body["items"])
+        nxt = _catalog_page(client, status, limit=2, offset=2)
+        assert [i["indicator_id"] for i in nxt["items"]] == ids[2:4]
+        assert nxt["total"] == len(ids)  # 后续页同样带匹配总数
+
+
 # ---------------------------------------------------------------------------
 # 用量分轨概览
 # ---------------------------------------------------------------------------

@@ -170,8 +170,16 @@ export interface IndicatorPendingItem {
 
 export interface CatalogPendingResponse {
   status: string;
+  /** 本页条目（服务端按 limit/offset 切片后的结果，不再是全量）。 */
   items: IndicatorPendingItem[];
+  /** 匹配总数（不是本页条数）——页数按它计算，故只需一次响应即可翻页。 */
   total: number;
+}
+
+/** 目录治理列表分页参数（后端 limit/offset，单页上限 100）。 */
+export interface CatalogPendingPage {
+  limit?: number;
+  offset?: number;
 }
 
 export interface ReviewNote {
@@ -413,10 +421,25 @@ export function retryDemandScope(demandId: number): Promise<AdminDemand> {
 // 目录治理
 // ---------------------------------------------------------------------------
 
+/** 单页上限（与后端 _CATALOG_PENDING_MAX_LIMIT、公开目录 page_size 上限同值）。 */
+export const CATALOG_PENDING_MAX_LIMIT = 100;
+
+/**
+ * 目录治理列表（分页）：status 筛镜像态，limit/offset 切片。
+ * 规模现实（wire-admin-console-routing D3）：verified 3,421 条、registered
+ * 54,132 条——全量拉取即 16 MB 级响应与一次性渲染（生产下滑白屏）。故缺省
+ * 即按单页上限取，调用方不传参也绝不会拉全量；total 为匹配总数（非本页条数），
+ * 页数由它算出，无需额外计数请求。
+ */
 export function fetchCatalogPending(
   status: "registered" | "verified" = "registered",
+  page: CatalogPendingPage = {},
 ): Promise<CatalogPendingResponse> {
-  return requestJson(`/internal/admin/catalog/pending?status=${status}`, {
+  const qs = new URLSearchParams();
+  qs.set("status", status);
+  qs.set("limit", String(page.limit ?? CATALOG_PENDING_MAX_LIMIT));
+  qs.set("offset", String(page.offset ?? 0));
+  return requestJson(`/internal/admin/catalog/pending?${qs.toString()}`, {
     method: "GET",
   });
 }

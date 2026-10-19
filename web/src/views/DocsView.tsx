@@ -6,6 +6,7 @@
 // 八态工作流旧态名不再出现在客户面文案（任务 3.5 同步）。
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import { markAdminSplitDone } from "../console/auth";
 
 /** MCP 端点占位（wire-platform URL 契约：单域 /mcp 反代 registry wire 入口）。 */
 export const MCP_ENDPOINT = "https://wire.finddatatech.cloud/mcp";
@@ -200,8 +201,15 @@ export function DocsView() {
               Authorization: Bearer &lt;wire-api-key&gt;
             </code>
             <div className="mt-3">
+              {/* 控制台直达（wire-admin-console-routing 任务 3.3）：保持裸
+                  #/console——它是唯一会走偏好落地序的入口（置顶看板 >
+                  landing_tab），对普通客户与管理员语义一致。管理员点击时置
+                  分流标记（onClick），避免这次显式进入被角色分流改跳后台；
+                  不以显式子路径绕开分流，那会一并剥夺普通客户的偏好落地。 */}
               <a
                 href="#/console"
+                data-testid="docs-quick-start-console-link"
+                onClick={markAdminSplitDone}
                 className="text-sm text-slate-600 underline hover:text-slate-900"
               >
                 {t("docs.quickStart.consoleLink")}
