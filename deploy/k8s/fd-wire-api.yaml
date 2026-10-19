@@ -43,7 +43,7 @@ spec:
         - name: api
           # 不可变标签纪律（mcp-service-deploy spec：禁 latest/浮动标签）。
           # 出片 tag=testaction005 build-pool 快照 sha=9f03ce2（真 ccf4440：管理员控制台可达性 + 目录治理分页 + 图表契约 v2）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-9f03ce2
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-c50fe51
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
