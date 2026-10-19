@@ -39,10 +39,21 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-#: 源看板目录（相对工作区根；可用 --dashboards-dir 覆盖）
-DEFAULT_DASHBOARDS_DIR = (
-    Path(__file__).resolve().parents[4] / "dashboards"
-)
+#: 源看板目录缺省值：优先「仓库根的 dashboards/」，退化到当前工作目录的
+#: dashboards/。**不能**直接写 ``parents[4]``——容器里包被装在 /app 下，
+#: 路径深度只有 parents[0..3]，索引 4 会 IndexError（生产实锤）。
+def _default_dashboards_dir() -> Path:
+    here = Path(__file__).resolve()
+    # 仓库内布局：<repo>/api/fd_wire_api/scripts/x.py → parents[4] = <repo>
+    if len(here.parents) > 4:
+        candidate = here.parents[4] / "dashboards"
+        if candidate.is_dir():
+            return candidate
+    # 容器内布局：/app/fd_wire_api/scripts/x.py → 用工作目录下的 dashboards/
+    return Path.cwd() / "dashboards"
+
+
+DEFAULT_DASHBOARDS_DIR = _default_dashboards_dir()
 
 #: 面板固定跨度：成品看板本身是单列长页，迁入后每张图占满三列。
 PANEL_SPAN = 3
