@@ -834,3 +834,173 @@ def test_refresh_single_flight_shared_by_both_paths(client, db_session, fake_llm
     assert fake_llm.calls == []  # 两路都没发起
     refresh_module.release_refresh_lock(artifact["id"])
     refresh_module.release_refresh_lock(legacy["id"])
+
+
+# ------------------------------------- v2 结构保留（wire-chart-contract-v2）
+
+
+def test_contract_refresh_keeps_v2_panel_fields(
+    client, db_session, fake_llm, fake_engine
+) -> None:
+    """契约刷新回写只换 snapshot：encoding/panes/overlays/height 逐字段不变。"""
+    make_dataset(db_session, dataset_id="ds-cell", key="contract_src", tier="cell")
+    panel = contract_panel("q1", "ds-cell")
+    panel.update(
+        {
+            "encoding": {"x": "日期", "xType": "time", "y": ["amount"]},
+            "panes": [{"title": "价格"}, {"title": "成交量", "height": 1}],
+            "overlays": {"markLine": [{"value": 2.1, "label": "阈值"}]},
+            "height": 420,
+        }
+    )
+    spec = {"title": "v2 看板", "spec": {"panels": [panel]}}
+    artifact = make_dashboard(client, db_session, spec=spec)
+
+    resp = client.post(f"/api/v1/artifacts/{artifact['id']}/refresh", headers=CUST)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["mode"] == "contract"
+    detail = client.get(f"/api/v1/artifacts/{artifact['id']}", headers=CUST).json()
+    saved = detail["spec"]["spec"]["panels"][0]
+    # v2 字段逐字段原样存活
+    assert saved["encoding"] == panel["encoding"]
+    assert saved["panes"] == panel["panes"]
+    assert saved["overlays"] == panel["overlays"]
+    assert saved["height"] == 420
+    # 数据确实换了（假引擎返回两行）
+    assert saved["snapshot"]["columns"] == ["amount"]
+
+
+def test_contract_plan_skips_raw_option_panels() -> None:
+    """raw_option 面板不入契约刷新计划（数据自含于配置）。"""
+    from fd_wire_api.artifacts import query_contract
+
+    spec = {
+        "spec": {
+            "panels": [
+                contract_panel("q1", "ds-x"),
+                {
+                    "id": "raw1",
+                    "type": "line",
+                    "title": "成品",
+                    "span": 1,
+                    "query": {"dataset_id": "ds-x", "limit": 5},
+                    "raw_option": {"series": [{"type": "line", "data": [1]}]},
+                },
+            ]
+        }
+    }
+    plan = query_contract.contract_refresh_plan(spec)
+    assert [item[0] for item in plan] == [0]  # 只有 q1 入计划
+
+
+def test_contract_refresh_marks_raw_option_panel_kept(
+    client, db_session, fake_llm, fake_engine
+) -> None:
+    """契约路径：raw_option 面板记 kept，配置与快照零变化。"""
+    make_dataset(db_session, dataset_id="ds-cell", key="contract_src", tier="cell")
+    raw_panel = {
+        "id": "raw1",
+        "type": "line",
+        "title": "成品迁入",
+        "span": 2,
+        "raw_option": {
+            "xAxis": {"type": "time"},
+            "series": [{"type": "line", "data": [[1, 2]]}],
+        },
+    }
+    spec = {
+        "title": "混合看板",
+        "spec": {"panels": [contract_panel("q1", "ds-cell"), raw_panel]},
+    }
+    artifact = make_dashboard(client, db_session, spec=spec)
+
+    resp = client.post(f"/api/v1/artifacts/{artifact['id']}/refresh", headers=CUST)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["mode"] == "contract"
+    by_id = {item["panel_id"]: item for item in body["panels"]}
+    assert by_id["raw1"]["status"] == "kept"
+    detail = client.get(f"/api/v1/artifacts/{artifact['id']}", headers=CUST).json()
+    assert detail["spec"]["spec"]["panels"][1] == raw_panel
+
+
+def test_ai_refresh_restores_v2_structure() -> None:
+    """AI 刷新轮：LLM 抹掉的 v2 字段由服务端归位（结构不被刷新抹平）。"""
+    from fd_wire_api.artifacts.refresh import restore_panel_structure
+
+    current = {
+        "title": "看板",
+        "spec": {
+            "title": "看板",
+            "panels": [
+                {
+                    "id": "p1",
+                    "type": "line",
+                    "title": "价格",
+                    "span": 2,
+                    "source": "ds",
+                    "encoding": {"x": "日期", "xType": "time"},
+                    "panes": [{}, {}],
+                    "overlays": {"markLine": [{"value": 1}]},
+                    "height": 400,
+                    "snapshot": {"columns": ["日期", "值"], "rows": [["2026-01", 1]]},
+                }
+            ],
+        },
+    }
+    refreshed = {
+        "title": "看板",
+        "spec": {
+            "title": "看板",
+            "panels": [
+                {
+                    "id": "p1",
+                    "type": "line",
+                    "title": "价格",
+                    "span": 2,
+                    "source": "ds",
+                    "snapshot": {"columns": ["日期", "值"], "rows": [["2026-02", 2]]},
+                }
+            ],
+        },
+    }
+    merged = restore_panel_structure(current, refreshed)
+    panel = merged["spec"]["panels"][0]
+    assert panel["encoding"] == current["spec"]["panels"][0]["encoding"]
+    assert panel["panes"] == current["spec"]["panels"][0]["panes"]
+    assert panel["overlays"] == current["spec"]["panels"][0]["overlays"]
+    assert panel["height"] == 400
+    assert panel["snapshot"]["rows"] == [["2026-02", 2]]  # 数据用 LLM 的新值
+
+
+def test_ai_refresh_keeps_raw_option_panel_verbatim() -> None:
+    """AI 刷新轮：raw_option 面板整块保留（含数据），LLM 改不动。"""
+    from fd_wire_api.artifacts.refresh import restore_panel_structure
+
+    raw_panel = {
+        "id": "raw1",
+        "type": "line",
+        "title": "成品",
+        "span": 1,
+        "raw_option": {"series": [{"type": "line", "data": [1, 2]}]},
+    }
+    current = {"title": "看板", "spec": {"title": "看板", "panels": [raw_panel]}}
+    refreshed = {
+        "title": "看板",
+        "spec": {
+            "title": "看板",
+            "panels": [
+                {
+                    "id": "raw1",
+                    "type": "line",
+                    "title": "成品",
+                    "span": 1,
+                    "raw_option": {"series": [{"type": "line", "data": [9, 9]}]},
+                }
+            ],
+        },
+    }
+    merged = restore_panel_structure(current, refreshed)
+    assert merged["spec"]["panels"][0] == raw_panel

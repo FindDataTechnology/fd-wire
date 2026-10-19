@@ -57,24 +57,47 @@ TOOL_SCHEMAS: list[dict] = [
     _artifact_tool_schema(
         "dashboard_spec_create",
         "仪表盘",
-        # v1 结构示例对齐 web 渲染器契约（web/src/console/dashboard/spec.ts）：
-        # 面板 type 四值 / span 三档 / snapshot 内嵌取数结果——AI 产物默认
-        # 可渲染可分享（wire-dashboard-share）；面板可选 query 引用——刷新
-        # 走确定性契约路径零 AI（wire-dashboard-query-contract）。
+        # v2 结构示例对齐 web 渲染器契约（web/src/console/dashboard/spec.ts）：
+        # 面板类型谱（基础四类 + 高级十类）/ 编码通道与轴类型 / 多窗格 /
+        # 叠加层 / raw_option 逃生舱（wire-chart-contract-v2）——AI 产物默认
+        # 可渲染可分享（wire-dashboard-share）；面板可选 query 引用——刷新走
+        # 确定性契约路径零 AI（wire-dashboard-query-contract）。
         (
-            "仪表盘规格 v1（JSON）："
+            "仪表盘规格 v2（JSON）："
             '{"title":"仪表盘名","panels":[{"id":"p1",'
-            '"type":"kpi|line|bar|table","title":"面板标题","span":1,'
-            '"source":"指标code或数据集名",'
+            '"type":"kpi|line|bar|table|candlestick|scatter|pie|heatmap|gauge|radar|treemap|sankey|funnel|boxplot",'
+            '"title":"面板标题","span":1,"source":"指标code或数据集名",'
+            '"encoding":{"x":"日期","y":["数值"],"xType":"category|value|time|log",'
+            '"yType":"category|value|time|log","xName":"横轴名","yName":"纵轴名"},'
+            '"panes":[{"title":"副图","encoding":{},"overlays":{},"height":1}],'
+            '"overlays":{"markLine":[{"value":50,"label":"荣枯线","lineStyle":"dashed"}],'
+            '"markArea":[{"from":"2020","to":"2021","label":"区间"}],'
+            '"markPoint":[{"x":"2024","y":4.8,"label":"峰值"}]},'
+            '"height":320,'
             '"query":{"dataset_id":"数据集id",'
             '"filters":[{"column":"列名","op":"eq|in|gt|gte|lt|lte|contains|startswith","value":null}],'
             '"sort":[{"column":"列名","dir":"asc|desc"}],"limit":100,"columns":["列名"]},'
             '"snapshot":{"columns":["年份","GDP"],"rows":[["2023",129.4]]},'
             '"config":{"unit":"万亿元","subtitle":"不变价"}}]}。'
-            "字段说明：type 必取 kpi/line/bar/table；span 为 3 列栅格宽度"
-            "（1/2/3）；把取到的数据写进 snapshot（columns 列名 + rows 行值，"
-            "kpi 数值取 rows[0][0]，line/bar 首列为 x 轴其余为系列，table "
-            "整表呈现）——渲染器只读 snapshot，不要放占位符或待查标记；"
+            "字段说明：type 取上述十四类之一——基础四类（kpi/line/bar/table）"
+            "不带 encoding 即可渲染；高级十类建议显式给 encoding。span 为 3 列"
+            "栅格宽度（1/2/3）；height 可选（像素，缺省 220）。把取到的数据写进 "
+            "snapshot（columns 列名 + rows 行值，kpi 数值取 rows[0][0]，table "
+            "整表呈现）——渲染器只读 snapshot（raw_option 面板除外），不要放"
+            "占位符或待查标记。"
+            "encoding 是显式编码通道：x 指定横轴列、y 指定纵轴列（可多列，每列"
+            "一个系列）、series 指定分组列（长表形态）、size 指定大小列；"
+            "xType/yType 取 category/value/time/log——跨年份、跨月份等时间序列"
+            "必须用 xType 为 time（类目轴会把不等间隔日期画成等距，伪造趋势）。"
+            "candlestick 的 y 列序约定为 开盘/最高/最低/收盘，boxplot 为 "
+            "min/q1/median/q3/max。"
+            "panes 是多窗格：首个为主图、其余为副图，共享同一横轴与十字光标"
+            "（价格+成交量、指标+MACD 的既有范式）；窗格 height 为相对权重。"
+            "overlays 是叠加层：markLine 画阈值/参考线（axis 可设 x 画垂直线）、"
+            "markArea 高亮区间、markPoint 标事件点。"
+            "raw_option 是逃生舱，只在类型化字段确实表达不了时使用（完整图表"
+            "配置直通）；其内容必须是纯 JSON——绝不允许函数、正则或任何不可"
+            "序列化的值（写了会被判不合契约并整面板拒绝）。"
             "config 可选（unit/subtitle/yName/xName）。面板 source 应填"
             "指标 code 或数据集名（后续「刷新数据」依赖此标注重新取数）。"
             "面板数据取自数据集查询工具（dataset_query 等）时，该面板必须"
@@ -122,6 +145,88 @@ def validate_artifact_args(tool_name: str, args: dict[str, Any]) -> str | None:
     spec = args.get("spec")
     if not isinstance(spec, dict) or not spec:
         return f"工具 {tool_name} 缺少非空 spec 对象"
+    if tool_name == "dashboard_spec_create":
+        return _validate_dashboard_v2_payload(spec)
+    return None
+
+
+#: v2 面板类型谱（与 web spec.ts 的 DASHBOARD_PANEL_TYPES 同集合）。
+DASHBOARD_PANEL_TYPES_V2: frozenset[str] = frozenset(
+    {
+        "kpi",
+        "line",
+        "bar",
+        "table",
+        "candlestick",
+        "scatter",
+        "pie",
+        "heatmap",
+        "gauge",
+        "radar",
+        "treemap",
+        "sankey",
+        "funnel",
+        "boxplot",
+    }
+)
+
+
+def _find_unserializable(value: Any, path: str) -> str | None:
+    """深度遍历检出不可序列化值（函数/正则/类实例）；None=通过。
+
+    与 web spec.ts 的 findUnserializable 同口径：JSON 解析出来的纯数据
+    一律合法（含字符串形式的 formatter），只有真正的非纯对象要拒。
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return None
+    if isinstance(value, (bytes, bytearray)):
+        return f"{path} 是字节串"
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            problem = _find_unserializable(item, f"{path}[{index}]")
+            if problem:
+                return problem
+        return None
+    if isinstance(value, dict):
+        for key, item in value.items():
+            problem = _find_unserializable(item, f"{path}.{key}")
+            if problem:
+                return problem
+        return None
+    return f"{path} 不是可序列化的 JSON 值"
+
+
+def _validate_dashboard_v2_payload(spec: dict) -> str | None:
+    """dashboard 生成侧结构闸（wire-chart-contract-v2）：面板类型与 raw_option。
+
+    **只做两件事**——把「AI 写了个不存在的图表类型」和「AI 在 raw_option 里
+    塞函数」在落库前拦住（后者落库会渲染成坏面板，前端还会整面板跳过）。
+    其余形状宽容交给前端解析层（沿用既有纪律：不整板失败）。
+
+    历史 v1 产物无 raw_option、type 也都在集合内，不会被这里拒——存量零漂移。
+    """
+    panels = spec.get("panels")
+    if panels is None:
+        return None  # 空板/其他形状：交给前端宽容解析
+    if not isinstance(panels, list):
+        return "dashboard spec.panels 必须是数组"
+    for index, panel in enumerate(panels):
+        if not isinstance(panel, dict):
+            return f"dashboard spec.panels[{index}] 必须是 JSON 对象"
+        panel_type = panel.get("type")
+        if panel_type is not None and panel_type not in DASHBOARD_PANEL_TYPES_V2:
+            allowed = " / ".join(sorted(DASHBOARD_PANEL_TYPES_V2))
+            return (
+                f"dashboard spec.panels[{index}].type 不受支持：{panel_type!r}"
+                f"（可取 {allowed}）"
+            )
+        if panel.get("raw_option") is not None:
+            raw = panel["raw_option"]
+            if not isinstance(raw, dict):
+                return f"dashboard spec.panels[{index}].raw_option 必须是 JSON 对象"
+            problem = _find_unserializable(raw, f"panels[{index}].raw_option")
+            if problem:
+                return f"dashboard spec 含不可序列化的值：{problem}"
     return None
 
 

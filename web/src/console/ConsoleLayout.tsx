@@ -27,6 +27,38 @@ export type ConsoleTab =
   | "team"
   | "market";
 
+/**
+ * 侧栏分组（wire-console-shell）：十一项按客户的真实心智归四组——
+ * - 概览：工作台（单屏聚合）
+ * - 数据：自己的（我的数据/实体）、来源（源包）、别人的（数据市场）
+ * - 构建：对话入口（AI 构建）与产出（产物）
+ * - 运营：需求、用量与凭据、团队
+ *
+ * 分组只改组织方式，不改任何页签的 id/href/权限/默认落地。
+ */
+export const CONSOLE_NAV_GROUPS: ReadonlyArray<{
+  id: "overview" | "data" | "build" | "ops";
+  labelKey: string;
+  tabs: ReadonlyArray<ConsoleTab>;
+}> = [
+  { id: "overview", labelKey: "console.nav.groups.overview", tabs: ["workbench"] },
+  {
+    id: "data",
+    labelKey: "console.nav.groups.data",
+    tabs: ["datasets", "entities", "packs", "market"],
+  },
+  {
+    id: "build",
+    labelKey: "console.nav.groups.build",
+    tabs: ["chat", "artifacts"],
+  },
+  {
+    id: "ops",
+    labelKey: "console.nav.groups.ops",
+    tabs: ["demands", "usage", "keys", "team"],
+  },
+];
+
 export const CONSOLE_TABS: ReadonlyArray<{
   id: ConsoleTab;
   href: string;
@@ -77,6 +109,20 @@ export const CONSOLE_TABS: ReadonlyArray<{
   // 浏览订阅面——列表 SQL 层只查 market 档，私有数据永不出现。
   { id: "market", href: "#/console/market", labelKey: "console.nav.market" },
 ];
+
+/** 页签 id → 定义（分组渲染按 id 取 href/label，避免两处重复维护）。 */
+const TAB_BY_ID = new Map(CONSOLE_TABS.map((tab) => [tab.id, tab]));
+
+/** 分组渲染所需：按 CONSOLE_NAV_GROUPS 的顺序取回页签定义。 */
+export function tabsInGroup(
+  groupId: (typeof CONSOLE_NAV_GROUPS)[number]["id"],
+): ReadonlyArray<NonNullable<ReturnType<typeof TAB_BY_ID.get>>> {
+  const group = CONSOLE_NAV_GROUPS.find((item) => item.id === groupId);
+  if (group === undefined) return [];
+  return group.tabs
+    .map((id) => TAB_BY_ID.get(id))
+    .filter((tab): tab is NonNullable<typeof tab> => tab !== undefined);
+}
 
 export function ConsolePlaceholder({
   titleKey,
@@ -144,36 +190,61 @@ export function ConsoleLayout({
   }, []);
 
   return (
-    <div className="flex min-h-[32rem] rounded-lg border border-slate-200 bg-white shadow-sm">
-      <aside className="w-52 shrink-0 border-r border-slate-200 p-4">
+    <div className="flex min-h-[32rem] flex-col rounded-lg border border-slate-200 bg-white shadow-sm md:flex-row">
+      {/* 窄屏侧栏横向化（wire-console-shell 窄屏要求）：md 以下铺成一条横向
+          可滚动的分组条，内容区拿到完整宽度；md 以上恢复固定宽侧栏。 */}
+      <aside className="shrink-0 border-b border-slate-200 p-4 md:w-52 md:border-b-0 md:border-r">
         <div className="text-xs font-medium uppercase tracking-wide text-slate-400">
           {t("console.title")}
         </div>
-        <nav className="mt-3 flex flex-col gap-1" data-testid="console-nav">
-          {CONSOLE_TABS.map((item) => (
-            <a
-              key={item.id}
-              href={item.href}
-              data-testid={`console-nav-${item.id}`}
-              className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors ${
-                tab === item.id
-                  ? "bg-slate-900 text-white"
-                  : "text-slate-700 hover:bg-slate-100"
-              }`}
+        <nav
+          className="mt-3 flex gap-4 overflow-x-auto pb-1 md:block md:gap-0 md:overflow-visible"
+          data-testid="console-nav"
+        >
+          {CONSOLE_NAV_GROUPS.map((group) => (
+            <div
+              key={group.id}
+              data-testid={`console-nav-group-${group.id}`}
+              className="shrink-0 md:mb-4 md:shrink"
             >
-              <span>{t(item.labelKey)}</span>
-              {item.placeholder && (
-                <span
-                  className={`ml-auto rounded px-1 py-0.5 text-[10px] ${
-                    tab === item.id
-                      ? "bg-white/20 text-white"
-                      : "bg-amber-100 text-amber-700"
-                  }`}
-                >
-                  {t("badge.comingSoonShort")}
-                </span>
-              )}
-            </a>
+              <div
+                className="px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-slate-400"
+                data-testid={`console-nav-group-label-${group.id}`}
+              >
+                {t(group.labelKey)}
+              </div>
+              <div className="flex gap-1 md:flex-col">
+                {tabsInGroup(group.id).map((item) => {
+                  const current = tab === item.id;
+                  return (
+                    <a
+                      key={item.id}
+                      href={item.href}
+                      data-testid={`console-nav-${item.id}`}
+                      aria-current={current ? "page" : undefined}
+                      className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors ${
+                        current
+                          ? "bg-slate-900 text-white"
+                          : "text-slate-700 hover:bg-slate-100"
+                      }`}
+                    >
+                      <span>{t(item.labelKey)}</span>
+                      {item.placeholder && (
+                        <span
+                          className={`ml-auto rounded px-1 py-0.5 text-[10px] ${
+                            current
+                              ? "bg-white/20 text-white"
+                              : "bg-amber-100 text-amber-700"
+                          }`}
+                        >
+                          {t("badge.comingSoonShort")}
+                        </span>
+                      )}
+                    </a>
+                  );
+                })}
+              </div>
+            </div>
           ))}
         </nav>
       </aside>

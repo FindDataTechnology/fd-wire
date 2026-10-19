@@ -10,9 +10,22 @@ const en: Translation = {
     pricing: "Pricing",
     docs: "Docs",
     catalog: "Catalog",
+    showcase: "Showcase",
     console: "Console",
     admin: "Admin",
     login: "Sign in",
+  },
+  showcase: {
+    title: "Dashboard Showcase",
+    subtitle:
+      "Industry and macro dashboards published by FindData — open and read, no sign-up required. Data is a snapshot at publish time.",
+    loading: "Loading the showcase…",
+    loadError: "The showcase failed to load. Please try again.",
+    retry: "Retry",
+    empty: "The showcase is being prepared — check back soon.",
+    panelCount: "{{count}} panels",
+    backToList: "Back to showcase",
+    asOf: "Data as of {{at}}",
   },
   home: {
     heroTitle: "Wire · B2B Data Platform",
@@ -524,6 +537,13 @@ const en: Translation = {
     chartTitle: "Dashboard placeholder",
     chartEmpty: "No data yet",
     nav: {
+      // Sidebar groups (wire-console-shell): eleven tabs in four groups.
+      groups: {
+        overview: "Overview",
+        data: "Data",
+        build: "Build",
+        ops: "Operations",
+      },
       workbench: "Workbench",
       chat: "AI Build",
       artifacts: "Artifacts",
@@ -578,11 +598,39 @@ const en: Translation = {
     },
     // AI build guide card (wire-ux-consolidation task 2.1): the old chat page
     // is retired; the chat tab shows a Base trial guide — no timing promises.
+    // wire-assistant-panel: that page now carries the panel's full form (in-page
+    // conversation) and keeps the Base deep link as an exit.
     chatGuide: {
       title: "AI Build",
       body:
         "Wire's conversational build capability will be provided through this entrance; data trials run on Base — Base shares the same account system as Wire, so you land there already signed in.",
       tryCta: "Try it on Base",
+    },
+    // AI assistant panel (wire-assistant-panel): a persistent entry on every
+    // console page with three states (ask / build / go to Base). Ask runs the
+    // answer track (free tier available); build runs the build track (needs a
+    // data engine).
+    assistant: {
+      open: "Open the AI assistant",
+      close: "Collapse the AI assistant",
+      title: "AI Assistant",
+      modeAsk: "Ask",
+      modeBuild: "Build",
+      modeAskOnly: "Q&A mode",
+      empty:
+        "Ask what this page can do, or switch to Build and let me generate a dashboard.",
+      emptyAsk:
+        "Ask what this page can do, where a feature lives, or which tab you need.",
+      placeholder: "Ask something… (Enter to send, Shift+Enter for a newline)",
+      send: "Send",
+      sending: "Working…",
+      newConversation: "New conversation",
+      goBase: "Go to Base for deeper analysis →",
+      progressStarting: "Getting ready…",
+      progressTool: "Running: {{tool}}",
+      progressGeneric: "Working…",
+      pageTitle: "AI Assistant",
+      pageSubtitle: "Ask or build right on this page — no jumping around.",
     },
     // Personal workbench (wire-personal-workbench tasks 2.1/2.3): six aggregate
     // section cards + a compact Base entry card. Counts and recent items come
@@ -2520,6 +2568,7 @@ const en: Translation = {
         detailTitle: "Artifact detail",
         panelsTitle: "Panel structure",
         publisherLabel: "Publisher: ",
+        platformBadge: "Official",
         panelsLabel: "{{count}} panels",
         dataScopeLabel: "Data scope",
         dataRangeLabel: "Time range",

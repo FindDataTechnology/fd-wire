@@ -93,13 +93,19 @@ def get_customer_conversation(
     return conversation
 
 
-def list_messages(db: Session, *, conversation_id: int) -> list[AIMessage]:
-    """会话全部消息（append-only 顺序）。"""
-    stmt = (
-        select(AIMessage)
-        .where(AIMessage.conversation_id == conversation_id)
-        .order_by(AIMessage.id)
-    )
+def list_messages(
+    db: Session, *, conversation_id: int, after_id: int | None = None
+) -> list[AIMessage]:
+    """会话消息（append-only 顺序）。
+
+    ``after_id``（wire-assistant-panel）：只取该消息 id 之后的新增行——供浮层
+    在长耗时构建期间增量展示进展（循环每追加一条就 commit，天然可增量读）。
+    缺省 None = 全量，语义与既有调用逐字节一致。
+    """
+    stmt = select(AIMessage).where(AIMessage.conversation_id == conversation_id)
+    if after_id is not None:
+        stmt = stmt.where(AIMessage.id > after_id)
+    stmt = stmt.order_by(AIMessage.id)
     return list(db.scalars(stmt).all())
 
 
@@ -142,3 +148,40 @@ def chat(
         system_extra=system_extra,
     )
     return [user_message, *loop_messages]
+
+
+def ask(
+    db: Session,
+    conversation: AIConversation,
+    *,
+    content: str,
+    llm: LlmClient,
+    system_extra: str | None = None,
+) -> list[AIMessage]:
+    """一条用户消息走问答轨（wire-assistant-panel）：无工具、无 cell 依赖。
+
+    与 :func:`chat` 的关键差别：**不传 tool_executor**——问答轨结构上就没有
+    执行工具的能力（见 ``answer.answer_question`` 的 ``tools=[]``）。因此免费档
+    客户（无 cell）也能用它。
+
+    LLM 失败不吞：异常上抛给路由层转成如实失败响应，且**不留下 assistant 半
+    成品**——用户消息已落库（客户可重试同一句），失败事实由响应告知。
+    """
+    from .answer import answer_history, answer_question
+
+    # 先取历史再落库本次提问：历史天然不含本轮，无需去重。
+    history = answer_history(db, conversation.id)
+    user_message = append_message(
+        db, conversation_id=conversation.id, role=MessageRole.user, content=content
+    )
+    history.append({"role": "user", "content": content})
+    assistant = answer_question(
+        history=history, llm=llm, system_extra=system_extra
+    )
+    reply = append_message(
+        db,
+        conversation_id=conversation.id,
+        role=MessageRole.assistant,
+        content=assistant.text(),
+    )
+    return [user_message, reply]

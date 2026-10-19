@@ -51,6 +51,7 @@ from .assets import router as assets_router
 # link / directed / market）+ 定向授权 + 订阅/审批访问（三表挂
 # DatasetsBase；生产迁移 alembic 0034；默认私有——未开放永不进任何面）
 from .market import artifact_router as market_artifact_router
+from .market.showcase_routes import router as showcase_router
 from .market import router as market_router
 # 数据集质量快照（wire-asset-catalog 任务组 4）：快照通道 + 新鲜度徽章
 # （表挂 DatasetsBase；生产迁移 alembic 0031）
@@ -265,6 +266,11 @@ app.include_router(market_router)
 # （发布方）+ /api/v1/market/artifacts/*（浏览/订阅/审批/渲染/复制）——
 # 看板与研究报告的公开分享（只读看 + 可复制；快照剥离、敏感度双点闸）
 app.include_router(market_artifact_router)
+# 匿名橱窗（wire-showcase-market）：/api/v1/showcase/* ——平台自营发布方已上架
+# 的 market 档看板，**匿名只读**（无任何身份依赖）。客户产物在物理上不在这条
+# 路径的查询范围里（market/showcase.py 三条硬条件）；详情返回完整 spec（含
+# 快照——橱窗要画得出图），红线由路由边界而非参数正确性保证。
+app.include_router(showcase_router)
 # 数据集质量快照（wire-asset-catalog 任务组 4）：/api/v1/quality/summary
 # 徽章聚合 + /api/v1/datasets/{id}/quality 详情与手动 refresh
 # （计算在 cell 引擎侧，平台侧只收聚合计数——红线 2）

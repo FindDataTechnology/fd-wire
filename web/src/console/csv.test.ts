@@ -5,7 +5,7 @@
 // - boardToCsv：UTF-8 BOM 前缀、逐面板 section（注释行 + 快照表 + 空行
 //   分隔）、无快照面板只有注释行、空板/legacy（null）仅标题行。
 import { describe, expect, it } from "vitest";
-import { boardToCsv, csvEscape, toCsv } from "./csv";
+import { boardToCsv, csvEscape, rawOptionToTable, toCsv } from "./csv";
 import type { DashboardPanel } from "./dashboard/spec";
 
 describe("csvEscape（RFC4180 单格转义）", () => {
@@ -141,5 +141,88 @@ describe("boardToCsv（整板合成）", () => {
 
   it("标题原样进内容（不清洗）——文件名清洗是调用方职责", () => {
     expect(boardToCsv("Q3/汇报", null)).toBe("\uFEFF# Q3/汇报");
+  });
+});
+
+describe("raw_option 面板导出（wire-chart-contract-v2 任务 7.3）", () => {
+  it("rawOptionToTable：按系列抽两列 + x 轴类目作首列", () => {
+    const table = rawOptionToTable({
+      xAxis: { type: "category", data: ["2024", "2025"] },
+      series: [
+        { name: "营收", type: "line", data: [1.2, 1.5] },
+        { name: "净利", type: "line", data: [0.2, 0.3] },
+      ],
+    });
+    expect(table?.columns).toEqual(["x", "营收", "净利"]);
+    expect(table?.rows).toEqual([
+      ["2024", 1.2, 0.2],
+      ["2025", 1.5, 0.3],
+    ]);
+  });
+
+  it("rawOptionToTable：数据点对 [x, y] 取 y；无 xAxis.data 则不加首列", () => {
+    const table = rawOptionToTable({
+      series: [{ name: "值", type: "line", data: [[Date.UTC(2026, 0, 1), 7]] }],
+    });
+    expect(table?.columns).toEqual(["值"]);
+    expect(table?.rows).toEqual([[7]]);
+  });
+
+  it("rawOptionToTable：抽不出返回 null（无 series / 无 data / 空数组）", () => {
+    expect(rawOptionToTable({})).toBeNull();
+    expect(rawOptionToTable({ series: [] })).toBeNull();
+    expect(rawOptionToTable({ series: [{ name: "s" }] })).toBeNull();
+    expect(rawOptionToTable({ series: [{ name: "s", data: [] }] })).toBeNull();
+  });
+
+  it("整板导出：raw_option 面板参与导出，普通面板照常", () => {
+    const panels: DashboardPanel[] = [
+      {
+        id: "t1",
+        type: "table",
+        title: "明细",
+        span: 1,
+        snapshot: { columns: ["月", "值"], rows: [["7月", 1]] },
+      },
+      {
+        id: "r1",
+        type: "line",
+        title: "成品图",
+        span: 1,
+        raw_option: {
+          xAxis: { type: "category", data: ["A"] },
+          series: [{ name: "s", type: "line", data: [9] }],
+        },
+      },
+    ];
+    const csv = boardToCsv("看板", panels);
+    expect(csv).toContain("# 明细（table）");
+    expect(csv).toContain("月,值");
+    expect(csv).toContain("# 成品图（line）");
+    expect(csv).toContain("x,s");
+    expect(csv).toContain("A,9");
+  });
+
+  it("不可表格化的 raw_option 面板：标注未导出且不中断其余面板", () => {
+    const panels: DashboardPanel[] = [
+      {
+        id: "t1",
+        type: "table",
+        title: "明细",
+        span: 1,
+        snapshot: { columns: ["月"], rows: [["7月"]] },
+      },
+      {
+        id: "r1",
+        type: "line",
+        title: "不可表格化",
+        span: 1,
+        raw_option: { series: [{ name: "无数据" }] },
+      },
+    ];
+    const csv = boardToCsv("看板", panels);
+    expect(csv).toContain("# 明细（table）");
+    expect(csv).toContain("7月");
+    expect(csv).toContain("无法表格化");
   });
 });

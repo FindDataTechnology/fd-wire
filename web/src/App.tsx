@@ -22,6 +22,7 @@ import { DemandNewView } from "./views/DemandNewView";
 import { ShareView } from "./views/ShareView";
 import { PricingView } from "./views/PricingView";
 import { DocsView } from "./views/DocsView";
+import { ShowcaseView } from "./views/ShowcaseView";
 import { AdminView } from "./admin/AdminView";
 import { parseAdminSection, type AdminSection } from "./admin/AdminLayout";
 import { CallbackView } from "./console/CallbackView";
@@ -45,6 +46,8 @@ export type Route =
   | { name: "shareForm"; id: string; token: string | null; version: string | null }
   | { name: "shareDoc"; id: string; token: string | null; version: string | null }
   | { name: "shareRecordView"; id: string; token: string | null; recordKey: string | null }
+  | { name: "showcase" }
+  | { name: "showcaseDetail"; id: number }
   | { name: "login" };
 
 /** 控制台二级段 → tab（未知段回落默认 datasets）。 */
@@ -77,6 +80,15 @@ export function parseHash(rawHash: string): Route {
   const [head, second, third] = segments;
   if (head === "pricing") return { name: "pricing" };
   if (head === "docs") return { name: "docs" };
+  if (head === "showcase") {
+    // 橱窗（wire-showcase-market）：匿名公开只读面。详情 id 非法（非数字）
+    // 回落列表——比渲染一个必然 404 的详情页更诚实。
+    if (second === undefined) return { name: "showcase" };
+    const id = Number(second);
+    return Number.isInteger(id) && id > 0
+      ? { name: "showcaseDetail", id }
+      : { name: "showcase" };
+  }
   if (head === "console") {
     if (second === "demands" && third === "new") {
       return { name: "demandNew", indicator: query.get("indicator") };
@@ -159,6 +171,10 @@ function renderRoute(route: Route) {
       return <PricingView />;
     case "docs":
       return <DocsView />;
+    case "showcase":
+      return <ShowcaseView />;
+    case "showcaseDetail":
+      return <ShowcaseView detailId={route.id} />;
     case "catalog":
       return <CatalogView />;
     case "catalogDetail":
@@ -319,6 +335,11 @@ export function App() {
               {tab("#/pricing", t("nav.pricing"), route.name === "pricing")}
               {tab("#/docs", t("nav.docs"), route.name === "docs")}
               {tab("#/catalog", t("nav.catalog"), route.name === "catalog" || route.name === "catalogDetail")}
+              {tab(
+                "#/showcase",
+                t("nav.showcase"),
+                route.name === "showcase" || route.name === "showcaseDetail",
+              )}
               {tab("#/console", t("nav.console"), route.name === "console" || route.name === "demandNew")}
 
               <a

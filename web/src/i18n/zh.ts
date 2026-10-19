@@ -8,9 +8,22 @@ const zh = {
     pricing: "定价",
     docs: "文档",
     catalog: "指标目录",
+    showcase: "看板橱窗",
     console: "控制台",
     admin: "内部后台",
     login: "登录",
+  },
+  showcase: {
+    title: "看板橱窗",
+    subtitle:
+      "寻数官方发布的行业与宏观看板——直接打开看，无需注册。数据为发布时刻快照。",
+    loading: "正在加载橱窗…",
+    loadError: "橱窗加载失败，请稍后重试。",
+    retry: "重试",
+    empty: "橱窗正在筹备中——稍后再来看看。",
+    panelCount: "{{count}} 个面板",
+    backToList: "返回橱窗",
+    asOf: "数据截至 {{at}}",
   },
   home: {
     heroTitle: "柏讯 Wire · B2B 数据平台",
@@ -492,6 +505,13 @@ const zh = {
     chartTitle: "仪表盘占位",
     chartEmpty: "暂无数据",
     nav: {
+      // 侧栏分组（wire-console-shell）：十一项归四组。
+      groups: {
+        overview: "概览",
+        data: "数据",
+        build: "构建",
+        ops: "运营",
+      },
       workbench: "工作台",
       chat: "AI 构建",
       artifacts: "产物",
@@ -544,10 +564,34 @@ const zh = {
     },
     // AI 构建引导卡（wire-ux-consolidation 任务 2.1）：旧对话页退役，
     // chat tab 落壹座试用引导；不写死任何时间承诺。
+    // wire-assistant-panel：该页已改为浮层的完整形态（页内可对话），仍保留
+    // 壹座深链出口。
     chatGuide: {
       title: "AI 构建",
       body: "柏讯的对话构建能力将经此入口提供；数据试用在壹座进行——壹座与柏讯共用同一账号体系，点击直达。",
       tryCta: "去壹座试用",
+    },
+    // AI 助手浮层（wire-assistant-panel）：控制台每页常驻入口，三态
+    // （问/做/去壹座）。问=问答轨（免费档可用）；做=构建轨（需数据处理引擎）。
+    assistant: {
+      open: "打开 AI 助手",
+      close: "收起 AI 助手",
+      title: "AI 助手",
+      modeAsk: "问",
+      modeBuild: "做",
+      modeAskOnly: "问答模式",
+      empty: "问我这个页面能做什么，或切到「做」让我帮你生成看板。",
+      emptyAsk: "问我这个页面能做什么、某个功能在哪，或者该去哪个页签。",
+      placeholder: "问点什么…（Enter 发送，Shift+Enter 换行）",
+      send: "发送",
+      sending: "处理中…",
+      newConversation: "新对话",
+      goBase: "去壹座做深度分析 →",
+      progressStarting: "正在准备…",
+      progressTool: "正在执行：{{tool}}",
+      progressGeneric: "正在处理…",
+      pageTitle: "AI 助手",
+      pageSubtitle: "在当前页面内提问或直接构建，不必跳转。",
     },
     // 个人工作台（wire-personal-workbench 任务 2.1/2.3）：六段聚合卡片 +
     // 壹座入口紧凑卡。计数与最近条目一律来自聚合端点（不呈现虚构计数）；
@@ -2375,6 +2419,7 @@ const zh = {
         detailTitle: "产物详情",
         panelsTitle: "面板结构",
         publisherLabel: "发布方：",
+        platformBadge: "平台自营",
         panelsLabel: "{{count}} 个面板",
         dataScopeLabel: "数据范围",
         dataRangeLabel: "时间范围",

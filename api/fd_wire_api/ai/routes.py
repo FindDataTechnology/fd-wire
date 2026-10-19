@@ -4,9 +4,15 @@
 身份切换，同 demands 切片；X-Customer-Id 占位头退位不再接受）：
 - ``POST /api/v1/ai/conversations``               新开对话（可带首条消息即跑循环）
 - ``GET  /api/v1/ai/conversations``               本企业对话列表
-- ``GET  /api/v1/ai/conversations/{id}/messages`` 会话消息（他企一律 404）
+- ``GET  /api/v1/ai/conversations/{id}/messages`` 会话消息（他企一律 404；
+                                                  可选 after_id 增量取）
 - ``POST /api/v1/ai/conversations/{id}/messages`` 追加用户消息并驱动构建循环
 - ``GET  /api/v1/ai/conversations/{id}/artifacts``会话暂存的产物草稿（draft）
+- ``POST /api/v1/ai/answer``                      问答轨一轮（无 cell 依赖）
+
+两轨（wire-assistant-panel）：``/answer`` 是问答轨——不取 tool_executor 依赖，
+结构上不执行工具、不写产物，免费档可用；``/messages`` 是构建轨——依赖 cell，
+引擎未就绪时如实说明。
 
 预算护栏：新开对话受每客户每日限额（429）；单轮循环受 AI_MAX_TURNS 截断。
 """
@@ -26,6 +32,8 @@ from .executor import CellMcpExecutor
 from .llm import TokenGatewayLlmClient
 from .protocols import LlmClient, ToolExecutor
 from .schemas import (
+    AssistantAnswerOut,
+    AssistantAskIn,
     ChatIn,
     ConversationCreate,
     ConversationDetailOut,
@@ -126,12 +134,19 @@ def list_conversations(
 )
 def list_messages(
     conversation_id: int,
+    after_id: int | None = None,
     customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
 ) -> list[MessageOut]:
-    """会话全部消息（仅本企业可见；他企或不存在一律 404）。"""
+    """会话消息（仅本企业可见；他企或不存在一律 404）。
+
+    ``after_id``（wire-assistant-panel）：只返回该 id 之后新增的消息——浮层在
+    长耗时构建期间据此增量展示进展。缺省不给 = 全量（既有语义不变）。
+    """
     _conversation_or_404(db, conversation_id, customer_id)
-    messages = service.list_messages(db, conversation_id=conversation_id)
+    messages = service.list_messages(
+        db, conversation_id=conversation_id, after_id=after_id
+    )
     return [MessageOut.model_validate(m) for m in messages]
 
 
@@ -184,3 +199,64 @@ def list_artifacts(
     _conversation_or_404(db, conversation_id, customer_id)
     artifacts = service.list_artifacts(db, conversation_id=conversation_id)
     return [artifact_out(a) for a in artifacts]
+
+
+@router.post("/api/v1/ai/answer", response_model=AssistantAnswerOut)
+def answer(
+    payload: AssistantAskIn,
+    customer_id: str = Depends(require_console_customer_id),
+    db: Session = Depends(get_db),
+    datasets_db: Session = Depends(get_datasets_db),
+    llm: LlmClient = Depends(get_llm_client),
+) -> AssistantAnswerOut:
+    """问答轨一轮（wire-assistant-panel）：不依赖数据处理引擎。
+
+    与 ``append_and_run`` 的根本差别是**不取 tool_executor 依赖**——本端点
+    结构上就不可能执行工具或写产物草稿，因此免费档（无 cell）同样可用。
+    这直接落实 spec ``对话后端 SHALL 保留且按能力分轨`` 的问答轨场景：
+    无 cell 客户调用它 MUST 拿到自然语言回答，而不是「引擎未开通」。
+
+    ``conversation_id`` 给了就追加到该会话（浮层的单活会话，D7），缺省新开
+    ——新开受既有的每客户每日限额护栏（与构建轨共用同一计数）。
+    """
+    settings = get_settings()
+    if payload.conversation_id is None:
+        try:
+            service.ensure_daily_limit(db, customer_id, settings)
+        except service.DailyConversationLimitExceeded as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        conversation = service.create_conversation(
+            db,
+            customer_id=customer_id,
+            payload=ConversationCreate(message=None),
+        )
+    else:
+        conversation = _conversation_or_404(db, payload.conversation_id, customer_id)
+
+    from .answer import assistant_context_block, sanitize_context
+
+    context_block = assistant_context_block(
+        db,
+        datasets_db,
+        customer_id=customer_id,
+        context=sanitize_context(payload.context),
+    )
+    try:
+        appended = service.ask(
+            db,
+            conversation,
+            content=payload.content,
+            llm=llm,
+            system_extra=context_block,
+        )
+    except Exception as exc:  # noqa: BLE001 - 失败如实：不伪造回答
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI 服务调用失败，本轮问答未产生回复。原因：{exc}",
+        ) from exc
+    finally:
+        _release(llm)
+    return AssistantAnswerOut(
+        conversation_id=conversation.id,
+        messages=[MessageOut.model_validate(m) for m in appended],
+    )

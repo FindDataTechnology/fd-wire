@@ -73,6 +73,8 @@ export interface MarketArtifactCard {
   publisher_customer_id: string;
   /** 自有产物经市场面可见时 true（便于标注）。 */
   is_mine?: boolean;
+  /** 平台自营发布方（wire-showcase-market）：登录客户据此区分平台自有内容。 */
+  is_platform?: boolean;
   access_mode: "open" | "approval";
   allow_copy: boolean;
   published_at: string | null;
@@ -390,6 +392,14 @@ function ArtifactMarketItem({
           {t("console.market.artifacts.publisherLabel")}
           {item.publisher_customer_id}
         </span>
+        {item.is_platform && (
+          <span
+            data-testid="market-platform-badge"
+            className="rounded bg-indigo-50 px-1.5 py-0.5 font-medium text-indigo-700"
+          >
+            {t("console.market.artifacts.platformBadge")}
+          </span>
+        )}
         {item.panel_count != null && (
           <span>
             {t("console.market.artifacts.panelsLabel", {
@@ -995,8 +1005,10 @@ export function MarketPage() {
     );
   };
 
+  // 宽度由外壳统一给出（wire-console-shell 宽度契约）：页内不再自设整页
+  // 宽度与水平内边距，避免宽屏下自我收窄、与其他页签左边缘错位。
   return (
-    <div className="mx-auto max-w-4xl px-4 py-6">
+    <div>
       <header>
         <h1 className="text-lg font-semibold text-slate-900">
           {t("console.market.title")}

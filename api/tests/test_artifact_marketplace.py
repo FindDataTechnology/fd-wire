@@ -798,6 +798,40 @@ def test_detail_structure_summary_no_leak(client, ai_session) -> None:
     assert "query" not in flat and "config" not in flat
     assert body["access_source"] is None  # 未订阅（详情不要求订阅）
 
+
+def test_detail_summary_excludes_v2_fields(client, ai_session) -> None:
+    """v2 字段不进市场详情（wire-chart-contract-v2 任务 7.2）：encoding/
+    panes/overlays/height/raw_option 一律不出现在摘要里——摘要口径不变。"""
+    spec = {
+        "title": "v2 看板",
+        "spec": {
+            "panels": [
+                {
+                    "id": "p1",
+                    "type": "candlestick",
+                    "title": "K 线",
+                    "span": 3,
+                    "height": 420,
+                    "encoding": {"x": "日期", "xType": "time"},
+                    "panes": [{"title": "主"}, {"title": "量"}],
+                    "overlays": {"markLine": [{"value": 2.1}]},
+                    "raw_option": {"series": [{"type": "line", "data": [1]}]},
+                }
+            ]
+        },
+    }
+    artifact = make_artifact(client, ai_session, spec=spec)
+    aid = artifact["id"]
+    put_visibility(client, aid, {"visibility": "market"})
+
+    resp = client.get(f"/api/v1/market/artifacts/{aid}", headers=CONSUMER_H)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["panels"] == [{"id": "p1", "type": "candlestick", "title": "K 线"}]
+    flat = str(body)
+    for leaked in ["encoding", "panes", "overlays", "raw_option", '"height"']:
+        assert leaked not in flat, f"v2 字段泄露到市场详情：{leaked}"
+
     # 报告：data_scope/data_range 元信息（Q11），无正文数据值摘要泄露
     report = make_artifact(client, ai_session, spec=REPORT_SPEC, kind="research_report")
     put_visibility(client, report["id"], {"visibility": "market"})

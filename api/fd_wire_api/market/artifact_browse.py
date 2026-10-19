@@ -21,6 +21,7 @@ from .artifact_service import (
     ACCESS_MODE_DEFAULT,
     VISIBILITY_MARKET,
 )
+from .platform_publisher import PLATFORM_PUBLISHER_NAME
 
 #: 详情/渲染准入的三种关系来源
 SOURCE_OWN = "own"
@@ -74,7 +75,12 @@ def _report_scope(spec: Any) -> tuple[Any, Any]:
 
 
 def card(artifact: Artifact, *, viewer_customer_id: str) -> dict:
-    """列表卡片：元数据 + 轻摘要（零数据值、零 config）。"""
+    """列表卡片：元数据 + 轻摘要（零数据值、零 config）。
+
+    ``is_platform``（wire-showcase-market）：标识平台自营发布方——登录客户
+    据此区分平台自有内容与本平台其他客户发布的内容。仅一个布尔标识，
+    不额外暴露任何平台内部字段。
+    """
     return {
         "id": artifact.id,
         "kind": artifact.kind,
@@ -82,6 +88,7 @@ def card(artifact: Artifact, *, viewer_customer_id: str) -> dict:
         "version": artifact.version,
         "publisher_customer_id": artifact.customer_id,
         "is_mine": artifact.customer_id == viewer_customer_id,
+        "is_platform": artifact.customer_id == PLATFORM_PUBLISHER_NAME,
         "access_mode": artifact.access_mode or ACCESS_MODE_DEFAULT,
         "allow_copy": bool(artifact.allow_copy),
         "published_at": _fmt(artifact.published_at),

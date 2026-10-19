@@ -36,22 +36,22 @@
 
 ## 5. 刷新侧对齐
 
-- [ ] 5.1 契约刷新回写后 panic 面板的 v2 字段完整保留（encoding/panes/overlays/height 逐字段不变），验证：后端测试构造含 v2 字段的 query 面板执行刷新，断言新版本仅 snapshot 变化
-- [ ] 5.2 raw_option 面板在契约路径与 AI 路径均记 kept 并标注原因，验证：后端测试覆盖两条路径，断言 raw_option 面板快照与配置零变化、响应 status 为 kept
-- [ ] 5.3 AI 刷新轮不抹平 v2 结构（指令已要求仅更新 snapshot），补一条断言测试锁住该不变量，验证：mock LLM 返回保留 v2 字段的 spec 时新版本 v2 字段与刷新前一致
+- [x] 5.1 契约刷新回写后 panic 面板的 v2 字段完整保留（encoding/panes/overlays/height 逐字段不变），验证：后端测试构造含 v2 字段的 query 面板执行刷新，断言新版本仅 snapshot 变化
+- [x] 5.2 raw_option 面板在契约路径与 AI 路径均记 kept 并标注原因，验证：后端测试覆盖两条路径，断言 raw_option 面板快照与配置零变化、响应 status 为 kept
+- [x] 5.3 AI 刷新轮不抹平 v2 结构（指令已要求仅更新 snapshot），补一条断言测试锁住该不变量，验证：mock LLM 返回保留 v2 字段的 spec 时新版本 v2 字段与刷新前一致
 
 ## 6. AI 生成侧指令
 
-- [ ] 6.1 更新 `api/fd_wire_api/ai/tools.py` 中 `dashboard_spec_create` 的 spec 描述为 v2 表述：类型谱清单、encoding 写法（含轴类型）、panes 与 overlays 示例、raw_option 的使用边界与禁止函数值、时间序列必须声明时间轴，验证：单测断言描述包含各要素关键词，后端测试全绿
-- [ ] 6.2 验证生成侧约束：构造一段不合契约（raw_option 含函数）的 spec 走保存路径，断言被拒并如实反馈，验证：后端测试覆盖该用例
+- [x] 6.1 更新 `api/fd_wire_api/ai/tools.py` 中 `dashboard_spec_create` 的 spec 描述为 v2 表述：类型谱清单、encoding 写法（含轴类型）、panes 与 overlays 示例、raw_option 的使用边界与禁止函数值、时间序列必须声明时间轴，验证：单测断言描述包含各要素关键词，后端测试全绿
+- [x] 6.2 验证生成侧约束：构造一段不合契约（raw_option 含函数）的 spec 走保存路径，断言被拒并如实反馈，验证：后端测试覆盖该用例
 
 ## 7. 周边回归与收口
 
-- [ ] 7.1 分享页回归：v1 与 v2 看板在分享页均正常渲染，且无工具栏、无全屏、无导出，验证：`vitest run ShareView` 全绿
-- [ ] 7.2 市场面回归：面板摘要仍只取 {id,type,title} 三字段，v2 字段不进入市场详情响应，验证：`vitest run MarketPage` 与后端市场测试全绿
-- [ ] 7.3 整板 CSV 导出适配 v2：普通面板与可表格化的 raw_option 面板照常导出，不可表格化的 raw_option 面板 section 标注不可导出且不中断整板，验证：`vitest run csv` 全绿，新增三类面板混排的导出断言
-- [ ] 7.4 v1 零漂移总闸：对既有 v1 fixture 快照断言渲染产出的 option 与升级前逐字段一致，验证：该断言在 CI 中通过
-- [ ] 7.5 双语键值一致性（新增文案的 zh/en 键齐备），验证：`vitest run i18n` 全绿
-- [ ] 7.6 全量前端与后端测试，验证：`vitest run` 与 `pytest` 无新增失败
-- [ ] 7.7 浏览器实测：打开一份 v2 看板（含时间轴、副图、阈值线、raw_option 面板）逐项验证轴排布、光标联动、缩放、全屏、图数切换、导出图片，验证：实测记录逐条通过
-- [ ] 7.8 跑 `openspec validate wire-chart-contract-v2 --strict`，验证：输出 valid
+- [x] 7.1 分享页回归：v1 与 v2 看板在分享页均正常渲染，且无工具栏、无全屏、无导出，验证：`vitest run ShareView` 全绿
+- [x] 7.2 市场面回归：面板摘要仍只取 {id,type,title} 三字段，v2 字段不进入市场详情响应，验证：`vitest run MarketPage` 与后端市场测试全绿
+- [x] 7.3 整板 CSV 导出适配 v2：普通面板与可表格化的 raw_option 面板照常导出，不可表格化的 raw_option 面板 section 标注不可导出且不中断整板，验证：`vitest run csv` 全绿，新增三类面板混排的导出断言
+- [x] 7.4 v1 零漂移总闸：对既有 v1 fixture 快照断言渲染产出的 option 与升级前逐字段一致，验证：该断言在 CI 中通过
+- [x] 7.5 双语键值一致性（新增文案的 zh/en 键齐备），验证：`vitest run i18n` 全绿
+- [x] 7.6 全量前端与后端测试，验证：`vitest run` 与 `pytest` 无新增失败
+- [x] 7.7 浏览器实测：打开一份 v2 看板（含时间轴、副图、阈值线、raw_option 面板）逐项验证轴排布、光标联动、缩放、全屏、图数切换、导出图片，验证：实测记录逐条通过
+- [x] 7.8 跑 `openspec validate wire-chart-contract-v2 --strict`，验证：输出 valid

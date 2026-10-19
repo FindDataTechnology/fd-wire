@@ -243,6 +243,46 @@ export function fetchMessages(
   ) as Promise<ChatMessage[]>;
 }
 
+/** 增量取消息：只返回 id > afterId 的新增行（wire-assistant-panel）。
+ *  构建循环每追加一条就落库，浮层据此在长耗时构建期间显示真实进展。 */
+export function fetchMessagesAfter(
+  conversationId: number,
+  afterId: number,
+): Promise<ChatMessage[]> {
+  return requestJson(
+    `${API_BASE}/v1/ai/conversations/${conversationId}/messages?after_id=${afterId}`,
+    { method: "GET" },
+  ) as Promise<ChatMessage[]>;
+}
+
+/** 浮层当前的页面上下文（只放标识，绝不放数据）。 */
+export interface AssistantContext {
+  tab?: string;
+  artifact_id?: number;
+  dataset_id?: number;
+}
+
+/** 一轮问答结果（conversation_id 供浮层维持单活会话）。 */
+export interface AssistantAnswer {
+  conversation_id: number;
+  messages: ChatMessage[];
+}
+
+/** 问答轨一轮：不依赖数据处理引擎，免费档可用（wire-assistant-panel）。
+ *  不给 conversationId 即新开（计入每日限额）。 */
+export function askAssistant(
+  content: string,
+  options: { conversationId?: number; context?: AssistantContext } = {},
+): Promise<AssistantAnswer> {
+  const body: Record<string, unknown> = { content };
+  if (options.conversationId != null) body.conversation_id = options.conversationId;
+  if (options.context != null) body.context = options.context;
+  return requestJson(`${API_BASE}/v1/ai/answer`, {
+    method: "POST",
+    body,
+  }) as Promise<AssistantAnswer>;
+}
+
 /** 追加用户消息并驱动一轮构建循环（返回本轮落库的消息序列）。 */
 export function postMessage(
   conversationId: number,

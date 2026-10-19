@@ -216,23 +216,37 @@ describe("ConsoleView（tab 切换）", () => {
     expect(await screen.findByTestId("artifacts-empty")).toBeTruthy();
   });
 
-  it("chat tab 显示名「AI 构建」（id 保持 chat）；旧 #/console/chat 深链仍落壹座引导卡", async () => {
+  it("chat tab 显示名「AI 构建」（id 保持 chat）；#/console/chat 落助手整页形态", async () => {
     vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
     seedConsoleSession({ sub: "demo-customer", planCode: "basic" });
     render(<ConsoleView tab="chat" />);
 
-    expect(await screen.findByTestId("chat-guide")).toBeTruthy();
-    expect(screen.getByTestId("chat-guide-demo-cta").getAttribute("href")).toBe(
+    // wire-assistant-panel：引导卡退役，改为页内可对话（spec
+    // console-ai-entry 的 ADDED 需求「AI 构建页 SHALL 呈现可对话的助手界面」）。
+    expect(await screen.findByTestId("chat-page")).toBeTruthy();
+    expect(screen.getByTestId("assistant-input")).toBeTruthy();
+    expect(screen.getByTestId("chat-page-base-link").getAttribute("href")).toBe(
       "https://platform.finddatatech.cloud",
     );
-    // 引导卡无测试账号明文
-    expect(screen.getByTestId("chat-guide").textContent).not.toContain(
+    // 页面无测试账号明文
+    expect(screen.getByTestId("chat-page").textContent).not.toContain(
       "platform-test",
     );
-    // tab id 保持 chat（路由兼容），显示名改为「AI 构建」
+    // tab id 保持 chat（路由兼容），显示名「AI 构建」
     const chatNav = screen.getByTestId("console-nav-chat");
     expect(chatNav.getAttribute("href")).toBe("#/console/chat");
     expect(chatNav.textContent).toContain("AI 构建");
+  });
+
+  it("控制台 ready 态渲染 AI 浮层入口（公开面无浮层由 App 路由保证）", async () => {
+    vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
+    seedConsoleSession({ sub: "demo-customer", planCode: "basic" });
+    render(<ConsoleView tab="datasets" />);
+
+    expect(await screen.findByTestId("assistant-launcher")).toBeTruthy();
+    // 初始收起：面板存在但隐藏
+    const panel = screen.getByTestId("assistant-panel");
+    expect(panel.getAttribute("data-open")).toBe("off");
   });
 });
 

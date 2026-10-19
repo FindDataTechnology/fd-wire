@@ -20,6 +20,7 @@ conversation、不写 ai_messages，整个循环在内存 wire 里完成：
 
 from __future__ import annotations
 
+import copy
 import json
 import threading
 
@@ -50,6 +51,10 @@ def refresh_system_prompt(current_spec: dict) -> str:
         "获取最新数据，把结果写进该面板 snapshot（columns/rows 口径与原 "
         "spec 相同，kpi 数值放 rows[0][0]）。面板结构、面板 id、type、"
         "span、title、source、config 一律保持不动，只更新 snapshot；"
+        "**面板的 encoding、panes、overlays、height、raw_option 等高级"
+        "字段同样一律原样保留**——它们描述图表的呈现方式而非数据，改动会"
+        "让客户丢失自己配的轴类型、副图与阈值线。带 raw_option 的面板其"
+        "数据自含于该配置，跳过不刷新（原样保留）。"
         "某面板取不到新数据时保留原 snapshot。禁止调用任何产物写入工具。"
         "全部取数完成后，终答仅输出更新后的完整 spec JSON（一个 JSON "
         "对象，结构与输入相同），不要输出任何解释或 JSON 以外的文本。"
@@ -180,7 +185,7 @@ def refresh_dashboard_spec(
     customer_id: str,
     max_turns: int,
 ) -> dict:
-    """无头刷新全流程：跑轮 → 解析终答 JSON → 最小校验，返回更新后 spec。
+    """无头刷新全流程：跑轮 → 解析终答 JSON → 最小校验 → **结构归位**。
 
     ``CellNotProvisionedError`` 原样穿透（端点 403 档位提示）；解析/校验
     失败抛 :class:`RefreshFailed`（端点 502 带原因，不落版本）。
@@ -196,7 +201,106 @@ def refresh_dashboard_spec(
     error = validate_spec(spec)
     if error is not None:
         raise RefreshFailed(f"刷新输出的 spec 未过最小校验：{error}")
-    return spec
+    return restore_panel_structure(current_spec, spec)
+
+
+#: 刷新只允许改 snapshot；这些面板字段是"呈现方式"，LLM 改了就归位。
+_PRESERVED_PANEL_FIELDS: tuple[str, ...] = (
+    "id",
+    "type",
+    "title",
+    "span",
+    "source",
+    "config",
+    "query",
+    "encoding",
+    "panes",
+    "overlays",
+    "height",
+    "raw_option",
+)
+
+
+def _panel_entries(spec: object) -> list | None:
+    """spec（信封/本体两种形状）→ 面板数组；无面板数组返回 None。
+
+    就地实现而**不**从 query_contract 导入：query_contract 依赖本模块的
+    ``RefreshFailed``，反向导入会形成循环（两者共享同一宽容口径，此处保持
+    逐字一致）。
+    """
+    if not isinstance(spec, dict):
+        return None
+    inner = spec.get("spec")
+    if isinstance(inner, dict) and isinstance(inner.get("panels"), list):
+        return inner["panels"]
+    if isinstance(spec.get("panels"), list):
+        return spec["panels"]
+    return None
+
+
+def restore_panel_structure(current_spec: dict, refreshed_spec: dict) -> dict:
+    """把 LLM 输出里被改动/丢弃的面板结构字段按原 spec 归位（wire-chart-contract-v2）。
+
+    指令已要求"只更新 snapshot"，但 LLM 输出不可信（可能省略它认为多余的
+    字段、或误改轴类型）。这里做**服务端兜底**：
+
+    - 按面板 id（缺 id 时按原顺序索引）配对；
+    - 配对成功：除 snapshot 外的所有字段一律取原 spec 的值；
+    - **带 raw_option 的面板整体保留原样**（含 snapshot——其数据自含于
+      配置，刷新无意义），即 kept；
+    - 配对不上（LLM 增删面板）：原面板整体补回，不改看板结构。
+
+    结果：刷新只能改数据，改不动结构——与 spec「v2 表达力不被刷新抹平」
+    和「raw_option 面板 kept」两条要求一致。
+    """
+    current_panels = _panel_entries(current_spec)
+    refreshed_panels = _panel_entries(refreshed_spec)
+    if current_panels is None:
+        return refreshed_spec
+    if refreshed_panels is None:
+        # LLM 把 panels 丢了：整份回退，不产生结构损毁的新版本。
+        return copy.deepcopy(current_spec)
+
+    # 按 id 建索引（有 id 用 id；无 id 用序号回退键）。
+    def key_of(panel: object, index: int) -> str:
+        if isinstance(panel, dict):
+            value = panel.get("id")
+            if isinstance(value, str) and value:
+                return f"id:{value}"
+        return f"idx:{index}"
+
+    refreshed_by_key = {
+        key_of(panel, index): panel for index, panel in enumerate(refreshed_panels)
+    }
+
+    merged: list[object] = []
+    for index, current in enumerate(current_panels):
+        if not isinstance(current, dict):
+            merged.append(current)
+            continue
+        candidate = refreshed_by_key.get(key_of(current, index))
+        # raw_option 面板：整块原样保留（数据自含，契约无从回写）。
+        if current.get("raw_option") is not None:
+            merged.append(copy.deepcopy(current))
+            continue
+        if not isinstance(candidate, dict):
+            merged.append(copy.deepcopy(current))
+            continue
+        next_panel = copy.deepcopy(candidate)
+        for field in _PRESERVED_PANEL_FIELDS:
+            if field == "id":
+                continue
+            if field in current:
+                next_panel[field] = copy.deepcopy(current[field])
+            else:
+                next_panel.pop(field, None)
+        # id 也用原值（防止 LLM 改了 id 打乱后续配对）
+        next_panel["id"] = current.get("id", next_panel.get("id"))
+        merged.append(next_panel)
+
+    result = copy.deepcopy(refreshed_spec)
+    result["spec"]["panels"] = merged
+    return result
 
 
 # ------------------------------------------------------------ 单产物进程内锁

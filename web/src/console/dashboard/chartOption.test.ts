@@ -516,3 +516,96 @@ describe("类型谱系列映射（任务 2.1）", () => {
     expect(series[1]?.data).toEqual([null, 2, null, 4]);
   });
 });
+
+describe("v1 零漂移总闸（任务 7.4）", () => {
+  /**
+   * 对一份覆盖 v1 全部形态的看板逐面板断言：option 的**关键结构**与
+   * 升级前的构建口径逐字段一致（轴类型、轴数据、系列类型/名称/数据、
+   * 图例有无）。这是整个变更的安全绳——v2 放开表达力绝不能顺手改了
+   * v1 的画法。
+   */
+  it("四类 v1 面板的 option 与升级前口径逐字段一致", () => {
+    // kpi 不走 option 构建（渲染器直接读快照），此处只覆盖图表与表格类
+    const line: DashboardPanel = {
+      id: "l1",
+      type: "line",
+      title: "PMI",
+      span: 2,
+      source: "CN_PMI",
+      snapshot: {
+        columns: ["月份", "PMI"],
+        rows: [
+          ["7月", 49.4],
+          ["8月", 49.1],
+          ["9月", 49.8],
+        ],
+      },
+      config: { xName: "月份", yName: "PMI" },
+    };
+    const option = opt(line) as Record<string, unknown>;
+
+    // 轴：类目轴 + 首列数据 + 轴名（config 口径）
+    expect(option.xAxis).toEqual({
+      type: "category",
+      gridIndex: 0,
+      name: "月份",
+      data: ["7月", "8月", "9月"],
+    });
+    // y 轴：数值轴 + 轴名 + scale（v2 新增的 scale 不改变数值范围语义）
+    const yAxis = option.yAxis as Record<string, unknown>;
+    expect(yAxis.type).toBe("value");
+    expect(yAxis.name).toBe("PMI");
+
+    // 系列：单系列，名称取列名，数据取该列
+    const series = option.series as Array<Record<string, unknown>>;
+    expect(series).toHaveLength(1);
+    expect(series[0]).toMatchObject({
+      name: "PMI",
+      type: "line",
+      data: [49.4, 49.1, 49.8],
+    });
+    // 单系列不出图例
+    expect(option.legend).toBeUndefined();
+
+    // 多列 → 多系列 + 图例（v1 既有行为）
+    const multi = opt({
+      ...line,
+      snapshot: {
+        columns: ["月份", "PMI", "CPI"],
+        rows: [["7月", 49.4, 2.1]],
+      },
+    }) as Record<string, unknown>;
+    expect((multi.series as Array<Record<string, unknown>>).map((s) => s.name)).toEqual([
+      "PMI",
+      "CPI",
+    ]);
+    expect((multi.legend as Record<string, unknown>).data).toEqual(["PMI", "CPI"]);
+  });
+
+  it("v1 bar 面板：柱状系列，图高默认 220", () => {
+    const bar: DashboardPanel = {
+      id: "b1",
+      type: "bar",
+      title: "发电量",
+      span: 1,
+      snapshot: { columns: ["月份", "火电"], rows: [["7月", 100]] },
+    };
+    const built = buildPanelOption(bar);
+    expect(built?.height).toBe(220);
+    const series = (built?.option as unknown as Record<string, unknown>).series as Array<
+      Record<string, unknown>
+    >;
+    expect(series[0]?.type).toBe("bar");
+  });
+
+  it("v1 面板不因新增交互键而改变数据/轴/系列", () => {
+    // 交互开启与关闭只应影响 tooltip.axisPointer / dataZoom，其余完全一致
+    const withInteraction = opt(V1_LINE) as Record<string, unknown>;
+    const without = opt(V1_LINE, false) as Record<string, unknown>;
+    expect(without.xAxis).toEqual(withInteraction.xAxis);
+    expect(without.yAxis).toEqual(withInteraction.yAxis);
+    expect(without.series).toEqual(withInteraction.series);
+    expect(withInteraction.dataZoom).toBeDefined();
+    expect(without.dataZoom).toBeUndefined();
+  });
+});

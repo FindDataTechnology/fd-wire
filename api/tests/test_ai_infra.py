@@ -565,3 +565,138 @@ def test_migration_0005_downgrade_drops_ai_tables(migrated_sqlite, monkeypatch) 
     assert "ai_messages" not in tables
     assert "ai_draft_artifacts" not in tables
     assert "billing_plans" in tables  # 前置迁移不受影响
+
+
+# ------------------------------------- v2 生成侧指令与结构闸（wire-chart-contract-v2）
+
+
+def test_dashboard_tool_description_covers_v2_contract() -> None:
+    """工具描述包含 v2 各要素（类型谱/编码/轴类型/窗格/叠加层/逃生舱边界）。"""
+    dashboard = next(
+        item
+        for item in TOOL_SCHEMAS
+        if item["function"]["name"] == "dashboard_spec_create"
+    )
+    # v2 契约写在 spec 参数的描述里（外层是五类产物共用的通用文案）
+    description = dashboard["function"]["parameters"]["properties"]["spec"]["description"]
+    for needle in [
+        "仪表盘规格 v2",
+        "candlestick",
+        "encoding",
+        "time",
+        "panes",
+        "overlays",
+        "markLine",
+        "raw_option",
+        "不可序列化",
+        "纯 JSON",
+    ]:
+        assert needle in description, f"工具描述缺少 v2 要素：{needle}"
+
+
+def test_validate_artifact_args_rejects_bad_panel_type() -> None:
+    """面板类型不在类型谱内 → 落库前拒绝并列出可选类型。"""
+    error = validate_artifact_args(
+        "dashboard_spec_create",
+        {
+            "title": "看板",
+            "spec": {"panels": [{"id": "p1", "type": "waterfall"}]},
+        },
+    )
+    assert error is not None
+    assert "waterfall" in error
+    assert "candlestick" in error  # 列出可选类型
+
+
+def test_validate_artifact_args_accepts_advanced_types() -> None:
+    """高级档十类全部放行（不误伤合法生成）。"""
+    panels = [
+        {"id": f"p{i}", "type": t}
+        for i, t in enumerate(
+            [
+                "candlestick",
+                "scatter",
+                "pie",
+                "heatmap",
+                "gauge",
+                "radar",
+                "treemap",
+                "sankey",
+                "funnel",
+                "boxplot",
+            ]
+        )
+    ]
+    assert (
+        validate_artifact_args(
+            "dashboard_spec_create", {"title": "看板", "spec": {"panels": panels}}
+        )
+        is None
+    )
+
+
+def test_validate_artifact_args_rejects_function_in_raw_option() -> None:
+    """raw_option 里塞函数 → 拒绝（落库会渲染成坏面板）。"""
+    error = validate_artifact_args(
+        "dashboard_spec_create",
+        {
+            "title": "看板",
+            "spec": {
+                "panels": [
+                    {
+                        "id": "p1",
+                        "type": "line",
+                        "raw_option": {"tooltip": {"formatter": lambda v: v}},
+                    }
+                ]
+            },
+        },
+    )
+    assert error is not None
+    assert "不可序列化" in error
+
+
+def test_validate_artifact_args_accepts_string_formatter() -> None:
+    """字符串形式的 formatter 合法（成品看板实态：JSON 里就是字符串）。"""
+    assert (
+        validate_artifact_args(
+            "dashboard_spec_create",
+            {
+                "title": "看板",
+                "spec": {
+                    "panels": [
+                        {
+                            "id": "p1",
+                            "type": "line",
+                            "raw_option": {
+                                "tooltip": {"valueFormatter": "(v) => v"},
+                                "series": [{"type": "line", "data": [1, 2]}],
+                            },
+                        }
+                    ]
+                },
+            },
+        )
+        is None
+    )
+
+
+def test_validate_artifact_args_keeps_v1_panels_passing() -> None:
+    """存量 v1 形状零漂移：无 raw_option、四类基础面板照常通过。"""
+    assert (
+        validate_artifact_args(
+            "dashboard_spec_create",
+            {
+                "title": "宏观",
+                "spec": {
+                    "panels": [
+                        {"id": "k1", "type": "kpi", "snapshot": {"columns": ["v"], "rows": [[1]]}},
+                        {"id": "l1", "type": "line", "snapshot": {"columns": ["x", "y"], "rows": []}},
+                        {"id": "b1", "type": "bar"},
+                        {"id": "t1", "type": "table"},
+                    ]
+                },
+            },
+        )
+        is None
+    )

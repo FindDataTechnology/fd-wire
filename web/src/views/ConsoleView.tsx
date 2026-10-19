@@ -38,6 +38,7 @@ import {
 } from "../console/api";
 import i18nInstance, { switchLanguage } from "../i18n";
 import { ChatPage } from "../console/ChatPage";
+import { AssistantPanel } from "../console/assistant/AssistantPanel";
 import { WorkbenchPage } from "../console/WorkbenchPage";
 import { ArtifactsPage } from "../console/ArtifactsPage";
 import { DatasetsPage } from "../console/DatasetsPage";
@@ -474,7 +475,7 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
         </div>
       )}
       {tab === "workbench" && <WorkbenchPage />}
-      {tab === "chat" && <ChatPage />}
+      {tab === "chat" && <ChatPage planCode={customer?.plan_code ?? ""} />}
       {tab === "artifacts" && (
         <ArtifactsPage
           // 置顶徽标 + 落地展开锚（wire-personal-preferences）
@@ -497,6 +498,14 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
         {tab === "team" && <TeamPage />}
         {tab === "market" && <MarketPage />}
       </ErrorBoundary>
+      {/* AI 助手浮层（wire-assistant-panel）：全页签常驻、一处挂载。只在
+          ready 态渲染——未登录/阻塞态没有会话，浮层无从发起请求（对应
+          spec 场景「公开面不出现浮层」）。档位传入做「问/做」分轨（D3）。
+          chat 页签豁免：那页本身就是助手的整页形态，再叠浮层会出现两套
+          输入框（同屏两个对话入口会让人不知道往哪写）。 */}
+      {tab !== "chat" && (
+        <AssistantPanel tab={tab} planCode={customer?.plan_code ?? ""} />
+      )}
     </ConsoleLayout>
   );
 }
