@@ -42,8 +42,8 @@ spec:
       containers:
         - name: api
           # 不可变标签纪律（mcp-service-deploy spec：禁 latest/浮动标签）。
-          # 出片 tag=testaction002 build-pool 快照 sha=06dcb44（真 48f957a：动作闸 6.2 验收缺口修复——草稿转正建档+物化双写）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-06dcb44
+          # 出片 tag=testaction002 build-pool 快照 sha=22da877（真 171b2e8：动作闸 6.2 验收两修——转正建档+物化双写、分享令牌不落审计）。
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-22da877
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
