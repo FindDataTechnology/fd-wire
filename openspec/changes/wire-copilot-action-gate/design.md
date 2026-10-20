@@ -76,7 +76,7 @@ breaking；统一循环在工具面为空时自然退化为同款纯问答。
 |---|---|---|---|---|
 | 1 | `wire.artifact.draft.create` | `stage_artifact`（五类 spec，kind 参数化；校验沿用 `tools.py`） | write / inline | cell 已开通；spec 校验通过 |
 | 2 | `wire.dataset.create` | datasets 建集（free 档 CSV 分流，绝不编造示例行） | write / inline | 档位配额（free 3 表/1 万行由底层校验兜底） |
-| 3 | `wire.artifact.promote` | materialization 转正 service（**经闸开客户面路径**，见 D5） | write / inline | 草稿属本队；kind 可物化 |
+| 3 | `wire.artifact.promote` | `artifacts.service.import_from_draft`（建档，产物页可见）+ `materialization.service.promote_draft`（登记物化/调度）——**经闸开客户面路径**，见 D5 | write / inline | 草稿属本队；kind 可物化 |
 | 4 | `wire.artifact.publish` | artifacts publish 状态迁移 | write / inline | 产物属本队；非 viewer |
 | 5 | `wire.artifact.share.create` | share 令牌创建 | **publish / async** | 产物已 published；非 viewer |
 | 6 | `wire.artifact.archive` | artifacts archive | write / inline（影响面标注可逆） | 产物属本队 |
@@ -127,8 +127,12 @@ share/market/demands/materialization），**不经 HTTP、不经 MCP、不经对
 的 ToolExecutor**。跨切片会话按 `ai/routes.py` 的注入纪律各取各库。cell
 数据探索保持 `CellMcpExecutor` + 平台服务凭据轨道不变（计量归属不动）。
 
-草稿转正客户面路径 = 闸执行器内部调 materialization service；**不新增绕闸
-REST 端点**。产物页的手动转正按钮（若后续要加）走同一条 propose→approve。
+草稿转正客户面路径 = 闸执行器内部调两条既有 service：`import_from_draft`
+产生 `artifacts` 行（spec「转正后出现在产物页」的对象），`promote_draft`
+登记物化与调度（计费读取来源）——只登记物化会让草稿在产物页无处可寻
+（真机验收 6.2 实证的缺口）。执行体先查物化登记行再建档，二次转正如实
+失败且不产生第二份产物。**不新增绕闸 REST 端点**；产物页的手动转正按钮
+（若后续要加）走同一条 propose→approve。
 
 审计边界：闸审计记**对话侧**（谁提议、谁批）；`corrections` 体系继续记
 **数据侧**（改了哪行、可撤销）。两层并存不重复。

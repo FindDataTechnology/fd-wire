@@ -386,16 +386,54 @@ def _pf_promote(ctx: ActorContext, sess: GateSessions, args: dict[str, Any]) -> 
 
 
 def _exec_promote(ctx: ActorContext, sess: GateSessions, args: dict[str, Any]) -> str:
+    """草稿转正 = 正式产物建档 + 物化登记（spec「转正后出现在产物页」）。
+
+    两条既有服务都是转正的组成部分而非替代关系：``import_from_draft``
+    产生 artifacts 行（产物页/发布/分享的对象），``promote_draft`` 登记
+    物化与调度（计费读取的来源）。只登记物化会让「已转正」的草稿在产物页
+    无处可寻——真机验收 6.2 抓到的缺口。
+    """
+    from sqlalchemy import select
+
+    from ..artifacts.service import (
+        ArtifactNotFound,
+        InvalidArtifactSpec,
+        import_from_draft,
+    )
+    from ..materialization.models import MaterializedArtifact
     from ..materialization.service import promote_draft
 
     draft = _own_draft(sess, ctx, args["draft_id"])
+    conversation_id = args.get("_conversation_id") or _current_conversation_id()
+    # 重复转正先拦在建档之前：登记有唯一约束，建档没有——先查一行免得
+    # 二次执行留下两份 artifacts 行后再失败。
+    already = sess.materialization.execute(
+        select(MaterializedArtifact).where(
+            MaterializedArtifact.artifact_id == draft.id
+        )
+    ).scalar_one_or_none()
+    if already is not None:
+        raise ExecutionError(
+            f"草稿 #{draft.id} 已转正过（物化 #{already.id}），不可重复转正。"
+        )
     try:
+        artifact = import_from_draft(
+            sess.ai,
+            customer_id=ctx.customer_id,
+            conversation_id=conversation_id,
+            draft_id=draft.id,
+        )
         row = promote_draft(
             sess.materialization, draft=draft, schedule=args.get("schedule")
         )
+    except (ArtifactNotFound, InvalidArtifactSpec) as exc:
+        raise ExecutionError(str(exc)) from exc
     except HTTPException as exc:
         raise ExecutionError(_detail_of(exc)) from exc
-    return f"草稿 #{draft.id}（{_KIND_CN.get(draft.kind, draft.kind)}）已转正为正式产物（物化 #{row.id}），产物页可见"
+    return (
+        f"草稿 #{draft.id}（{_KIND_CN.get(draft.kind, draft.kind)}）已转正为正式产物 "
+        f"#{artifact.id}「{artifact.title}」（物化 #{row.id}），产物页可见"
+    )
 
 
 def _pf_artifact_id(ctx: ActorContext, sess: GateSessions, args: dict[str, Any]) -> None:

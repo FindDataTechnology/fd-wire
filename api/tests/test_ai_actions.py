@@ -368,7 +368,7 @@ def test_demand_submit_executes_with_customer_compliance(db, sess) -> None:
 
 
 def test_promote_single_execution_path(db, sess) -> None:
-    """草稿转正：经闸执行体落 materialized_artifacts；二次转正 409 语义如实失败。"""
+    """草稿转正：经闸执行体建档（产物页可见）+ 登记物化；二次转正如实失败。"""
     cid = _conversation(db)
     draft = stage_artifact(
         db, conversation_id=cid, customer_id="cust-001",
@@ -379,11 +379,21 @@ def test_promote_single_execution_path(db, sess) -> None:
         db, sess, OWNER,
         action_id="wire.artifact.promote", args={"draft_id": draft["artifact_id"]},
     )
-    assert approve(db, sess, OWNER, proposal.id)["state"] == "executed"
+    outcome = approve(db, sess, OWNER, proposal.id)
+    assert outcome["state"] == "executed"
+    assert "产物页可见" in outcome["result_summary"]
 
+    from fd_wire_api.artifacts.models import Artifact
+    from fd_wire_api.artifacts.service import list_artifacts
     from fd_wire_api.materialization.models import MaterializedArtifact
 
     assert db.query(MaterializedArtifact).count() == 1
+    rows = list_artifacts(db, customer_id="cust-001")
+    assert len(rows) == 1
+    assert rows[0].title == "看板一"
+    assert rows[0].status == "draft"
+    assert f"#{rows[0].id}" in outcome["result_summary"]
+    assert db.query(Artifact).count() == 1
 
     proposal2, _ = propose(
         db, sess, OWNER,
@@ -392,6 +402,8 @@ def test_promote_single_execution_path(db, sess) -> None:
     outcome = approve(db, sess, OWNER, proposal2.id)
     assert outcome["state"] == PROPOSAL_STATE_FAILED
     assert "已转正过" in outcome["error"]
+    # 二次转正不得再建一份 artifacts 行（先查物化再建档）。
+    assert db.query(Artifact).count() == 1
 
 
 # ── 发布执行体 + 读工具执行器 ────────────────────────────────────────────────
