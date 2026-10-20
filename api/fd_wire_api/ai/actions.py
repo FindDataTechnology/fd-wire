@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -300,6 +301,23 @@ def _summarize_scalars(args: dict[str, Any]) -> str:
         elif isinstance(value, list):
             parts.append(f"{key}[{len(value)}]")
     return "; ".join(parts) or "(无参数)"
+
+
+#: 执行结果持久化前的凭据脱敏（spec「审计不含密钥」：响应不含 token/
+#: 密钥或其片段）。分享令牌只在 approve 的即时响应里出现一次；提议表与
+#: 历史回放只留 ``t=***``——与首登密钥 ``key_once`` 同款一次性展示纪律。
+_CREDENTIAL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"([?&]t=)[^&\s）)]+"), r"\1***"),
+    (re.compile(r"\bwgk-[A-Za-z0-9_-]+"), "wgk-***"),
+    (re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/-]+=*", re.IGNORECASE), r"\1***"),
+)
+
+
+def redact_credentials(text: str) -> str:
+    """把执行结果里的分享令牌/数据面 Key/Bearer 头替换为 ``***``。"""
+    for pattern, replacement in _CREDENTIAL_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 def _pf_dataset_create(ctx: ActorContext, sess: GateSessions, args: dict[str, Any]) -> None:
@@ -991,7 +1009,8 @@ def approve(
     try:
         summary = def_.execute(ctx, sess, execute_args)
         proposal.state = PROPOSAL_STATE_EXECUTED
-        proposal.result_summary = summary
+        # 即时响应保留全文（分享链接要能当场复制一次）；持久记录脱敏。
+        proposal.result_summary = redact_credentials(summary)
         proposal.approved_at = utc_now_naive()
         db.commit()
         _write_audit(db, proposal, ok=True, started=started)

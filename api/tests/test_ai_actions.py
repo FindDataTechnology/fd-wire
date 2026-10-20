@@ -303,6 +303,28 @@ def test_async_expiry_fail_closed(db, sess, published_dashboard) -> None:
     assert db.get(AIActionProposal, proposal2.id).state == PROPOSAL_STATE_EXPIRED
 
 
+def test_share_result_redacts_token_in_persisted_summary(
+    db, sess, published_dashboard, share_secret
+) -> None:
+    """分享链接只在批准确认响应里出现一次；提议表/历史回放不含令牌（spec
+    「审计不含密钥」）。"""
+    _conversation(db)
+    proposal, _ = propose(
+        db, sess, OWNER,
+        action_id="wire.artifact.share.create",
+        args={"artifact_id": published_dashboard.id},
+    )
+    outcome = approve(db, sess, OWNER, proposal.id)
+    assert outcome["state"] == "executed"
+    # 即时响应带完整链接（客户当场复制）。
+    assert "?t=" in outcome["result_summary"]
+    assert "t=***" not in outcome["result_summary"]
+
+    row = db.get(AIActionProposal, proposal.id)
+    assert "t=***" in row.result_summary
+    assert "?t=1" not in row.result_summary
+
+
 def test_reject_any_pending(db, sess, published_dashboard) -> None:
     """拒绝：pending → rejected，不执行。"""
     proposal = _async_proposal(db, sess, published_dashboard)
