@@ -28,8 +28,8 @@ spec:
       containers:
         - name: web
           # TODO(go-live): 首次构建后回填实际 sha- tag。
-          # 出片 tag=testaction005 build-pool 快照 sha=9f03ce2（真 ccf4440：管理员控制台可达性 + 目录治理分页 + 图表契约 v2）。
-          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-c5b5cf4
+          # 出片 tag=testaction002 build-pool 快照 sha=f07ed95（真 ef98203：图文信息流面板 list；含橱窗/浮层/动作闸既有面）。
+          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-f07ed95
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
