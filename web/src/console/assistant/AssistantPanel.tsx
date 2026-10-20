@@ -1,22 +1,19 @@
 // AI 助手浮层外壳（wire-assistant-panel）：右下角常驻入口 + 展开面板。
 //
-// 这里只管「开/合」与外壳尺寸；三态交互、分轨、失败纪律全在
+// 这里只管「开/合」与外壳尺寸；统一副驾循环、动作卡、失败纪律全在
 // AssistantConversation（与「AI 构建」整页形态共用同一套实现）。
 //
 // Esc 收起但**不丢弃草稿**——草稿状态在会话组件里，收起只是卸载外壳；为了让
 // 草稿在收起后仍在，外壳保持挂载、仅切换可见性（见 spec 场景「Esc 收起」）。
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  AssistantConversation,
-  type AssistantMode,
-} from "./AssistantConversation";
+import { AssistantConversation } from "./AssistantConversation";
 import type { AssistantContext } from "../api";
 
 export interface AssistantPanelProps {
   /** 当前页签（上下文注入用）。 */
   tab: string;
-  /** 当前档位 code（`free` 隐藏构建入口）。 */
+  /** 当前档位 code（免费档渲染能力说明徽章；档位校验在后端闸）。 */
   planCode: string;
   /** 当前产物/数据集标识（可选）。 */
   context?: AssistantContext;
@@ -81,5 +78,3 @@ export function AssistantPanel({ tab, planCode, context }: AssistantPanelProps) 
     </>
   );
 }
-
-export type { AssistantMode };

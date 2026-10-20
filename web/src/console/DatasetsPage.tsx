@@ -173,6 +173,20 @@ export function DatasetsPage({ planCode }: { planCode: string }) {
     void loadQuota();
   }, [view, load, loadQuota]);
 
+  // 执行成功事件刷新（wire-copilot-action-gate 任务 4.1，design D9）：闸
+  // 执行成功后 api.ts 广播 window 级 wire:action-executed（resources 按
+  // action_id 前缀映射）；「我的数据」命中 "datasets" 即重跑既有列表加载
+  // ——只重取数据（filters/page 状态原样参与请求），不重置筛选与滚动。
+  useEffect(() => {
+    if (view !== "list") return;
+    const onExecuted = (event: Event) => {
+      const detail = (event as CustomEvent<{ resources?: string[] }>).detail;
+      if (detail?.resources?.includes("datasets")) void load();
+    };
+    window.addEventListener("wire:action-executed", onExecuted);
+    return () => window.removeEventListener("wire:action-executed", onExecuted);
+  }, [view, load]);
+
   // ── 筛选交互：下拉即席提交（页码回 1），文本经「筛选」/回车提交 ──
   const filtersActive =
     Boolean(filters.domain) ||

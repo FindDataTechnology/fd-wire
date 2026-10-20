@@ -606,21 +606,16 @@ const en: Translation = {
         "Wire's conversational build capability will be provided through this entrance; data trials run on Base — Base shares the same account system as Wire, so you land there already signed in.",
       tryCta: "Try it on Base",
     },
-    // AI assistant panel (wire-assistant-panel): a persistent entry on every
-    // console page with three states (ask / build / go to Base). Ask runs the
-    // answer track (free tier available); build runs the build track (needs a
-    // data engine).
+    // AI assistant (wire-assistant-panel → wire-copilot-action-gate): one
+    // copilot on every console page — Q&A, reads and action proposals share a
+    // single loop; write actions confirm via action cards (keys for
+    // action/draft/free added by wire-copilot-action-gate task 4.3).
     assistant: {
       open: "Open the AI assistant",
       close: "Collapse the AI assistant",
       title: "AI Assistant",
-      modeAsk: "Ask",
-      modeBuild: "Build",
-      modeAskOnly: "Q&A mode",
       empty:
-        "Ask what this page can do, or switch to Build and let me generate a dashboard.",
-      emptyAsk:
-        "Ask what this page can do, where a feature lives, or which tab you need.",
+        "Ask what this page can do, or just say what you want done — write actions come back as a card you confirm first.",
       placeholder: "Ask something… (Enter to send, Shift+Enter for a newline)",
       send: "Send",
       sending: "Working…",
@@ -631,6 +626,62 @@ const en: Translation = {
       progressGeneric: "Working…",
       pageTitle: "AI Assistant",
       pageSubtitle: "Ask or build right on this page — no jumping around.",
+      // Free-tier capability badge (task 3.1): no entry is hidden; tier checks
+      // live in the backend gate.
+      free: {
+        badge: "Free tier",
+        badgeNote:
+          "Free tier covers Q&A and reading your own data; build actions (artifact drafts, promotion) require the data engine and will be declined with an explanation at proposal time.",
+      },
+      // Action proposal card (tasks 3.2/3.3): both faces + compliance inputs +
+      // inline preview labels.
+      action: {
+        confirm: "Confirm",
+        cancel: "Cancel",
+        approving: "Executing…",
+        waitingApproval: "Waiting for a team admin to approve",
+        retry: "Retry",
+        impactLabel: "Impact: ",
+        resultLabel: "Result: ",
+        resultNone: "Executed (no result summary returned)",
+        rejectedNote: "This proposal was cancelled; nothing was executed.",
+        expiredNote:
+          "This proposal expired without confirmation; nothing was executed.",
+        opFailed: "Action failed, please try again later.",
+        state: {
+          pending_confirm: "Pending confirmation",
+          pending_approval: "Pending approval",
+          executed: "Executed",
+          rejected: "Cancelled",
+          expired: "Expired",
+          failed: "Failed",
+        },
+        tier: {
+          inline: "Inline confirm",
+          second: "Second confirm",
+          async: "Async approval",
+        },
+        compliance: {
+          sourceUrlLabel: "Public source URL (required)",
+          sourceUrlPlaceholder: "https://…",
+          publicClaim:
+            "I confirm the data referenced by this demand is public",
+          required:
+            "Fill in the public source URL and check the public-data claim before confirming.",
+        },
+        preview: {
+          fieldsLabel: "Fields",
+          keyColumnLabel: "Key column: ",
+          structureLabel: "Structure",
+        },
+      },
+      // Conversation drafts (task 3.4): compact entries atop the transcript.
+      draft: {
+        title: "Drafts in this conversation",
+        promote: "Promote",
+        promoting: "Submitting…",
+        promoteFailed: "Failed to propose promotion, please try again later.",
+      },
     },
     // Personal workbench (wire-personal-workbench tasks 2.1/2.3): six aggregate
     // section cards + a compact Base entry card. Counts and recent items come

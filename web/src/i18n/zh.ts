@@ -571,17 +571,15 @@ const zh = {
       body: "柏讯的对话构建能力将经此入口提供；数据试用在壹座进行——壹座与柏讯共用同一账号体系，点击直达。",
       tryCta: "去壹座试用",
     },
-    // AI 助手浮层（wire-assistant-panel）：控制台每页常驻入口，三态
-    // （问/做/去壹座）。问=问答轨（免费档可用）；做=构建轨（需数据处理引擎）。
+    // AI 助手（wire-assistant-panel → wire-copilot-action-gate）：控制台每页
+    // 常驻的单一副驾——问答、读数据与动作提议统一走一条循环，写操作以
+    // 动作卡确认（wire-copilot-action-gate 任务 4.3 新增 action/draft/free 三段）。
     assistant: {
       open: "打开 AI 助手",
       close: "收起 AI 助手",
       title: "AI 助手",
-      modeAsk: "问",
-      modeBuild: "做",
-      modeAskOnly: "问答模式",
-      empty: "问我这个页面能做什么，或切到「做」让我帮你生成看板。",
-      emptyAsk: "问我这个页面能做什么、某个功能在哪，或者该去哪个页签。",
+      empty:
+        "问我这个页面能做什么，或直接说想完成的操作——写操作会先给你一张待确认的动作卡。",
       placeholder: "问点什么…（Enter 发送，Shift+Enter 换行）",
       send: "发送",
       sending: "处理中…",
@@ -592,6 +590,57 @@ const zh = {
       progressGeneric: "正在处理…",
       pageTitle: "AI 助手",
       pageSubtitle: "在当前页面内提问或直接构建，不必跳转。",
+      // 免费档能力徽章（任务 3.1）：不再隐藏任何入口，档位校验在后端闸。
+      free: {
+        badge: "免费档",
+        badgeNote:
+          "免费档可问答与读取自有数据；构建类动作（生成产物草稿、草稿转正）需开通数据处理引擎，由系统在提议时如实说明。",
+      },
+      // 动作提议卡（任务 3.2/3.3）：两面文案 + 合规门留白 + 内联预览标签。
+      action: {
+        confirm: "确认执行",
+        cancel: "取消",
+        approving: "执行中…",
+        waitingApproval: "等待本队管理员批准",
+        retry: "重试",
+        impactLabel: "影响面：",
+        resultLabel: "结果：",
+        resultNone: "已执行（服务端未返回结果摘要）",
+        rejectedNote: "该提议已取消，未执行任何操作。",
+        expiredNote: "该提议已过期（超时未确认），未执行任何操作。",
+        opFailed: "操作失败，请稍后重试。",
+        state: {
+          pending_confirm: "待确认",
+          pending_approval: "待批准",
+          executed: "已执行",
+          rejected: "已取消",
+          expired: "已过期",
+          failed: "执行失败",
+        },
+        tier: {
+          inline: "行内确认",
+          second: "二次确认",
+          async: "异步审批",
+        },
+        compliance: {
+          sourceUrlLabel: "公开源 URL（必填）",
+          sourceUrlPlaceholder: "https://…",
+          publicClaim: "我确认本需求所引数据均为公开数据",
+          required: "确认前需填写公开源 URL 并勾选公开数据声明。",
+        },
+        preview: {
+          fieldsLabel: "字段",
+          keyColumnLabel: "键列：",
+          structureLabel: "结构",
+        },
+      },
+      // 会话草稿区（任务 3.4）：事务区顶部的紧凑草稿条目与转正入口。
+      draft: {
+        title: "本会话草稿",
+        promote: "转正",
+        promoting: "提交中…",
+        promoteFailed: "草稿转正提议失败，请稍后重试。",
+      },
     },
     // 个人工作台（wire-personal-workbench 任务 2.1/2.3）：六段聚合卡片 +
     // 壹座入口紧凑卡。计数与最近条目一律来自聚合端点（不呈现虚构计数）；

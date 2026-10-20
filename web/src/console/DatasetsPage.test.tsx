@@ -1524,3 +1524,54 @@ describe("DatasetsPage 配额条：档位未知 null 降级", () => {
     expect(screen.getByTestId("datasets-quota-upgrade")).toBeTruthy();
   });
 });
+
+// ── 执行成功事件刷新（wire-copilot-action-gate 任务 4.1，design D9）────────
+// 闸执行成功后 api.ts 广播 wire:action-executed；「我的数据」命中 resources
+// 才重取资产目录（filters/page 原样参与请求，不重置筛选）。
+describe("DatasetsPage（执行成功事件刷新，wire-copilot-action-gate 4.1）", () => {
+  it("wire:action-executed 命中 datasets 即重取目录", async () => {
+    const backend = install({
+      datasets: [makeDataset({ id: "ds-1", name: "销售明细" })],
+    });
+    render(<DatasetsPage planCode="basic" />);
+    await screen.findAllByTestId("dataset-card");
+
+    const catalogCalls = () =>
+      backend.calls.filter(
+        (c) => c.method === "GET" && c.url.pathname === "/api/v1/assets",
+      ).length;
+    const before = catalogCalls();
+
+    window.dispatchEvent(
+      new CustomEvent("wire:action-executed", {
+        detail: { resources: ["datasets"] },
+      }),
+    );
+
+    await waitFor(() => expect(catalogCalls()).toBeGreaterThan(before));
+  });
+
+  it("resources 不含 datasets：不重取", async () => {
+    const backend = install({
+      datasets: [makeDataset({ id: "ds-1", name: "销售明细" })],
+    });
+    render(<DatasetsPage planCode="basic" />);
+    await screen.findAllByTestId("dataset-card");
+
+    const before = backend.calls.filter(
+      (c) => c.method === "GET" && c.url.pathname === "/api/v1/assets",
+    ).length;
+
+    window.dispatchEvent(
+      new CustomEvent("wire:action-executed", {
+        detail: { resources: ["artifacts"] },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(
+      backend.calls.filter(
+        (c) => c.method === "GET" && c.url.pathname === "/api/v1/assets",
+      ).length,
+    ).toBe(before);
+  });
+});

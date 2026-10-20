@@ -51,7 +51,7 @@ describe("ChatPage（助手整页形态）", () => {
     expect(text).not.toMatch(/密码|口令|password/i);
   });
 
-  it("免费档：不渲染构建入口，标出问答模式", () => {
+  it("免费档：渲染能力说明徽章，无模式切换（统一副驾）", () => {
     render(<ChatPage planCode="free" />);
 
     expect(screen.getByTestId("assistant-free-badge")).toBeTruthy();
@@ -59,12 +59,10 @@ describe("ChatPage（助手整页形态）", () => {
     expect(screen.queryByTestId("assistant-mode-build")).toBeNull();
   });
 
-  it("付费档：渲染问/做切换", () => {
+  it("付费档：同样无模式切换（问/做合并为单一副驾）", () => {
     render(<ChatPage planCode="basic" />);
 
-    expect(screen.getByTestId("assistant-mode-switch")).toBeTruthy();
-    expect(screen.getByTestId("assistant-mode-ask")).toBeTruthy();
-    expect(screen.getByTestId("assistant-mode-build")).toBeTruthy();
+    expect(screen.queryByTestId("assistant-mode-switch")).toBeNull();
     expect(screen.queryByTestId("assistant-free-badge")).toBeNull();
   });
 

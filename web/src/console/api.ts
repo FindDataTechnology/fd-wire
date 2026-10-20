@@ -287,10 +287,16 @@ export function askAssistant(
 export function postMessage(
   conversationId: number,
   content: string,
+  context?: AssistantContext,
 ): Promise<ChatMessage[]> {
+  // context（wire-assistant-panel 既有语义在统一循环上的延续）：白名单
+  // 键 tab/artifact_id/dataset_id，服务端净化后注入 system 提示。
   return requestJson(
     `${API_BASE}/v1/ai/conversations/${conversationId}/messages`,
-    { method: "POST", body: { content } },
+    {
+      method: "POST",
+      body: context ? { content, context } : { content },
+    },
   ) as Promise<ChatMessage[]>;
 }
 
@@ -314,6 +320,151 @@ export async function fetchAllArtifacts(
   return grouped
     .flat()
     .sort((a, b) => b.id - a.id);
+}
+
+// ── 副驾动作闸（wire-copilot-action-gate 任务 3.4/4.1 web 面）────────────
+// 契约（design D4 冻结，后端并行实现——本层按契约编码）：
+// - POST /api/v1/ai/actions/propose {action_id, args, conversation_id} → 201
+//   {proposal_id, action_id, state, tier, impact, missing_fields?}
+// - POST /api/v1/ai/actions/{id}/approve {compliance?: {source_url,
+//   public_claim}} → 200 {proposal_id, action_id, state, result_summary?,
+//   error?}；非 owner/admin 批 publish 档 403、缺合规字段 422（detail 如实
+//   上抛，由卡原样呈现）。
+// - POST /api/v1/ai/actions/{id}/reject → 200 {proposal_id, state:"rejected"}
+// - GET  /api/v1/ai/actions/{id} → 提议详情（含 result_summary/error——历史
+//   回放已执行面的数据源）；GET /api/v1/ai/actions?conversation_id= → 同形
+//   数组（按 id 升序）。
+
+/** 提议/执行状态机（append-only：终态不可逆）。 */
+export type WireActionState =
+  | "pending_confirm"
+  | "pending_approval"
+  | "executed"
+  | "rejected"
+  | "expired"
+  | "failed";
+
+/** 确认档位：inline=行内确认、second=二次确认、async=异步审批。 */
+export type WireActionTier = "inline" | "second" | "async";
+
+/** propose 响应（201）。 */
+export interface WireActionProposal {
+  proposal_id: number;
+  action_id: string;
+  state: WireActionState;
+  tier: WireActionTier;
+  impact: string;
+  /** 预检发现缺失的参数名（如实呈现，服务端不代填）。 */
+  missing_fields?: string[];
+}
+
+/** 需求单合规门（D8）：模型给的取值服务端一律不采纳，只收卡上客户手填值。 */
+export interface WireActionCompliance {
+  source_url: string;
+  public_claim: boolean;
+}
+
+/** approve 响应（200）：state 只有 executed|failed 两个终态。 */
+export interface WireActionApproval {
+  proposal_id: number;
+  action_id: string;
+  state: "executed" | "failed";
+  result_summary?: string;
+  error?: string;
+}
+
+/** 提议详情/列表行（GET /actions 形状——历史回放与审计指向的数据源）。 */
+export interface WireAction {
+  proposal_id: number;
+  action_id: string;
+  state: WireActionState;
+  tier: WireActionTier;
+  impact: string;
+  args_summary?: string;
+  created_at: string;
+  approved_by?: string;
+  expires_at?: string;
+  result_summary?: string;
+  error?: string;
+}
+
+/** 发起动作提议（写操作唯一入口——工具面结构性不含写工具）。 */
+export function proposeAction(
+  actionId: string,
+  args: Record<string, unknown>,
+  conversationId: number,
+): Promise<WireActionProposal> {
+  return requestJson(`${API_BASE}/v1/ai/actions/propose`, {
+    method: "POST",
+    body: { action_id: actionId, args, conversation_id: conversationId },
+  }) as Promise<WireActionProposal>;
+}
+
+/**
+ * action_id 前缀 → 受影响资源页（design D9 事件刷新的 resources 映射，
+ * 单一真源）：artifact/dataset/demand 三族各归各页，未知前缀返回空数组
+ * （无页可刷新，事件仍派发——接收方按命中过滤）。
+ */
+export function actionAffectedResources(actionId: string): string[] {
+  if (actionId.startsWith("wire.artifact.")) return ["artifacts"];
+  if (actionId.startsWith("wire.dataset.")) return ["datasets"];
+  if (actionId.startsWith("wire.demand.")) return ["demands"];
+  return [];
+}
+
+/**
+ * 确认执行（inline/second 即时执行；publish 档要求本队 owner/admin）。
+ * 执行成功后广播 window 级 `wire:action-executed`（detail.resources 由
+ * action_id 前缀映射）——受影响页面挂载期监听并重取列表（wire 无 WS 栈，
+ * 事件与执行同页同步发生，无需轮询兜底）。
+ */
+export async function approveAction(
+  proposalId: number,
+  compliance?: WireActionCompliance,
+): Promise<WireActionApproval> {
+  const result = (await requestJson(
+    `${API_BASE}/v1/ai/actions/${proposalId}/approve`,
+    {
+      method: "POST",
+      // compliance 只在携带时进 body（需求单合规门；其他动作不带该键）。
+      ...(compliance ? { body: { compliance } } : { body: {} }),
+    },
+  )) as WireActionApproval;
+  if (result.state === "executed") {
+    window.dispatchEvent(
+      new CustomEvent("wire:action-executed", {
+        detail: { resources: actionAffectedResources(result.action_id ?? "") },
+      }),
+    );
+  }
+  return result;
+}
+
+/** 取消提议（append-only 落 rejected 态；已执行的动作不可取消）。 */
+export function rejectAction(
+  proposalId: number,
+): Promise<{ proposal_id: number; state: "rejected" }> {
+  return requestJson(`${API_BASE}/v1/ai/actions/${proposalId}/reject`, {
+    method: "POST",
+    body: {},
+  }) as Promise<{ proposal_id: number; state: "rejected" }>;
+}
+
+/** 单条提议详情（轮询异步审批结果/审计指向用）。 */
+export function fetchAction(proposalId: number): Promise<WireAction> {
+  return requestJson(`${API_BASE}/v1/ai/actions/${proposalId}`, {
+    method: "GET",
+  }) as Promise<WireAction>;
+}
+
+/** 会话内提议列表（按 id 升序——历史回放两态裁决的数据源）。 */
+export function fetchConversationActions(
+  conversationId: number,
+): Promise<WireAction[]> {
+  return requestJson(
+    `${API_BASE}/v1/ai/actions?conversation_id=${conversationId}`,
+    { method: "GET" },
+  ) as Promise<WireAction[]>;
 }
 
 // ── 我的数据：客户数据集与连接器（wire-customer-local-data 任务组 3）────────

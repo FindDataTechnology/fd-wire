@@ -342,6 +342,30 @@ def require_console_owner(
     return customer, identity.sub
 
 
+def require_console_actor(
+    request: Request, db: Session = Depends(get_platform_db)
+) -> tuple[Customer, str, str]:
+    """动作闸依赖（wire-copilot-action-gate）：解析 (客户, sub, 角色)。
+
+    与 ``require_console_customer`` 的关键差异——**刻意不做 viewer 方法级
+    只读门禁**：动作闸的角色裁决（viewer 拒写、async 档限 owner/editor）
+    在闸内按提议逐条执行并给如实的逐条文案，而非在依赖层一刀切 403——
+    viewer 的读与浏览不受影响，写提议在 preflight 被如实拦下（spec 场景
+    「viewer 写操作被拒」）。密钥物面 owner-only 门禁同样不在本依赖（动作
+    面 v1 不含密钥类动作）。
+    """
+    identity = verify_id_token(bearer_token(request))
+    resolved = resolve_member_role(db, identity.sub)
+    if resolved is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="登录身份尚未映射到客户（请先完成首次登录开户）",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    customer, role = resolved
+    return customer, identity.sub, role
+
+
 def require_console_customer_id(
     request: Request, db: Session = Depends(get_platform_db)
 ) -> str:
@@ -366,6 +390,7 @@ __all__ = [
     "get_platform_db",
     "logto_client_id",
     "logto_issuer",
+    "require_console_actor",
     "require_console_customer",
     "require_console_customer_id",
     "require_console_member_identity",

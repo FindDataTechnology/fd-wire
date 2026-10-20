@@ -140,3 +140,40 @@ class CellMcpExecutor:
             raise CellToolError(str(exc)) from exc
         except McpCallError as exc:
             raise CellToolError(f"cell MCP 端点{exc}") from exc
+
+    def list_tool_schemas(self) -> list[dict]:
+        """``tools/list`` → OpenAI tools 形态（wire-copilot-action-gate D1：
+        副驾循环按引擎可用性动态注入 cell 指标探索工具）。
+
+        端点未配/凭据缺失/发现失败一律返回空列表——cell 工具不进工具面，
+        循环照常以读工具+提议面运行（fail-open 到「无引擎工具」而非断话）。
+        """
+        if not self._endpoint or not self._credential:
+            return []
+        if self._native is None:
+            self._native = NativeMcpClient(
+                self._endpoint,
+                credential=self._credential,
+                http_client=self._http,
+                label="cell MCP 端点",
+            )
+        try:
+            tools = self._native.list_tools()
+        except Exception:  # noqa: BLE001 - 发现失败=本轮不提供 cell 工具
+            return []
+        schemas: list[dict] = []
+        for tool in tools:
+            if not isinstance(tool, dict) or not isinstance(tool.get("name"), str):
+                continue
+            schemas.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool["name"],
+                        "description": str(tool.get("description") or ""),
+                        "parameters": tool.get("inputSchema")
+                        or {"type": "object", "properties": {}},
+                    },
+                }
+            )
+        return schemas

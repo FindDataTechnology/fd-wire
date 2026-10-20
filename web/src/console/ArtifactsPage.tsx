@@ -235,6 +235,19 @@ export function ArtifactsPage({
     void load();
   }, [load]);
 
+  // 执行成功事件刷新（wire-copilot-action-gate 任务 4.1，design D9）：闸
+  // 执行成功后 api.ts 广播 window 级 wire:action-executed（resources 按
+  // action_id 前缀映射）；产物页命中 "artifacts" 即重跑既有列表加载——只
+  // 重取数据，筛选/展开等 UI 状态不动（spec：无需手动刷新整页）。
+  useEffect(() => {
+    const onExecuted = (event: Event) => {
+      const detail = (event as CustomEvent<{ resources?: string[] }>).detail;
+      if (detail?.resources?.includes("artifacts")) void load();
+    };
+    window.addEventListener("wire:action-executed", onExecuted);
+    return () => window.removeEventListener("wire:action-executed", onExecuted);
+  }, [load]);
+
   const conversationById = useMemo(() => {
     const map = new Map<number, Conversation>();
     conversations?.forEach((c) => map.set(c.id, c));

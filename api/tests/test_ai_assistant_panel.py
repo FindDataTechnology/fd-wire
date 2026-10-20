@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import json
+
 import os
 
 os.environ.setdefault("AI_DATABASE_URL", "sqlite://")
@@ -317,9 +319,19 @@ def test_after_id_absent_keeps_full_semantics(client, llm) -> None:
 # ------------------------------------------------------------------ 构建轨不变
 
 
-def test_build_track_still_refuses_free_tier(client, llm, executor) -> None:
-    """构建轨对免费档仍如实拒绝，且零工具调用（分轨不改既有护栏）。"""
-    llm.script = []  # 不该被调用
+def test_build_class_proposal_refuses_free_tier_honestly(client, llm, executor) -> None:
+    """免费档（wire-copilot-action-gate 合并后）：对话照常（不再整轮短路），
+    构建类提议被 preflight 如实拦截（spec「免费档不见构建入口」的闸侧语义）。"""
+    from fd_wire_api.ai.protocols import LlmAssistantMessage, ToolCall
+
+    llm.script = [
+        LlmAssistantMessage(content=None, tool_calls=[ToolCall(
+            id="c1", name="propose_action",
+            arguments={"action_id": "wire.artifact.draft.create",
+                       "args": {"kind": "dashboard", "title": "t", "spec": {"panels": []}}},
+        )]),
+        LlmAssistantMessage(content="构建需要数据引擎，我已说明原因。"),
+    ]
     conversation = client.post(
         "/api/v1/ai/conversations", json={"title": "t"}, headers=FREE
     ).json()
@@ -330,7 +342,13 @@ def test_build_track_still_refuses_free_tier(client, llm, executor) -> None:
     )
     assert resp.status_code == 200, resp.text
     roles = [m["role"] for m in resp.json()]
-    assert roles == ["user", "assistant"]
-    assert "尚未开通数据 cell" in resp.json()[1]["content"]
+    assert roles == ["user", "assistant", "tool_trace", "assistant"]
+    trace = json.loads(resp.json()[2]["content"])
+    assert trace["result"]["ok"] is False
+    assert "数据处理引擎" in trace["result"]["error"]
+    # 提议未落 pending（不进确认档位）；cell 零调用
+    actions = client.get(
+        f"/api/v1/ai/actions?conversation_id={conversation['id']}", headers=FREE
+    )
+    assert actions.json() == []
     assert executor.calls == []
-    assert llm.calls == []

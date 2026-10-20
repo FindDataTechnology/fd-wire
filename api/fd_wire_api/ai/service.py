@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .loop import append_message, run_build_loop
+from .loop import append_message, run_copilot_loop
 from .models import AIMessage, AIConversation, MessageRole
 from .protocols import LlmClient, ToolExecutor
 from .schemas import ConversationCreate
@@ -130,22 +130,30 @@ def chat(
     tool_executor: ToolExecutor,
     settings: AiSettings,
     system_extra: str | None = None,
+    read_executor=None,
+    actor=None,
+    gate_sessions=None,
 ) -> list[AIMessage]:
-    """一条用户消息驱动一轮构建循环（用户消息 + 循环产出全部落库）。
+    """一条用户消息驱动一轮副驾循环（用户消息 + 循环产出全部落库）。
 
     ``system_extra``：实体图谱块（wire-entity-layer）——空图谱传 None，
     system prompt 与固定文案逐字一致（零漂移）。
+    ``read_executor`` / ``actor`` / ``gate_sessions``：读工具与提议通道的
+    依赖束（wire-copilot-action-gate）；缺席时对应能力如实降级，对话继续。
     """
     user_message = append_message(
         db, conversation_id=conversation.id, role=MessageRole.user, content=content
     )
-    loop_messages = run_build_loop(
+    loop_messages = run_copilot_loop(
         db,
         conversation,
         llm=llm,
         tool_executor=tool_executor,
         max_turns=settings.ai_max_turns,
         system_extra=system_extra,
+        read_executor=read_executor,
+        actor=actor,
+        gate_sessions=gate_sessions,
     )
     return [user_message, *loop_messages]
 

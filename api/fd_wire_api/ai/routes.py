@@ -23,15 +23,37 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from . import service
+from .actions import (
+    ActionNotRegistered,
+    ActorContext,
+    ApprovalDenied,
+    ComplianceMissing,
+    GateSessions,
+    PreflightError,
+    approve as gate_approve,
+    get_proposal as gate_get_proposal,
+    list_proposals as gate_list_proposals,
+    propose as gate_propose,
+    reject as gate_reject,
+    set_conversation_id,
+)
 from .db import get_db
-from ..console.auth import require_console_customer_id
+from ..console.auth import require_console_actor, require_console_customer_id
 from ..datasets.db import get_db as get_datasets_db
+from ..demands.db import get_db as get_demands_db
 from ..entities.db import get_db as get_entities_db
 from ..entities.service import entity_graph_prompt_block
+from ..materialization.db import get_db as get_materialization_db
 from .executor import CellMcpExecutor
 from .llm import TokenGatewayLlmClient
 from .protocols import LlmClient, ToolExecutor
+from .reads import ReadToolExecutor
 from .schemas import (
+    ActionApproveIn,
+    ActionApproveOut,
+    ActionOut,
+    ActionProposeIn,
+    ActionProposeOut,
     AssistantAnswerOut,
     AssistantAskIn,
     ChatIn,
@@ -40,6 +62,7 @@ from .schemas import (
     ConversationOut,
     DraftArtifactOut,
     MessageOut,
+    action_out,
     artifact_out,
     conversation_detail,
 )
@@ -66,6 +89,67 @@ def _release(client: object) -> None:
         client.close()
 
 
+def _actor_context(
+    actor: tuple[object, str, str] = Depends(require_console_actor),
+) -> ActorContext:
+    """require_console_actor → 动作闸 ActorContext（customer_id=活跃队命名空间）。"""
+    customer, sub, role = actor
+    return ActorContext(customer_id=str(customer.name), sub=sub, role=role)
+
+
+def get_gate_sessions(
+    ai_db: Session = Depends(get_db),
+    datasets_db: Session = Depends(get_datasets_db),
+    demands_db: Session = Depends(get_demands_db),
+    materialization_db: Session = Depends(get_materialization_db),
+) -> GateSessions:
+    """闸执行器的跨切片会话束（各库依赖注入；会话生命周期归各依赖管）。"""
+    return GateSessions(
+        ai=ai_db, datasets=datasets_db, demands=demands_db, materialization=materialization_db
+    )
+
+
+def get_read_executor(
+    ai_db: Session = Depends(get_db),
+    datasets_db: Session = Depends(get_datasets_db),
+    demands_db: Session = Depends(get_demands_db),
+) -> ReadToolExecutor:
+    """副驾读工具执行器（自有数据切片直调；测试可整体覆写本依赖）。"""
+    return ReadToolExecutor(ai_db=ai_db, datasets_db=datasets_db, demands_db=demands_db)
+
+
+def _compose_system_extra(
+    db: Session,
+    entities_db: Session,
+    datasets_db: Session,
+    *,
+    customer_id: str,
+    context: dict | None,
+) -> str | None:
+    """图谱块 + 页面上下文块的组合（wire-copilot-action-gate：上下文注入
+    从 /answer 迁到统一循环）。
+
+    零漂移纪律：上下文为空（或净化后为空）时返回值与纯图谱块**逐字节
+    一致**；两块都有时以换行拼接（图谱块在前）。
+    """
+    # 惰性导入（answer → artifacts.service → artifacts.routes → 本模块的环）：
+    # 与既有 answer 端点的函数内导入同款纪律。
+    from .answer import assistant_context_block, sanitize_context
+
+    graph = entity_graph_prompt_block(entities_db, datasets_db, customer_id)
+    clean = sanitize_context(context) if context else {}
+    context_block = (
+        assistant_context_block(db, datasets_db, customer_id=customer_id, context=clean)
+        if clean
+        else None
+    )
+    if graph is None:
+        return context_block
+    if context_block is None:
+        return graph
+    return f"{graph}\n{context_block}"
+
+
 def _conversation_or_404(db: Session, conversation_id: int, customer_id: str):
     try:
         return service.get_customer_conversation(
@@ -82,18 +166,22 @@ def _conversation_or_404(db: Session, conversation_id: int, customer_id: str):
 )
 def create_conversation(
     payload: ConversationCreate,
-    customer_id: str = Depends(require_console_customer_id),
+    actor: ActorContext = Depends(_actor_context),
     db: Session = Depends(get_db),
     entities_db: Session = Depends(get_entities_db),
     datasets_db: Session = Depends(get_datasets_db),
+    demands_db: Session = Depends(get_demands_db),
     llm: LlmClient = Depends(get_llm_client),
     tool_executor: ToolExecutor = Depends(get_tool_executor),
+    read_executor: ReadToolExecutor = Depends(get_read_executor),
+    gate_sessions: GateSessions = Depends(get_gate_sessions),
 ) -> ConversationDetailOut:
     """新开对话（先过每日限额护栏）；带 message 即当场跑一轮构建循环。
 
     实体图谱注入（wire-entity-layer）：跑循环前经 entities（元数据库）+
     datasets 双库会话组装图谱紧凑块——空图谱得 None，system prompt 与
     固定文案逐字一致（零漂移）。"""
+    customer_id = actor.customer_id
     settings = get_settings()
     try:
         service.ensure_daily_limit(db, customer_id, settings)
@@ -101,6 +189,7 @@ def create_conversation(
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     conversation = service.create_conversation(db, customer_id=customer_id, payload=payload)
     if payload.message:
+        set_conversation_id(conversation.id)
         service.chat(
             db,
             conversation,
@@ -108,9 +197,13 @@ def create_conversation(
             llm=llm,
             tool_executor=tool_executor,
             settings=settings,
-            system_extra=entity_graph_prompt_block(
-                entities_db, datasets_db, customer_id
+            system_extra=_compose_system_extra(
+                db, entities_db, datasets_db,
+                customer_id=customer_id, context=payload.context,
             ),
+            read_executor=read_executor,
+            actor=actor,
+            gate_sessions=gate_sessions,
         )
     _release(llm)
     _release(tool_executor)
@@ -157,19 +250,24 @@ def list_messages(
 def append_and_run(
     conversation_id: int,
     payload: ChatIn,
-    customer_id: str = Depends(require_console_customer_id),
+    actor: ActorContext = Depends(_actor_context),
     db: Session = Depends(get_db),
     entities_db: Session = Depends(get_entities_db),
     datasets_db: Session = Depends(get_datasets_db),
+    demands_db: Session = Depends(get_demands_db),
     llm: LlmClient = Depends(get_llm_client),
     tool_executor: ToolExecutor = Depends(get_tool_executor),
+    read_executor: ReadToolExecutor = Depends(get_read_executor),
+    gate_sessions: GateSessions = Depends(get_gate_sessions),
 ) -> list[MessageOut]:
     """追加用户消息并驱动一轮构建循环（返回本轮落库的消息序列）。
 
     实体图谱注入同 create_conversation（空图谱 None = 零漂移）。
     """
+    customer_id = actor.customer_id
     conversation = _conversation_or_404(db, conversation_id, customer_id)
     settings = get_settings()
+    set_conversation_id(conversation.id)
     appended = service.chat(
         db,
         conversation,
@@ -177,9 +275,13 @@ def append_and_run(
         llm=llm,
         tool_executor=tool_executor,
         settings=settings,
-        system_extra=entity_graph_prompt_block(
-            entities_db, datasets_db, customer_id
+        system_extra=_compose_system_extra(
+            db, entities_db, datasets_db,
+            customer_id=customer_id, context=payload.context,
         ),
+        read_executor=read_executor,
+        actor=actor,
+        gate_sessions=gate_sessions,
     )
     _release(llm)
     _release(tool_executor)
@@ -260,3 +362,146 @@ def answer(
         conversation_id=conversation.id,
         messages=[MessageOut.model_validate(m) for m in appended],
     )
+
+
+# ── 动作闸端点（wire-copilot-action-gate design D4）──────────────────────────
+#
+# 提议/确认/审批/查询——写操作唯一的对外入口。角色与状态裁决在闸内
+# （actions.approve / reject），路由只做异常→HTTP 映射：
+# 未注册 404、preflight/合规 422、角色 403、状态/过期 409、他企 404。
+
+
+def _gate_error(exc: Exception) -> HTTPException:
+    """闸异常 → HTTPException（如实文案透传，绝不吞成 500）。"""
+    if isinstance(exc, ActionNotRegistered):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, PreflightError):
+        return HTTPException(status_code=422, detail=str(exc))
+    if isinstance(exc, ComplianceMissing):
+        return HTTPException(
+            status_code=422, detail="合规声明未完成：" + "、".join(exc.missing)
+        )
+    if isinstance(exc, ApprovalDenied):
+        return HTTPException(
+            status_code=409 if exc.kind == "state" else 403, detail=str(exc)
+        )
+    if isinstance(exc, LookupError):
+        return HTTPException(status_code=404, detail=str(exc))
+    return HTTPException(status_code=500, detail=f"动作闸内部错误：{exc}")
+
+
+@router.post(
+    "/api/v1/ai/actions/propose",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ActionProposeOut,
+)
+def propose_action_endpoint(
+    payload: ActionProposeIn,
+    actor: ActorContext = Depends(_actor_context),
+    db: Session = Depends(get_db),
+    gate_sessions: GateSessions = Depends(get_gate_sessions),
+) -> ActionProposeOut:
+    """提议一个写操作（面板直发入口；副驾循环内部同经 ``actions.propose``）。
+
+    未注册/预检失败不落 pending（4xx 如实文案）——「板上没有的动作，
+    副驾也不提供」的闸面收口。
+    """
+    _conversation_or_404(db, payload.conversation_id, actor.customer_id)
+    set_conversation_id(payload.conversation_id)
+    try:
+        proposal, missing = gate_propose(
+            db,
+            gate_sessions,
+            actor,
+            action_id=payload.action_id,
+            args=payload.args,
+        )
+    except (ActionNotRegistered, PreflightError, ComplianceMissing, ApprovalDenied, LookupError) as exc:
+        raise _gate_error(exc) from exc
+    return ActionProposeOut(
+        proposal_id=proposal.id,
+        action_id=proposal.action_id,
+        state=proposal.state,
+        tier=proposal.tier,
+        impact=proposal.impact_text,
+        missing_fields=missing,
+    )
+
+
+@router.post(
+    "/api/v1/ai/actions/{proposal_id}/approve",
+    response_model=ActionApproveOut,
+)
+def approve_action_endpoint(
+    proposal_id: int,
+    payload: ActionApproveIn | None = None,
+    actor: ActorContext = Depends(_actor_context),
+    db: Session = Depends(get_db),
+    gate_sessions: GateSessions = Depends(get_gate_sessions),
+) -> ActionApproveOut:
+    """确认（inline/second 档）或审批（async 档）并执行——单一执行路径+审计。
+
+    合规字段（需求单类）只认本载荷：``compliance.source_url`` 与
+    ``compliance.public_claim``（模型提议参数里的取值已在 propose 丢弃）。
+    """
+    try:
+        compliance = (
+            payload.compliance.model_dump() if payload and payload.compliance else None
+        )
+        outcome = gate_approve(
+            db, gate_sessions, actor, proposal_id, compliance=compliance
+        )
+    except (ActionNotRegistered, PreflightError, ComplianceMissing, ApprovalDenied, LookupError) as exc:
+        raise _gate_error(exc) from exc
+    proposal = gate_get_proposal(db, actor, proposal_id)
+    return ActionApproveOut(
+        proposal_id=proposal_id,
+        action_id=proposal.action_id,
+        state=outcome["state"],
+        result_summary=outcome.get("result_summary"),
+        error=outcome.get("error"),
+    )
+
+
+@router.post("/api/v1/ai/actions/{proposal_id}/reject", response_model=ActionOut)
+def reject_action_endpoint(
+    proposal_id: int,
+    actor: ActorContext = Depends(_actor_context),
+    db: Session = Depends(get_db),
+) -> ActionOut:
+    """拒绝提议（任意 pending 态；本队成员即可，不执行）。"""
+    try:
+        proposal = gate_reject(db, actor, proposal_id)
+    except (ApprovalDenied, LookupError) as exc:
+        raise _gate_error(exc) from exc
+    return action_out(proposal)
+
+
+@router.get("/api/v1/ai/actions/{proposal_id}", response_model=ActionOut)
+def get_action_endpoint(
+    proposal_id: int,
+    actor: ActorContext = Depends(_actor_context),
+    db: Session = Depends(get_db),
+) -> ActionOut:
+    """提议详情（含惰性过期：读时发现超时即置 expired，fail-closed）。"""
+    try:
+        proposal = gate_get_proposal(db, actor, proposal_id)
+    except LookupError as exc:
+        raise _gate_error(exc) from exc
+    return action_out(proposal)
+
+
+@router.get("/api/v1/ai/actions", response_model=list[ActionOut])
+def list_actions_endpoint(
+    conversation_id: int,
+    actor: ActorContext = Depends(_actor_context),
+    db: Session = Depends(get_db),
+) -> list[ActionOut]:
+    """会话内提议列表（面板历史回放与草稿区的数据源）。"""
+    _conversation_or_404(db, conversation_id, actor.customer_id)
+    return [
+        action_out(row)
+        for row in gate_list_proposals(
+            db, conversation_id=conversation_id, customer_id=actor.customer_id
+        )
+    ]

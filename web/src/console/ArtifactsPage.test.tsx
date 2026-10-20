@@ -1912,3 +1912,50 @@ describe("ArtifactsPage 富文本文档（wire-rich-text-docs 4.2/4.3/4.5）", (
     await screen.findByTestId("doc-editor-text");
   });
 });
+
+// ── 执行成功事件刷新（wire-copilot-action-gate 任务 4.1，design D9）────────
+// 闸执行成功后 api.ts 广播 wire:action-executed；产物页命中 resources 才重取
+// 列表——只重取数据（筛选/展开态不动），无需手动刷新整页。
+describe("ArtifactsPage（执行成功事件刷新，wire-copilot-action-gate 4.1）", () => {
+  it("wire:action-executed 命中 artifacts 即重取列表（无需手动刷新）", async () => {
+    const backend = install();
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+
+    const listCalls = () =>
+      backend.calls.filter(
+        (c) => c.method === "GET" && c.url.pathname === "/api/v1/artifacts",
+      ).length;
+    const before = listCalls();
+
+    window.dispatchEvent(
+      new CustomEvent("wire:action-executed", {
+        detail: { resources: ["artifacts"] },
+      }),
+    );
+
+    await waitFor(() => expect(listCalls()).toBeGreaterThan(before));
+  });
+
+  it("resources 不含 artifacts：不重取（别页的事不惊动产物页）", async () => {
+    const backend = install();
+    render(<ArtifactsPage />);
+    await screen.findAllByTestId("artifact-item");
+
+    const before = backend.calls.filter(
+      (c) => c.method === "GET" && c.url.pathname === "/api/v1/artifacts",
+    ).length;
+
+    window.dispatchEvent(
+      new CustomEvent("wire:action-executed", {
+        detail: { resources: ["datasets"] },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(
+      backend.calls.filter(
+        (c) => c.method === "GET" && c.url.pathname === "/api/v1/artifacts",
+      ).length,
+    ).toBe(before);
+  });
+});

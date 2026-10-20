@@ -17,16 +17,14 @@ from typing import Callable
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..ai.models import AIDraftArtifact
-from .cron import parse_cron
+from . import service
 from .db import get_db
 from .models import MaterializedArtifact
 from .schemas import MaterializedArtifactOut, PromoteIn, artifact_out
 from .settings import get_settings
-from .specs import MATERIALIZABLE_KINDS
 
 router = APIRouter(prefix="/internal/materialization", tags=["materialization-internal"])
 
@@ -93,49 +91,18 @@ def promote(
     db: Session = Depends(get_db),
     load_draft: DraftLoader = Depends(get_draft_loader),
 ) -> MaterializedArtifactOut:
-    """draft 转正：拷贝 spec 快照 + 登记调度（同一草稿只允许转正一次）。"""
+    """draft 转正：拷贝 spec 快照 + 登记调度（同一草稿只允许转正一次）。
+
+    转正逻辑在 ``service.promote_draft``（wire-copilot-action-gate D5 抽取
+    ——internal 端点与动作闸执行器共用同一条路径，零漂移）。
+    """
     draft = load_draft(artifact_id)
     if draft is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"产物草稿 {artifact_id} 不存在（ai_draft_artifacts）",
         )
-    if draft.kind not in MATERIALIZABLE_KINDS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"产物类型 {draft.kind!r} 暂不支持物化读取"
-                f"（支持: {sorted(MATERIALIZABLE_KINDS)}；alert_rule/refresh_schedule"
-                " 不产生计费读取）"
-            ),
-        )
-    schedule = payload.schedule
-    if schedule is not None:
-        try:
-            parse_cron(schedule)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-            ) from exc
-    artifact = MaterializedArtifact(
-        artifact_id=draft.id,
-        customer_id=draft.customer_id,
-        kind=draft.kind,
-        spec=dict(draft.spec or {}),
-        schedule=schedule,
-        enabled=True,
-    )
-    db.add(artifact)
-    try:
-        db.flush()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"产物草稿 {artifact_id} 已转正过（artifact_id 唯一）",
-        ) from exc
-    db.commit()
-    db.refresh(artifact)
+    artifact = service.promote_draft(db, draft=draft, schedule=payload.schedule)
     return artifact_out(artifact)
 
 

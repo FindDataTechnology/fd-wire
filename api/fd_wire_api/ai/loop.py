@@ -1,14 +1,19 @@
-"""AI 构建循环（任务 5.4 的核心抽象）。
+"""副驾对话循环（wire-copilot-action-gate D1/D2；前身是 v1 构建循环）。
 
-``用户消息 → LLM（带五类产物工具 schema）→ 工具调用执行 → 结果回灌
-→ …… → LLM 终答或轮次上限``。
+``用户消息 → LLM（读工具 + propose_action + cell 工具[有引擎时]）→ 工具
+调用执行 → 结果回灌 → …… → LLM 终答或轮次上限``。
 
-- 工具分两路：五类产物工具走「spec 写入暂存表」假语义（tools.py，
-  真正落 cell 是 5.3/5.5 的活）；其余工具经 ``ToolExecutor`` 协议打到
-  企业 cell MCP 端点（executor.py，平台服务凭据）。
+- 工具三分路：**读工具**（reads.py，直调自有数据切片，任意档位）；
+  **propose_action**（actions.py 动作闸——写操作唯一的通道，立即返回
+  pending，不在回合内等待确认）；**cell 工具**（executor.py，指标探索，
+  仅引擎可用时动态注入工具面）。
+- 不可绕过是结构性的：工具面组装处**只有**这三类 schema——五类产物
+  spec 写入从模型直调改为经闸提议（v1 假语义退役），代码路径上不存在
+  写工具可达的分支。
 - 失败如实：LLM 异常 → assistant 消息如实报错并安全中止；工具异常 →
-  错误结果回灌 LLM、tool_trace 留痕，绝不留下半成品产物。
-- 预算护栏：cell 未开通 → 常量报错不调 LLM；轮次达上限 → 如实告知截断。
+  错误结果回灌 LLM、tool_trace 留痕，绝不留下半成品。
+- 预算护栏：轮次达上限 → 如实告知截断。免费档（无引擎）不再整轮短路
+  ——读工具与提议面照常可用（wire-assistant-panel 问/做合并的落点）。
 """
 
 from __future__ import annotations
@@ -19,6 +24,16 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .actions import (
+    ActorContext,
+    GateSessions,
+    ActionNotRegistered,
+    PreflightError,
+    PROPOSE_ACTION_TOOL_NAME,
+    PROPOSE_ACTION_TOOL_SCHEMA,
+    propose,
+    set_conversation_id,
+)
 from .executor import (
     CELL_NOT_PROVISIONED_MESSAGE,
     CellNotProvisionedError,
@@ -26,29 +41,37 @@ from .executor import (
 )
 from .models import AIMessage, AIConversation, MessageRole
 from .protocols import LlmAssistantMessage, LlmClient, ToolCall, ToolExecutor
-from .tools import ARTIFACT_TOOL_KINDS, TOOL_SCHEMAS, stage_artifact
+from .reads import READ_TOOL_SCHEMAS, ReadToolExecutor, is_read_tool
 
 SYSTEM_PROMPT = (
-    "你是柏讯控制台的分析构建助手。客户用自然语言描述分析意图，你经工具完成"
-    "探索与产物生成。可用工具有五类产物 spec 写入：dashboard_spec_create、"
-    "composite_indicator_create、research_report_create、alert_rule_create、"
-    "refresh_schedule_create——spec 写入只是暂存草稿（draft），待客户确认后"
-    "才物化到企业 cell。要求：意图不清先追问；数据不可得或生成失败时如实"
-    "说明原因，绝不编造、绝不产出半成品 spec；产物齐备后用中文给客户一个"
-    "简短的完成总结。"
+    "你是柏讯控制台的副驾。客户就当前页面提问或下达操作意图，你经读工具与"
+    "提议通道帮他完成。纪律："
+    "① 读工具直通——dataset_list / dataset_schema / artifact_list / "
+    "artifact_get / demands_list 只读本团队资产；有引擎时另有指标探索工具。"
+    "② 写操作只能经 propose_action 提议——你不能直接执行任何写操作；提议"
+    "立即返回 pending，由客户在确认卡上确认后才执行。"
+    "③ 回执如实转述——pending 不是成功，执行失败如实说明并保留重试。"
+    "④ 需求单提议的公开源 URL 与公开数据声明绝不代填——那必须由客户在"
+    "确认卡上自己填写。"
+    "⑤ 意图不清先追问；数据不可得时如实说明，绝不编造数值、绝不产出"
+    "占位符。"
+    "⑥ 产物草稿提议要给完整 spec（把取到的真实数据写进快照），让客户在"
+    "确认卡上直接看到成品预览。"
+    "⑦ 完成后用中文给简短总结，指明结果落在哪里（会话草稿区/产物页/"
+    "我的需求）。"
 )
 
 #: 轮次上限截断的如实文案
 def _truncation_message(max_turns: int) -> str:
     return (
-        f"本轮构建已达到最大轮次上限（AI_MAX_TURNS={max_turns}），"
-        "对话被安全截断。已生成的产物草稿保留在暂存区；"
+        f"本轮对话已达到最大轮次上限（AI_MAX_TURNS={max_turns}），"
+        "对话被安全截断。已产生的提议与草稿保留；"
         "请开新对话或简化意图后继续。"
     )
 
 
 def _llm_failure_message(exc: Exception) -> str:
-    return f"AI 服务调用失败，本轮构建已安全中止，未产生半成品产物。原因：{exc}"
+    return f"AI 服务调用失败，本轮对话已安全中止，未产生半成品。原因：{exc}"
 
 
 def append_message(
@@ -169,30 +192,61 @@ def execute_tool_call(
     conversation: AIConversation,
     call: ToolCall,
     tool_executor: ToolExecutor,
+    *,
+    read_executor: ReadToolExecutor | None = None,
+    actor: ActorContext | None = None,
+    gate_sessions: GateSessions | None = None,
 ) -> dict:
     """执行一次工具调用并返回回灌结果（异常即错误结果；未开通例外穿透）。
 
-    产物工具 → spec 暂存；其余 → ToolExecutor（cell MCP，平台服务凭据
-    轨道：AI 探索不计费，计量在 registry audit 侧按平台身份归集）。
+    三分路：读工具 → ``ReadToolExecutor``（自有数据切片直调）；
+    ``propose_action`` → 动作闸（立即返回 pending，不等待确认）；
+    其余 → ``ToolExecutor``（cell MCP，平台服务凭据轨道：AI 探索不计费，
+    计量在 registry audit 侧按平台身份归集）。
     ``CellNotProvisionedError`` 不在此吞——上抛给循环以常量回复收场
     （约定派生口径下「未开通」在首个探索调用的握手期才被发现）。
     """
-    if call.name in ARTIFACT_TOOL_KINDS:
-        try:
-            return stage_artifact(
-                db,
-                conversation_id=conversation.id,
-                customer_id=conversation.customer_id,
-                tool_name=call.name,
-                args=call.arguments,
-            )
-        except Exception as exc:  # 暂存落库异常：回滚，不留半成品
-            db.rollback()
+    if call.name == PROPOSE_ACTION_TOOL_NAME:
+        if actor is None or gate_sessions is None:
             return {
                 "ok": False,
-                "error": f"产物暂存失败: {exc}",
-                "error_type": type(exc).__name__,
+                "error": "提议通道未就绪（缺少身份或会话束），本轮不可提议。",
             }
+        set_conversation_id(conversation.id)
+        action_id = call.arguments.get("action_id")
+        args = call.arguments.get("args")
+        if not isinstance(action_id, str) or not isinstance(args, dict):
+            return {
+                "ok": False,
+                "error": "propose_action 入参须为 {action_id: string, args: object}。",
+            }
+        try:
+            proposal, missing = propose(
+                db, gate_sessions, actor, action_id=action_id, args=args
+            )
+        except ActionNotRegistered as exc:
+            return {"ok": False, "error": str(exc)}
+        except PreflightError as exc:
+            return {"ok": False, "error": f"提议未通过前置检查：{exc}"}
+        except Exception as exc:  # noqa: BLE001 - 落库异常：回滚不留半行
+            db.rollback()
+            return {"ok": False, "error": f"提议落库失败: {exc}"}
+        result: dict = {
+            "ok": True,
+            "proposal_id": proposal.id,
+            "state": proposal.state,
+            "tier": proposal.tier,
+            "impact": proposal.impact_text,
+            "note": "提议已提交，等待客户在确认卡上确认——如实转述状态，"
+            "pending 不是成功。",
+        }
+        if missing:
+            result["missing_fields"] = missing
+        return result
+    if is_read_tool(call.name) and read_executor is not None:
+        return read_executor.execute(
+            call.name, call.arguments, customer_id=conversation.customer_id
+        )
     try:
         return tool_executor.execute(call.name, call.arguments)
     except CellNotProvisionedError:
@@ -205,7 +259,34 @@ def execute_tool_call(
         }
 
 
-def run_build_loop(
+def _engine_available(customer_id: str) -> bool:
+    """cell 引擎可用性（工具面注入判定）：端点可解析且档位非免费（api 层）。
+
+    与构建类动作 preflight 同一口径（datasets.storage_tier_for）——免费档
+    的指标探索工具不进工具面，但读工具与提议面照常可用。
+    """
+    from ..datasets import service as datasets_service
+
+    if resolve_cell_endpoint(customer_id) is None:
+        return False
+    return datasets_service.storage_tier_for(customer_id=customer_id) != datasets_service.TIER_API
+
+
+def copilot_tool_schemas(tool_executor: ToolExecutor, *, customer_id: str) -> list[dict]:
+    """组装本轮工具面：读工具 + propose_action + cell 工具（引擎可用时）。
+
+    结构性不可绕过的实现点——这里**只有**这三类 schema，写工具没有可达
+    分支（spec「写操作不进入副驾的可见工具面」）。
+    """
+    schemas = [*READ_TOOL_SCHEMAS, PROPOSE_ACTION_TOOL_SCHEMA]
+    if _engine_available(customer_id):
+        discover = getattr(tool_executor, "list_tool_schemas", None)
+        if callable(discover):
+            schemas.extend(discover())
+    return schemas
+
+
+def run_copilot_loop(
     db: Session,
     conversation: AIConversation,
     *,
@@ -213,11 +294,16 @@ def run_build_loop(
     tool_executor: ToolExecutor,
     max_turns: int,
     system_extra: str | None = None,
+    read_executor: ReadToolExecutor | None = None,
+    actor: ActorContext | None = None,
+    gate_sessions: GateSessions | None = None,
 ) -> list[AIMessage]:
-    """跑一轮构建循环，返回本次追加的全部消息（含首条 user）。
+    """跑一轮副驾循环，返回本次追加的全部消息（含首条 user）。
 
     调用方须已把用户消息落库（``chat`` 一并处理）。``system_extra`` 见
     ``_wire_history``（图谱块注入；缺省 None = 固定文案零漂移）。
+    ``actor`` / ``gate_sessions`` / ``read_executor`` 缺席时提议与读工具
+    如实降级（不可用回灌），对话本身继续——兼容无这些依赖的旧调用方。
     """
     appended: list[AIMessage] = []
 
@@ -228,18 +314,11 @@ def run_build_loop(
         appended.append(message)
         return message
 
-    # 护栏一：cell 未开通——常量如实报错，不调 LLM、零工具执行。
-    # （显式部署口径：map 已配且未命中时 resolve 为 None；约定派生口径
-    # 下派生端点恒有值，未开通在首次工具执行的握手期 404/405 处发现，
-    # CellNotProvisionedError 在循环体内同样触发本常量回复。）
-    if resolve_cell_endpoint(conversation.customer_id) is None:
-        emit(MessageRole.assistant, CELL_NOT_PROVISIONED_MESSAGE)
-        return appended
-
     wire = _wire_history(db, conversation.id, system_extra)
+    schemas = copilot_tool_schemas(tool_executor, customer_id=conversation.customer_id)
     for _ in range(max_turns):
         try:
-            assistant = llm.complete(wire, TOOL_SCHEMAS)
+            assistant = llm.complete(wire, schemas)
         except Exception as exc:
             # 失败如实：assistant 消息报错并安全中止（无终答、无半成品）。
             emit(MessageRole.assistant, _llm_failure_message(exc))
@@ -252,7 +331,15 @@ def run_build_loop(
         wire.append(_assistant_wire(assistant))
         try:
             for call in assistant.tool_calls:
-                result = execute_tool_call(db, conversation, call, tool_executor)
+                result = execute_tool_call(
+                    db,
+                    conversation,
+                    call,
+                    tool_executor,
+                    read_executor=read_executor,
+                    actor=actor,
+                    gate_sessions=gate_sessions,
+                )
                 emit(
                     MessageRole.tool_trace,
                     json.dumps(
@@ -278,6 +365,10 @@ def run_build_loop(
             emit(MessageRole.assistant, CELL_NOT_PROVISIONED_MESSAGE)
             return appended
 
-    # 护栏二：轮次上限——如实告知截断（draft 留存，不静默丢弃）。
+    # 护栏：轮次上限——如实告知截断（提议与草稿留存，不静默丢弃）。
     emit(MessageRole.assistant, _truncation_message(max_turns))
     return appended
+
+
+#: 旧名兼容（v1 构建循环时代的外部引用；语义已并入副驾循环）
+run_build_loop = run_copilot_loop

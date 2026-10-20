@@ -136,6 +136,9 @@ async def lifespan(_: FastAPI):
     # FD_WIRE_REFRESH_SCHEDULER_ENABLED=false 可关）。
     init_schedules_db()
     start_refresh_scheduler()
+    # 动作闸过期扫描（wire-copilot-action-gate）：15min 心跳，读路径惰性过期兜底。
+    from .ai.actions import start_expiry_sweeper
+    start_expiry_sweeper()
     # 告警评估引擎（wire-alert-evaluation）：alert_states/alert_events 幂等
     # 建表兜底（生产走 alembic 0028）+ tick 循环（published alert_rule 逐条
     # 评估，缺省 30s；FD_WIRE_ALERTS_ENABLED=false 可关）。
@@ -171,6 +174,10 @@ async def lifespan(_: FastAPI):
         stop_sealer_loop()
         stop_forwarder_loop()
         stop_refresh_scheduler()
+        # 动作闸过期扫描线程随应用退出（daemon 兜底，显式停更干净）。
+        from .ai.actions import stop_expiry_sweeper
+
+        stop_expiry_sweeper()
         stop_metering_driver()
         stop_workorder_sync()
         stop_materialization_scheduler()

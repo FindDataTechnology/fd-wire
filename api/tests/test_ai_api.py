@@ -40,7 +40,7 @@ class FakeLlm:
         self.calls: list = []
 
     def complete(self, messages, tools):
-        self.calls.append(messages)
+        self.calls.append({"messages": messages, "tools": tools})
         item = self.script.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -107,6 +107,18 @@ def client(monkeypatch, tmp_path, fake_llm, fake_executor):
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_llm_client] = lambda: fake_llm
     app.dependency_overrides[get_tool_executor] = lambda: fake_executor
+    # 动作闸跨切片会话束（wire-copilot-action-gate）：本文件用例不触
+    # demands/materialization 表，挂同一测试引擎即可（惰性连接，不建表）。
+    from fd_wire_api.ai.routes import (
+        get_gate_sessions,
+        get_read_executor,
+        _actor_context,
+    )
+    from fd_wire_api.demands.db import get_db as get_demands_db
+    from fd_wire_api.materialization.db import get_db as get_materialization_db
+
+    for dep in (get_demands_db, get_materialization_db):
+        app.dependency_overrides[dep] = override_get_db
     install_fake_jwks(monkeypatch)
     make_console_env(
         tmp_path, monkeypatch,
@@ -127,11 +139,23 @@ def create(client, *, headers=CUST, **payload) -> dict:
 # ------------------------------------------------------------------ 循环落库
 
 
-def test_create_with_message_runs_full_round(client, fake_llm, fake_executor) -> None:
-    """创建带首条消息：完整「用户→工具调用→暂存→终答」序列落库并返回。"""
+def _propose(action_id: str, args: dict, call_id: str = "call-1") -> ToolCall:
+    return ToolCall(id=call_id, name="propose_action",
+                    arguments={"action_id": action_id, "args": args})
+
+
+def test_create_with_message_runs_full_round(client, fake_llm, fake_executor, monkeypatch) -> None:
+    """创建带首条消息：完整「用户→propose_action→pending→终答」序列落库并返回；
+    确认后草稿才产生（提议-确认-执行 e2e，wire-copilot-action-gate）。"""
+    monkeypatch.setattr(
+        "fd_wire_api.datasets.service.storage_tier_for", lambda **_: "cell"
+    )
     fake_llm.script = [
-        tool_reply(ToolCall(id="call-1", name="dashboard_spec_create", arguments=DASHBOARD_ARGS)),
-        text_reply("仪表盘草稿已生成（3 条指标线），确认后我将物化到贵司 cell。"),
+        tool_reply(_propose("wire.artifact.draft.create", {
+            "kind": "dashboard",
+            **DASHBOARD_ARGS,
+        })),
+        text_reply("已提议创建仪表盘草稿，请在确认卡上预览并确认。"),
     ]
     body = create(client, title="GDP 分析", message="帮我建一个中美日人均 GDP 对比仪表盘")
 
@@ -142,32 +166,54 @@ def test_create_with_message_runs_full_round(client, fake_llm, fake_executor) ->
     assert body["messages"][0]["content"] == "帮我建一个中美日人均 GDP 对比仪表盘"
 
     trace = json.loads(body["messages"][2]["content"])
-    assert trace["tool_name"] == "dashboard_spec_create"
+    assert trace["tool_name"] == "propose_action"
     assert trace["result"]["ok"] is True
-    assert trace["result"]["status"] == "draft"
-    assert "仪表盘草稿已生成" in body["messages"][3]["content"]
+    assert trace["result"]["state"] == "pending_confirm"
+    assert "仪表盘草稿已生成" not in body["messages"][3]["content"]  # 回执不冒充成功
+    proposal_id = trace["result"]["proposal_id"]
 
-    # 消息端点按 id 可查（append-only 顺序）；产物草稿端点列出暂存 draft
-    messages = client.get(f"/api/v1/ai/conversations/{body['id']}/messages", headers=CUST)
-    assert messages.status_code == 200
-    assert [m["role"] for m in messages.json()] == roles
+    # 提议列表端点：本会话一条 pending
+    actions = client.get(
+        f"/api/v1/ai/actions?conversation_id={body['id']}", headers=CUST
+    )
+    assert actions.status_code == 200
+    assert [a["state"] for a in actions.json()] == ["pending_confirm"]
+    assert actions.json()[0]["action_id"] == "wire.artifact.draft.create"
 
-    artifacts = client.get(f"/api/v1/ai/conversations/{body['id']}/artifacts", headers=CUST)
-    assert artifacts.status_code == 200
-    rows = artifacts.json()
+    # 确认前：草稿端点空（确认在回合之外）
+    cid = body["id"]
+    assert client.get(f"/api/v1/ai/conversations/{cid}/artifacts", headers=CUST).json() == []
+
+    # 确认 → 执行（stage_artifact）→ 草稿可见（收口 G1）
+    approved = client.post(
+        f"/api/v1/ai/actions/{proposal_id}/approve", json={}, headers=CUST
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["state"] == "executed"
+    assert "草稿" in approved.json()["result_summary"]
+
+    rows = client.get(f"/api/v1/ai/conversations/{cid}/artifacts", headers=CUST).json()
     assert len(rows) == 1
     assert rows[0]["kind"] == "dashboard"
     assert rows[0]["status"] == "draft"
     assert rows[0]["spec"] == DASHBOARD_ARGS
+
+    # 消息端点按 id 可查（append-only 顺序）
+    messages = client.get(f"/api/v1/ai/conversations/{cid}/messages", headers=CUST)
+    assert messages.status_code == 200
+    assert [m["role"] for m in messages.json()] == roles
 
 
 def test_append_message_continues_conversation(client, fake_llm) -> None:
     """POST messages 续聊：追加用户消息并跑新一轮循环。"""
     fake_llm.script = [
         text_reply("好的，请把对比范围告诉我。"),
-        tool_reply(ToolCall(id="c2", name="alert_rule_create",
-                            arguments={"title": "GDP 偏离告警", "spec": {"indicator": "IND-GDP-CN", "op": ">", "threshold": 13000}})),
-        text_reply("告警规则草稿已暂存。"),
+        tool_reply(ToolCall(id="c2", name="propose_action", arguments={
+            "action_id": "wire.artifact.draft.create",
+            "args": {"kind": "alert_rule", "title": "GDP 偏离告警",
+                     "spec": {"indicator": "IND-GDP-CN", "op": ">", "threshold": 13000}},
+        })),
+        text_reply("告警规则草稿提议已提交，等待确认。"),
     ]
     created = create(client, message="我想监控 GDP")
     cid = created["id"]
@@ -218,7 +264,9 @@ def test_max_turns_via_env(client, fake_llm, monkeypatch) -> None:
     """AI_MAX_TURNS 经 env 生效：达上限如实截断。"""
     monkeypatch.setenv("AI_MAX_TURNS", "1")
     reset_ai_runtime()
-    call = ToolCall(id="c1", name="dashboard_spec_create", arguments=DASHBOARD_ARGS)
+    call = ToolCall(id="c1", name="propose_action", arguments={
+        "action_id": "wire.artifact.publish", "args": {"artifact_id": 1}
+    })
     fake_llm.script = [tool_reply(call), text_reply("不该被调到")]
 
     body = create(client, message="建仪表盘")
@@ -234,14 +282,21 @@ def test_cell_not_provisioned_constant_error(client, fake_llm, fake_executor, mo
     （CellNotProvisionedError 由 executor 包装）。"""
     from fd_wire_api.ai.executor import CellNotProvisionedError
 
-    # ① map 已配、OTHER 企业未命中
+    # ① map 已配、OTHER 企业未命中：不整轮短路——cell 工具不进工具面，
+    # 对话照常（wire-copilot-action-gate：免费/未开通客户读+提议可用）
     monkeypatch.setenv("AI_CELL_ENDPOINT_MAP", "cust-001=http://cell-001/mcp")
     reset_ai_runtime()
+    fake_llm.script = [text_reply("你的问题我答：先到「我的数据」上传数据。")]
     body = create(client, headers=OTHER, message="帮我建个仪表盘")
 
     assert [m["role"] for m in body["messages"]] == ["user", "assistant"]
-    assert body["messages"][1]["content"] == "该企业尚未开通数据 cell，AI 构建暂不可用。请联系平台开通 cell 后再试。"
-    assert fake_llm.calls == []
+    assert "先到" in body["messages"][1]["content"]
+    assert len(fake_llm.calls) == 1
+    tool_names = {
+        item["function"]["name"] for item in fake_llm.calls[0]["tools"]
+    }
+    assert "propose_action" in tool_names  # 提议面照常
+    assert "search_indicators" not in tool_names  # cell 工具不在面
     assert fake_executor.calls == []
 
     # ② map 未配（约定派生恒有端点）→ 派生端点握手期 404 → 未开通
@@ -340,3 +395,76 @@ def test_create_without_message_is_empty_conversation(client, fake_llm) -> None:
     assert body["messages"] == []
     assert fake_llm.calls == []
     assert client.get("/api/v1/ai/conversations", headers=CUST).json()[0]["title"] == "空对话"
+
+
+# ── 动作端点补面（wire-copilot-action-gate）──────────────────────────────────
+
+
+def _draft_propose(client, monkeypatch) -> dict:
+    """便利：建会话并提议一份合法仪表盘草稿（付费档口径）。"""
+    monkeypatch.setattr(
+        "fd_wire_api.datasets.service.storage_tier_for", lambda **_: "cell"
+    )
+    fake_llm = client.app.dependency_overrides[get_llm_client]()
+    fake_llm.script = [
+        tool_reply(ToolCall(id="c1", name="propose_action", arguments={
+            "action_id": "wire.artifact.draft.create",
+            "args": {"kind": "dashboard", "title": "看板A", "spec": {"panels": []}},
+        })),
+        text_reply("已提议。"),
+    ]
+    body = create(client, message="建看板")
+    trace = json.loads(body["messages"][2]["content"])
+    assert trace["result"]["ok"] is True
+    return {"conversation_id": body["id"], "proposal_id": trace["result"]["proposal_id"]}
+
+
+def test_action_reject_and_get_endpoints(client, monkeypatch) -> None:
+    """拒绝端点：pending → rejected；详情端点回读同态；重复拒绝 409。"""
+    ids = _draft_propose(client, monkeypatch)
+    pid = ids["proposal_id"]
+
+    rejected = client.post(f"/api/v1/ai/actions/{pid}/reject", headers=CUST)
+    assert rejected.status_code == 200
+    assert rejected.json()["state"] == "rejected"
+
+    detail = client.get(f"/api/v1/ai/actions/{pid}", headers=CUST)
+    assert detail.status_code == 200
+    assert detail.json()["state"] == "rejected"
+    assert detail.json()["action_id"] == "wire.artifact.draft.create"
+
+    again = client.post(f"/api/v1/ai/actions/{pid}/reject", headers=CUST)
+    assert again.status_code == 409
+
+    # 他企读/拒一律 404（不泄露存在性）
+    assert client.get(f"/api/v1/ai/actions/{pid}", headers=OTHER).status_code == 404
+    assert client.post(f"/api/v1/ai/actions/{pid}/reject", headers=OTHER).status_code == 404
+
+
+def test_propose_endpoint_unregistered_404_and_cross_tenant_404(client) -> None:
+    """直发提议端点：未注册 404；他企会话 404。"""
+    body = create(client, title="t")
+    resp = client.post("/api/v1/ai/actions/propose", json={
+        "action_id": "wire.dataset.delete", "args": {}, "conversation_id": body["id"],
+    }, headers=CUST)
+    assert resp.status_code == 404
+    assert "未注册" in resp.json()["detail"]
+
+    cross = client.post("/api/v1/ai/actions/propose", json={
+        "action_id": "wire.artifact.publish", "args": {"artifact_id": 1},
+        "conversation_id": body["id"],
+    }, headers=OTHER)
+    assert cross.status_code == 404
+
+
+def test_context_injected_into_unified_loop(client, fake_llm) -> None:
+    """页面上下文进统一循环（wire-assistant-panel「注入受限上下文」在合并后
+    的延续）：带 tab 时 system 提示含当前页标签；不带时与固定文案零漂移。"""
+    fake_llm.script = [text_reply("ok"), text_reply("ok2")]
+    create(client, message="这页能干什么", context={"tab": "datasets"})
+    system_with = fake_llm.calls[0]["messages"][0]["content"]
+    assert "我的数据" in system_with
+
+    create(client, message="再问一句")
+    system_without = fake_llm.calls[-1]["messages"][0]["content"]
+    assert "【当前页面上下文】" not in system_without
