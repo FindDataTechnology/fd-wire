@@ -492,6 +492,146 @@ export function showsEncodingForm(panel: DashboardPanel): boolean {
 }
 
 /** 面板是否显示叠加层表单（笛卡尔与无轴类型都支持叠加层）。 */
+/** 列表面板的角色通道（wire-list-panel）：title 必填，其余可选。 */
+const LIST_ROLES = [
+  "title",
+  "summary",
+  "image",
+  "time",
+  "source",
+  "link",
+] as const;
+type ListRole = (typeof LIST_ROLES)[number];
+
+export function ListEncodingForm({
+  panel,
+  onPatch,
+}: {
+  panel: DashboardPanel;
+  onPatch: (updater: (panel: DashboardPanel) => DashboardPanel) => void;
+}) {
+  const { t } = useTranslation();
+  const columns = panel.snapshot?.columns ?? [];
+  const encoding: DashboardPanelEncoding = panel.encoding ?? {};
+
+  const patchRole = (role: ListRole, value: string | undefined) => {
+    onPatch((current) => {
+      const nextEncoding: DashboardPanelEncoding = { ...current.encoding };
+      if (value === undefined || value === '') {
+        if (role === 'title') {
+          return current; // Title is required, cannot unset
+        }
+        delete nextEncoding[role];
+      } else {
+        nextEncoding[role] = value;
+      }
+      return { ...current, encoding: nextEncoding };
+    });
+  };
+
+  const patchLimit = (value: number) => {
+    onPatch((current) => ({
+      ...current,
+      config: { ...current.config, limit: value },
+    }));
+  };
+
+  return (
+    <div
+      data-testid="editor-panel-list-encoding"
+      className="mt-2 rounded border border-slate-200 bg-slate-50/50 p-2"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-medium text-slate-500">
+          {t("console.dashboard.editor.listForm.title")}
+        </span>
+        {columns.length === 0 && (
+          <span className={labelClass}>
+            {t("console.dashboard.editor.listForm.needsData")}
+          </span>
+        )}
+      </div>
+
+      {columns.length > 0 && (
+        <>
+          {LIST_ROLES.map((role) => (
+            <div key={role} className="mt-1.5 flex flex-col">
+              <label
+                className={labelClass}
+                htmlFor={`list-role-${role}-${panel.id}`}
+              >
+                {t(`console.dashboard.editor.listForm.${role}Role`)}
+              </label>
+              <select
+                id={`list-role-${role}-${panel.id}`}
+                data-testid={`editor-list-role-${role}`}
+                value={encoding[role] ?? ''}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  patchRole(
+                    role,
+                    value === '' ? undefined : value,
+                  );
+                }}
+                className={fieldClass}
+              >
+                {role !== 'title' && (
+                  <option value="">
+                    {t("console.dashboard.editor.listForm.notSet")}
+                  </option>
+                )}
+                {columns.map((column) => (
+                  <option key={column} value={column}>
+                    {column}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ))}
+
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <label
+              className={labelClass}
+              htmlFor={`list-limit-${panel.id}`}
+            >
+              {t("console.dashboard.editor.listForm.limit")}
+            </label>
+            <input
+              id={`list-limit-${panel.id}`}
+              data-testid="editor-list-limit"
+              type="number"
+              min={1}
+              max={20}
+              value={panel.config?.limit ?? 20}
+              onChange={(e) => {
+                let value = e.target.value.trim();
+                if (value === '') {
+                  patchLimit(20);
+                  return;
+                }
+                const num = parseInt(value, 10);
+                const clamped = isNaN(num)
+                  ? 20
+                  : Math.max(1, Math.min(20, num));
+                patchLimit(clamped);
+              }}
+              className={`${fieldClass} w-20`}
+            />
+          </div>
+
+          <p className="mt-1 text-[11px] text-slate-400">
+            {t("console.dashboard.editor.listForm.hint")}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+export function showsListEncodingForm(panel: DashboardPanel): boolean {
+  return panel.type === "list" && panel.raw_option === undefined;
+}
+
 export function showsOverlaysForm(panel: DashboardPanel): boolean {
-  return panel.raw_option === undefined;
+  return panel.raw_option === undefined && panel.type !== "list";
 }

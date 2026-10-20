@@ -919,12 +919,14 @@ const zh = {
         not_object: "面板必须是 JSON 对象",
         bad_type: "面板 type 不在支持的图表类型谱内",
         bad_raw_option: "面板的高级配置（raw_option）含不可序列化的值",
+        bad_list_encoding: "列表面板缺少有效的标题列（title 角色未声明或不在快照列内）",
       },
       type: {
         kpi: "指标卡",
         line: "折线图",
         bar: "柱状图",
         table: "数据表",
+        list: "信息流",
         candlestick: "K 线图",
         scatter: "散点图",
         pie: "饼图",
@@ -981,6 +983,7 @@ const zh = {
           line: "转为折线图",
           bar: "转为柱状图",
           table: "转为数据表",
+          list: "转为信息流",
         },
         convertConfirm:
           "指标卡与图表的数据口径不同（指标卡只取首值），转换后面板呈现方式将改变——确定转换吗？",
@@ -1005,6 +1008,23 @@ const zh = {
         areaTo: "止",
         heightLabel: "面板高度",
         heightHint: "留空用默认（220px）",
+        convertConfirmList:
+          "信息流按列角色映射呈现图文卡片，与图表/表格的数据口径不同——转换后面板呈现方式将改变，确定转换吗？",
+        // 信息流角色映射（wire-list-panel）：五个可选角色各一个列选择器 +
+        // 条数上限；顺序按快照行序，时间列只作展示（倒序由查询排序决定）。
+        listForm: {
+          title: "信息流角色",
+          needsData: "该面板还没有数据——绑定查询后即可选择列。",
+          titleRole: "标题列（必填）",
+          summaryRole: "摘要列",
+          imageRole: "图片列（http(s) 链接）",
+          timeRole: "时间列",
+          sourceRole: "来源列",
+          linkRole: "外链列（http(s) 链接）",
+          limit: "最多显示条数",
+          notSet: "未设置",
+          hint: "顺序按快照行序呈现；要按时间倒序，请在绑定查询里设置排序。",
+        },
         rawOptionNote:
           "该面板使用高级配置直通——结构与数据以配置为准，此处只读；标题、跨度、高度与来源仍可编辑。",
         sourceLabel: "来源",

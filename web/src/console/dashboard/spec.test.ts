@@ -13,6 +13,7 @@ import {
   isV2Panel,
   moveItem,
   normalizeEncoding,
+  normalizeListEncoding,
   normalizeOverlays,
   normalizePanelQuery,
   normalizePanes,
@@ -502,7 +503,7 @@ describe("v2 类型谱（wire-chart-contract-v2 任务 1.1）", () => {
   it("两档类型完整且互不重叠，并集等于完整枚举", () => {
     const base = new Set(DASHBOARD_BASE_PANEL_TYPES as readonly string[]);
     const advanced = new Set(DASHBOARD_ADVANCED_PANEL_TYPES as readonly string[]);
-    expect(base.size).toBe(4);
+    expect(base.size).toBe(5); // kpi/line/bar/table + list（wire-list-panel）
     expect(advanced.size).toBe(10);
     // 不重叠
     for (const t of advanced) expect(base.has(t)).toBe(false);
@@ -830,5 +831,150 @@ describe("v2 字段在编辑 helpers 上的保留（任务 4.6）", () => {
     expect(
       (rawPanel.raw_option!.series as Array<Record<string, unknown>>)[0]!.name,
     ).toBe("a");
+  });
+});
+
+describe("列表面板契约（wire-list-panel）", () => {
+  const LIST_COLUMNS = ["title", "summary", "image_url", "published_at", "source", "url"];
+  const listPanel = (overrides: Record<string, unknown> = {}) => ({
+    id: "l1",
+    type: "list",
+    title: "资讯流",
+    span: 3,
+    encoding: {
+      title: "title",
+      summary: "summary",
+      image: "image_url",
+      time: "published_at",
+      source: "source",
+      link: "url",
+    },
+    snapshot: { columns: LIST_COLUMNS, rows: [] },
+    ...overrides,
+  });
+
+  it("五角色全部命中：encoding 原样保留", () => {
+    const parsed = parseDashboardSpec({ spec: { panels: [listPanel()] } });
+    expect(parsed.kind).toBe("v1");
+    if (parsed.kind !== "v1") return;
+    expect(parsed.badPanels).toEqual([]);
+    expect(parsed.panels[0]!.encoding).toEqual({
+      title: "title",
+      summary: "summary",
+      image: "image_url",
+      time: "published_at",
+      source: "source",
+      link: "url",
+    });
+  });
+
+  it("title 缺失或不在快照列内：整面板判坏（bad_list_encoding）", () => {
+    for (const encoding of [{}, { title: "missing_col" }, { summary: "summary" }]) {
+      const parsed = parseDashboardSpec({
+        spec: { panels: [listPanel({ encoding })] },
+      });
+      if (parsed.kind !== "v1") throw new Error("expected v1");
+      expect(parsed.panels).toEqual([]);
+      expect(parsed.badPanels).toEqual([
+        { index: 0, reason: "bad_list_encoding", raw: expect.anything() },
+      ]);
+    }
+  });
+
+  it("快照缺失：判坏（没有列就无从校验角色）", () => {
+    const parsed = parseDashboardSpec({
+      spec: { panels: [listPanel({ snapshot: undefined })] },
+    });
+    if (parsed.kind !== "v1") throw new Error("expected v1");
+    expect(parsed.badPanels[0]!.reason).toBe("bad_list_encoding");
+  });
+
+  it("可选角色列名不命中：只丢该角色，面板照常解析", () => {
+    const parsed = parseDashboardSpec({
+      spec: {
+        panels: [
+          listPanel({
+            encoding: { title: "title", image: "no_such_col", link: "url" },
+          }),
+        ],
+      },
+    });
+    if (parsed.kind !== "v1") throw new Error("expected v1");
+    expect(parsed.badPanels).toEqual([]);
+    expect(parsed.panels[0]!.encoding).toEqual({ title: "title", link: "url" });
+  });
+
+  it("config.limit 钳制到 1..20，非数回退 20", () => {
+    const limits = [0, 21, "abc", 7];
+    const expected = [1, 20, 20, 7];
+    limits.forEach((limit, i) => {
+      const parsed = parseDashboardSpec({
+        spec: { panels: [listPanel({ config: { limit } })] },
+      });
+      if (parsed.kind !== "v1") throw new Error("expected v1");
+      expect(parsed.panels[0]!.config?.limit).toBe(expected[i]);
+    });
+  });
+
+  it("normalizeListEncoding：快照缺失返回 null，可选角色逐项过滤", () => {
+    expect(normalizeListEncoding({ title: "title" }, undefined)).toBeNull();
+    expect(
+      normalizeListEncoding(
+        { title: "title", summary: "summary", image: "nope" },
+        { columns: ["title", "summary"], rows: [] },
+      ),
+    ).toEqual({ title: "title", summary: "summary" });
+  });
+
+  it("panelTemplate('list')：骨架合法（title 命中快照列）", () => {
+    const template = panelTemplate("list", []);
+    expect(template.type).toBe("list");
+    expect(template.encoding?.title).toBe("title");
+    expect(template.config?.limit).toBe(20);
+    const parsed = parseDashboardSpec({ spec: { panels: [template] } });
+    if (parsed.kind !== "v1") throw new Error("expected v1");
+    expect(parsed.badPanels).toEqual([]);
+    expect(parsed.panels).toHaveLength(1);
+  });
+
+  it("类型互转：list↔table 免确认且快照零损失；list↔图表需确认", () => {
+    const source: DashboardPanel = {
+      id: "p1",
+      type: "table",
+      title: "表",
+      span: 1,
+      snapshot: { columns: ["标题", "摘要"], rows: [["a", "b"]] },
+    };
+    const toList = convertPanelType(source, "list");
+    expect(toList.needConfirm).toBe(false);
+    expect(toList.panel.snapshot).toEqual(source.snapshot);
+    expect(toList.panel.encoding).toEqual({ title: "标题", summary: "摘要" });
+
+    const backToTable = convertPanelType(toList.panel, "table");
+    expect(backToTable.needConfirm).toBe(false);
+    expect(backToTable.panel.snapshot).toEqual(source.snapshot);
+    expect(backToTable.panel.encoding).toBeUndefined();
+    expect(backToTable.panel.config).toBeUndefined();
+
+    const chartSource: DashboardPanel = {
+      id: "p2",
+      type: "line",
+      title: "线",
+      span: 1,
+      snapshot: { columns: ["x", "y"], rows: [] },
+      encoding: { x: "x", y: ["y"] },
+    };
+    const toListFromChart = convertPanelType(chartSource, "list");
+    expect(toListFromChart.needConfirm).toBe(true);
+    expect(toListFromChart.panel.encoding).toEqual({
+      x: "x",
+      y: ["y"],
+      title: "x",
+      summary: "y",
+    });
+
+    const fromList = convertPanelType(toList.panel, "line");
+    expect(fromList.needConfirm).toBe(true);
+    expect(fromList.panel.encoding).toBeUndefined();
   });
 });

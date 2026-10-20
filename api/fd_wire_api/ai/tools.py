@@ -58,14 +58,15 @@ TOOL_SCHEMAS: list[dict] = [
         "dashboard_spec_create",
         "仪表盘",
         # v2 结构示例对齐 web 渲染器契约（web/src/console/dashboard/spec.ts）：
-        # 面板类型谱（基础四类 + 高级十类）/ 编码通道与轴类型 / 多窗格 /
+        # 面板类型谱（基础五类 + 高级十类）/ 编码通道与轴类型 / 多窗格 /
         # 叠加层 / raw_option 逃生舱（wire-chart-contract-v2）——AI 产物默认
         # 可渲染可分享（wire-dashboard-share）；面板可选 query 引用——刷新走
         # 确定性契约路径零 AI（wire-dashboard-query-contract）。
+        # list（wire-list-panel）：图文信息流面板，角色列映射见下方说明。
         (
             "仪表盘规格 v2（JSON）："
             '{"title":"仪表盘名","panels":[{"id":"p1",'
-            '"type":"kpi|line|bar|table|candlestick|scatter|pie|heatmap|gauge|radar|treemap|sankey|funnel|boxplot",'
+            '"type":"kpi|line|bar|table|list|candlestick|scatter|pie|heatmap|gauge|radar|treemap|sankey|funnel|boxplot",'
             '"title":"面板标题","span":1,"source":"指标code或数据集名",'
             '"encoding":{"x":"日期","y":["数值"],"xType":"category|value|time|log",'
             '"yType":"category|value|time|log","xName":"横轴名","yName":"纵轴名"},'
@@ -79,18 +80,24 @@ TOOL_SCHEMAS: list[dict] = [
             '"sort":[{"column":"列名","dir":"asc|desc"}],"limit":100,"columns":["列名"]},'
             '"snapshot":{"columns":["年份","GDP"],"rows":[["2023",129.4]]},'
             '"config":{"unit":"万亿元","subtitle":"不变价"}}]}。'
-            "字段说明：type 取上述十四类之一——基础四类（kpi/line/bar/table）"
-            "不带 encoding 即可渲染；高级十类建议显式给 encoding。span 为 3 列"
-            "栅格宽度（1/2/3）；height 可选（像素，缺省 220）。把取到的数据写进 "
-            "snapshot（columns 列名 + rows 行值，kpi 数值取 rows[0][0]，table "
-            "整表呈现）——渲染器只读 snapshot（raw_option 面板除外），不要放"
-            "占位符或待查标记。"
+            "字段说明：type 取上述十五类之一——基础五类（kpi/line/bar/table/"
+            "list）不带 encoding 即可渲染；高级十类建议显式给 encoding。span 为 "
+            "3 列栅格宽度（1/2/3）；height 可选（像素，缺省 220）。把取到的数据"
+            "写进 snapshot（columns 列名 + rows 行值，kpi 数值取 rows[0][0]，"
+            "table 整表呈现，list 按行渲染卡片）——渲染器只读 snapshot"
+            "（raw_option 面板除外），不要放占位符或待查标记。"
             "encoding 是显式编码通道：x 指定横轴列、y 指定纵轴列（可多列，每列"
             "一个系列）、series 指定分组列（长表形态）、size 指定大小列；"
             "xType/yType 取 category/value/time/log——跨年份、跨月份等时间序列"
             "必须用 xType 为 time（类目轴会把不等间隔日期画成等距，伪造趋势）。"
             "candlestick 的 y 列序约定为 开盘/最高/最低/收盘，boxplot 为 "
             "min/q1/median/q3/max。"
+            "list 是图文信息流（新闻/公告/资讯类数据的卡片流）：仅当数据含标题"
+            "等文本列、且用户要的是「信息流/动态/资讯」时使用；encoding 必须给 "
+            "title（标题列），可选给 summary/image/time/source/link（摘要/图片/"
+            "时间/来源/外链列），值均为 snapshot 列名；图片与外链列的值必须是 "
+            "http(s) URL；顺序按 snapshot 行序呈现——要最新在前，请把 query 的 "
+            "sort 设为时间列 desc 并限制 limit。不得把长文塞进 table 假扮信息流。"
             "panes 是多窗格：首个为主图、其余为副图，共享同一横轴与十字光标"
             "（价格+成交量、指标+MACD 的既有范式）；窗格 height 为相对权重。"
             "overlays 是叠加层：markLine 画阈值/参考线（axis 可设 x 画垂直线）、"
@@ -98,8 +105,9 @@ TOOL_SCHEMAS: list[dict] = [
             "raw_option 是逃生舱，只在类型化字段确实表达不了时使用（完整图表"
             "配置直通）；其内容必须是纯 JSON——绝不允许函数、正则或任何不可"
             "序列化的值（写了会被判不合契约并整面板拒绝）。"
-            "config 可选（unit/subtitle/yName/xName）。面板 source 应填"
-            "指标 code 或数据集名（后续「刷新数据」依赖此标注重新取数）。"
+            "config 可选（unit/subtitle/yName/xName；list 另可给 limit=1..20）。"
+            "面板 source 应填指标 code 或数据集名（后续「刷新数据」依赖此标注"
+            "重新取数）。"
             "面板数据取自数据集查询工具（dataset_query 等）时，该面板必须"
             "同时带 query 引用：把所用 dataset_id 与 filters/sort/limit/"
             "columns 查询形参如实写进 panel.query（「刷新数据」按契约确定性"
@@ -157,6 +165,7 @@ DASHBOARD_PANEL_TYPES_V2: frozenset[str] = frozenset(
         "line",
         "bar",
         "table",
+        "list",
         "candlestick",
         "scatter",
         "pie",
@@ -220,6 +229,16 @@ def _validate_dashboard_v2_payload(spec: dict) -> str | None:
                 f"dashboard spec.panels[{index}].type 不受支持：{panel_type!r}"
                 f"（可取 {allowed}）"
             )
+        # list（wire-list-panel）：title 角色是渲染前提——生成侧先拦，
+        # 免得落库后前端整面板判坏。
+        if panel_type == "list":
+            encoding = panel.get("encoding")
+            title = encoding.get("title") if isinstance(encoding, dict) else None
+            if not isinstance(title, str) or not title.strip():
+                return (
+                    f"dashboard spec.panels[{index}] 是 list 面板，"
+                    "encoding.title（标题列）必填"
+                )
         if panel.get("raw_option") is not None:
             raw = panel["raw_option"]
             if not isinstance(raw, dict):

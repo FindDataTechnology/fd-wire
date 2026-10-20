@@ -46,6 +46,8 @@ import {
   PanelHeightForm,
   PanelOverlaysForm,
   RawOptionViewer,
+  ListEncodingForm,
+  showsListEncodingForm,
   showsEncodingForm,
   showsOverlaysForm,
 } from "./PanelV2Forms";
@@ -182,16 +184,24 @@ export function DashboardEditor({
     setServerError(null);
   };
 
-  /** 类型转换（v2）：kpi↔图表互转先 confirm（needConfirm 由纯函数标记）。 */
+  /** 类型转换（v2）：kpi↔图表、list↔图表先 confirm（needConfirm 由纯函数
+   *  标记；list↔table 同源表格语义不确认）。文案按是否涉及 list 区分。 */
   const convertPanel = (id: string, target: DashboardPanelType) => {
     const current = draft.panels.find((p) => p.id === id);
     if (!current || current.type === target) return;
     const result = convertPanelType(current, target);
-    if (
-      result.needConfirm &&
-      !window.confirm(t("console.dashboard.editor.convertConfirm"))
-    ) {
-      return;
+    if (result.needConfirm) {
+      const isChartType = (type: DashboardPanelType) =>
+        type !== "kpi" && type !== "table" && type !== "list";
+      const listConversion =
+        (current.type === "list" && isChartType(target)) ||
+        (target === "list" && isChartType(current.type));
+      const message = t(
+        listConversion
+          ? "console.dashboard.editor.convertConfirmList"
+          : "console.dashboard.editor.convertConfirm",
+      );
+      if (!window.confirm(message)) return;
     }
     patchPanel(id, () => result.panel);
   };
@@ -511,6 +521,9 @@ export function DashboardEditor({
                   <RawOptionViewer panel={panel} />
                 ) : (
                   <>
+                    {showsListEncodingForm(panel) && (
+                      <ListEncodingForm panel={panel} onPatch={(fn) => patchPanel(panel.id, fn)} />
+                    )}
                     {showsEncodingForm(panel) && (
                       <PanelEncodingForm panel={panel} onPatch={(fn) => patchPanel(panel.id, fn)} />
                     )}

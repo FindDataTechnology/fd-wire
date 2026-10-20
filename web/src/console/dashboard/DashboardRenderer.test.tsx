@@ -441,3 +441,206 @@ describe("工具栏（wire-chart-contract-v2 任务 3.1–3.5）", () => {
     expect(table.textContent).toContain("2024");
   });
 });
+
+describe("List panel (list type)", () => {
+  it("Three-row snapshot renders three dashboard-list-item cards in snapshot order", () => {
+    const spec = {
+      panels: [
+        {
+          id: "list1",
+          type: "list",
+          snapshot: {
+            columns: ["title", "summary", "image", "time", "source", "link"],
+            rows: [
+              ["Title1", "Summary1", "https://example.com/img1.jpg", "2026-10-21", "Source1", "https://example.com/link1"],
+              ["Title2", "Summary2", "data:image/png;base64,...", "2026-10-20", "Source2", "javascript:alert(1)"],
+              ["Title3", "Summary3", "https://example.com/img3.jpg", "2026-10-19", "Source3", "https://example.com/link3"],
+            ],
+          },
+          encoding: {
+            title: "title",
+            summary: "summary",
+            image: "image",
+            time: "time",
+            source: "source",
+            link: "link",
+          },
+        },
+      ],
+    };
+    render(<DashboardRenderer spec={spec} />);
+    const items = screen.getAllByTestId("dashboard-list-item");
+    expect(items).toHaveLength(3);
+    expect(items[0].textContent).toContain("Title1");
+    expect(items[1].textContent).toContain("Title2");
+    expect(items[2].textContent).toContain("Title3");
+  });
+
+  it("config.limit: 2 with three rows renders only two cards", () => {
+    const spec = {
+      panels: [
+        {
+          id: "list1",
+          type: "list",
+          config: { limit: 2 },
+          snapshot: {
+            columns: ["title"],
+            rows: [["Row1"], ["Row2"], ["Row3"]],
+          },
+          encoding: { title: "title" },
+        },
+      ],
+    };
+    render(<DashboardRenderer spec={spec} />);
+    expect(screen.getAllByTestId("dashboard-list-item")).toHaveLength(2);
+  });
+
+  it("Valid https image renders an <img> with loading='lazy' and referrerpolicy='no-referrer'", () => {
+    const spec = {
+      panels: [
+        {
+          id: "list1",
+          type: "list",
+          snapshot: {
+            columns: ["title", "image"],
+            rows: [["Title", "https://example.com/image.jpg"]],
+          },
+          encoding: { title: "title", image: "image" },
+        },
+      ],
+    };
+    render(<DashboardRenderer spec={spec} />);
+    // alt="" 是装饰性图片（无可访问名），因此按 DOM 查询而非 role。
+    const img = document.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img!.getAttribute("loading")).toBe("lazy");
+    expect(img!.getAttribute("referrerpolicy")).toBe("no-referrer");
+  });
+
+  it("data:image/png/base64 value renders no img element", () => {
+    const spec = {
+      panels: [
+        {
+          id: "list1",
+          type: "list",
+          snapshot: {
+            columns: ["title", "image"],
+            rows: [["Title", "data:image/png;base64,..."]],
+          },
+          encoding: { title: "title", image: "image" },
+        },
+      ],
+    };
+    render(<DashboardRenderer spec={spec} />);
+    expect(screen.queryByRole("img")).toBeNull();
+  });
+
+  it("Simulate image error with fireEvent.error(img) and assert the image block is gone", () => {
+    const spec = {
+      panels: [
+        {
+          id: "list1",
+          type: "list",
+          snapshot: {
+            columns: ["title", "image"],
+            rows: [["Title", "https://example.com/image.jpg"]],
+          },
+          encoding: { title: "title", image: "image" },
+        },
+      ],
+    };
+    render(<DashboardRenderer spec={spec} />);
+    const img = document.querySelector("img");
+    expect(img).not.toBeNull();
+    fireEvent.error(img!);
+    expect(document.querySelector("img")).toBeNull();
+  });
+
+  it("A javascript:alert(1) link produces no <a> element", () => {
+    const spec = {
+      panels: [
+        {
+          id: "list1",
+          type: "list",
+          snapshot: {
+            columns: ["title", "link"],
+            rows: [["Title", "javascript:alert(1)"]],
+          },
+          encoding: { title: "title", link: "link" },
+        },
+      ],
+    };
+    render(<DashboardRenderer spec={spec} />);
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  it("A valid https link produces an anchor with target='_blank' and rel='noopener noreferrer'", () => {
+    const spec = {
+      panels: [
+        {
+          id: "list1",
+          type: "list",
+          snapshot: {
+            columns: ["title", "link"],
+            rows: [["Title", "https://example.com"]],
+          },
+          encoding: { title: "title", link: "link" },
+        },
+      ],
+    };
+    render(<DashboardRenderer spec={spec} />);
+    const link = screen.getByRole("link");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
+  it("A title containing <script>x</script> is rendered as literal text", () => {
+    const spec = {
+      panels: [
+        {
+          id: "list1",
+          type: "list",
+          snapshot: {
+            columns: ["title"],
+            rows: [["<script>alert(1)</script>"]],
+          },
+          encoding: { title: "title" },
+        },
+      ],
+    };
+    render(<DashboardRenderer spec={spec} />);
+    expect(screen.getByText("<script>alert(1)</script>")).not.toBeNull();
+    expect(document.querySelector("script")).toBeNull();
+  });
+
+  it("Empty snapshot shows dashboard-no-data", () => {
+    const spec = {
+      panels: [
+        {
+          id: "list1",
+          type: "list",
+          // 空快照的合法形态：列声明存在、零行（title 角色仍可校验）。
+          snapshot: { columns: ["title"], rows: [] },
+          encoding: { title: "title" },
+        },
+      ],
+    };
+    render(<DashboardRenderer spec={spec} />);
+    expect(screen.getByTestId("dashboard-no-data")).not.toBeNull();
+  });
+
+  it("A list panel with toolbar prop true must NOT render dashboard-panel-toolbar", () => {
+    const spec = {
+      panels: [
+        {
+          id: "list1",
+          type: "list",
+          snapshot: { columns: ["title"], rows: [["Title"]] },
+          encoding: { title: "title" },
+        },
+      ],
+    };
+    render(<DashboardRenderer spec={spec} toolbar={true} />);
+    expect(screen.queryByTestId("dashboard-panel-toolbar")).toBeNull();
+  });
+});

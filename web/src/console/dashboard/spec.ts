@@ -18,11 +18,13 @@
 // **v1 是 v2 的子集**：无 v2 字段的面板解析后逐字段与升级前一致，渲染走
 // 既有「第一列 x、其余列系列、类目轴」回退分支——存量产物零迁移零漂移。
 export const DASHBOARD_PANEL_TYPES = [
-  // 基础档（v1 既有四类；编辑器保留类型互转与专属表单）
+  // 基础档（v1 既有四类 + wire-list-panel 的图文信息流；编辑器保留类型
+  // 互转与专属表单）
   "kpi",
   "line",
   "bar",
   "table",
+  "list",
   // 高级档（v2 类型谱；表达力靠 encoding/overlays/raw_option 支撑）
   "candlestick",
   "scatter",
@@ -37,12 +39,14 @@ export const DASHBOARD_PANEL_TYPES = [
 ] as const;
 export type DashboardPanelType = (typeof DASHBOARD_PANEL_TYPES)[number];
 
-/** 基础档类型（v1 语义：第一列 x / 其余列系列 / kpi 取首值 / table 整表）。 */
+/** 基础档类型（v1 语义：第一列 x / 其余列系列 / kpi 取首值 / table 整表；
+ *  list = 按快照行序的图文卡片流，见 wire-list-panel）。 */
 export const DASHBOARD_BASE_PANEL_TYPES = [
   "kpi",
   "line",
   "bar",
   "table",
+  "list",
 ] as const satisfies ReadonlyArray<DashboardPanelType>;
 
 /** 高级档类型（v2 新增十类）。 */
@@ -78,6 +82,8 @@ export interface DashboardPanelConfig {
   yName?: string;
   /** line/bar：x 轴名。 */
   xName?: string;
+  /** list：渲染行数上限（1..20，缺省 20；wire-list-panel）。 */
+  limit?: number;
 }
 
 /** 轴类型白名单（v2 编码通道）。category=类目（v1 行为）、value=数值、
@@ -111,6 +117,19 @@ export interface DashboardPanelEncoding {
   xName?: string;
   /** y 轴名（覆盖 config.yName）。 */
   yName?: string;
+  // ── list 角色通道（wire-list-panel；图表类型忽略这些字段）────────────
+  /** 标题列（list 必填角色）。 */
+  title?: string;
+  /** 摘要列。 */
+  summary?: string;
+  /** 图片列（值须为 http(s) URL）。 */
+  image?: string;
+  /** 时间列（仅展示，不参与排序——顺序由快照决定）。 */
+  time?: string;
+  /** 来源列（卡片底部来源标注，与面板级 source 不同）。 */
+  source?: string;
+  /** 外链列（值须为 http(s) URL）。 */
+  link?: string;
 }
 
 /** 叠加层：阈值线 / 区间高亮 / 事件点（v2）。 */
@@ -204,7 +223,7 @@ export interface DashboardBadPanel {
   /** 在原 panels 数组里的序号（0 起）。 */
   index: number;
   /** 跳过原因（i18n 键之外的机器码，渲染层映射文案）。 */
-  reason: "not_object" | "bad_type" | "bad_raw_option";
+  reason: "not_object" | "bad_type" | "bad_raw_option" | "bad_list_encoding";
   raw: unknown;
 }
 
@@ -255,12 +274,23 @@ function normalizeSnapshot(raw: unknown): DashboardSnapshot | undefined {
   return { columns, rows };
 }
 
-function normalizeConfig(raw: unknown): DashboardPanelConfig | undefined {
+/** 面板 config 归一：kpi/图表字段原样收字符串；list 另收 limit（1..20
+ *  钳制，非数回退 20——wire-list-panel）。 */
+function normalizeConfig(
+  raw: unknown,
+  type: DashboardPanelType,
+): DashboardPanelConfig | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const record = raw as Record<string, unknown>;
   const config: DashboardPanelConfig = {};
   for (const key of ["unit", "subtitle", "yName", "xName"] as const) {
     if (typeof record[key] === "string") config[key] = record[key] as string;
+  }
+  if (type === "list" && record.limit !== undefined) {
+    config.limit =
+      typeof record.limit === "number" && Number.isFinite(record.limit)
+        ? Math.min(20, Math.max(1, Math.round(record.limit)))
+        : 20;
   }
   return Object.keys(config).length > 0 ? config : undefined;
 }
@@ -322,7 +352,41 @@ export function normalizeEncoding(
   if (xName !== undefined) encoding.xName = xName;
   const yName = nonEmptyString(record.yName);
   if (yName !== undefined) encoding.yName = yName;
+  // list 角色通道（wire-list-panel）：与图表通道同层归一，图表类型忽略。
+  for (const role of [
+    "title",
+    "summary",
+    "image",
+    "time",
+    "source",
+    "link",
+  ] as const) {
+    const column = nonEmptyString(record[role]);
+    if (column !== undefined) encoding[role] = column;
+  }
   return Object.keys(encoding).length > 0 ? encoding : undefined;
+}
+
+/**
+ * 列表面板角色归一（wire-list-panel）：title 必填且必须命中快照列，否则
+ * 面板判坏（返回 null——没有标题列的卡片流没有意义）；可选角色列名不命中
+ * 只丢该角色。快照缺失同样判坏：没有列就无从校验角色。
+ */
+export function normalizeListEncoding(
+  encoding: DashboardPanelEncoding | undefined,
+  snapshot: DashboardSnapshot | undefined,
+): DashboardPanelEncoding | null {
+  if (snapshot === undefined) return null;
+  const title = encoding?.title;
+  if (title === undefined || !snapshot.columns.includes(title)) return null;
+  const next: DashboardPanelEncoding = { title };
+  for (const role of ["summary", "image", "time", "source", "link"] as const) {
+    const column = encoding?.[role];
+    if (column !== undefined && snapshot.columns.includes(column)) {
+      next[role] = column;
+    }
+  }
+  return next;
 }
 
 const OVERLAY_LINE_STYLES = ["solid", "dashed", "dotted"] as const;
@@ -675,11 +739,21 @@ export function parseDashboardSpec(raw: unknown): DashboardParseResult {
       ? (record.span as DashboardPanelSpan)
       : 1;
     const snapshot = normalizeSnapshot(record.snapshot);
-    const config = normalizeConfig(record.config);
+    const config = normalizeConfig(record.config, record.type);
     const source = typeof record.source === "string" ? record.source : undefined;
     const query = normalizePanelQuery(record.query);
     // v2 字段（缺省不落字段——v1 面板解析后的对象形状与升级前逐字段一致）
-    const encoding = normalizeEncoding(record.encoding);
+    let encoding = normalizeEncoding(record.encoding);
+    // list（wire-list-panel）：title 必填且须命中快照列，否则整面板判坏
+    // （与 raw_option 同理——没有标题列的卡片流无从渲染，静默降级更糟）。
+    if (record.type === "list") {
+      const listEncoding = normalizeListEncoding(encoding, snapshot);
+      if (listEncoding === null) {
+        badPanels.push({ index, reason: "bad_list_encoding", raw: entry });
+        return;
+      }
+      encoding = listEncoding;
+    }
     const panes = normalizePanes(record.panes);
     const overlays = normalizeOverlays(record.overlays);
     const height =
@@ -790,6 +864,15 @@ export function panelTemplate(
         ...base,
         snapshot: { columns: ["列一", "列二"], rows: [] },
       };
+    case "list":
+      // 图文信息流骨架（wire-list-panel）：标题 + 摘要两列空表；title 角色
+      // 必填（解析层据此判合法），用户绑定数据后按列改名。
+      return {
+        ...base,
+        snapshot: { columns: ["title", "summary"], rows: [] },
+        encoding: { title: "title", summary: "summary" },
+        config: { limit: 20 },
+      };
     case "candlestick":
       // 日期 + 开高低收（K 线标准四价；渲染层按此顺序取）。
       return {
@@ -878,24 +961,70 @@ export interface ConvertPanelResult {
 }
 
 /**
- * 面板类型转换（编辑器 v2）：snapshot/config 原样保留（四类型共用同一
- * snapshot 形状，line↔bar↔table 互转零数据损失），仅换 type；同类型转换
- * 为幂等原样返回。kpi↔图表类互转带 needConfirm 标记（是否确认由调用方
- * 决定，本函数不弹窗）。不可变：原面板不动，返回新对象。
+ * 面板类型转换（编辑器 v2）：snapshot 原样保留（面板共用同一 snapshot
+ * 形状，line↔bar↔table↔list 互转零数据损失），仅换 type；同类型转换为
+ * 幂等原样返回。kpi↔图表类互转、以及 list↔图表类互转带 needConfirm 标记
+ * （kpi 只读首值、list 按角色取列，两个方向都有信息取舍；list↔table 是
+ * 同源表格语义，无需确认）。不可变：原面板不动，返回新对象。
  */
 export function convertPanelType(
   panel: DashboardPanel,
   target: DashboardPanelType,
 ): ConvertPanelResult {
-  const needConfirm = isKpi(panel.type) !== isKpi(target);
-  return {
-    panel: panel.type === target ? panel : { ...panel, type: target },
-    needConfirm,
-  };
+  if (panel.type === target) return { panel, needConfirm: false };
+  const needConfirm =
+    isKpi(panel.type) !== isKpi(target) ||
+    (isList(panel.type) && isChartType(target)) ||
+    (isList(target) && isChartType(panel.type));
+  const next: DashboardPanel = { ...panel, type: target };
+  if (isList(target)) {
+    // 转入 list：title 角色取快照首列（无快照给占位名），摘要取次列；
+    // 其余列表角色留空由用户在编辑器补齐。
+    const columns = panel.snapshot?.columns ?? [];
+    next.encoding = {
+      ...(stripListRoles(panel.encoding) ?? {}),
+      title: columns[0] ?? "title",
+      ...(columns[1] !== undefined ? { summary: columns[1] } : {}),
+    };
+    next.config = { ...panel.config, limit: panel.config?.limit ?? 20 };
+  } else if (isList(panel.type)) {
+    // 转出 list：剥离列表角色与 limit，图表/表格字段原样保留。
+    const stripped = stripListRoles(panel.encoding);
+    if (stripped === undefined) delete next.encoding;
+    else next.encoding = stripped;
+    if (next.config !== undefined) {
+      const config = { ...next.config };
+      delete config.limit;
+      if (Object.keys(config).length > 0) next.config = config;
+      else delete next.config;
+    }
+  }
+  return { panel: next, needConfirm };
 }
 
 function isKpi(type: DashboardPanelType): boolean {
   return type === "kpi";
+}
+
+function isList(type: DashboardPanelType): boolean {
+  return type === "list";
+}
+
+/** 走 echarts 的类型（kpi/table/list 之外的都算图表类）。 */
+function isChartType(type: DashboardPanelType): boolean {
+  return type !== "kpi" && type !== "table" && type !== "list";
+}
+
+const LIST_ROLES = ["title", "summary", "image", "time", "source", "link"] as const;
+
+/** 剥离 list 角色通道，返回剩余图表编码（空则 undefined）。 */
+function stripListRoles(
+  encoding: DashboardPanelEncoding | undefined,
+): DashboardPanelEncoding | undefined {
+  if (encoding === undefined) return undefined;
+  const next = { ...encoding };
+  for (const role of LIST_ROLES) delete next[role];
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 /**

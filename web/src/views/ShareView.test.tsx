@@ -219,6 +219,44 @@ describe("ShareView（公开分享页三态 + noindex 红线）", () => {
     expectShareBrand();
   });
 
+  it("list 面板在分享页只读呈现：卡片可见、无工具栏/导出入口", async () => {
+    stubShareFetch(200, {
+      ...SHARE_BODY,
+      spec: {
+        title: "资讯流",
+        spec: {
+          title: "资讯流",
+          panels: [
+            {
+              id: "f1",
+              type: "list",
+              title: "最新动态",
+              span: 3,
+              encoding: { title: "title", summary: "summary", link: "url" },
+              snapshot: {
+                columns: ["title", "summary", "url"],
+                rows: [
+                  ["标题甲", "摘要甲", "https://example.com/a"],
+                  ["标题乙", "摘要乙", ""],
+                ],
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    render(<ShareView artifactId="11" token="tok-abc" version="3" />);
+
+    expect(await screen.findByTestId("dashboard-list")).toBeTruthy();
+    expect(
+      document.querySelectorAll('[data-testid="dashboard-list-item"]'),
+    ).toHaveLength(2);
+    // 公开只读红线：分享页不传 toolbar → 无任何工具栏/导出入口
+    expect(screen.queryByTestId("dashboard-panel-toolbar")).toBeNull();
+    expect(document.querySelector('[data-testid="panel-tool-export"]')).toBeNull();
+  });
+
   it("四态品牌一致：加载中即有品牌顶栏与产品署名，且不注入 og", async () => {
     // 永不 resolve 的 fetch：停在 loading 态检查品牌面
     vi.stubGlobal(

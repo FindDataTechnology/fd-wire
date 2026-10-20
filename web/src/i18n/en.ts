@@ -975,12 +975,14 @@ const en: Translation = {
         not_object: "a panel must be a JSON object",
         bad_type: "panel type is not in the supported chart type spectrum",
         bad_raw_option: "the panel's advanced config (raw_option) contains non-serializable values",
+        bad_list_encoding: "list panel has no valid title column (title role missing or not in the snapshot)",
       },
       type: {
         kpi: "KPI card",
         line: "Line chart",
         bar: "Bar chart",
         table: "Data table",
+        list: "Feed",
         candlestick: "Candlestick chart",
         scatter: "Scatter chart",
         pie: "Pie chart",
@@ -1037,6 +1039,7 @@ const en: Translation = {
           line: "Convert to line chart",
           bar: "Convert to bar chart",
           table: "Convert to data table",
+          list: "Convert to feed",
         },
         convertConfirm:
           "KPI cards and charts use different data calibers (a KPI card shows only the first value) — converting changes how this panel is presented. Convert anyway?",
@@ -1061,6 +1064,24 @@ const en: Translation = {
         areaTo: "To",
         heightLabel: "Panel height",
         heightHint: "Leave blank for default (220px)",
+        convertConfirmList:
+          "A feed maps columns to card roles, which differs from how charts and tables use data — converting changes how this panel is presented. Convert anyway?",
+        // Feed role mapping (wire-list-panel): one column picker per optional
+        // role plus a row cap; order follows the snapshot, the time column is
+        // display-only (use the bound query sort for newest-first).
+        listForm: {
+          title: "Feed roles",
+          needsData: "This panel has no data yet — bind a query to pick columns.",
+          titleRole: "Title column (required)",
+          summaryRole: "Summary column",
+          imageRole: "Image column (http(s) URL)",
+          timeRole: "Time column",
+          sourceRole: "Source column",
+          linkRole: "Link column (http(s) URL)",
+          limit: "Max rows",
+          notSet: "Not set",
+          hint: "Order follows the snapshot. For newest-first, set the sort in the bound query.",
+        },
         rawOptionNote:
           "This panel uses a raw advanced config — structure and data come from it and are read-only here. Title, span, height and source remain editable.",
         sourceLabel: "Source",

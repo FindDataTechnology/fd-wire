@@ -352,6 +352,40 @@ describe("DashboardEditor v2（wire-dashboard-editor-v2 任务 1.2/1.3）", () =
     expect(within(editorPanel("k1")).queryByTestId("editor-kpi-value")).toBeNull();
   });
 
+  it("list↔图表互转需确认且用信息流文案；转为 list 后角色回填首列", async () => {
+    install();
+    render(
+      <DashboardEditor artifactId={21} initial={INITIAL} onSaved={vi.fn()} onExit={vi.fn()} />,
+    );
+    const confirm = vi.fn();
+    vi.stubGlobal("confirm", confirm);
+
+    // 取消：面板仍是 line，但确认文案是信息流那一份
+    confirm.mockReturnValueOnce(false);
+    fireEvent.change(within(editorPanel("l1")).getByTestId("editor-panel-convert"), {
+      target: { value: "list" },
+    });
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(String(confirm.mock.calls[0]![0])).toContain("信息流");
+    expect(editorPanel("l1").getAttribute("data-panel-type")).toBe("line");
+
+    // 确认：转为 list，角色表单出现且 title 回填快照首列（月份）
+    confirm.mockReturnValueOnce(true);
+    fireEvent.change(within(editorPanel("l1")).getByTestId("editor-panel-convert"), {
+      target: { value: "list" },
+    });
+    await waitFor(() => {
+      expect(editorPanel("l1").getAttribute("data-panel-type")).toBe("list");
+    });
+    expect(
+      within(editorPanel("l1")).getByTestId("editor-panel-list-encoding"),
+    ).not.toBeNull();
+    const titleSelect = within(editorPanel("l1")).getByTestId(
+      "editor-list-role-title",
+    ) as HTMLSelectElement;
+    expect(titleSelect.value).toBe("月份");
+  });
+
   it("面板复制：新 id + 副本标题 + 深拷贝数据，独立编辑不波及原件", async () => {
     install();
     render(
@@ -570,16 +604,181 @@ describe("编辑器 v2 扩面（wire-chart-contract-v2 任务 4.1–4.6）", () 
   it("添加面板的类型选择按两档分组（基础/高级）", () => {
     install();
     render(
-      <DashboardEditor artifactId={21} initial={INITIAL} onSaved={vi.fn()} onExit={vi.fn()} />,
+      <DashboardEditor artifactId={21} initial={INITIAL} onSaved={vi.fn()} onExit={vi.fn()} />
     );
     const select = screen.getByTestId("editor-add-type");
     const groups = Array.from(select.querySelectorAll("optgroup")).map((g) =>
       g.getAttribute("label"),
     );
     expect(groups).toEqual(["基础图表", "高级图表"]);
+    
+    // 基础档包含 'list' 类型
+    const baseOptions = Array.from(
+      select.querySelectorAll("optgroup[label='基础图表'] option"),
+    ).map((opt) => (opt as HTMLOptionElement).value);
+    expect(baseOptions).toContain("list");
+    
     // 高级档十个选项都在
     const advanced = select.querySelectorAll("optgroup[label='高级图表'] option");
     expect(advanced).toHaveLength(10);
+  });
+
+  it("list 面板添加与表单渲染", async () => {
+    install();
+    render(
+      <DashboardEditor artifactId={21} initial={INITIAL} onSaved={vi.fn()} onExit={vi.fn()} />
+    );
+    
+    // 选择 list 类型并添加
+    fireEvent.change(screen.getByTestId("editor-add-type"), {
+      target: { value: "list" },
+    });
+    fireEvent.click(screen.getByTestId("editor-add-panel"));
+    
+    const panels = screen.getAllByTestId("editor-panel");
+    expect(panels).toHaveLength(3);
+    const added = panels[2]!;
+    expect(added.getAttribute("data-panel-type")).toBe("list");
+    
+    // 验证 list 表单可见
+    expect(within(added).getByTestId("editor-panel-list-encoding")).toBeTruthy();
+    
+    // 验证无 overlays 表单
+    expect(within(added).queryByTestId("editor-panel-overlays")).toBeNull();
+  });
+
+  it("list 面板 summary 角色变更保存", async () => {
+    const backend = installConsoleBackend([]);
+    backend.addLifecycleArtifact({
+      id: 21,
+      kind: "dashboard",
+      title: "列表测试",
+      version: 1,
+      spec: {
+        title: "列表测试",
+        spec: {
+          title: "列表测试",
+          panels: [
+            {
+              id: "list1",
+              type: "list",
+              title: "新闻列表",
+              span: 2,
+              snapshot: {
+                columns: ["title", "summary", "source"],
+                rows: [],
+              },
+              encoding: { title: "title" },
+              config: { limit: 20 },
+            },
+          ],
+        },
+      },
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    
+    const customInitial: DashboardSpecV1 = {
+      title: "列表测试",
+      panels: [
+        {
+          id: "list1",
+          type: "list",
+          title: "新闻列表",
+          span: 2,
+          snapshot: {
+            columns: ["title", "summary", "source"],
+            rows: [],
+          },
+          encoding: { title: "title" },
+          config: { limit: 20 },
+        },
+      ],
+    };
+    
+    render(
+      <DashboardEditor artifactId={21} initial={customInitial} onSaved={vi.fn()} onExit={vi.fn()} />
+    );
+    
+    const panel = editorPanel("list1");
+    const summarySelect = within(panel).getByTestId("editor-list-role-summary");
+    fireEvent.change(summarySelect, { target: { value: "source" } });
+    
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await waitFor(() => expect(backend.calls.some(c => c.method === "PUT")).toBe(true));
+    
+    const put = backend.calls.find(c => c.method === "PUT");
+    const body = put?.body as {
+      spec: { spec: { panels: DashboardSpecV1["panels"] } };
+    };
+    const savedPanel = body.spec.spec.panels.find(p => p.id === "list1");
+    expect(savedPanel?.encoding).toEqual({ title: "title", summary: "source" });
+  });
+
+  it("list 面板 limit 变更保存", async () => {
+    const backend = installConsoleBackend([]);
+    backend.addLifecycleArtifact({
+      id: 21,
+      kind: "dashboard",
+      title: "列表测试",
+      version: 1,
+      spec: {
+        title: "列表测试",
+        spec: {
+          title: "列表测试",
+          panels: [
+            {
+              id: "list1",
+              type: "list",
+              title: "新闻列表",
+              span: 2,
+              snapshot: {
+                columns: ["title", "summary"],
+                rows: [],
+              },
+              encoding: { title: "title" },
+              config: { limit: 20 },
+            },
+          ],
+        },
+      },
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    
+    const customInitial: DashboardSpecV1 = {
+      title: "列表测试",
+      panels: [
+        {
+          id: "list1",
+          type: "list",
+          title: "新闻列表",
+          span: 2,
+          snapshot: {
+            columns: ["title", "summary"],
+            rows: [],
+          },
+          encoding: { title: "title" },
+          config: { limit: 20 },
+        },
+      ],
+    };
+    
+    render(
+      <DashboardEditor artifactId={21} initial={customInitial} onSaved={vi.fn()} onExit={vi.fn()} />
+    );
+    
+    const panel = editorPanel("list1");
+    const limitInput = within(panel).getByTestId("editor-list-limit");
+    fireEvent.change(limitInput, { target: { value: "5" } });
+    
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await waitFor(() => expect(backend.calls.some(c => c.method === "PUT")).toBe(true));
+    
+    const put = backend.calls.find(c => c.method === "PUT");
+    const body = put?.body as {
+      spec: { spec: { panels: DashboardSpecV1["panels"] } };
+    };
+    const savedPanel = body.spec.spec.panels.find(p => p.id === "list1");
+    expect(savedPanel?.config).toEqual({ limit: 5 });
   });
 
   it("选中高级档类型添加 → 面板带该类型与骨架快照", () => {

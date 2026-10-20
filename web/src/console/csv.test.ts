@@ -225,4 +225,24 @@ describe("raw_option 面板导出（wire-chart-contract-v2 任务 7.3）", () =>
     expect(csv).toContain("7月");
     expect(csv).toContain("无法表格化");
   });
+
+  it("list 面板按快照行原样导出（wire-list-panel：与 table 同口径）", () => {
+    const panels: DashboardPanel[] = [
+      {
+        id: "f1",
+        type: "list",
+        title: "资讯流",
+        span: 3,
+        encoding: { title: "title", summary: "summary", link: "url" },
+        snapshot: {
+          columns: ["title", "summary", "url"],
+          rows: [["标题甲", "摘要甲", "https://example.com/a"]],
+        },
+      },
+    ];
+    const csv = boardToCsv("看板", panels);
+    expect(csv).toContain("# 资讯流（list）");
+    expect(csv).toContain("title,summary,url");
+    expect(csv).toContain("标题甲,摘要甲,https://example.com/a");
+  });
 });

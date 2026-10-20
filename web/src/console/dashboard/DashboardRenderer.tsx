@@ -121,7 +121,7 @@ export function DashboardRenderer({ spec, toolbar = false }: DashboardRendererPr
 function PanelCard({ panel, toolbar }: { panel: DashboardPanel; toolbar: boolean }) {
   const { t } = useTranslation();
   // 图数切换只对图表面板有意义（kpi 无表格语义，table 本来就是表）。
-  const isChart = panel.type !== "kpi" && panel.type !== "table";
+  const isChart = panel.type !== "kpi" && panel.type !== "table" && panel.type !== "list";
   const [showTable, setShowTable] = useState(false);
 
   const body =
@@ -129,6 +129,8 @@ function PanelCard({ panel, toolbar }: { panel: DashboardPanel; toolbar: boolean
       <KpiBody panel={panel} />
     ) : panel.type === "table" ? (
       <TableBody panel={panel} />
+    ) : panel.type === "list" ? (
+      <ListBody panel={panel} />
     ) : (
       <ChartBody panel={panel} showTable={showTable} />
     );
@@ -572,5 +574,121 @@ function PanelToolbar({
           : t("console.dashboard.toolbar.copyData")}
       </button>
     </span>
+  );
+}
+
+/**
+ * List 面板（wire-list-panel）：按快照行序渲染图文卡片流。
+ * 角色映射：title（必填）/ summary / image / time / source / link——
+ * 值均为快照列名；时间只作原文展示（顺序由快照决定，不在这里重排）。
+ * 图片与外链只认 http(s)；图片加载失败整块消失（不留破图占位）。
+ */
+function httpUrl(value: string | number | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const url = value.trim();
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
+/** 卡片图片：懒加载 + 无 referrer；失败即卸载（state，不直接改 DOM）。 */
+function ListImage({ url }: { url: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return (
+    <img
+      src={url}
+      alt=""
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      className="h-36 w-full object-cover"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+function ListBody({ panel }: { panel: DashboardPanel }) {
+  const columns = panel.snapshot?.columns ?? [];
+  const allRows = panel.snapshot?.rows ?? [];
+  const cap = panel.config?.limit ?? 20;
+  const rows = allRows.slice(0, cap);
+  if (rows.length === 0) return <NoData />;
+
+  const indexOf = (
+    role: "title" | "summary" | "image" | "time" | "source" | "link",
+  ): number => {
+    const column = panel.encoding?.[role];
+    return typeof column === "string" ? columns.indexOf(column) : -1;
+  };
+  const titleCol = indexOf("title");
+  const summaryCol = indexOf("summary");
+  const imageCol = indexOf("image");
+  const timeCol = indexOf("time");
+  const sourceCol = indexOf("source");
+  const linkCol = indexOf("link");
+
+  const rawCell = (row: Array<string | number | null>, index: number) =>
+    index >= 0 ? row[index] : null;
+  const cellText = (row: Array<string | number | null>, index: number): string => {
+    const cell = rawCell(row, index);
+    return cell === null || cell === undefined ? "" : String(cell);
+  };
+
+  return (
+    <div
+      data-testid="dashboard-list"
+      className={
+        rows.length > 3
+          ? "max-h-96 space-y-3 overflow-y-auto pr-1"
+          : "space-y-3"
+      }
+    >
+      {rows.map((row, index) => {
+        const title = cellText(row, titleCol);
+        const summary = cellText(row, summaryCol);
+        const time = cellText(row, timeCol);
+        const source = cellText(row, sourceCol);
+        const imageUrl = httpUrl(rawCell(row, imageCol));
+        const linkUrl = httpUrl(rawCell(row, linkCol));
+
+        const card = (
+          <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+            {imageUrl !== null && <ListImage url={imageUrl} />}
+            <div className="p-3">
+              <div className="text-sm font-medium text-slate-800 line-clamp-2">
+                {title}
+              </div>
+              {summary !== "" && (
+                <p className="mt-1 text-xs text-slate-600 line-clamp-3">
+                  {summary}
+                </p>
+              )}
+              {(time !== "" || source !== "") && (
+                <div className="mt-1 text-[11px] text-slate-400">
+                  {time}
+                  {time !== "" && source !== "" ? " · " : ""}
+                  {source}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+
+        return (
+          <div key={index} data-testid="dashboard-list-item">
+            {linkUrl !== null ? (
+              <a
+                href={linkUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block hover:opacity-90"
+              >
+                {card}
+              </a>
+            ) : (
+              card
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }

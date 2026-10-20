@@ -700,3 +700,51 @@ def test_validate_artifact_args_keeps_v1_panels_passing() -> None:
         )
         is None
     )
+
+
+def test_validate_artifact_args_accepts_list_panel_with_title_role() -> None:
+    """list 面板（wire-list-panel）：声明 title 角色即通过（新类型在白名单内）。"""
+    assert (
+        validate_artifact_args(
+            "dashboard_spec_create",
+            {
+                "title": "资讯流",
+                "spec": {
+                    "panels": [
+                        {
+                            "id": "f1",
+                            "type": "list",
+                            "encoding": {"title": "title", "image": "image_url"},
+                            "snapshot": {
+                                "columns": ["title", "image_url"],
+                                "rows": [["标题", "https://example.com/a.jpg"]],
+                            },
+                        }
+                    ]
+                },
+            },
+        )
+        is None
+    )
+
+
+def test_validate_artifact_args_rejects_list_panel_without_title_role() -> None:
+    """list 面板缺 title 角色 → 生成侧先拦（前端会整面板判坏）。"""
+    error = validate_artifact_args(
+        "dashboard_spec_create",
+        {
+            "title": "资讯流",
+            "spec": {
+                "panels": [
+                    {
+                        "id": "f1",
+                        "type": "list",
+                        "encoding": {"summary": "summary"},
+                        "snapshot": {"columns": ["summary"], "rows": [["摘要"]]},
+                    }
+                ]
+            },
+        },
+    )
+    assert error is not None
+    assert "encoding.title" in error

@@ -116,6 +116,44 @@ describe("橱窗详情（任务 4.1/4.3）", () => {
     expect(screen.getByTestId("dashboard-kpi-value").textContent).toBe("2.1");
   });
 
+  it("list 面板在橱窗匿名面正常出卡片（图文信息流可对外展示）", async () => {
+    stubFetch({
+      ...DETAIL,
+      panels: [{ id: "f1", type: "list", title: "最新动态" }],
+      spec: {
+        title: "行业资讯流",
+        spec: {
+          title: "行业资讯流",
+          panels: [
+            {
+              id: "f1",
+              type: "list",
+              title: "最新动态",
+              span: 3,
+              encoding: { title: "title", image: "image_url", time: "date" },
+              snapshot: {
+                columns: ["title", "image_url", "date"],
+                rows: [
+                  ["标题甲", "https://example.com/a.jpg", "2026-10-20"],
+                  ["标题乙", "", "2026-10-19"],
+                ],
+              },
+            },
+          ],
+        },
+      },
+    });
+    render(<ShowcaseView detailId={7} />);
+
+    expect(await screen.findByTestId("dashboard-list")).toBeTruthy();
+    expect(
+      document.querySelectorAll('[data-testid="dashboard-list-item"]'),
+    ).toHaveLength(2);
+    // 只读红线不变
+    expect(screen.queryByTestId("dashboard-panel-toolbar")).toBeNull();
+    expect(screen.queryByTestId("panel-tool-export")).toBeNull();
+  });
+
   it("只读红线：无工具栏 / 无导出 / 无编辑入口", async () => {
     stubFetch(DETAIL);
     render(<ShowcaseView detailId={7} />);
