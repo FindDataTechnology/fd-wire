@@ -43,7 +43,7 @@ spec:
         - name: api
           # 不可变标签纪律（mcp-service-deploy spec：禁 latest/浮动标签）。
           # 出片 tag=testaction002 build-pool 快照 sha=f07ed95（真 ef98203：图文信息流面板 list；含动作闸 6.2 两修）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-f07ed95
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-b3b5389
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
