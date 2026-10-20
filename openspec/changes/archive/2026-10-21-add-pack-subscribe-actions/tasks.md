@@ -12,4 +12,4 @@
 ## 3. 验证
 
 - [x] 3.1 api 全量测试绿（1404 passed）；wire-ops-mcp 10/10 绿
-- [ ] 3.2 真机：壹座侧镜像条目上线后，经闸订阅/退订一个真实源包并核订阅态
+- [x] 3.2 真机：壹座侧镜像条目上线后，经闸订阅/退订一个真实源包并核订阅态（2026-10-21：wire-ops-mcp sha-f3161a4 13 工具上线；壹座闸 propose `wire.pack.subscribe` population-employment → inline 确认 → executed（subscribed:true）；退订 → executed；`wire_packs_list` 回读 subscribed=[macro-prices] 复原）
