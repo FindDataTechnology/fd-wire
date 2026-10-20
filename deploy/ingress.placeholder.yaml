@@ -4,8 +4,12 @@
 # fd-wire-web。**当前 cheap 集群没有 ingress controller**：实际上线路径与
 # wanxing-web 同法——cheap-1 SafeLine→Caddy→tailscale → fd-wire-web
 # NodePort 31881（deploy/README.md 步骤 9-10，主代理执行），TLS 也在 Caddy
-# 终结。本清单先落路由事实于 git，待集群启用 controller 后即生效；生效前
-# ArgoCD 同步它无害（无 controller 时 Ingress 对象只是无流量绑定）。
+# 终结。
+#
+# 位置纪律（2026-10-21）：本文件刻意放在 ArgoCD 同步路径（deploy/k8s）之外
+# ——无 controller 时 Ingress 永远拿不到 address，应用级 health 会一直卡
+# Progressing，掩盖真实工作负载状态。controller 启用时再移回 deploy/k8s/。
+# 集群里的同名 Ingress 对象（prune=false）保留不动，无流量绑定。
 #
 # /mcp 不在此处：wire.finddatatech.cloud/mcp 由边缘 Caddy 直接反代 registry
 # 的 wire 入口（鉴权/逐调用审计在 registry 侧完成），流量不进本集群——
