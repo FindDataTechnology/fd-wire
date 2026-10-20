@@ -116,8 +116,9 @@ def client(monkeypatch, tmp_path, fake_llm, fake_executor):
     )
     from fd_wire_api.demands.db import get_db as get_demands_db
     from fd_wire_api.materialization.db import get_db as get_materialization_db
+    from fd_wire_api.packs.db import get_db as get_packs_db
 
-    for dep in (get_demands_db, get_materialization_db):
+    for dep in (get_demands_db, get_materialization_db, get_packs_db):
         app.dependency_overrides[dep] = override_get_db
     install_fake_jwks(monkeypatch)
     make_console_env(

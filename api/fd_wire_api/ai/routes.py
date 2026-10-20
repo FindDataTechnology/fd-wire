@@ -44,6 +44,7 @@ from ..demands.db import get_db as get_demands_db
 from ..entities.db import get_db as get_entities_db
 from ..entities.service import entity_graph_prompt_block
 from ..materialization.db import get_db as get_materialization_db
+from ..packs.db import get_db as get_packs_db
 from .executor import CellMcpExecutor
 from .llm import TokenGatewayLlmClient
 from .protocols import LlmClient, ToolExecutor
@@ -102,10 +103,15 @@ def get_gate_sessions(
     datasets_db: Session = Depends(get_datasets_db),
     demands_db: Session = Depends(get_demands_db),
     materialization_db: Session = Depends(get_materialization_db),
+    packs_db: Session = Depends(get_packs_db),
 ) -> GateSessions:
     """闸执行器的跨切片会话束（各库依赖注入；会话生命周期归各依赖管）。"""
     return GateSessions(
-        ai=ai_db, datasets=datasets_db, demands=demands_db, materialization=materialization_db
+        ai=ai_db,
+        datasets=datasets_db,
+        demands=demands_db,
+        materialization=materialization_db,
+        packs=packs_db,
     )
 
 

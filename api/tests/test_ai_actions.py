@@ -58,7 +58,9 @@ def db():
     """单引擎内存库：AI 表 + 物化表 + 需求单表（闸执行体的跨切片会话束全挂它）。"""
     from fd_wire_api.demands.db import Base as DemandsBase
     from fd_wire_api.materialization.db import MatBase
+    from fd_wire_api.packs.db import PacksBase
     import fd_wire_api.artifacts.models  # noqa: F401 - 注册 AiBase 映射（share/publish 执行体要查 artifacts）
+    import fd_wire_api.packs.models  # noqa: F401 - 注册 PacksBase 映射（源包订阅执行体）
 
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
@@ -66,6 +68,7 @@ def db():
     AiBase.metadata.create_all(bind=engine)
     MatBase.metadata.create_all(bind=engine)
     DemandsBase.metadata.create_all(bind=engine)
+    PacksBase.metadata.create_all(bind=engine)
     session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
     yield session
     session.close()
@@ -73,7 +76,7 @@ def db():
 
 @pytest.fixture()
 def sess(db):
-    return GateSessions(ai=db, datasets=db, demands=db, materialization=db)
+    return GateSessions(ai=db, datasets=db, demands=db, materialization=db, packs=db)
 
 
 @pytest.fixture(autouse=True)
@@ -108,8 +111,8 @@ def _conversation(db, customer_id="cust-001", cid=101):
 
 
 def test_v1_roster_and_tier_mapping() -> None:
-    """v1 十一条；风险→档位映射与壹座侧一致；名单外（key 铸造/团队）不存在。"""
-    assert len(REGISTRY) == 11
+    """v1 十三条（+源包订阅/退订，add-pack-subscribe-actions）；映射与壹座侧一致；名单外不存在。"""
+    assert len(REGISTRY) == 13
     assert RISK_TO_TIER == {
         "write": "inline",
         "destructive": "second",
@@ -117,6 +120,8 @@ def test_v1_roster_and_tier_mapping() -> None:
         "publish": "async",
     }
     assert REGISTRY["wire.market.subscribe"].risk == "cost"
+    assert REGISTRY["wire.pack.subscribe"].risk == "write"  # 源包订阅免费
+    assert REGISTRY["wire.pack.unsubscribe"].risk == "write"
     assert REGISTRY["wire.artifact.share.create"].tier == "async"
     for banned in ("wire.key.mint", "wire.key.revoke", "wire.team.invite"):
         assert banned not in REGISTRY
@@ -428,6 +433,31 @@ def test_promote_single_execution_path(db, sess) -> None:
     assert db.query(Artifact).count() == 1
 
 
+def test_pack_subscribe_and_unsubscribe_executes(db, sess) -> None:
+    """源包订阅/退订（add-pack-subscribe-actions）：订阅免费 write/inline；行随动作生灭。"""
+    from fd_wire_api.packs.models import PackSubscription
+
+    _conversation(db)
+    p1, _ = propose(
+        db, sess, OWNER, action_id="wire.pack.subscribe", args={"pack_id": "macro-price"}
+    )
+    assert p1.tier == "inline" and p1.state == "pending_confirm"
+    out = approve(db, sess, OWNER, p1.id)
+    assert out["state"] == "executed"
+    assert "订阅免费" in out["result_summary"]
+    assert db.query(PackSubscription).count() == 1
+
+    # 重复订阅幂等：仍 executed，不落第二行
+    p2, _ = propose(db, sess, OWNER, action_id="wire.pack.subscribe", args={"pack_id": "macro-price"})
+    approve(db, sess, OWNER, p2.id)
+    assert db.query(PackSubscription).count() == 1
+
+    p3, _ = propose(db, sess, OWNER, action_id="wire.pack.unsubscribe", args={"pack_id": "macro-price"})
+    out3 = approve(db, sess, OWNER, p3.id)
+    assert out3["state"] == "executed"
+    assert db.query(PackSubscription).count() == 0
+
+
 # ── 发布执行体 + 读工具执行器 ────────────────────────────────────────────────
 
 
@@ -502,6 +532,7 @@ def test_tool_risk_fixture_consistency() -> None:
 def _fixture_for(tool_name: str) -> Path:
     ops_tools = {
         "wire_demand_submit", "wire_market_subscribe", "wire_market_unsubscribe",
+        "wire_pack_subscribe", "wire_pack_unsubscribe",
     }
     return (
         FIXTURES / "wire-ops-mcp.tool-surface.json"

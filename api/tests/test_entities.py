@@ -150,6 +150,8 @@ def client(monkeypatch, tmp_path, db_session, engine_fake, fake_llm):
     app.dependency_overrides[get_ai_db] = override_get_db
     app.dependency_overrides[get_entities_db] = override_get_db
     app.dependency_overrides[get_datasets_db] = override_get_db
+    from fd_wire_api.packs.db import get_db as get_packs_db
+    app.dependency_overrides[get_packs_db] = override_get_db
     app.dependency_overrides[get_llm_client] = lambda: fake_llm
     app.dependency_overrides[get_tool_executor] = lambda: FakeExecutor()
     app.dependency_overrides[get_engine_client_factory] = lambda: (

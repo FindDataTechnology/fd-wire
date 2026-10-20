@@ -115,15 +115,17 @@ class GateSessions:
     - ``datasets``：datasets 库（数据集/上传/市场元数据）。
     - ``demands``：需求单库。
     - ``materialization``：物化库（materialized_artifacts）。
+    - ``packs``：源包订阅库（pack_subscriptions，元数据库；add-pack-subscribe-actions）。
     """
 
     ai: Session
     datasets: Session
     demands: Session
     materialization: Session
+    packs: Session
 
     def close(self) -> None:
-        for session in (self.ai, self.datasets, self.demands, self.materialization):
+        for session in (self.ai, self.datasets, self.demands, self.materialization, self.packs):
             try:
                 session.close()
             except Exception:  # noqa: BLE001 - 尽力关，不掩盖主流程
@@ -157,6 +159,8 @@ ACTION_TO_TOOL_NAME: dict[str, str] = {
     "wire.demand.submit": "wire_demand_submit",
     "wire.market.subscribe": "wire_market_subscribe",
     "wire.market.unsubscribe": "wire_market_unsubscribe",
+    "wire.pack.subscribe": "wire_pack_subscribe",
+    "wire.pack.unsubscribe": "wire_pack_unsubscribe",
     "wire.artifact.publish": "wire_artifact_publish",
     "wire.artifact.archive": "wire_artifact_archive",
     "wire.dataset.correct": "wire_dataset_correct",
@@ -593,6 +597,35 @@ def _exec_demand_submit(
     return f"需求单已提交（编号 {demand.code}），进展可在「我的需求」查看"
 
 
+def _pf_pack_id(ctx: ActorContext, sess: GateSessions, args: dict[str, Any]) -> None:
+    _deny_viewer(ctx)
+    if not isinstance(args.get("pack_id"), str) or not args["pack_id"].strip():
+        raise PreflightError("源包动作必须带非空 pack_id（源包页可见各包 id）。")
+
+
+def _exec_pack_subscribe(ctx: ActorContext, sess: GateSessions, args: dict[str, Any]) -> str:
+    from ..packs.service import PackSubscriptionService
+
+    svc = PackSubscriptionService()
+    svc.subscribe(sess.packs, customer_id=ctx.customer_id, pack_id=args["pack_id"])
+    return (
+        f"已订阅源包 {args['pack_id']}（订阅免费；源包页可随时退订，"
+        "目录更新即跟踪）"
+    )
+
+
+def _exec_pack_unsubscribe(ctx: ActorContext, sess: GateSessions, args: dict[str, Any]) -> str:
+    from ..packs.service import PackSubscriptionService
+
+    svc = PackSubscriptionService()
+    removed = svc.unsubscribe(sess.packs, customer_id=ctx.customer_id, pack_id=args["pack_id"])
+    return (
+        f"已退订源包 {args['pack_id']}"
+        if removed
+        else f"源包 {args['pack_id']} 此前未订阅（幂等，无需操作）"
+    )
+
+
 def _market_dataset(sess: GateSessions, dataset_id: str):
     from ..assets.models import AssetMeta
     from ..datasets.models import Dataset
@@ -835,6 +868,20 @@ REGISTRY: dict[str, ActionDef] = {
             impact=lambda a: f"退订市场数据集 {a.get('dataset_id')}（「我的数据」不再可见）",
             preflight=_pf_market_ready,
             execute=_exec_unsubscribe,
+        ),
+        ActionDef(
+            id="wire.pack.subscribe",
+            risk=RISK_WRITE,
+            impact=lambda a: f"订阅源包 {a.get('pack_id')}（订阅免费，随时可退订；目录更新即跟踪）",
+            preflight=_pf_pack_id,
+            execute=_exec_pack_subscribe,
+        ),
+        ActionDef(
+            id="wire.pack.unsubscribe",
+            risk=RISK_WRITE,
+            impact=lambda a: f"退订源包 {a.get('pack_id')}（幂等；「源包」页可重新订阅）",
+            preflight=_pf_pack_id,
+            execute=_exec_pack_unsubscribe,
         ),
         ActionDef(
             id="wire.dataset.correct",

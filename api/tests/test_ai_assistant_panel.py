@@ -97,6 +97,8 @@ def client(monkeypatch, tmp_path, llm, executor):
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_llm_client] = lambda: llm
     app.dependency_overrides[get_tool_executor] = lambda: executor
+    from fd_wire_api.packs.db import get_db as get_packs_db
+    app.dependency_overrides[get_packs_db] = override_get_db
     install_fake_jwks(monkeypatch)
     make_console_env(
         tmp_path,

@@ -177,7 +177,7 @@ def test_full_round_propose_pending_no_draft(db, monkeypatch) -> None:
     executor = FakeExecutor()
     reads = FakeReadExecutor()
     actor = ActorContext(customer_id="cust-001", sub="sub-001", role="owner")
-    sessions = GateSessions(ai=db, datasets=db, demands=db, materialization=db)
+    sessions = GateSessions(ai=db, datasets=db, demands=db, materialization=db, packs=db)
 
     appended = chat(
         db,
@@ -287,7 +287,7 @@ def test_history_replay_rebuilds_wire_pairs(db, monkeypatch) -> None:
         settings=settings,
         read_executor=FakeReadExecutor(),
         actor=ActorContext(customer_id="cust-001", sub="sub-001", role="owner"),
-        gate_sessions=GateSessions(ai=db, datasets=db, demands=db, materialization=db),
+        gate_sessions=GateSessions(ai=db, datasets=db, demands=db, materialization=db, packs=db),
     )
     chat(db, conversation, content="第一轮", **kwargs)
     chat(db, conversation, content="第二轮", **kwargs)
@@ -327,7 +327,7 @@ def test_max_turns_truncation(db, monkeypatch) -> None:
         settings=AiSettings(ai_max_turns=3),
         read_executor=FakeReadExecutor(),
         actor=ActorContext(customer_id="cust-001", sub="sub-001", role="owner"),
-        gate_sessions=GateSessions(ai=db, datasets=db, demands=db, materialization=db),
+        gate_sessions=GateSessions(ai=db, datasets=db, demands=db, materialization=db, packs=db),
     )
 
     assert len(llm.calls) == 3
@@ -475,7 +475,7 @@ def test_invalid_draft_args_rejected_at_propose(db, monkeypatch) -> None:
         settings=AiSettings(ai_max_turns=8),
         read_executor=FakeReadExecutor(),
         actor=ActorContext(customer_id="cust-001", sub="sub-001", role="owner"),
-        gate_sessions=GateSessions(ai=db, datasets=db, demands=db, materialization=db),
+        gate_sessions=GateSessions(ai=db, datasets=db, demands=db, materialization=db, packs=db),
     )
 
     trace = json.loads(_messages(db, conversation.id)[2].content)
@@ -508,7 +508,7 @@ def test_unregistered_action_rejected(db, monkeypatch) -> None:
         settings=AiSettings(ai_max_turns=8),
         read_executor=FakeReadExecutor(),
         actor=ActorContext(customer_id="cust-001", sub="sub-001", role="owner"),
-        gate_sessions=GateSessions(ai=db, datasets=db, demands=db, materialization=db),
+        gate_sessions=GateSessions(ai=db, datasets=db, demands=db, materialization=db, packs=db),
     )
 
     trace = json.loads(_messages(db, conversation.id)[2].content)
