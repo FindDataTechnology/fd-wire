@@ -50,7 +50,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -64,6 +64,7 @@ from ..ai.settings import get_settings
 from ..console.auth import require_console_customer_id
 from ..datasets import api_store
 from ..datasets.db import get_db as get_datasets_db
+from ..market.platform_publisher import PLATFORM_PUBLISHER_NAME
 from ..datasets.ingest import (
     EngineCallError,
     EngineClientFactory,
@@ -244,28 +245,64 @@ def restore_artifact(
 )
 def create_artifact(
     payload: ArtifactCreateIn,
+    response: Response,
     customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
+    datasets_db: Session = Depends(get_datasets_db),
 ) -> ArtifactDetailOut:
-    """空白建板（wire-dashboard-blank-create）：免费档第一块板的出生路径。
+    """空白/带内容创建：免费档第一块板的出生路径 + 程序化发布通道。
 
     产物此前只有 from-draft 一条出生路径（会话草稿转正），而草稿只能由
     AI 构建产生、AI 构建要求 cell——免费档（无 cell）造不出任何看板，
-    编辑/契约绑定/刷新等后续能力对第一块板全部够不着。本端点补直接出生
-    路径：``{kind,title}`` → 最小空板 spec ``{"title":…, "spec":
-    {"title":…, "panels":[]}}`` 建 draft 产物 v1，复用既有建档与审计
-    语义（版本行 operator=console:<cid> + 初始状态留痕），无来源会话
-    指针；创建即可进编辑器加面板/绑定数据。
+    编辑/契约绑定/刷新等后续能力对第一块板全部够不着。``{kind,title}`` →
+    最小空板 spec ``{"title":…, "spec":{"title":…, "panels":[]}}`` 建
+    draft 产物 v1，复用既有建档与审计语义（版本行 operator=console:<cid>
+    + 初始状态留痕），无来源会话指针；创建即可进编辑器加面板/绑定数据。
+
+    带 ``spec`` 时（add-artifact-create-endpoint）为**程序化发布通道**：
+    v1 = 给定 spec（与 spec 更新同一校验栈），**仅限平台自营发布方**
+    ``finddata-official``（红线，用户 2026-10-22 裁决「创建权必须限平台
+    租户」；与公开橱窗查询层同一判定口径），其他租户 403 如实。幂等键 =
+    ``spec.spec.showcase_slug``（import_showcase 既有约定升格为平台契约）：
+    同租户命中即不建重——内容一致零操作、有变化追加版本，二者均 200 返回
+    既有产物（新建 201 / 重放 200 如实区分）；跨租户同 slug 互不命中。
 
     语义边界：kind 白名单 v0 仅 dashboard（其他 kind 由 AI 构建产生）
-    422；title 缺/空/非字符串 422 如实；拒收零半写。
+    422；title 缺/空/非字符串 422 如实；校验失败 422 零半写；重放命中
+    archived 产物 409（与 PUT 同口径）。
     """
-    try:
-        artifact = service.create_blank_artifact(
-            db, customer_id=customer_id, kind=payload.kind, title=payload.title
+    if payload.spec is not None and customer_id != PLATFORM_PUBLISHER_NAME:
+        raise HTTPException(
+            status_code=403,
+            detail="带内容创建仅限平台自营发布方（finddata-official）；"
+            "空白创建（不带 spec）不受限",
         )
+    try:
+        if payload.spec is None:
+            artifact = service.create_blank_artifact(
+                db, customer_id=customer_id, kind=payload.kind, title=payload.title
+            )
+            created = True
+        else:
+            artifact, created = service.create_or_replay_artifact(
+                db,
+                customer_id=customer_id,
+                kind=payload.kind,
+                title=payload.title,
+                spec=payload.spec,
+                datasets_db=datasets_db,
+            )
+    except service.ArtifactLocked as exc:
+        # slug 重放命中 archived 产物：拒改与 PUT 同口径（先恢复再重放）
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except service.InvalidAlertArtifactSpec as exc:
+        # alert_rule 规则契约层：400 detail=校验文案（须先于父类捕获——子类）
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except service.InvalidArtifactSpec as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not created:
+        # slug 重放（零操作或追加版本）：非新建语义，200 如实
+        response.status_code = status.HTTP_200_OK
     return artifact_detail(artifact, service.current_spec(db, artifact))
 
 

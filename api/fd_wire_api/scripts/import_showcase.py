@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -402,6 +403,145 @@ def run_import(
     return report
 
 
+# ------------------------------------------------------- HTTP 客户端模式
+# （add-artifact-create-endpoint：建档→publish→visibility 全走开放端点，
+#  解除对 kubectl exec 与 pod 内直连双库的依赖；pod 直跑（run_import）
+#  保留为回退。仅依赖带内容创建 + slug 幂等 + 既有 publish/visibility 端点。）
+
+
+def _http_request(
+    base_url: str, token: str, method: str, path: str, payload: Any = None
+) -> tuple[int, dict[str, Any]]:
+    """一次带 Bearer 的 JSON 请求；非 2xx 抛 RuntimeError（detail 如实透传）。"""
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        base_url.rstrip("/") + path,
+        data=json.dumps(payload).encode("utf-8") if payload is not None else None,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(raw).get("detail", raw)
+        except json.JSONDecodeError:
+            detail = raw
+        raise RuntimeError(f"{method} {path} → {exc.code}: {detail}") from exc
+
+
+def http_import_one(
+    base_url: str,
+    token: str,
+    *,
+    path: Path,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """HTTP 模式导入单份源看板（异常不外抛，转 status=failed 由调用方兜）。
+
+    POST /api/v1/artifacts（spec+slug 幂等：新建 201 / 重放 200）→ draft
+    才 publish（published 重放跳过，避免 409）→ PUT visibility=market。
+    幂等查重在平台租户域内（端点语义），pod 模式的「同 slug 客户产物
+    冲突跳过」检查在 HTTP 面不可得——但幂等键不跨租户命中，客户产物
+    依旧绝不被触碰。
+    """
+    slug = slugify(path.name)
+    try:
+        envelope = build_showcase_spec(load_source(path), slug)
+    except (ValueError, json.JSONDecodeError) as exc:
+        return {
+            "source": str(path),
+            "slug": slug,
+            "status": "failed",
+            "error": f"源文件不可用：{exc}",
+        }
+
+    panel_count = len(envelope["spec"]["panels"])
+    if dry_run:
+        return {
+            "source": str(path),
+            "slug": slug,
+            "status": "would_create",
+            "title": envelope["title"],
+            "panels": panel_count,
+        }
+
+    status_code, body = _http_request(
+        base_url,
+        token,
+        "POST",
+        "/api/v1/artifacts",
+        {"kind": "dashboard", "title": envelope["title"], "spec": envelope},
+    )
+    artifact_id = body["id"]
+    if body.get("status") == "draft":
+        _http_request(
+            base_url, token, "POST", f"/api/v1/artifacts/{artifact_id}/publish"
+        )
+    _http_request(
+        base_url,
+        token,
+        "PUT",
+        f"/api/v1/artifacts/{artifact_id}/visibility",
+        {"visibility": "market", "access_mode": "open"},
+    )
+    return {
+        "source": str(path),
+        "slug": slug,
+        "status": "created" if status_code == 201 else "updated",
+        "artifact_id": artifact_id,
+        "title": envelope["title"],
+        "version": body["version"],
+        "panels": panel_count,
+    }
+
+
+def _collect_source_files(dashboards_dir: Path, only: list[str] | None) -> list[Path]:
+    """源文件枚举（pod/HTTP 两模式同款）：两种历史命名 + --only slug 过滤。"""
+    files = sorted(
+        set(dashboards_dir.glob("*.spec.json")) | set(dashboards_dir.glob("*_spec.json"))
+    )
+    if only:
+        wanted = {slugify(name) for name in only}
+        files = [f for f in files if slugify(f.name) in wanted]
+    return files
+
+
+def run_import_http(
+    *,
+    dashboards_dir: Path,
+    base_url: str,
+    token: str,
+    dry_run: bool = False,
+    only: list[str] | None = None,
+) -> ImportReport:
+    """HTTP 模式批量导入入口：逐文件独立执行，单条失败不中断整批。"""
+    report = ImportReport()
+    files = _collect_source_files(dashboards_dir, only)
+    if not files:
+        report.add(source=str(dashboards_dir), slug="-", status="failed",
+                   error="未找到任何 *.spec.json 源文件")
+        return report
+    for path in files:
+        try:
+            report.add(
+                **http_import_one(base_url, token, path=path, dry_run=dry_run)
+            )
+        except (RuntimeError, OSError) as exc:
+            report.add(
+                source=str(path), slug=slugify(path.name), status="failed",
+                error=str(exc),
+            )
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="行业看板批量导入（平台自营）")
     parser.add_argument(
@@ -414,11 +554,34 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--only", nargs="*", help="只导入指定 slug/文件名（缺省全部）"
     )
+    parser.add_argument(
+        "--http-base-url",
+        default=None,
+        help="API 基址（如 https://wire.finddatatech.cloud）——给定时走 HTTP "
+        "客户端模式（不再直连库，可在任意机器运行）；缺省 pod 内直跑",
+    )
+    parser.add_argument(
+        "--http-token",
+        default=os.environ.get("FD_WIRE_CONSOLE_TOKEN"),
+        help="平台租户 console Bearer token（HTTP 模式必填；缺省读 "
+        "FD_WIRE_CONSOLE_TOKEN 环境变量）",
+    )
     args = parser.parse_args(argv)
 
-    report = run_import(
-        dashboards_dir=args.dashboards_dir, dry_run=args.dry_run, only=args.only
-    )
+    if args.http_base_url:
+        if not args.http_token:
+            parser.error("HTTP 模式需要 --http-token（或 FD_WIRE_CONSOLE_TOKEN）")
+        report = run_import_http(
+            dashboards_dir=args.dashboards_dir,
+            base_url=args.http_base_url,
+            token=args.http_token,
+            dry_run=args.dry_run,
+            only=args.only,
+        )
+    else:
+        report = run_import(
+            dashboards_dir=args.dashboards_dir, dry_run=args.dry_run, only=args.only
+        )
     print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
     return 0 if report.failed == 0 else 1
 

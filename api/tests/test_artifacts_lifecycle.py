@@ -39,6 +39,7 @@ from fd_wire_api.ai.schemas import ConversationCreate
 from fd_wire_api.ai.tools import ARTIFACT_TOOL_KINDS
 from fd_wire_api.app import app
 from fd_wire_api.artifacts.models import ARTIFACT_KINDS, ArtifactStatus
+from fd_wire_api.market.platform_publisher import PLATFORM_PUBLISHER_NAME
 
 from console_fixture import bearer, install_fake_jwks, make_console_env, mint_id_token
 
@@ -490,6 +491,230 @@ def test_blank_create_title_required_422(client) -> None:
     assert ok.status_code == 201, ok.text
     assert ok.json()["title"] == "空白板"
     assert ok.json()["spec"]["title"] == "空白板"
+
+
+# ------------------------------------------------- 带内容创建 + slug 幂等
+
+
+SUB_PLAT = "sub-art-plat"
+PLAT = bearer(mint_id_token(SUB_PLAT))
+
+
+@pytest.fixture()
+def client_platform(monkeypatch, tmp_path, db_session):
+    """同 client，另加平台自营发布方（finddata-official）的身份映射——
+    带内容创建（add-artifact-create-endpoint）的平台租户测试身份。"""
+    monkeypatch.setenv("AI_CELL_ENDPOINT_MAP", "cust-001=http://cell-001/mcp")
+
+    def override_get_db():
+        try:
+            yield db_session
+        finally:
+            pass
+
+    reset_ai_runtime()
+    app.dependency_overrides[get_db] = override_get_db
+    install_fake_jwks(monkeypatch)
+    make_console_env(
+        tmp_path,
+        monkeypatch,
+        customers=[
+            (SUB_CUST, "cust-001"),
+            (SUB_OTHER, "cust-002"),
+            (SUB_PLAT, PLATFORM_PUBLISHER_NAME),
+        ],
+    )
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+    reset_ai_runtime()
+
+
+def _content_envelope(
+    slug: str | None = "province-test",
+    *,
+    title: str = "省级面板测试板",
+    panels: list | None = None,
+) -> dict:
+    """带内容创建的 spec 信封（showcase_slug 约定在 inner 层）。"""
+    inner: dict = {"title": title, "panels": panels or [{"id": "kpi-1", "type": "kpi"}]}
+    if slug is not None:
+        inner["showcase_slug"] = slug
+    return {"title": title, "spec": inner}
+
+
+def test_create_with_spec_platform_201(client_platform) -> None:
+    """平台租户带内容创建：201 draft v1=给定 spec，留痕如实区分出生方式。"""
+    resp = client_platform.post(
+        "/api/v1/artifacts",
+        json={"kind": "dashboard", "title": "省级面板测试板",
+              "spec": _content_envelope()},
+        headers=PLAT,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["status"] == "draft" and body["version"] == 1
+    assert body["customer_id"] == PLATFORM_PUBLISHER_NAME
+    assert body["origin_conversation_id"] is None
+    # v1 = 给定 spec 原样（含 showcase_slug 幂等键）
+    assert body["spec"] == _content_envelope()
+    # 留痕语义同空白创建（draft 初始留痕 + operator 同款），文案如实区分
+    assert body["status_history"][0]["status"] == "draft"
+    assert body["status_history"][0]["by"] == f"console:{PLATFORM_PUBLISHER_NAME}"
+    assert "带内容创建" in body["status_history"][0]["note"]
+
+
+def test_create_with_spec_non_platform_403_zero_halfwrite(client) -> None:
+    """红线：非平台租户带内容创建 403 零半写；空白创建不受影响（201）。"""
+    resp = client.post(
+        "/api/v1/artifacts",
+        json={"kind": "dashboard", "title": "越权板", "spec": _content_envelope()},
+        headers=CUST,
+    )
+    assert resp.status_code == 403
+    assert "平台自营发布方" in resp.json()["detail"]
+    assert client.get("/api/v1/artifacts", headers=CUST).json() == []
+    # 同一租户不带 spec 的空白创建照常（既有行为零变化）
+    blank = client.post(
+        "/api/v1/artifacts", json={"kind": "dashboard", "title": "空白板"},
+        headers=CUST,
+    )
+    assert blank.status_code == 201
+
+
+def test_create_with_spec_validation_422_zero_halfwrite(client_platform) -> None:
+    """校验失败 422 零半写：缺 spec.spec / 白名单外 kind，均不落任何行。"""
+    bad_inner = client_platform.post(
+        "/api/v1/artifacts",
+        json={"kind": "dashboard", "title": "坏板",
+              "spec": {"title": "坏板"}},
+        headers=PLAT,
+    )
+    assert bad_inner.status_code == 422
+    assert "spec.spec" in bad_inner.json()["detail"]
+    bad_kind = client_platform.post(
+        "/api/v1/artifacts",
+        json={"kind": "research_report", "title": "报告",
+              "spec": _content_envelope()},
+        headers=PLAT,
+    )
+    assert bad_kind.status_code == 422
+    assert client_platform.get("/api/v1/artifacts", headers=PLAT).json() == []
+
+
+def test_slug_replay_appends_version_200(client_platform) -> None:
+    """同 slug 重放：不建重、追加版本、200 返回既有产物（新建 201 区分）。"""
+    first = client_platform.post(
+        "/api/v1/artifacts",
+        json={"kind": "dashboard", "title": "省级面板测试板",
+              "spec": _content_envelope(panels=[{"id": "kpi-1"}])},
+        headers=PLAT,
+    )
+    assert first.status_code == 201
+    created = first.json()
+
+    replay = client_platform.post(
+        "/api/v1/artifacts",
+        json={"kind": "dashboard", "title": "省级面板测试板",
+              "spec": _content_envelope(
+                  panels=[{"id": "kpi-1"}, {"id": "chart-1"}])},
+        headers=PLAT,
+    )
+    assert replay.status_code == 200, replay.text
+    updated = replay.json()
+    assert updated["id"] == created["id"]
+    assert updated["version"] == 2
+    assert updated["spec"]["spec"]["panels"] == [
+        {"id": "kpi-1"}, {"id": "chart-1"}]
+    # 版本链 append-only：v1 原内容仍在
+    v1 = client_platform.get(
+        f"/api/v1/artifacts/{created['id']}/versions/1", headers=PLAT)
+    assert v1.json()["spec"]["spec"]["panels"] == [{"id": "kpi-1"}]
+
+
+def test_slug_replay_identical_no_redundant_version(client_platform) -> None:
+    """同 slug 重放且内容一致：零操作（不追加冗余版本），200 返回现状。"""
+    spec = _content_envelope()
+    first = client_platform.post(
+        "/api/v1/artifacts",
+        json={"kind": "dashboard", "title": "省级面板测试板", "spec": spec},
+        headers=PLAT,
+    )
+    assert first.status_code == 201
+    # 键序不同=同一内容（规范化语义比对，不制造假版本）
+    reordered = {
+        "spec": {"showcase_slug": "province-test",
+                 "panels": spec["spec"]["panels"], "title": spec["spec"]["title"]},
+        "title": spec["title"],
+    }
+    replay = client_platform.post(
+        "/api/v1/artifacts",
+        json={"kind": "dashboard", "title": "省级面板测试板",
+              "spec": reordered},
+        headers=PLAT,
+    )
+    assert replay.status_code == 200
+    assert replay.json()["version"] == 1
+    versions = client_platform.get(
+        f"/api/v1/artifacts/{replay.json()['id']}/versions", headers=PLAT)
+    assert [v["version"] for v in versions.json()] == [1]
+
+
+def test_slug_replay_archived_409(client_platform) -> None:
+    """slug 重放命中 archived 产物：409 与 PUT 同口径，版本链不动。"""
+    created = client_platform.post(
+        "/api/v1/artifacts",
+        json={"kind": "dashboard", "title": "省级面板测试板",
+              "spec": _content_envelope()},
+        headers=PLAT,
+    ).json()
+    assert client_platform.post(
+        f"/api/v1/artifacts/{created['id']}/archive", headers=PLAT
+    ).status_code == 200
+    replay = client_platform.post(
+        "/api/v1/artifacts",
+        json={"kind": "dashboard", "title": "省级面板测试板",
+              "spec": _content_envelope(panels=[{"id": "new-1"}])},
+        headers=PLAT,
+    )
+    assert replay.status_code == 409
+    versions = client_platform.get(
+        f"/api/v1/artifacts/{created['id']}/versions", headers=PLAT)
+    assert [v["version"] for v in versions.json()] == [1]
+
+
+def test_slug_cross_tenant_isolation(db_session) -> None:
+    """幂等查重只在请求方租户域内：他租户同 slug 不命中（service 层直证）。
+
+    v0 带内容创建仅平台租户可用，跨租户场景由 service 层直接锁定——
+    将来放开权限时语义不漂移。"""
+    from fd_wire_api.artifacts.service import create_or_replay_artifact
+
+    envelope_a = {"title": "A 板", "spec": {"title": "A 板",
+                                            "panels": [],
+                                            "showcase_slug": "shared-slug"}}
+    artifact_a, created_a = create_or_replay_artifact(
+        db_session, customer_id="finddata-official", kind="dashboard",
+        title="A 板", spec=envelope_a,
+    )
+    assert created_a is True
+    # 租户 B 用同一 slug：不被拒、不被合并——建自己的产物
+    envelope_b = {"title": "B 板", "spec": {"title": "B 板",
+                                            "panels": [],
+                                            "showcase_slug": "shared-slug"}}
+    artifact_b, created_b = create_or_replay_artifact(
+        db_session, customer_id="cust-002", kind="dashboard",
+        title="B 板", spec=envelope_b,
+    )
+    assert created_b is True
+    assert artifact_b.id != artifact_a.id
+    assert artifact_b.customer_id == "cust-002"
+    # 租户 B 再重放：命中自己的（不是 A 的）
+    _, created_b2 = create_or_replay_artifact(
+        db_session, customer_id="cust-002", kind="dashboard",
+        title="B 板", spec=envelope_b,
+    )
+    assert created_b2 is False
 
 
 # ---------------------------------------------------------------- 跨客户隔离

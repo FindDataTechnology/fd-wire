@@ -32,6 +32,7 @@ from fd_wire_api.scripts.import_showcase import (
     import_one,
     load_source,
     run_import,
+    run_import_http,
     slugify,
 )
 
@@ -305,3 +306,129 @@ def test_imported_dashboard_renders_in_showcase(db, publisher, tmp_path) -> None
     assert detail is not None
     panels = detail["spec"]["spec"]["panels"]
     assert any("raw_option" in p for p in panels)
+
+
+# ------------------------------------------------------- HTTP 模式（真服务器）
+
+
+def test_http_mode_replay_two_runs_real_server(monkeypatch, tmp_path) -> None:
+    """HTTP 模式全链（add-artifact-create-endpoint 3.2）：真 uvicorn 上
+    run_import_http 连跑两次——首跑 201 created、次跑 200 updated 零新建、
+    版本号 +1、publish/visibility 环节重放不炸；匿名橱窗可见且数量不翻倍。"""
+    import threading
+    import time
+    import urllib.error
+
+    import uvicorn
+    from fastapi.testclient import TestClient  # noqa: F401 - 仅为导入一致性
+
+    from console_fixture import (
+        install_fake_jwks,
+        make_console_env,
+        mint_id_token,
+    )
+    from fd_wire_api.app import app as wire_app
+    from fd_wire_api.ai.db import get_db
+
+    # 本机回环请求必须绕系统代理（macOS 实锤：代理会劫持 127.0.0.1 报 502）
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    for var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
+                "all_proxy", "ALL_PROXY"):
+        monkeypatch.delenv(var, raising=False)
+
+    # ai 库：静态池内存库 + get_db 覆写（uvicorn 线程内同进程生效）
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    AiBase.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+    def override_get_db():
+        session = Session()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    reset_ai_runtime()
+    wire_app.dependency_overrides[get_db] = override_get_db
+    install_fake_jwks(monkeypatch)
+    make_console_env(
+        tmp_path, monkeypatch,
+        customers=[("sub-import-http", PLATFORM_PUBLISHER_NAME)],
+    )
+
+    config = uvicorn.Config(
+        wire_app, host="127.0.0.1", port=0, log_level="warning"
+    )
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 15
+    while not server.started and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert server.started, "uvicorn 15s 未就绪"
+    port = server.servers[0].sockets[0].getsockname()[1]
+    base_url = f"http://127.0.0.1:{port}"
+    token = mint_id_token("sub-import-http")
+
+    _write_source(tmp_path, "http-a.spec.json", "HTTP 板 A")
+    _write_source(tmp_path, "http-b.spec.json", "HTTP 板 B")
+
+    try:
+        first = run_import_http(
+            dashboards_dir=tmp_path, base_url=base_url, token=token
+        )
+        assert first.failed == 0, first.to_dict()
+        assert [e["status"] for e in first.entries] == ["created", "created"]
+        ids_first = {e["slug"]: e["artifact_id"] for e in first.entries}
+
+        # 匿名橱窗可见（publish + visibility=market 全链在 HTTP 上走通）；
+        # 列表卡片无 spec，slug 经详情端点逐个核
+        with urllib.request.urlopen(  # noqa: S310 - 测试回环
+            base_url + "/api/v1/showcase/dashboards", timeout=30
+        ) as resp:
+            listing = json.loads(resp.read().decode())
+        assert listing["total"] == 2
+        slugs = set()
+        for it in listing["items"]:
+            with urllib.request.urlopen(  # noqa: S310 - 测试回环
+                f"{base_url}/api/v1/showcase/dashboards/{it['id']}", timeout=30
+            ) as resp:
+                detail = json.loads(resp.read().decode())
+            slugs.add(detail["spec"]["spec"]["showcase_slug"])
+        assert {"http-a", "http-b"} <= slugs
+
+        # 第二跑：http-a 内容有变化（新图表）→ updated 零新建版本+1；
+        # http-b 内容一致 → updated 零新建且不追加冗余版本
+        path_a = tmp_path / "http-a.spec.json"
+        source_a = json.loads(path_a.read_text(encoding="utf-8"))
+        source_a["charts"].append(
+            {"id": "c2", "title": "图二", "source": "测试源", "height": 300,
+             "option": {"series": [{"type": "bar", "data": [2]}]}}
+        )
+        path_a.write_text(
+            json.dumps(source_a, ensure_ascii=False), encoding="utf-8"
+        )
+        second = run_import_http(
+            dashboards_dir=tmp_path, base_url=base_url, token=token
+        )
+        assert second.failed == 0, second.to_dict()
+        by_slug = {e["slug"]: e for e in second.entries}
+        assert all(e["status"] == "updated" for e in second.entries)
+        assert {e["slug"]: e["artifact_id"] for e in second.entries} == ids_first
+        assert by_slug["http-a"]["version"] == by_slug["http-b"]["version"] + 1
+
+        with urllib.request.urlopen(  # noqa: S310 - 测试回环
+            base_url + "/api/v1/showcase/dashboards", timeout=30
+        ) as resp:
+            listing2 = json.loads(resp.read().decode())
+        assert listing2["total"] == listing["total"]  # 零新建：橱窗不翻倍
+    finally:
+        wire_app.dependency_overrides.clear()
+        server.should_exit = True
+        thread.join(timeout=10)
+        reset_ai_runtime()

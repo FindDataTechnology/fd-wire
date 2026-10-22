@@ -63,14 +63,19 @@ class ArtifactFromDraftIn(BaseModel):
 
 
 class ArtifactCreateIn(BaseModel):
-    """空白建板入参（wire-dashboard-blank-create）。
+    """空白/带内容建板入参（空白=wire-dashboard-blank-create）。
 
-    kind/title 均必填；白名单与非空校验在 service 层统一裁决（空 title、
-    非 dashboard kind 一律 422 带原因）——模型只保字段在位与类型。
+    kind/title 必填；白名单与非空校验在 service 层统一裁决（空 title、
+    非白名单 kind 一律 422 带原因）——模型只保字段在位与类型。
+
+    ``spec`` 可选（add-artifact-create-endpoint）：携带时一步创建「带内容
+    draft 产物」，走与 spec 更新相同的 kind 分派校验；仅限平台自营发布方
+    （路由层 403）。缺省 None = 既有空白创建，行为逐字节不变。
     """
 
     kind: str
     title: str
+    spec: dict[str, Any] | None = None
 
 
 class PanelRefreshResult(BaseModel):

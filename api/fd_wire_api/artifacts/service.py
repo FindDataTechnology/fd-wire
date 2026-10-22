@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -370,6 +371,29 @@ def get_version(db: Session, artifact: Artifact, version: int) -> ArtifactVersio
     return row
 
 
+def _require_kind_layers(
+    kind: str,
+    spec: object,
+    *,
+    datasets_db: Session | None,
+    customer_id: str,
+) -> None:
+    """kind 专属校验层（spec 更新与带内容创建共用的单一真源）。
+
+    在版本行落库前执行——任何拒绝零半写。form/record-view 的 datasetId
+    属主层需要 datasets 库会话；alert_rule 规则契约层失败抛
+    InvalidAlertArtifactSpec（路由层 400，须先于父类捕获）。
+    """
+    if kind == FORM_KIND:
+        _require_form_dataset(spec, datasets_db=datasets_db, customer_id=customer_id)
+    if kind == RECORD_VIEW_KIND:
+        _require_record_view_datasets(
+            spec, datasets_db=datasets_db, customer_id=customer_id
+        )
+    if kind == ALERT_KIND:
+        _validate_alert_spec(spec)
+
+
 def update_spec(
     db: Session,
     artifact: Artifact,
@@ -404,16 +428,12 @@ def update_spec(
     error = validate_kind_spec(artifact.kind, spec)
     if error is not None:
         raise InvalidArtifactSpec(error)
-    if artifact.kind == FORM_KIND:
-        _require_form_dataset(
-            spec, datasets_db=datasets_db, customer_id=artifact.customer_id
-        )
-    if artifact.kind == RECORD_VIEW_KIND:
-        _require_record_view_datasets(
-            spec, datasets_db=datasets_db, customer_id=artifact.customer_id
-        )
-    if artifact.kind == ALERT_KIND:
-        _validate_alert_spec(spec)
+    _require_kind_layers(
+        artifact.kind,
+        spec,
+        datasets_db=datasets_db,
+        customer_id=artifact.customer_id,
+    )
     spec = dict(spec)  # type: ignore[arg-type]
     artifact.version += 1
     db.add(
@@ -605,10 +625,15 @@ def _blank_spec(kind: str, title: str) -> dict:
 
 
 def create_blank_artifact(
-    db: Session, *, customer_id: str, kind: str, title: str
+    db: Session,
+    *,
+    customer_id: str,
+    kind: str,
+    title: str,
+    spec: dict | None = None,
+    datasets_db: Session | None = None,
 ) -> Artifact:
-    """空白创建（wire-dashboard-blank-create；form 扩展 wire-form-builder）：
-    console 直接创建 draft 产物。
+    """空白/带内容创建（console 直接创建 draft 产物）。
 
     产物此前唯一出生路径是会话草稿转正（import_from_draft），而草稿只能由
     AI 构建产生、AI 构建要求 cell——免费档（无 cell）造不出任何看板/表单。
@@ -616,6 +641,11 @@ def create_blank_artifact(
     form=零字段未绑数据集），走与 from-draft 完全相同的建档手法（version=1
     版本行 + operator 审计 + 初始状态留痕 + title 投影），仅来源会话指针
     为 None。
+
+    ``spec`` 给定时（add-artifact-create-endpoint）创建「带内容 draft 产物」
+    （v1 = 给定 spec）：与 spec 更新同一校验栈（kind 分派 + kind 专属层，
+    全部落库前零半写），留痕文案如实区分两种出生方式。缺省 None = 既有
+    空白创建，行为逐字节不变。
 
     约束：kind 白名单 BLANK_CREATE_KINDS（dashboard/form/alert_rule/
     record-view/doc）；title strip 后须非空——违者 InvalidArtifactSpec
@@ -629,7 +659,20 @@ def create_blank_artifact(
     if not title.strip():
         raise InvalidArtifactSpec("title 必须是非空字符串")
     title = title.strip()
-    spec = _blank_spec(kind, title)
+    note = "空白创建（console 直接新建）"
+    if spec is not None:
+        spec = dict(spec)
+        error = validate_kind_spec(kind, spec)
+        if error is not None:
+            raise InvalidArtifactSpec(error)
+        # kind 专属层（数据集属主/告警契约）与 update_spec 同一函数——
+        # 单一真源，任何拒绝发生在落库前
+        _require_kind_layers(
+            kind, spec, datasets_db=datasets_db, customer_id=customer_id
+        )
+        note = "带内容创建（console 直接新建）"
+    else:
+        spec = _blank_spec(kind, title)
     # kind 分派校验（内造最小 spec 恒过——防御位，保证出生版本永远合法）
     error = validate_kind_spec(kind, spec)
     if error is not None:  # pragma: no cover - 内造 spec 恒过校验
@@ -648,7 +691,7 @@ def create_blank_artifact(
                 "status": ArtifactStatus.draft.value,
                 "at": utc_now_iso(),
                 "by": operator_label(customer_id),
-                "note": "空白创建（console 直接新建）",
+                "note": note,
             }
         ],
     )
@@ -665,6 +708,87 @@ def create_blank_artifact(
     db.commit()
     db.refresh(artifact)
     return artifact
+
+
+# ------------------------------------------------- 带内容创建 + slug 幂等
+
+
+def _spec_slug(spec: object) -> str | None:
+    """取 artifact spec 信封里的幂等键（``spec.spec.showcase_slug``）。
+
+    ``showcase_slug`` 是 spec 的自由扩展位（import_showcase 既有约定），
+    不在数据库列里。非 dict / 空 / 非字符串一律 None（视为无幂等键）。
+    """
+    if not isinstance(spec, dict):
+        return None
+    inner = spec.get("spec")
+    if not isinstance(inner, dict):
+        return None
+    slug = inner.get("showcase_slug")
+    return slug if isinstance(slug, str) and slug else None
+
+
+def find_slug_hit(db: Session, *, customer_id: str, slug: str) -> Artifact | None:
+    """同租户内按 ``showcase_slug`` 查既有产物（幂等查重）。
+
+    只在请求方租户域内查（跨租户同 slug 互不命中）；遍历该租户产物并读
+    各自最新版本行比对（平台租户产物量级几十条，代价可忽略；超规模再落
+    列建索引）。查重域不挑 kind——slug 是发布面概念，同租户同 slug 的
+    任何 kind 都视为同一产物的重放。
+    """
+    for artifact in list_artifacts(db, customer_id=customer_id):
+        if _spec_slug(current_spec(db, artifact)) == slug:
+            return artifact
+    return None
+
+
+def _specs_equal(a: dict, b: dict) -> bool:
+    """规范化 JSON 语义相等（键序无关）——避免键序差异制造假版本。"""
+    return json.dumps(a, sort_keys=True, ensure_ascii=False) == json.dumps(
+        b, sort_keys=True, ensure_ascii=False
+    )
+
+
+def create_or_replay_artifact(
+    db: Session,
+    *,
+    customer_id: str,
+    kind: str,
+    title: str,
+    spec: dict,
+    datasets_db: Session | None = None,
+) -> tuple[Artifact, bool]:
+    """带内容创建 + ``showcase_slug`` 幂等（本 change 核心）。
+
+    返回 ``(产物, 是否新建)``。slug 命中同租户既有产物时**绝不建重**：
+    内容一致零操作（原样返回，不追加冗余版本——「重跑 = 确保最新内容在线」
+    的单调语义）；有变化走 update_spec 同款追加版本（append-only；
+    archived 拒改 ArtifactLocked，与 PUT 同口径，路由层 409）。未命中或
+    无幂等键走普通创建。
+    """
+    slug = _spec_slug(spec)
+    if slug:
+        hit = find_slug_hit(db, customer_id=customer_id, slug=slug)
+        if hit is not None:
+            if _specs_equal(current_spec(db, hit), spec):
+                return hit, False
+            update_spec(
+                db,
+                hit,
+                spec=spec,
+                customer_id=customer_id,
+                datasets_db=datasets_db,
+            )
+            return hit, False
+    artifact = create_blank_artifact(
+        db,
+        customer_id=customer_id,
+        kind=kind,
+        title=title,
+        spec=spec,
+        datasets_db=datasets_db,
+    )
+    return artifact, True
 
 
 # ------------------------------------------------------------- 草稿层（doc）
