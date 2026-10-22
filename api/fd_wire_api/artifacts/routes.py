@@ -205,6 +205,10 @@ def _transition(artifact_id: int, action: str, customer_id: str, db: Session):
         artifact = handler(db, artifact, customer_id=customer_id)
     except service.InvalidStatusTransition as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except service.InvalidArtifactSpec as exc:
+        # 发布证据门 enforce 模式（wire-info-stream-program 4.3）：校验失败
+        # 422 并指名证据项；archive/restore 不抛此异常，语义不受影响。
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return artifact_detail(artifact, service.current_spec(db, artifact))
 
 
