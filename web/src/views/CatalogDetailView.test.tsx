@@ -91,19 +91,24 @@ describe("CatalogDetailView", () => {
     expect(screen.queryByTestId("detail-direct-read")).toBeNull();
   });
 
-  it("verified：「读取数据」引导登录，不展示按需开通", async () => {
+  it("verified：「落成数据集」表单（实体+时间范围），不展示按需开通", async () => {
     installDetails({ "ind-cpi": VERIFIED });
     render(<CatalogDetailView id="ind-cpi" />);
 
-    await screen.findByTestId("detail-direct-read");
+    const card = await screen.findByTestId("detail-to-dataset");
     expect(screen.getByRole("heading", { name: "居民消费价格指数同比" })).toBeTruthy();
     const fields = screen.getByTestId("detail-fields");
     expect(fields.textContent).toContain("420 个实体");
     expect(fields.textContent).toContain("1990-01 – 2026-09");
-    const read = screen.getByRole("link", { name: "读取数据" });
-    expect(read.getAttribute("href")).toBe("#/login");
+    // 建集表单：实体类型/标识/起止 + 提交按钮
+    expect(screen.getByTestId("to-dataset-entity-type")).toBeTruthy();
+    expect(screen.getByTestId("to-dataset-entity-id")).toBeTruthy();
+    expect(screen.getByTestId("to-dataset-start")).toBeTruthy();
+    expect(screen.getByTestId("to-dataset-end")).toBeTruthy();
+    expect(screen.getByTestId("to-dataset-submit").textContent).toContain("落成数据集");
     expect(screen.queryByTestId("detail-on-demand")).toBeNull();
     expect(screen.queryByText("按需开通（提交需求单）")).toBeNull();
+    expect(card.textContent).toContain("verified");
   });
 
   it("404：指标不存在的明确态", async () => {
