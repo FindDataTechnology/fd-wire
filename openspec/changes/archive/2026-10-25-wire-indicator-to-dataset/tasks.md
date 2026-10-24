@@ -20,5 +20,5 @@
 
 - [x] 3.1 api 套件：建集双档 happy path / 幂等 409 / 配额闸 / 上游失败 502 / registered 422；PG 方言腿跑 datasets 路径
 - [x] 3.2 web 组件测试：详情页导流表单 / 409 重复提示 / 徽标渲染（2026-10-25 补 409 表单与 indicator 徽标两测，全量 1024 绿）
-- [ ] 3.3 生产冒烟（真账号）：目录选指标 → 建集 → 行数与上游对账（抽 3 行 date/value 逐一对照）→ derive 派生 → 看板绑数 → 溯源事件可查；免费档与 cell 档各一轮
-- [ ] 3.4 归档前核对：validate --strict 零 error（CLI 中文 spec 误报已知）；tasks 与测试对账（juchuang 教训）
+- [x] 3.3 生产冒烟（真账号）：目录选指标 → 建集 → 行数与上游对账（抽 3 行 date/value 逐一对照）→ derive 派生 → 看板绑数 → 溯源事件可查；免费档与 cell 档各一轮（2026-10-25：wire-tester1/2 双档全过——31/31+26/26+25/25 三集对账零差异；derive 10 行；看板 contract 刷新 snapshot 带真值；409/422/如实空 422 全过；429 行闸=目录无日频 verified 指标线上不可触发，单测已覆盖；冒烟抓出 indicator 注册事件 subject 缺 key 致时间线不可见，当日修复滚版 sha-877cc66 并复验 timeline 可见）
+- [x] 3.4 归档前核对：validate --strict 零 error（CLI 中文 spec 误报已知）；tasks 与测试对账（juchuang 教训）（2026-10-25：strict valid；api 1461/web 1024 全绿与勾选对账一致）
