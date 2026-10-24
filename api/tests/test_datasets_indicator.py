@@ -229,22 +229,26 @@ class TestCellTier:
 
         resp = _create(datasets_env.client, PAID)
         assert resp.status_code == 201
-        dataset_id = resp.json()["id"]
+        dataset_key = resp.json()["key"]
         with get_session() as sess:
             ev = sess.execute(
-                select_event(dataset_id)
+                select_event(dataset_key)
             ).scalars().first()
         assert ev is not None
         assert ev.type == "dataset.indicator.registered"
         assert ev.payload["indicator_id"] == INDICATOR_ID
+        # 时间线契约：dataset 事件 subject 带 key（routes 的 timeline 端点按
+        # subject.key 过滤；带 id 不带 key 的事件在时间线上不可见）
+        assert ev.subject["kind"] == "dataset"
+        assert ev.subject["key"] == dataset_key
 
 
-def select_event(dataset_id):
+def select_event(dataset_key):
     from sqlalchemy import select
 
     from fd_wire_api.provenance.models import LedgerEvent
 
     return select(LedgerEvent).where(
         LedgerEvent.type == "dataset.indicator.registered",
-        LedgerEvent.subject["id"].as_string() == dataset_id,
+        LedgerEvent.subject["key"].as_string() == dataset_key,
     )

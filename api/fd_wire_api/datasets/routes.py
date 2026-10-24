@@ -648,7 +648,7 @@ def _indicator_append_ledger(db: Session, *, customer_id: str, dataset: Dataset,
         ledger=customer_id,
         type="dataset.indicator.registered",
         actor={"kind": "customer", "id": customer_id, "sig": None},
-        subject={"kind": "dataset", "id": dataset.id},
+        subject={"kind": "dataset", "key": dataset.key},
         payload={
             "indicator_id": source.indicator_id,
             "entity_type": source.entity_type,
