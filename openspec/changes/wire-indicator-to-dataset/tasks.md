@@ -18,7 +18,7 @@
 
 ## 3. 测试与验证
 
-- [ ] 3.1 api 套件：建集双档 happy path / 幂等 409 / 配额闸 / 上游失败 502 / registered 422；PG 方言腿跑 datasets 路径
-- [ ] 3.2 web 组件测试：详情页导流表单 / 409 重复提示 / 徽标渲染
+- [x] 3.1 api 套件：建集双档 happy path / 幂等 409 / 配额闸 / 上游失败 502 / registered 422；PG 方言腿跑 datasets 路径
+- [x] 3.2 web 组件测试：详情页导流表单 / 409 重复提示 / 徽标渲染（2026-10-25 补 409 表单与 indicator 徽标两测，全量 1024 绿）
 - [ ] 3.3 生产冒烟（真账号）：目录选指标 → 建集 → 行数与上游对账（抽 3 行 date/value 逐一对照）→ derive 派生 → 看板绑数 → 溯源事件可查；免费档与 cell 档各一轮
 - [ ] 3.4 归档前核对：validate --strict 零 error（CLI 中文 spec 误报已知）；tasks 与测试对账（juchuang 教训）
