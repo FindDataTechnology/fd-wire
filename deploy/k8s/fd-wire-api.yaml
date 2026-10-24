@@ -42,8 +42,8 @@ spec:
       containers:
         - name: api
           # 不可变标签纪律（mcp-service-deploy spec：禁 latest/浮动标签）。
-          # 出片 tag=testaction002 build-pool 快照 sha=f07ed95（真 ef98203：图文信息流面板 list；含动作闸 6.2 两修）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-8b6a68b
+          # 出片 tag=testaction004 build-pool 快照 sha=dd72128（真 ee262bc：指标落成数据集 source.kind="indicator" 全链 + docker 适配层）。
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-dd72128
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -55,6 +55,19 @@ spec:
             # 面板/evidence 端点走诚实降级（info_lag 标注 / 带原因返回）。
             - name: FD_INFO_URL
               value: http://fd-info.fd-prod.svc.cluster.local:8080/mcp
+            # 指标落成数据集拉数（wire-indicator-to-dataset）：上游 business-mcp
+            # 的 indicator_series_read 工具。business-mcp 部署在 zihan 集群
+            # fd-mcp ns（NodePort 30803，公网安全组未放行），cheap pod 出站走
+            # tailscale mesh（zihan=100.64.0.4，lawbench-mcp 同款
+            # NodePort-over-mesh 先例，pod 内实探 initialize 200）。token 走
+            # business-mcp 内部服务轨（zihan fd-mcp-env/FDBIZ_INTERNAL_TOKEN
+            # 同值，存 fd-wire-env/indicator_fetch_token）。URL 不带 /mcp——
+            # fetch 模块按 mcp_url property 自动补齐。
+            - name: INDICATOR_FETCH_URL
+              value: http://100.64.0.4:30803
+            - name: INDICATOR_FETCH_TOKEN
+              valueFrom:
+                secretKeyRef: { name: fd-wire-env, key: indicator_fetch_token }
             # 轮询式工单状态回流兜底：fd-prod 到 raw.githubusercontent.com
             # 被海外出站挡死（2026-10-11 实测），生产走拉取器推送式回流，
             # 轮询关闭（出站可达环境可开）。
