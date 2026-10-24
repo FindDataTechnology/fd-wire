@@ -13,9 +13,9 @@ ARG NGINX_IMAGE=nginx:1.27-alpine
 FROM ${NODE_IMAGE} AS builder
 WORKDIR /app
 # 依赖层先行，锁文件变化才失效。
-COPY web/package.json package-lock.json ./
+COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-fund --no-audit
-COPY web/tsconfig.json vite.config.ts index.html ./
+COPY web/tsconfig.json web/vite.config.ts web/index.html ./
 COPY web/src ./src
 # package.json build = tsc --noEmit && vite build → dist/
 RUN npm run build
