@@ -5,7 +5,8 @@
 - [x] 1.3 建 pack manifest「柏讯·产物构建」，`mcpServers: [wire-build-mcp]`，验证：`check_presets.py` 与 `pack-server-closure` 双绿
 - [x] 1.4 建 pack manifest「柏讯·数据治理」，`mcpServers: [wire-build-mcp]`，验证：同上
 - [x] 1.5 为「柏讯·产物构建」加一个 3 岗 `fleet` 段（巡线岗主动日节奏 + 内容岗/源岗被动）；「柏讯·数据治理」按 design D3 不设岗、保持普通 pack。验证：`parseFleetTemplate` 返回 ok，3 岗在岗者类型分别为 `pack-preset` / `pack-preset` / `existing-a2a`，两个被动岗 cadence 为空；steward pack 解析结果为 `no fleet section`
-- [ ] 1.6 装进运营号 cell 实跑一周，验证：一周内至少一次真产物落库（产物详情可见）与连续报数记录，且无越权写入；同时记录巡线岗空信号比例，>80% 则把日节奏降为每周三次
+- [x] 1.6 装进运营号 cell 实跑一周，验证：一周内至少一次真产物落库（产物详情可见）与连续报数记录，且无越权写入；同时记录巡线岗空信号比例，>80% 则把日节奏降为每周三次
+  - 10-26 按用户裁决提前收口（不空等满七天；系统持续演进，判据已由真实数据满足）：①**真产物落库** 36 号（平台域）+ 38 号（客户域），产物详情可见、source_ref 三元组完整；②**连续报数** 运营号巡线 3 轮（含 ok/被拒/无信号三种形态）+ 客户舰 2 轮，cron 物化与触发链实证；③**无越权写入** ai_action_audit 逐条归属正确客户（38 号草稿=wire-tester2 经批准闸），零跨客户动作；④**空信号比例实测 1/5=20%**（运营号 1/3、客户舰 0/2），远低于 80% 阈值 → **判定不降频，维持 `0 9 * * *`**。实测到的运行态事实（如实记录，不掩盖）：10-26 09:00 那轮因 platform 01:33Z 重启晚于 01:00Z 触发点，调度器记 `missed 1 occurrence during downtime` 未补跑，巡线岗一度判 missing（超 48h 容忍窗）——属平台停机缺补跑机制的既有缺口，已入 paas 需求文档观测项；与本 change 交付物无关
   - 10-24 实跑启动（fleet_1792786329045_jchvsd，platform-test cell）：当日两项条件各一次实证——36 号看板草稿落库（source_ref 三元组完整）+ 连续报数 6 轮（「本轮无信号」「有信号已派发」两形态都有）；观察期至 ≥10-31，五缺陷修复记录与凭据约束挂账见 `reports/2026-10-24-fleet-live-run.md`
 
 ## 2. 产物构建 MCP 工具
