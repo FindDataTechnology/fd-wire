@@ -128,6 +128,8 @@ b. 至少把 missed 计数暴露到 fleet cockpit / 岗位 evidence，让「少�
 
 ## 六、P1 · 回合启动期 `runtime_not_ready` / `runtime restarted mid-turn` 跨舰队普遍失败
 
+> **本文已升级为独立文档** `paas-fleet-turn-reliability-requirements.md`（2026-10-26 全量普查 178 条回合，含 P0 状态不可见/重试语义、P1 timeout 可归因/上游熔断）。本节保留作索引，**排期与验收以独立文档为准**。
+
 ### 问题
 
 岗位回合未能启动（或启动后被重启打断）时，平台把失败归到岗位的 `lastTurn.errorKind`，**但状态机仍按「最近执行在容忍窗内」判 `on_duty`**（本文件 §五的 `missing` 是另一条路径，看的是「有没有报数」）。结果是：回合没产出任何结论、没有报数、没有产物，控制台却显示「正常」——无人值守线会把这类静默少跑当成正常。
