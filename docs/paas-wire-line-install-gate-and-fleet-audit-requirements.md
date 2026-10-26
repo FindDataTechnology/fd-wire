@@ -1,7 +1,7 @@
-# 壹座侧需求：wire 线 pack 安装闸分支 + fleet 行更新审计 + 凭据首连交付 + consent 页修复
+# 壹座侧需求：wire 线 pack 安装闸分支 + fleet 行更新审计 + 凭据首连交付 + consent 页修复 + 回合启动期失败可见性
 
-> 来源：fd-wire change `wire-content-fleet` 交接执行（2026-10-24 下午–晚，`openspec/changes/wire-content-fleet/reports/2026-10-24-handoff-execution.md`）
-> 对象：paas（壹座）仓。四件按优先级排列，P0 阻断真实客户装 wire pack。
+> 来源：fd-wire change `wire-content-fleet` 交接执行（2026-10-24 下午–晚，`openspec/changes/wire-content-fleet/reports/2026-10-24-handoff-execution.md`）；§五、§六 为 2026-10-26 归档前核验补充
+> 对象：paas（壹座）仓。六件按优先级排列，P0 阻断真实客户装 wire pack。
 > wire 侧配合事项在文末（都是已做或零代码）。
 
 ## 一、P0 · pack 安装闸缺 wire-customer/lex 分支（阻断客户车道）
@@ -126,7 +126,48 @@ b. 至少把 missed 计数暴露到 fleet cockpit / 岗位 evidence，让「少�
 
 人为在触发点前后重启 platform：要么看到补跑回合（带补跑标记），要么 cockpit 明确显示 missed 计数与原因。
 
-## 六、wire 侧状态（无需 paas 动作，备案）
+## 六、P1 · 回合启动期 `runtime_not_ready` / `runtime restarted mid-turn` 跨舰队普遍失败
+
+### 问题
+
+岗位回合未能启动（或启动后被重启打断）时，平台把失败归到岗位的 `lastTurn.errorKind`，**但状态机仍按「最近执行在容忍窗内」判 `on_duty`**（本文件 §五的 `missing` 是另一条路径，看的是「有没有报数」）。结果是：回合没产出任何结论、没有报数、没有产物，控制台却显示「正常」——无人值守线会把这类静默少跑当成正常。
+
+与 §五 的区别：§五是「触发点被停机覆盖、调度器不补跑」；本节是「**触发了、但回合没跑起来**」，两者叠加时更容易被误读成一次正常但无信号的巡视。
+
+### 实测（2026-10-26 单次横向扫描，`GET /api/fleets/<id>` 逐支读取）
+
+7 支活跃舰队中 **6 支**在最近一轮出现失败回合，合计 11 个失败岗位回合：
+
+| 舰队 | 岗位 | errorKind | 备注 |
+|---|---|---|---|
+| 柏讯内容舰队 | 巡线岗 | `runtime_not_ready` | 10-25T01:17Z，同一轮触发 §五 的 missing |
+| 柏讯情报舆情舰队 | 舆情哨 | `runtime_not_ready` | 10-24T23:40Z |
+| 柏讯情报舆情舰队 | 投稿岗 | `runtime_not_ready` | 10-25T00:14Z |
+| 柏讯情报舆情舰队 | 情报主编 | `other`（runtime restarted mid-turn） | 10-25T00:24Z |
+| 识律政心监测舰队 | 政心主编 | `runtime_not_ready` | 10-25T04:00Z |
+| 识律政心监测舰队 | 指标巡检员 | `model_upstream`（502） | 10-25T02:30Z，与 runtime 无关，另一类 |
+| 识律评测哨 | 评测哨 | `other`（runtime restarted mid-turn） | 10-25T08:50Z |
+| lex 营销内容舰队 | 选题岗 | `timeout`（turn timed out） | 2026-10-26T02:24Z |
+| lex 营销内容舰队 | 发布草稿岗 | `timeout` | 10-25T06:20Z |
+| 营销·官网内容舰队 | 选题岗 | `timeout` | 10-25T18:00Z |
+| 营销·官网内容舰队 | 审读岗 | `timeout` | 2026-10-26T02:14Z |
+
+同批健康的对照：情报舆情「情报巡检员」、政心「投稿岗」、lex「撰稿岗」、官网「撰稿岗/发布草稿岗/评测哨岗」均正常。**说明不是单一舰队配置问题，是平台运行时的启动期/重启期行为。**
+
+### 需求（两条，互不替代）
+
+a. **回合未启动不计入「正常」**：`runtime_not_ready` 应作为「本轮未执行」计入 evidence（类似 missed），并在 fleet cockpit 与岗位卡片显式可见；不要把「有 lastRun 但回合失败」渲染成与成功同形的「正常」。
+b. **`timeout` 需要可归因**：`turn timed out` 目前不带耗时/步数/最后一步工具，运营方无法判断是模型慢、工具挂死还是预算设置不当——至少回传已用时长与最后调用的工具名。
+
+### 验收
+
+扫描任一舰队：出现过 `runtime_not_ready` / `timeout` 的岗位，其 cockpit 状态与 `on_duty` 有别，且能一眼看出「本轮没跑成」与「跑了但无信号」的区分。
+
+### 与本次交付的关系
+
+本节由 `wire-content-fleet` 归档前的横向核验发现，**不是该 change 的交付缺陷**（其自身产物/报数/审计判据均已实证通过，见归档 tasks 1.6）。登记在此供 paas 侧排期。
+
+## 七、wire 侧状态（无需 paas 动作，备案）
 
 - **引擎通道开户口径已落**：`AI_CELL_ENDPOINT_MAP`（fd-wire GitOps bcf57e3，三条在位：wire-tester2/wiretester2、drillcust001、pgauto001）。**新付费客户开户步骤**=cell-manager provision+grant（短 slug，PG 库名规则 ≤30 小写）→ relay（socat 尾网端口）→ PATCH registry 条目 proxy_pass_url 触发边缘重渲染 → fd-wire-api.yaml 加一行映射。全程配方在 `openspec/changes/wire-content-fleet/reports/2026-10-24-handoff-execution.md` §三。
 - 7 天凭据续期观测照旧（首日数据点：aloadtree 两行正常、tester2 新行自动续 ✓、运营号旧行 invalid_grant 已重铸）。
