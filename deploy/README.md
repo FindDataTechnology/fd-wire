@@ -81,8 +81,18 @@
 历史与上传原件。新清单（`deploy/k8s/fd-wire-api.yaml`）已改挂 PVC
 `fd-wire-datasets-data`（`/var/lib/fd-wire/{db,uploads}`）。迁移工件：
 `fd-wire/scripts/datasets_off_tmp.py`（自包含标准库，`--help` 自解释；
-`--selftest` 本地演练）。备份/恢复均在 pod 内执行，镜像 slim 无 tar，
-文件进出一律走 `kubectl exec -i … cat`（不用 `kubectl cp`）。
+`--selftest` 本地演练）。备份/恢复均在 pod 内执行。
+
+**文件进出一律用 `kubectl cp`**（本 pod 实测 `tar` 与 `base64` 都在
+`/usr/bin/`，原先「slim 镜像没有 tar」的判断已过时）。
+
+> ⚠️ **不要用 `kubectl exec -i … sh -c 'cat > /path' < localfile` 传文件。**
+> 2026-10-30 在 cheap-1 上清出三个自 10-15 起运行 15 天的僵死 `cat` 进程：
+> `docker exec -i` 的 stdin 一旦没有正常关闭（客户端中断、管道异常、TTY 差异），
+> 容器里的 `cat` 就永远等不到 EOF，进程和管道都不释放，每个空烧约 40% CPU
+> 并把主机 load 顶到 60+，连带 `mcp-mongodb` 被判 unhealthy。这种写法没有超时、
+> 没有失败可见性，泄漏后只能靠人工发现。
+> 必须走 exec 流式时，加 `timeout` 兜底（`timeout 30 sh -c 'cat > /path'`）。
 
 前置：`kubectl --context cheap -n fd-prod get pvc` 确认目标 PVC 名未占用；
 旧 pod 健康（迁移期间 datasets 面短暂只读，告知控制台侧）。
@@ -91,13 +101,13 @@
 
    ```bash
    POD=$(kubectl --context cheap -n fd-prod get pod -l app.kubernetes.io/name=fd-wire-api -o jsonpath='{.items[0].metadata.name}')
-   # 脚本送进旧 pod（exec cat 流式；kubectl cp 依赖容器内 tar，slim 镜像没有）
-   kubectl --context cheap -n fd-prod exec -i "$POD" -- sh -c 'cat > /tmp/datasets_off_tmp.py' < scripts/datasets_off_tmp.py
+   # 脚本送进旧 pod
+   kubectl --context cheap -n fd-prod cp scripts/datasets_off_tmp.py "$POD":/tmp/datasets_off_tmp.py
    kubectl --context cheap -n fd-prod exec "$POD" -- python3 /tmp/datasets_off_tmp.py backup \
      --db /tmp/fd_wire.db --uploads /tmp/fd_wire_dataset_uploads --out /tmp/datasets_off_tmp_backup
    mkdir -p datasets_off_tmp_backup
    for f in db.sqlite uploads.tar.gz MANIFEST.json; do
-     kubectl --context cheap -n fd-prod exec -i "$POD" -- cat /tmp/datasets_off_tmp_backup/$f > datasets_off_tmp_backup/$f
+     kubectl --context cheap -n fd-prod cp "$POD":/tmp/datasets_off_tmp_backup/$f datasets_off_tmp_backup/$f
    done
    sha256sum datasets_off_tmp_backup/*   # 留档；restore 侧会再验 MANIFEST 哈希
    ```
@@ -110,14 +120,14 @@
 
 3. **一次性恢复（备份灌入 PVC）**——在挂 PVC 的新 pod 内执行（PVC 为
    RWO 单写者，api pod 即恢复执行位；备份文件在本地，独立 Job 对象拿不
-   到本地文件，exec 注入等价且少一亲清单）：
+   到本地文件，cp 注入等价且少一亲清单）：
 
    ```bash
    NEWPOD=$(kubectl --context cheap -n fd-prod get pod -l app.kubernetes.io/name=fd-wire-api -o jsonpath='{.items[0].metadata.name}')
-   kubectl --context cheap -n fd-prod exec -i "$NEWPOD" -- sh -c 'cat > /tmp/datasets_off_tmp.py' < scripts/datasets_off_tmp.py
+   kubectl --context cheap -n fd-prod cp scripts/datasets_off_tmp.py "$NEWPOD":/tmp/datasets_off_tmp.py
    kubectl --context cheap -n fd-prod exec "$NEWPOD" -- mkdir -p /tmp/datasets_off_tmp_backup
    for f in db.sqlite uploads.tar.gz MANIFEST.json; do
-     kubectl --context cheap -n fd-prod exec -i "$NEWPOD" -- sh -c "cat > /tmp/datasets_off_tmp_backup/$f" < datasets_off_tmp_backup/$f
+     kubectl --context cheap -n fd-prod cp datasets_off_tmp_backup/$f "$NEWPOD":/tmp/datasets_off_tmp_backup/$f
    done
    kubectl --context cheap -n fd-prod exec "$NEWPOD" -- python3 /tmp/datasets_off_tmp.py restore \
      --backup-dir /tmp/datasets_off_tmp_backup \
