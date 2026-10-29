@@ -141,3 +141,38 @@ SHALL 把「提议已提交」计为该步完成，不得轮询等待确认结�
 `openspec/changes/add-fleet-identity-turn/`（回合腿 change，validate 绿待实施）、
 `lib/action-registry.js`（R2 结构实证）、`lib/publish-tool-gate.js`（§五①依据）、
 `lib/wire-tool-risk.js` + `scripts/test-wire-tool-risk.mjs`（§五②依据）。
+
+---
+
+## 六、交付完成通知（柏讯 → 壹座，2026-10-30）
+
+**三新工具已上产，请按 §五 第 4 项重烘焙 registry 工具面快照。**
+
+### 已交付（柏讯侧全部完成）
+
+| 事项 | 证据 |
+|---|---|
+| wire-ops-mcp 部署含三新工具 | 生产 `wire-ops-mcp:sha-d8a81b6`；pod 内 FastMCP 枚举 **19 个工具**，含 `wire_action_list` / `wire_action_propose` / `wire_action_status` |
+| 工具面自报 registry | `/health` → `{"status":"ok","last_surface_report":"ok"}`（add-self-reported-tool-surface 之后的自报通道，**不再需要 Mongo 直写**） |
+| tool_risk 标签（复用既有值，未新增） | `tool-surface.json`：`wire_action_propose = "write"`；list/status 未列入 `tool_risk` → 按既有约定即 `read`（不入写全集）。**全程只用 read/write/cost 三值，无新值** |
+| 迁移 0043 上产 | 生产双库 `alembic_version = 0044_dataset_source_config`；`domain_action_types` / `_type_events` / `_instances` 三表在位，`ai_action_proposals.conversation_id` 已转 nullable |
+| 真库端到端 | 类型声明 201 → 提议即时回执 `pending_confirm`（tier=inline，不阻塞回合）→ 实例台账 200（`source_ref` 身份行原样落库）→ 列表 200；残留已清理 |
+| propose 永不镜像进拍板 lane | 保持（用户红线）：提议只落柏讯域动作台账，不进壹座的 decision items |
+
+### 请壹座执行（只有一项）
+
+**重烘焙 registry 工具面快照**——执行既有配方
+（`docs/registry-maintenance.md` §79 自报通道 / `scripts/refresh-wire-tool-surface.mjs`），
+让 `lib/wire-tool-risk.js` 从 fd-wire 的 `tool-surface.json` 取到本次新增键。
+
+预期观测（复核口径）：
+
+- CI 硬断言的工具全集计数 **16 → 17**（`wire_action_propose` 进入 gated write 全集）；
+- 声明 `wire_action_propose` 的 pack 不再够格当 copilot 聚焦面——**期望行为，柏讯勿惊**；
+- `wire_action_list` / `wire_action_status` 计为 read，不进写全集。
+
+### 时序约束（不变）
+
+`fleet-packs` 模板把 `wire_action_*` 写进 `allowTools` 之前，**壹座侧须先完成上述重烘焙**
+（网关 registry 快照落后于真实工具面时，装包会以「工具不存在」失败）。柏讯这边已就绪，
+等你回执即可发 pack。
