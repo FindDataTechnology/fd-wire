@@ -16,4 +16,6 @@
 - [x] 2.2 `openspec validate wire-sensitivity-market-closure --strict` 绿；与根仓
   change 的上产顺序记录（helper 前置——两 change 同批实施，同仓同卷）；ROADMAP-v2
   Wave B 勾选同步
-- [ ] 2.3 归档 + 生产 rollout 走快照仓通道（随根仓主件同批）
+- [x] 2.3 归档 + 生产 rollout 走快照仓通道。**已上产 2026-10-30**（与根仓
+  `wire-sensitivity-propagation` 同批）：api/web 镜像 sha-ca7b45e 已滚；
+  迁移 0041 父集边表在双库落位并回填存量。

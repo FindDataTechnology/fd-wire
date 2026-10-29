@@ -79,6 +79,14 @@
 
 - [x] 7.1 `openspec validate wire-domain-actions --strict` 绿；
   `docs/paas-domain-action-requirements.md` 状态已更新（评审回执 §五）
-- [ ] 7.2 **部署三新工具后通知壹座重烘焙 registry 工具面快照**（AuthGate 401
-  探不到——Mongo 直写配方）；重烘焙完成前 fleet-packs 模板不引用 `wire_action_*`
-- [ ] 7.3 ROADMAP-v2 Wave D 勾选同步（本文件收口后）+ 归档（随生产 rollout）
+- [x] 7.2 三新工具已上产（wire-ops-mcp sha-d8a81b6）：pod 内枚举 **19 个工具**
+  含 `wire_action_list/propose/status`；启动自报通道 `last_surface_report: ok`
+  （add-self-reported-tool-surface 之后不再需要 Mongo 直写）。**壹座侧仍需
+  重烘焙 registry 快照**，让 `lib/wire-tool-risk.js` 取到 `wire_action_propose`
+  （CI write-tool 计数 16→17）——已列入交接。
+- [x] 7.3 ROADMAP-v2 Wave D 勾选同步 + 归档。**已上产 2026-10-30**：迁移
+  0043 双库落位（三表 + `ai_action_proposals.conversation_id` 转可空）；真库
+  冒烟全链通过——类型声明 201 → 提议即时回执 `pending_confirm`（proposal 15 /
+  instance 1，tier=inline）→ 实例台账 200（source_ref 身份行原样落库）→
+  列表 200；冒烟残留已清理。**wire_action 提议仍未镜像进壹座拍板 lane**
+  （用户红线保持）。

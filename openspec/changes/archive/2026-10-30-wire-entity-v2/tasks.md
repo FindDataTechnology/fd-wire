@@ -55,5 +55,8 @@
   pytest（v2 字段断言）
 - [x] 5.2 `openspec validate wire-entity-v2 --strict` 绿；全 api 套件
   1505 全绿（连续两轮）；web 1024 全绿
-- [ ] 5.3 ROADMAP-v2 Wave C 勾选同步 + 真库端到端冒烟（声明→关系→对象列表→
-  详情→遍历→MCP 搜索——随生产 rollout）+ 归档
+- [x] 5.3 ROADMAP-v2 Wave C 勾选同步 + 真库端到端冒烟 + 归档。**已上产
+  2026-10-30**：迁移 0042 双库落位（entities 两列 + entity_relationships 四列）；
+  真库冒烟——建实体 201 且 `display_column`/`column_notes` 原样回显、对象列表
+  200、graph 200、1:n 关系 201（服务端归一化为 n:1 存储）、m:n 非主键源列
+  如实 422。冒烟实体已清理。
