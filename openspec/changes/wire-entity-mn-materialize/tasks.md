@@ -49,6 +49,8 @@
   {estimate 0, rows 3, orphan_dropped 2} 如实、展开行右表列真带出 → 桥加合法对
   (o3,c1) 重放物化 dataset_5：rows 4、o3 同连 c1+c2（m:n 多重性实证）→
   **冒烟抓出对象面 dict 行解析缺陷并已修**（_rows_to_dicts 对 query 的 dict 行
-  zip 迭代键名产垃圾行，api 5975db1 + 镜像 sha-fd6f9c0，42 测试含 2 条回归）
+  zip 迭代键名产垃圾行，api 净重建 6fc088f + 镜像 sha-b6c3346，42 测试含 2 条回归；
+  教训入档：5975db1 曾误扫入并发会话未提交的 entities/console 半成品→首版镜像
+  import 崩 crashloop→回滚 995a1cb 恢复→净重建重上产）
 - [ ] 5.3 closeout 记：本 change wire-ops-mcp 工具面零改动 → 无壹座重烘焙前置；
   引擎构建线 `internal-main` 移植确认（防「镜像内算子计数为 0」复现）
