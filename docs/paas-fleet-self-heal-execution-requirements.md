@@ -90,3 +90,11 @@ action-registry 的 pending 提案 SHALL 增加"政策批准人"通道：命中�
 - 不新建第二套调度器/执行路径（与 orchestration-modes 基调一致；E1/E2 落既有 reconcile+cron 引擎，E3 落既有 action-gate）。
 - 不给工厂集群或任何 pack 直 kubectl 写权（写面=GitOps/在册 server 单一通道）。
 - 不在本需求稿内实现——paas 姊妹 change 立项后以 paas design 为准施工。
+
+## 七、追加挂账（10-31 隔夜故障段实证，2026-11-01 补记）
+
+来自 `add-infra-factory-fleet` 验收报告「隔夜 model_upstream 故障段」，平台 LLM 通道两层故障（账号调度排除已修=priority 拉高即愈；容量残层未治）：
+
+- **E7 · 看护集群推理通道独立**：watcher（工厂集群）与被看护系统共用同一 LLM 网关/账号池，平台网关故障时看护者自己也 fail/skip（实测 15 failed + 26 skipped）。SHALL：看护集群可配置独立推理通道或独立账号池（至少独立于被巡检对象的容量配额）；不满足时巡检岗 SHALL 在清单中标注「看护通道同源」。
+- **E8 · 单模型容量下限**：平台默认模型（deepseek-v4.1-flash/glm-5.3-flash）当前只有单一上游账号（windows-sub2api 中转，priority 已拉高），其自身 429（no_reset_time→默认 5s 窗）即造成全平台该模型 503 爆发（实测 10 分钟窗 44 次选择失败）。SHALL：平台默认模型至少两个上游账号；上游 429 无 reset 头时网关 SHALL 采用指数退避而非固定 5s 重试打满。
+- **E9 · turn 级 timeout 尾挂**（与本稿 E1 同族，转正式条目）：巡检工作产物完整落地后 turn 仍被 runtime 判 timeout（实测 turn 768/770/1192 三例同形状）。SHALL：回合预算判定以「产物落账时间」为准或产物落地后进入宽限收尾窗，不允许已交付产物被标失败。
