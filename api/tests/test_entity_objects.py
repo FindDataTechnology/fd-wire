@@ -71,18 +71,11 @@ def query_result(columns: list[str], rows: list[list]) -> dict:
 
 @pytest.fixture()
 def db_session():
-    pg_url = os.getenv("MN_TEST_PG_URL")
-    if pg_url:
-        # PG 腿（wire-entity-mn-materialize 1.3，Wave F 口径）：MN_TEST_PG_URL
-        # 指向**可弃测试库**时换 PG 后端跑同一测试集——执行类用例零标记全跑，
-        # 引擎方言差异（JSON 列/RETURNING/服务端默认值）就地暴露。
-        engine = create_engine(pg_url)
-    else:
-        engine = create_engine(
-            "sqlite://",
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-        )
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     AiBase.metadata.create_all(bind=engine)
     EntitiesBase.metadata.create_all(bind=engine)
     DatasetsBase.metadata.create_all(bind=engine)
@@ -92,10 +85,6 @@ def db_session():
         yield session
     finally:
         session.close()
-    if pg_url:
-        AiBase.metadata.drop_all(bind=engine)
-        EntitiesBase.metadata.drop_all(bind=engine)
-        DatasetsBase.metadata.drop_all(bind=engine)
 
 
 @pytest.fixture()
