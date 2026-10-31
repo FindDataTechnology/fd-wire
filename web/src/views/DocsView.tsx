@@ -558,6 +558,28 @@ export function DocsView() {
             </p>
           </div>
           <div
+            data-testid="docs-transform-pipelines-dag"
+            className="rounded-lg border border-slate-200 p-5"
+          >
+            <h3 className="font-medium">
+              {t("docs.transformPipelines.dagTitle")}
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.transformPipelines.dagDesc")}
+            </p>
+          </div>
+          <div
+            data-testid="docs-transform-pipelines-async"
+            className="rounded-lg border border-slate-200 p-5"
+          >
+            <h3 className="font-medium">
+              {t("docs.transformPipelines.asyncTitle")}
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("docs.transformPipelines.asyncDesc")}
+            </p>
+          </div>
+          <div
             data-testid="docs-transform-pipelines-failure"
             className="rounded-lg border border-slate-200 p-5"
           >

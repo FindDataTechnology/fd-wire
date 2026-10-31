@@ -289,6 +289,12 @@ const en: Translation = {
     outputTitle: "Output semantics",
     outputDesc:
       "Re-running the same version refreshes the output datasets in place (nothing new is created); the first run of a new version creates new outputs, while old-version outputs persist as regular datasets, untouched.",
+    dagTitle: "Branching and parallelism (DAG)",
+    dagDesc:
+      "A step can declare its inputs: by default the previous step (a linear chain), or any earlier step or the base dataset — two branches run at once and converge in a later step (fan-out/fan-in). Cycles and references to unknown steps are rejected when the version is saved.",
+    asyncTitle: "Asynchronous runs and cancellation",
+    asyncDesc:
+      "A run no longer blocks the request until it finishes: it is queued, and returns the result directly if it settles within a short window (~30 seconds), otherwise it returns the run and the detail view polls node states (queued / running / succeeded / failed / skipped). You can cancel at any time — unstarted nodes are skipped, in-flight nodes finish, and outputs of successful steps are kept; the run budget and per-node timeout fail honestly when exceeded.",
     failureTitle: "Failure isolation",
     failureDesc:
       "If a step fails midway, outputs of already-successful steps are kept and later steps do not run — the run record locates the failed step and its error summary honestly; later results are never fabricated.",
