@@ -2881,6 +2881,83 @@ const en: Translation = {
           "Nodes = entities, edges = relationships (with kind labels); click a node to jump to its card. This graph is the same source the AI builder's context draws from.",
         empty: "The graph is empty — declare entities to see them here.",
       },
+      // Ontology versioning (add-ontology-versioning task 5): bumping a version
+      // = taking a snapshot (daily = timeline, manual = release decision);
+      // unpublished changes = event count since the latest snapshot. Raw-SQL
+      // writes bypass the event stream, so the integrity badge says plainly
+      // "differs from the event stream".
+      version: {
+        title: "Versions",
+        subtitle:
+          "Your ontology has semantic versions: bumping a version takes a snapshot; unpublished changes count the changes since the latest snapshot. Compare any two versions, export (JSON/YAML), and roll back to any version (history only grows).",
+        loading: "Loading versions…",
+        loadFailed: "Failed to load versions",
+        retry: "Retry",
+        empty:
+          "No version snapshots yet — they appear after the first daily snapshot or a manual release.",
+        unpublishedBadge: "{{count}} unpublished change(s)",
+        unpublishedSince: "since v{{version}}",
+        publish: "Take a release",
+        publishLabelLabel: "Version label (optional, ≤80 chars)",
+        publishLabelPlaceholder: "e.g. Smoke-test ontology final",
+        publishSubmit: "Publish",
+        publishing: "Publishing…",
+        publishCancel: "Cancel",
+        publishFailed: "Publish failed",
+        publishOk: "Published v{{version}}",
+        publishUnchanged: "{{message}}",
+        publishUnchangedFallback:
+          "The current ontology matches v{{version}} — no new version was created",
+        exportCurrentJson: "Export current as JSON",
+        exportCurrentYaml: "Export current as YAML",
+        exportVersion: "Export this version",
+        exportFailed: "Export failed",
+        trigger: {
+          manual: "release",
+          daily: "daily",
+        },
+        counts: "{{entities}} entities / {{relations}} relationships",
+        compareCurrent: "Compare with current",
+        diffTitle: "v{{version}} → current",
+        diffLoading: "Computing differences…",
+        diffFailed: "Failed to compute differences",
+        diffClose: "Collapse",
+        noDiff: "No differences — the current ontology matches this version.",
+        entityGroup: "Entities",
+        relationshipGroup: "Relationships",
+        added: "Added ({{count}})",
+        removed: "Removed ({{count}})",
+        changed: "Field changes ({{count}})",
+        none: "None",
+        rollback: "Roll back to this version",
+        rollbackPlanTitle: "Plan to roll back to v{{version}}",
+        rollbackPlanFailed: "Failed to build the rollback plan",
+        rollbackPlanEmpty:
+          "The current ontology already matches v{{version}} — nothing to roll back.",
+        rollbackEntities:
+          "Entities: create {{create}} / update {{update}} / delete {{delete}}",
+        rollbackRelationships: "Relationships: create {{create}} / delete {{delete}}",
+        rollbackConfirm: "Confirm rollback",
+        rollbackCancel: "Cancel",
+        rollbackWorking: "Rolling back…",
+        rollbackFailed: "Rollback failed",
+        rollbackExecuted: "{{count}} step(s) executed",
+        rollbackIdentity:
+          "Note: the target id of {{items}} was already taken and fell back to a fresh id — the digest does not match the target version.",
+        rollbackDigestMatch:
+          "Rollback complete — the current state matches the target version (same digest).",
+        rollbackDigestMismatch:
+          "Rollback complete, but the current state's digest does not match the target version.",
+        integrity: "Integrity self-check",
+        integrityUnavailable: "Integrity self-check unavailable",
+        integrityFailed: "Integrity self-check failed",
+        integrityOk: "Consistent with the event stream",
+        integrityBad: "Differs from the event stream ({{count}} difference(s))",
+        integrityBaseline: "Baseline: {{kind}}, {{events}} event(s) folded",
+        integrityLoading: "Checking…",
+        baselineSnapshot: "earliest snapshot",
+        baselineEmpty: "empty baseline",
+      },
     },
     // Dataset market (wire-dataset-marketplace): signed-in customers can
     // browse datasets others opened, subscribe (or request approval), and

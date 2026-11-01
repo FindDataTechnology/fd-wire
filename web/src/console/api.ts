@@ -100,16 +100,18 @@ function parseDetailItems(raw: unknown[]): ApiDetailItem[] {
 
 export class ConsoleApiError extends Error {
   readonly status: number | undefined;
-  /** 后端 error body 的 detail 文案（如 429 限额说明），无则 undefined。 */
-  readonly detail: string | undefined;
-  /** 422 校验错误的 detail 数组条目（FastAPI 标准形状；string detail 时
+  /** 后端 error body 的 detail（如 429 限额说明 / 回滚中途失败的
+   *  {message,executed,note} 对象）——UI 取字符串或对象的 message 如实
+   *  呈现，绝不显示 [object Object]。 */
+  readonly detail: string | Record<string, unknown> | undefined;
+  /** 422 校验错误的 detail 数组条目（FastAPI 标准形状；非数组 detail 时
    *  为 undefined）——按条目供 UI 映射本地化文案。 */
   readonly detailItems: ApiDetailItem[] | undefined;
 
   constructor(
     message: string,
     status?: number,
-    detail?: string,
+    detail?: string | Record<string, unknown>,
     detailItems?: ApiDetailItem[],
   ) {
     super(message);
@@ -137,7 +139,7 @@ export function bearerHeaders(): Record<string, string> {
 /** 统一响应处理：非 2xx 抛 ConsoleApiError（带后端 detail），204 返回 null。 */
 async function readResponse(response: Response, url: string): Promise<unknown> {
   if (!response.ok) {
-    let detail: string | undefined;
+    let detail: string | Record<string, unknown> | undefined;
     let detailItems: ApiDetailItem[] | undefined;
     try {
       const data: unknown = await response.json();
@@ -148,6 +150,9 @@ async function readResponse(response: Response, url: string): Promise<unknown> {
         } else if (Array.isArray(rawDetail)) {
           // FastAPI 422 校验错误数组：逐条收窄（string detail 语义不变）。
           detailItems = parseDetailItems(rawDetail);
+        } else if (rawDetail && typeof rawDetail === "object") {
+          // 对象 detail（如回滚中途失败 {message,executed,note}）原样保留。
+          detail = rawDetail as Record<string, unknown>;
         }
       }
     } catch {
@@ -211,9 +216,16 @@ async function requestMultipart(
   return readResponse(response, url);
 }
 
-/** 呈现用错误文案：ConsoleApiError 有后端 detail 用 detail，否则用兜底文案。 */
+/** 呈现用错误文案：ConsoleApiError 有后端 detail 用 detail，否则用兜底文案。
+ *  对象 detail（如回滚中途失败）取 message 字段——绝不回退到 [object Object]。 */
 export function apiErrorText(err: unknown, fallback: string): string {
-  return err instanceof ConsoleApiError && err.detail ? err.detail : fallback;
+  if (!(err instanceof ConsoleApiError)) return fallback;
+  if (typeof err.detail === "string" && err.detail) return err.detail;
+  if (err.detail && typeof err.detail === "object") {
+    const message = err.detail.message;
+    if (typeof message === "string" && message) return message;
+  }
+  return fallback;
 }
 
 /** 新开对话（带 message 即当场跑一轮构建循环）。 */
@@ -2783,6 +2795,393 @@ export function fetchEntityGraph(): Promise<EntityGraph> {
   return requestJson(`${API_BASE}/v1/entities/graph`, {
     method: "GET",
   }) as Promise<EntityGraph>;
+}
+
+// ── 本体版本（add-ontology-versioning 任务 5.1 web 面）────────────────────
+// 契约（api 仓 entities 路由，Bearer 登录身份，跨客户/不存在版本一律 404）：
+// - GET  /api/v1/ontology/versions → {versions:[{version,digest,trigger,
+//   label,created_by,created_at,entity_count,relationship_count}],
+//   unpublished:{count,since_version}}（versions 已按版本倒序；since_version
+//   可 null = 尚无快照）；
+// - POST /api/v1/ontology/versions body {label?:string|null} → 201
+//   {version,digest,trigger,label,created_by,created_at,unchanged,message}
+//   （unchanged=true = 同 digest 未新增版本，message 说明「与 vN 内容一致」；
+//   本体为空 / label>80 字 → 422 detail 字符串）；
+// - GET  /api/v1/ontology/versions/{n}/diff?against=current|{m} → 实体/关系
+//   三组（added/removed/changed 字段级 before→after）+ counts+has_changes；
+// - GET  /api/v1/ontology/export?version=current|{n}&format=json|yaml&
+//   provenance=true|false → 附件下载（Content-Disposition attachment；
+//   响应头 X-Ontology-Digest / X-Ontology-Version）；
+// - POST /api/v1/ontology/versions/{n}/rollback/plan → 200（只读预览：
+//   create/update/delete 三组 + summary + diff）；
+// - POST /api/v1/ontology/versions/{n}/rollback（owner-only，非 owner 403）
+//   → 200 {version,executed,identity_changed,current_digest,target_digest,
+//   digest_match,message}；中途失败 422 **detail 为对象**
+//   {message,executed,note}（ConsoleApiError.detail 原样保留，UI 取 message）；
+// - GET  /api/v1/ontology/integrity → {customer_id,consistent,baseline,current,
+//   folded_digest,differences,escape_hint}（不一致 = 曾绕过 service 直改）。
+
+/** 快照触发来源：manual=手动打发布版、daily=每日 03:30 UTC 日快照。 */
+export type OntologyVersionTrigger = "manual" | "daily";
+
+/** 版本时间线条目（规模计数来自快照 manifest；列表不含全量 manifest）。 */
+export interface OntologyVersionSummary {
+  version: number;
+  /** 规范 manifest 的 sha256（64 hex）。 */
+  digest: string;
+  trigger: OntologyVersionTrigger;
+  label: string | null;
+  created_by: string | null;
+  /** ISO8601（秒精度）。 */
+  created_at: string;
+  entity_count: number;
+  relationship_count: number;
+}
+
+/** 未发布变更（=最近快照之后的事件计数；无快照时计全部事件）。 */
+export interface OntologyUnpublished {
+  count: number;
+  since_version: number | null;
+}
+
+/** 版本时间线信封（倒序 + 未发布计数）。 */
+export interface OntologyVersions {
+  versions: OntologyVersionSummary[];
+  unpublished: OntologyUnpublished;
+}
+
+/** 手动打发布版响应（unchanged=true 时 version 是已有那版，未新增）。 */
+export interface OntologyPublishResult {
+  version: number;
+  digest: string;
+  trigger: OntologyVersionTrigger;
+  label: string | null;
+  created_by: string | null;
+  created_at: string;
+  unchanged: boolean;
+  message: string | null;
+}
+
+/** manifest 实体条（与快照/导出同形；不含时间戳）。 */
+export interface OntologyEntityRecord {
+  id: number;
+  name: string;
+  dataset_id: string;
+  pk_columns: string[];
+  description: string | null;
+  display_column: string | null;
+  column_notes: Record<string, string> | null;
+}
+
+/** manifest 关系条（存储方向；declared_kind 保留声明方向）。 */
+export interface OntologyRelationshipRecord {
+  id: number;
+  from_entity_id: number;
+  from_column: string;
+  to_entity_id: number;
+  to_column: string;
+  kind: string;
+  declared_kind: string | null;
+  label: string | null;
+  junction_dataset_id: string | null;
+  junction_source_column: string | null;
+  junction_target_column: string | null;
+}
+
+/** 字段级差异一格（before→after 原值，UI 自负责呈现）。 */
+export interface OntologyFieldChange {
+  before: unknown;
+  after: unknown;
+}
+
+/** 实体字段级改动条目（fields 只含实际变化键）。 */
+export interface OntologyEntityChange {
+  id: number | null;
+  name: string;
+  before: OntologyEntityRecord;
+  after: OntologyEntityRecord;
+  fields: Record<string, OntologyFieldChange>;
+}
+
+/** 关系字段级改动条目。 */
+export interface OntologyRelationshipChange {
+  id: number | null;
+  before: OntologyRelationshipRecord;
+  after: OntologyRelationshipRecord;
+  fields: Record<string, OntologyFieldChange>;
+}
+
+/** 差异三组（增/删为整条，改为字段级 before→after）。 */
+export interface OntologyDiffGroup<TItem, TChange> {
+  added: TItem[];
+  removed: TItem[];
+  changed: TChange[];
+}
+
+/** 差异计数（total = 三组之和）。 */
+export interface OntologyDiffCounts {
+  added: number;
+  removed: number;
+  changed: number;
+  total: number;
+}
+
+/** 对比端点一端（version=current 时 version 为 null）。 */
+export interface OntologyManifestRef {
+  kind: "version" | "current";
+  version: number | null;
+  digest: string;
+}
+
+/** 本体 diff 主体（实体/关系三组 + 计数 + has_changes）——回滚 plan 与
+ *  完整性自检内嵌的就是这个形状（不带 base/target 引用）。 */
+export interface OntologyDiffBody {
+  entities: OntologyDiffGroup<OntologyEntityRecord, OntologyEntityChange>;
+  relationships: OntologyDiffGroup<
+    OntologyRelationshipRecord,
+    OntologyRelationshipChange
+  >;
+  counts: {
+    entities: OntologyDiffCounts;
+    relationships: OntologyDiffCounts;
+  };
+  has_changes: boolean;
+}
+
+/** 对比端点响应 = diff 主体 + 两端引用（version=current 时 version 为 null）。 */
+export interface OntologyDiff extends OntologyDiffBody {
+  base: OntologyManifestRef;
+  target: OntologyManifestRef;
+}
+
+/** 导出格式（json/yaml）。 */
+export type OntologyExportFormat = "json" | "yaml";
+
+/** 导出文件（blob + 响应头文件名；UI 用 <a download> 触发下载）。 */
+export interface OntologyExportFile {
+  blob: Blob;
+  filename: string;
+}
+
+/** 回滚 plan 的实体更新条目（update 带字段级 before→after）。 */
+export interface OntologyRollbackEntityUpdate {
+  id: number | null;
+  name: string;
+  fields: Record<string, OntologyFieldChange>;
+  before: OntologyEntityRecord;
+  after: OntologyEntityRecord;
+}
+
+/** 回滚 plan（create/update/delete 三组 + 摘要 + 底层 diff）。 */
+export interface OntologyRollbackPlan {
+  version: number;
+  digest: string;
+  current_digest: string;
+  /** true = 当前态已与目标版本一致，无需回滚。 */
+  empty: boolean;
+  plan: {
+    create_entities: OntologyEntityRecord[];
+    update_entities: OntologyRollbackEntityUpdate[];
+    delete_entities: OntologyEntityRecord[];
+    create_relationships: OntologyRelationshipRecord[];
+    delete_relationships: OntologyRelationshipRecord[];
+    summary: {
+      entities: { create: number; update: number; delete: number };
+      relationships: { create: number; delete: number };
+    };
+    diff: OntologyDiffBody;
+  };
+}
+
+/** 回滚执行的一步（动作 + 目标 id）。 */
+export interface OntologyRollbackExecuted {
+  action: string;
+  target: number;
+}
+
+/** 回滚执行结果（digest_match=false 时如实看 identity_changed/message）。 */
+export interface OntologyRollbackResult {
+  version: number;
+  executed: OntologyRollbackExecuted[];
+  /** 因 id 被占用退回自增的条目（非空即 digest 未对齐）。 */
+  identity_changed: unknown[];
+  current_digest: string;
+  target_digest?: string;
+  digest_match: boolean;
+  message?: string;
+}
+
+/** 完整性自检结果（consistent=false = 当前态与事件折叠不一致）。 */
+export interface OntologyIntegrity {
+  customer_id: string;
+  consistent: boolean;
+  baseline: {
+    kind: "snapshot" | "empty";
+    version: number | null;
+    digest: string | null;
+    events_folded: number;
+  };
+  current: {
+    digest: string;
+    entity_count: number;
+    relationship_count: number;
+  };
+  folded_digest: string;
+  /** 事件折叠结果 vs 当前态的差异（diff 主体；不一致时三组有内容）。 */
+  differences: OntologyDiffBody;
+  /** 不一致时的中文说明（一致时 null）。 */
+  escape_hint: string | null;
+}
+
+/** 版本时间线 + 未发布变更计数（解 {versions,unpublished} 信封；坏条目
+ *  容忍为空数组/零值——读面失败由 ConsoleApiError 如实上抛）。 */
+export async function fetchOntologyVersions(): Promise<OntologyVersions> {
+  const body = await requestJson(`${API_BASE}/v1/ontology/versions`, {
+    method: "GET",
+  });
+  const record = (body ?? {}) as Record<string, unknown>;
+  const versions = Array.isArray(record.versions)
+    ? (record.versions as OntologyVersionSummary[])
+    : [];
+  const unpublishedRaw = (record.unpublished ?? {}) as Record<string, unknown>;
+  return {
+    versions,
+    unpublished: {
+      count:
+        typeof unpublishedRaw.count === "number" && unpublishedRaw.count >= 0
+          ? unpublishedRaw.count
+          : 0,
+      since_version:
+        typeof unpublishedRaw.since_version === "number"
+          ? unpublishedRaw.since_version
+          : null,
+    },
+  };
+}
+
+/** 手动打发布版（label 可选、≤80 字；空/空白 → null）。同日已有日版仍照打；
+ *  同 digest 返回 unchanged=true（未新增版本，message 如实说明与哪一版一致）；
+ *  本体为空 / label 超长 → 422 detail 字符串如实上抛。 */
+export function publishOntologyVersion(
+  label?: string | null,
+): Promise<OntologyPublishResult> {
+  const trimmed = (label ?? "").trim();
+  return requestJson(`${API_BASE}/v1/ontology/versions`, {
+    method: "POST",
+    body: { label: trimmed || null },
+  }) as Promise<OntologyPublishResult>;
+}
+
+/** 版本对比（base=该版本，target=current 或另一版本号）；「当前 vs 最近
+ *  快照」= 对最新版本调 against=current。404 不存在版本如实上抛。 */
+export function fetchOntologyDiff(
+  version: number,
+  against: string | number = "current",
+): Promise<OntologyDiff> {
+  const params = new URLSearchParams({ against: String(against) });
+  return requestJson(
+    `${API_BASE}/v1/ontology/versions/${version}/diff?${params}`,
+    { method: "GET" },
+  ) as Promise<OntologyDiff>;
+}
+
+/** 导出的文件名（Content-Disposition 优先，缺省按 ontology-{version}.{format}
+ *  兜底；带引号/UTF-8* 形态都兼容）。 */
+function exportFilename(
+  disposition: string | null | undefined,
+  version: string,
+  format: OntologyExportFormat,
+): string {
+  const match = (disposition ?? "").match(
+    /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i,
+  );
+  return match?.[1] ?? `ontology-${version}.${format}`;
+}
+
+/** 导出本体为附件（非 JSON 端点——带鉴权头 fetch 后转 blob；文件名取响应
+ *  Content-Disposition，缺省 ontology-{version}.{format}）。错误语义与
+ *  requestJson 完全一致：ConsoleApiError 带 status/detail（含 404 他企/不存在
+ *  版本）。不触发任何本体写入或快照创建。 */
+export async function downloadOntologyExport(
+  options: {
+    version?: number | "current";
+    format?: OntologyExportFormat;
+    provenance?: boolean;
+  } = {},
+): Promise<OntologyExportFile> {
+  const version = options.version ?? "current";
+  const format = options.format ?? "json";
+  const params = new URLSearchParams({
+    version: String(version),
+    format,
+  });
+  if (options.provenance) params.set("provenance", "true");
+  const url = `${API_BASE}/v1/ontology/export?${params}`;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: format === "yaml" ? "application/yaml" : "application/json",
+        ...bearerHeaders(),
+      },
+    });
+  } catch (err) {
+    if (err instanceof ConsoleApiError) throw err;
+    throw new ConsoleApiError(
+      `network error fetching ${url}: ${(err as Error).message}`,
+    );
+  }
+  if (!response.ok) {
+    // 复用统一错误解析（detail 字符串/数组/对象三态一致；非 2xx 恒抛）。
+    await readResponse(response, url);
+    throw new ConsoleApiError(
+      `console api ${response.status} for ${url}`,
+      response.status,
+    );
+  }
+  const filename = exportFilename(
+    response.headers?.get?.("content-disposition"),
+    String(version),
+    format,
+  );
+  try {
+    return { blob: await response.blob(), filename };
+  } catch (err) {
+    throw new ConsoleApiError(
+      `invalid body from ${url}: ${(err as Error).message}`,
+    );
+  }
+}
+
+/** 回滚预览（只读计算，不执行）：将创建/更新/删除的条目 + 字段级差异；
+ *  empty=true 表示当前态已与目标版本一致。404 不存在版本如实上抛。 */
+export function fetchOntologyRollbackPlan(
+  version: number,
+): Promise<OntologyRollbackPlan> {
+  return requestJson(
+    `${API_BASE}/v1/ontology/versions/${version}/rollback/plan`,
+    { method: "POST" },
+  ) as Promise<OntologyRollbackPlan>;
+}
+
+/** 执行回滚（owner-only；非 owner 403）。中途失败 422 且 detail 为对象
+ *  {message,executed,note}——ConsoleApiError.detail 保留该对象，UI 取
+ *  message 如实呈现，已执行条目见 executed。 */
+export function executeOntologyRollback(
+  version: number,
+): Promise<OntologyRollbackResult> {
+  return requestJson(`${API_BASE}/v1/ontology/versions/${version}/rollback`, {
+    method: "POST",
+  }) as Promise<OntologyRollbackResult>;
+}
+
+/** 完整性自检（只读）：事件折叠结果 vs 当前态，报告逃逸写差异条目；
+ *  不一致时 escape_hint 为中文说明、differences 三组有内容。 */
+export function fetchOntologyIntegrity(): Promise<OntologyIntegrity> {
+  return requestJson(`${API_BASE}/v1/ontology/integrity`, {
+    method: "GET",
+  }) as Promise<OntologyIntegrity>;
 }
 
 // ── 团队空间（wire-team-spaces 任务 5 web 面）────────────────────────────

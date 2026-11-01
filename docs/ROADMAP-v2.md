@@ -157,6 +157,18 @@ EntityObjectBrowser+i18n+文档 v2。api 1505 全绿 / web 1024 全绿 / wire-op
 - [x] C3 `wire-object-view`（owner 输出面）：对象详情页（属性+关联对象），读边界沿 record-view
   纪律（只执行声明查询）；免费档降级为声明+图谱（现状），对象浏览为付费档。
 - [x] C4 AI 构建上下文注入改用对象口径（有界注入 ≤50/≤100 不变；空图谱零漂移不变）。
+- [x] C5 **本体版本（2026-11-01 实施，待上产）**：change `add-ontology-versioning`（fd-wire 根）
+  ——本体从「只有当前态」升为「有语义版本」。①事件流 `ontology_events`（append-only，
+  与本体同库同事务；写面收敛到 `entities/service.py` 单点，三条写路径 actor/via/血缘分列）；
+  ②快照 `ontology_snapshots`（客户内版本号单调 + 规范 manifest + digest；日快照 03:30 UTC
+  与 pg_dump 同刻、零变更静默跳过；手动发布版可带 label；同 digest 不重复落；日版保留 30 份、
+  手动版永久）；③导出 `GET /api/v1/ontology/export`（json/yaml、指定版本或当前、`provenance`
+  附舰队血缘、`schema_version` 单一真源）；④diff/回滚（三组逐条 +1/-1/字段级 before→after；
+  回滚=按 plan 再写一遍，逐条经 service 落 `via=rollback` 事件、沿用 manifest id，可再回滚）；
+  ⑤`GET /integrity` 逃逸写自检（事件折叠 vs 当前态）；⑥控制台实体页版本区（时间线/未发布
+  变更数/diff/导出/打版/回滚[owner]）。文档：`docs/ontology-versioning.md`。
+  **验收** = 打版→改实体→未发布变更 1→diff→导出 json/yaml→回滚→再打版 digest 一致；
+  完整性自检 200 一致。
 
 **内容腿（2026-11-01 只读复核）**：本体建设舰队已在 cell `1da519d4c1c0bf89` 物化并跑出真产物
 （五岗、37 run/73 回合/第 14 轮台账；实体 5 + 关系 5 经 `wire_action_propose` executed 落库，

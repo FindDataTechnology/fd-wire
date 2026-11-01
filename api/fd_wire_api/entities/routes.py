@@ -28,13 +28,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from ..console.auth import (
     require_console_customer_actor,
     require_console_customer_id,
+    require_console_owner,
 )
 from ..data_plane.auth import DataPlanePrincipal
 from ..data_plane.data_routes import _register_derived_child, _sync_columns_and_size
@@ -51,13 +52,18 @@ from ..datasets.models import Dataset
 from ..datasets.routes import _actor, _raise_quota, engine_failure, require_cell_tier
 from ..datasets.schemas import DatasetOut, MaterializeInfo
 from ..datasets.settings import get_settings as get_datasets_settings
-from . import service
+from . import service, snapshots, versioning
 from ..ai.db import get_db as get_ai_db
 from .db import get_db as get_entities_db
 from .models import Entity
 from .service import dataset_summary
 
 router = APIRouter(prefix="/api/v1/entities", tags=["entities"])
+
+#: 本体版本面（wire-ontology-versioning）：版本列表 / 打发布版 / diff / 导出 /
+#: 回滚 / 完整性自检。读面与写面同走 console 身份 + 客户域隔离；回滚执行
+#: 额外要求 owner 语义（design D8）。
+ontology_router = APIRouter(prefix="/api/v1/ontology", tags=["ontology"])
 
 
 # ------------------------------------------------------------------ schemas
@@ -234,11 +240,17 @@ def get_graph(
 @router.post("", response_model=EntityOut, status_code=status.HTTP_201_CREATED)
 def create_entity(
     payload: EntityCreateIn,
-    customer_id: str = Depends(require_console_customer_id),
+    principal: tuple[Any, str, str] = Depends(require_console_customer_actor),
     db: Session = Depends(get_entities_db),
     datasets_db: Session = Depends(get_datasets_db),
 ) -> EntityOut:
-    """声明实体：name/dataset 属主/pk ⊆ 列快照/双唯一 全过才落行（否则零半写）。"""
+    """声明实体：name/dataset 属主/pk ⊆ 列快照/双唯一 全过才落行（否则零半写）。
+
+    wire-ontology-versioning：落行与事件同事务（事件 actor=调用成员 sub，
+    via=console）。
+    """
+    customer, actor_sub, _role = principal
+    customer_id = str(customer.name)
     try:
         entity = service.create_entity(
             db,
@@ -250,6 +262,7 @@ def create_entity(
             description=payload.description,
             display_column=payload.display_column,
             column_notes=payload.column_notes,
+            actor=actor_sub,
         )
     except service.EntityConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -262,11 +275,13 @@ def create_entity(
 def update_entity(
     entity_id: int,
     payload: EntityCreateIn,
-    customer_id: str = Depends(require_console_customer_id),
+    principal: tuple[Any, str, str] = Depends(require_console_customer_actor),
     db: Session = Depends(get_entities_db),
     datasets_db: Session = Depends(get_datasets_db),
 ) -> EntityOut:
     """整量更新（重校验——与创建同一条链；他企/不存在一律 404）。"""
+    customer, actor_sub, _role = principal
+    customer_id = str(customer.name)
     entity = _entity_or_404(db, entity_id, customer_id)
     try:
         entity = service.update_entity(
@@ -279,6 +294,7 @@ def update_entity(
             description=payload.description,
             display_column=payload.display_column,
             column_notes=payload.column_notes,
+            actor=actor_sub,
         )
     except service.EntityConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -290,14 +306,19 @@ def update_entity(
 @router.delete("/{entity_id}")
 def delete_entity(
     entity_id: int,
-    customer_id: str = Depends(require_console_customer_id),
+    principal: tuple[Any, str, str] = Depends(require_console_customer_actor),
     db: Session = Depends(get_entities_db),
     ai_db: Session = Depends(get_ai_db),
 ) -> dict:
     """删实体：同事务级联删两端关系（响应带 deleted_relationships 计数留痕）；
-    域动作类型级联停用（ai 元数据会话注入——wire-domain-actions）。"""
+    域动作类型级联停用（ai 元数据会话注入——wire-domain-actions）。
+
+    wire-ontology-versioning：级联删掉的关系与实体自身逐条落 delete 事件。
+    """
+    customer, actor_sub, _role = principal
+    customer_id = str(customer.name)
     entity = _entity_or_404(db, entity_id, customer_id)
-    removed = service.delete_entity(db, entity, domain_db=ai_db)
+    removed = service.delete_entity(db, entity, domain_db=ai_db, actor=actor_sub)
     return {
         "id": entity_id,
         "deleted": True,
@@ -313,11 +334,13 @@ def delete_entity(
 def create_relationship(
     entity_id: int,
     payload: RelationshipCreateIn,
-    customer_id: str = Depends(require_console_customer_id),
+    principal: tuple[Any, str, str] = Depends(require_console_customer_actor),
     db: Session = Depends(get_entities_db),
     datasets_db: Session = Depends(get_datasets_db),
 ) -> RelationshipOut:
     """声明关系：源列 ∈ 源集列、目标列 ∈ 目标实体主键（纪律）、四元组唯一。"""
+    customer, actor_sub, _role = principal
+    customer_id = str(customer.name)
     entity = _entity_or_404(db, entity_id, customer_id)
     try:
         relationship = service.create_relationship(
@@ -333,6 +356,7 @@ def create_relationship(
             junction_dataset_id=payload.junction_dataset_id,
             junction_source_column=payload.junction_source_column,
             junction_target_column=payload.junction_target_column,
+            actor=actor_sub,
         )
     except service.EntityNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -349,14 +373,20 @@ def create_relationship(
 def delete_relationship(
     entity_id: int,
     rel_id: int,
-    customer_id: str = Depends(require_console_customer_id),
+    principal: tuple[Any, str, str] = Depends(require_console_customer_actor),
     db: Session = Depends(get_entities_db),
 ) -> dict:
     """删关系：须属本企业且以该实体为端点，否则一律 404（不泄露）。"""
+    customer, actor_sub, _role = principal
+    customer_id = str(customer.name)
     _entity_or_404(db, entity_id, customer_id)
     try:
         service.delete_relationship(
-            db, customer_id=customer_id, entity_id=entity_id, rel_id=rel_id
+            db,
+            customer_id=customer_id,
+            entity_id=entity_id,
+            rel_id=rel_id,
+            actor=actor_sub,
         )
     except service.EntityNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1040,3 +1070,376 @@ def _relations_payload(
         "page": page,
         "page_size": page_size,
     }
+
+
+# ------------------------------------------------------------------ 本体版本
+# （wire-ontology-versioning：版本列表 / 打发布版 / diff / 导出 / 回滚 /
+#  完整性自检。读面沿 console 身份 + 客户域隔离；跨企业/不存在一律 404。）
+
+
+class OntologyVersionOut(BaseModel):
+    """时间线条目（规模计数来自快照 manifest——列表不返回全量 manifest）。"""
+
+    version: int
+    digest: str
+    trigger: str
+    label: str | None = None
+    created_by: str | None = None
+    created_at: datetime
+    entity_count: int
+    relationship_count: int
+
+
+class OntologyUnpublishedOut(BaseModel):
+    """未发布变更（=最近快照之后的事件计数；无快照时计全部事件）。"""
+
+    count: int
+    since_version: int | None = None
+
+
+class OntologyVersionsOut(BaseModel):
+    versions: list[OntologyVersionOut]
+    unpublished: OntologyUnpublishedOut
+
+
+class OntologyPublishIn(BaseModel):
+    """手动打发布版（label 可选，≤80 字）。"""
+
+    label: str | None = None
+
+
+class OntologyPublishOut(BaseModel):
+    version: int
+    digest: str
+    trigger: str
+    label: str | None = None
+    created_by: str | None = None
+    created_at: datetime
+    #: 当前态与最近快照 digest 相同 → 未新增版本（`message` 说明与哪一版一致）
+    unchanged: bool = False
+    message: str | None = None
+
+
+def _snapshot_or_404(db: Session, customer_id: str, version: int):
+    snapshot = versioning.get_snapshot(
+        db, customer_id=customer_id, version=version
+    )
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail=f"本体版本 v{version} 不存在")
+    return snapshot
+
+
+def _unpublished(db: Session, customer_id: str, latest) -> dict[str, Any]:
+    return {
+        "count": versioning.count_events_since(
+            db,
+            customer_id=customer_id,
+            after_created_at=latest.created_at if latest is not None else None,
+        ),
+        "since_version": latest.version if latest is not None else None,
+    }
+
+
+@ontology_router.get("/versions", response_model=OntologyVersionsOut)
+def list_versions(
+    customer_id: str = Depends(require_console_customer_id),
+    db: Session = Depends(get_entities_db),
+) -> OntologyVersionsOut:
+    """版本时间线（倒序）+ 未发布变更计数。"""
+    snapshots_list = versioning.list_snapshots(
+        db, customer_id=customer_id, order="desc"
+    )
+    latest = snapshots_list[0] if snapshots_list else None
+    return OntologyVersionsOut(
+        versions=[
+            OntologyVersionOut(**versioning.snapshot_summary(snapshot))
+            for snapshot in snapshots_list
+        ],
+        unpublished=OntologyUnpublishedOut(**_unpublished(db, customer_id, latest)),
+    )
+
+
+@ontology_router.post(
+    "/versions",
+    response_model=OntologyPublishOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def publish_version(
+    payload: OntologyPublishIn = Body(default=OntologyPublishIn()),
+    principal: tuple[Any, str, str] = Depends(require_console_customer_actor),
+    db: Session = Depends(get_entities_db),
+) -> OntologyPublishOut:
+    """手动打发布版（owner 之外的成员亦可——只有回滚要求 owner，design D8）。
+
+    同 digest 不新增版本：仍返回快照信封，但 ``unchanged=true`` 且 ``message``
+    如实说明「与 vN 内容一致」（spec 场景）——不谎称新版本。
+    """
+    customer, actor_sub, _role = principal
+    customer_id = str(customer.name)
+    label = (payload.label or "").strip() or None
+    if label is not None and len(label) > snapshots.MAX_LABEL_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"版本标签超过 {snapshots.MAX_LABEL_LENGTH} 字上限"
+                f"（当前 {len(label)} 字符）"
+            ),
+        )
+    snapshot, state = snapshots.create_snapshot(
+        db,
+        customer_id=customer_id,
+        trigger=versioning.TRIGGER_MANUAL,
+        label=label,
+        created_by=actor_sub,
+    )
+    if state == "empty":
+        raise HTTPException(
+            status_code=422,
+            detail="本体为空（没有任何实体与关系）——无可发布的版本",
+        )
+    assert snapshot is not None  # empty 已提前返回
+    if state == "unchanged":
+        return OntologyPublishOut(
+            version=snapshot.version,
+            digest=snapshot.digest,
+            trigger=snapshot.trigger,
+            label=snapshot.label,
+            created_by=snapshot.created_by,
+            created_at=snapshot.created_at,
+            unchanged=True,
+            message=(
+                f"当前本体与 v{snapshot.version} 内容一致（digest 相同），未新增版本"
+            ),
+        )
+    return OntologyPublishOut(
+        version=snapshot.version,
+        digest=snapshot.digest,
+        trigger=snapshot.trigger,
+        label=snapshot.label,
+        created_by=snapshot.created_by,
+        created_at=snapshot.created_at,
+    )
+
+
+@ontology_router.get("/versions/{version}/diff")
+def diff_version(
+    version: int,
+    against: str = Query(default="current", max_length=20),
+    customer_id: str = Depends(require_console_customer_id),
+    db: Session = Depends(get_entities_db),
+) -> dict:
+    """版本对比：base=该版本，target=`current` 或另一版本号。
+
+    「当前 vs 最近快照」（未发布变更明细）= ``/versions/{latest}/diff``。
+    输出实体/关系三组（增/删/字段级改，字段级带 before→after）。
+    """
+    base_snapshot = _snapshot_or_404(db, customer_id, version)
+    base = versioning.snapshot_manifest(base_snapshot)
+    if against == "current":
+        target = versioning.build_manifest(db, customer_id=customer_id)
+        target_label: dict[str, Any] = {
+            "kind": "current",
+            "version": None,
+            "digest": versioning.manifest_digest(target),
+        }
+    else:
+        try:
+            against_version = int(against)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="against 必须是 current 或一个版本号",
+            ) from exc
+        target_snapshot = _snapshot_or_404(db, customer_id, against_version)
+        target = versioning.snapshot_manifest(target_snapshot)
+        target_label = {
+            "kind": "version",
+            "version": target_snapshot.version,
+            "digest": target_snapshot.digest,
+        }
+    # 差异条目附舰队血缘（spec「改动条目可携带出处」；无血缘的条目键缺席）
+    diff = versioning.diff_manifests(
+        base,
+        target,
+        provenance=versioning.provenance_map(db, customer_id=customer_id),
+    )
+    return {
+        "base": {
+            "kind": "version",
+            "version": base_snapshot.version,
+            "digest": base_snapshot.digest,
+        },
+        "target": target_label,
+        **diff,
+    }
+
+
+@ontology_router.get("/export")
+def export_ontology(
+    version: str = Query(default="current", max_length=20),
+    format: str = Query(default="json", pattern="^(json|yaml)$"),
+    provenance: bool = Query(default=False),
+    customer_id: str = Depends(require_console_customer_id),
+    db: Session = Depends(get_entities_db),
+) -> Response:
+    """导出本体（json/yaml；指定版本或当前态；可选出处）。
+
+    纯读：不触发任何本体写入或快照创建（spec「导出 MUST NOT 触发写入」）。
+    他企版本与不存在版本一律 404。
+    """
+    import json as _json  # noqa: PLC0415
+
+    import yaml as _yaml  # noqa: PLC0415
+
+    if version == "current":
+        manifest = versioning.build_manifest(db, customer_id=customer_id)
+        version_label: str | int = "current"
+    else:
+        try:
+            version_number = int(version)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="version 必须是 current 或一个版本号",
+            ) from exc
+        snapshot = _snapshot_or_404(db, customer_id, version_number)
+        manifest = versioning.snapshot_manifest(snapshot)
+        version_label = snapshot.version
+    document = versioning.build_export_document(
+        manifest,
+        customer_id=customer_id,
+        version=version_label,
+        provenance=versioning.provenance_map(db, customer_id=customer_id)
+        if provenance
+        else None,
+    )
+    filename = f"ontology-{version_label}.{format}"
+    if format == "yaml":
+        body = _yaml.safe_dump(
+            document, allow_unicode=True, sort_keys=False, default_flow_style=False
+        )
+        media_type = "application/yaml"
+    else:
+        body = _json.dumps(
+            document, ensure_ascii=False, indent=2, sort_keys=False
+        )
+        media_type = "application/json"
+    return Response(
+        content=body,
+        media_type=f"{media_type}; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # 供控制台直接展示（下载内容自带 digest；避免中间层改写）
+            "X-Ontology-Digest": document["digest"],
+            "X-Ontology-Version": str(version_label),
+        },
+    )
+
+
+def _rollback_preview(
+    db: Session, customer_id: str, snapshot
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    current = versioning.build_manifest(db, customer_id=customer_id)
+    target = versioning.snapshot_manifest(snapshot)
+    plan = versioning.rollback_plan(current, target)
+    return plan, current
+
+
+@ontology_router.post("/versions/{version}/rollback/plan")
+def rollback_plan_endpoint(
+    version: int,
+    customer_id: str = Depends(require_console_customer_id),
+    db: Session = Depends(get_entities_db),
+) -> dict:
+    """回滚预览（只读计算，不执行）：将创建/更新/删除的条目 + 字段级差异。"""
+    snapshot = _snapshot_or_404(db, customer_id, version)
+    plan, current = _rollback_preview(db, customer_id, snapshot)
+    return {
+        "version": snapshot.version,
+        "digest": snapshot.digest,
+        "current_digest": versioning.manifest_digest(current),
+        "empty": versioning.plan_is_empty(plan),
+        "plan": plan,
+    }
+
+
+@ontology_router.post("/versions/{version}/rollback")
+def rollback_endpoint(
+    version: int,
+    principal: tuple[Any, str] = Depends(require_console_owner),
+    db: Session = Depends(get_entities_db),
+    datasets_db: Session = Depends(get_datasets_db),
+    ai_db: Session = Depends(get_ai_db),
+) -> dict:
+    """执行回滚（owner-only；逐条经 service，落 ``via=rollback`` 事件）。
+
+    任一校验失败**如实停**：已执行条目已落事件（可再回滚修正），响应 422
+    带 ``executed`` 与失败原因。回滚本身可被再次回滚（append-only）。
+    """
+    customer, actor_sub = principal
+    customer_id = str(customer.name)
+    snapshot = _snapshot_or_404(db, customer_id, version)
+    plan, _current = _rollback_preview(db, customer_id, snapshot)
+    if versioning.plan_is_empty(plan):
+        current_manifest = versioning.build_manifest(db, customer_id=customer_id)
+        return {
+            "version": snapshot.version,
+            "executed": [],
+            "identity_changed": [],
+            "message": (
+                f"当前本体已与 v{snapshot.version} 内容一致，无需回滚"
+            ),
+            "current_digest": versioning.manifest_digest(current_manifest),
+            "digest_match": versioning.manifest_digest(current_manifest)
+            == snapshot.digest,
+        }
+    try:
+        result = versioning.execute_rollback(
+            db,
+            datasets_db,
+            customer_id=customer_id,
+            plan=plan,
+            actor=actor_sub,
+            domain_db=ai_db,
+        )
+    except versioning.RollbackError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": str(exc),
+                "executed": exc.executed,
+                "note": (
+                    "回滚已如实停止；已执行条目已落 via=rollback 事件"
+                    "（历史只增不减，可再次回滚修正）"
+                ),
+            },
+        ) from exc
+    except (service.EntityConflict, service.InvalidEntity) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except service.EntityNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    db.flush()
+    current_manifest = versioning.build_manifest(db, customer_id=customer_id)
+    current_digest = versioning.manifest_digest(current_manifest)
+    return {
+        "version": snapshot.version,
+        "executed": result["executed"],
+        "identity_changed": result["identity_changed"],
+        "current_digest": current_digest,
+        "target_digest": snapshot.digest,
+        "digest_match": current_digest == snapshot.digest,
+        "message": (
+            "回滚完成，当前态与目标版本一致"
+            if current_digest == snapshot.digest
+            else "回滚完成，但当前态与目标版本 digest 不一致（见 identity_changed）"
+        ),
+    }
+
+
+@ontology_router.get("/integrity")
+def integrity(
+    customer_id: str = Depends(require_console_customer_id),
+    db: Session = Depends(get_entities_db),
+) -> dict:
+    """完整性自检（只读）：事件折叠结果 vs 当前态，报告逃逸写差异条目。"""
+    return versioning.integrity_report(db, customer_id=customer_id)

@@ -14,6 +14,14 @@
 - 删除实体：同事务先删两端关系再删实体，返回删除的关系计数。
 
 所有写操作只 flush 不 commit——提交归请求级会话依赖（``db.get_db``）。
+
+**事件流单点收口**（wire-ontology-versioning design D1/D3）：本模块是本体的
+唯一写入口，create/update/delete 实体与关系各路径在**同一事务内**追加
+``ontology_events``（before/after 全量）。控制台 CRUD、动作闸执行器、回滚
+执行器三条路径全部经此——三条都只是传入不同的 ``via``/``actor``/血缘。
+事件写失败即本体写失败（不吞异常），不存在「本体变了但没有事件」的窗口。
+绕过本模块的直改（裸 SQL）不进事件流：由文档纪律 + ``GET
+/api/v1/ontology/integrity`` 自检负责（design D10）。
 """
 
 from __future__ import annotations
@@ -24,6 +32,7 @@ from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from ..datasets.models import Dataset
+from . import versioning
 from .models import Entity, EntityRelationship
 
 #: 关系基数枚举（v2：多对一 / 一对一 / 一对多反向声明 / 多对多经中间集）
@@ -199,8 +208,18 @@ def create_entity(
     description: str | None = None,
     display_column: str | None = None,
     column_notes: dict | None = None,
+    entity_id: int | None = None,
+    actor: str | None = None,
+    via: str = versioning.VIA_CONSOLE,
+    source_ref: str | None = None,
+    source_instance_id: int | None = None,
 ) -> Entity:
-    """声明实体：name/dataset 属主/pk ⊆ 列快照 全过 + 双唯一检查后落行。"""
+    """声明实体：name/dataset 属主/pk ⊆ 列快照 全过 + 双唯一检查后落行。
+
+    ``entity_id`` 仅由回滚执行器传入（按 manifest 恢复原身份，见
+    ``versioning.execute_rollback``）；常规创建走自增。落行后**同事务**追加
+    op=create 事件（事件写失败即整体失败）。
+    """
     name = _validate_name(name)
     dataset = _owned_dataset_or_none(datasets_db, dataset_id, customer_id)
     if dataset is None:
@@ -221,8 +240,23 @@ def create_entity(
         display_column=display,
         column_notes=notes,
     )
+    if entity_id is not None:
+        entity.id = int(entity_id)
     db.add(entity)
     db.flush()
+    versioning.record_event(
+        db,
+        customer_id=customer_id,
+        op=versioning.OP_CREATE,
+        target_kind=versioning.KIND_ENTITY,
+        target_id=entity.id,
+        before=None,
+        after=versioning.entity_payload(entity),
+        actor=actor,
+        via=via,
+        source_ref=source_ref,
+        source_instance_id=source_instance_id,
+    )
     return entity
 
 
@@ -237,8 +271,15 @@ def update_entity(
     description: str | None = None,
     display_column: str | None = None,
     column_notes: dict | None = None,
+    actor: str | None = None,
+    via: str = versioning.VIA_CONSOLE,
+    source_ref: str | None = None,
+    source_instance_id: int | None = None,
 ) -> Entity:
-    """整量更新（重校验——与创建同一条校验链，排除自身后的双唯一检查）。"""
+    """整量更新（重校验——与创建同一条校验链，排除自身后的双唯一检查）。
+
+    无实际字段变化时不落事件（整量 PUT 的空转不算一次本体变更）。
+    """
     name = _validate_name(name)
     dataset = _owned_dataset_or_none(datasets_db, dataset_id, entity.customer_id)
     if dataset is None:
@@ -250,6 +291,7 @@ def update_entity(
     _check_dataset_binding_conflict(
         db, entity.customer_id, dataset_id, exclude_id=entity.id
     )
+    before = versioning.entity_payload(entity)
     entity.name = name
     entity.dataset_id = dataset_id
     entity.pk_columns = columns
@@ -259,23 +301,60 @@ def update_entity(
     entity.display_column = display
     entity.column_notes = notes
     db.flush()
+    after = versioning.entity_payload(entity)
+    if after != before:
+        versioning.record_event(
+            db,
+            customer_id=entity.customer_id,
+            op=versioning.OP_UPDATE,
+            target_kind=versioning.KIND_ENTITY,
+            target_id=entity.id,
+            before=before,
+            after=after,
+            actor=actor,
+            via=via,
+            source_ref=source_ref,
+            source_instance_id=source_instance_id,
+        )
     return entity
 
 
 def delete_entity(
-    db: Session, entity: Entity, *, domain_db: Session | None = None
+    db: Session,
+    entity: Entity,
+    *,
+    domain_db: Session | None = None,
+    actor: str | None = None,
+    via: str = versioning.VIA_CONSOLE,
+    source_ref: str | None = None,
+    source_instance_id: int | None = None,
 ) -> int:
     """删实体 = 同事务先删两端关系再删实体；返回删除的关系数（留痕）。
 
     域动作类型级联停用（wire-domain-actions：enabled=False，历史实例保留
     可查）——``domain_db``（ai 元数据会话）由路由注入；None 时跳过（跨库
-    拓扑由调用方负责，直调兼容）。"""
+    拓扑由调用方负责，直调兼容）。
+
+    级联删掉的关系**逐条落 delete 事件**（再落实体自身）——否则折叠回放
+    会以为这些关系还在（spec「删除留事件」覆盖级联腿）。
+    """
     if domain_db is not None:
         from ..domain_actions import service as domain_service  # noqa: PLC0415
 
         domain_service.disable_for_entity(
             domain_db, customer_id=entity.customer_id, entity_id=entity.id
         )
+    cascade = list(
+        db.scalars(
+            select(EntityRelationship).where(
+                EntityRelationship.customer_id == entity.customer_id,
+                or_(
+                    EntityRelationship.from_entity_id == entity.id,
+                    EntityRelationship.to_entity_id == entity.id,
+                ),
+            )
+        ).all()
+    )
     result = db.execute(
         delete(EntityRelationship).where(
             EntityRelationship.customer_id == entity.customer_id,
@@ -286,8 +365,38 @@ def delete_entity(
         )
     )
     removed = int(result.rowcount or 0)
+    if removed != len(cascade):  # pragma: no cover - 事务内行集合不会漂移
+        cascade = cascade[:removed]
+    entity_before = versioning.entity_payload(entity)
     db.delete(entity)
     db.flush()
+    for rel in cascade:
+        versioning.record_event(
+            db,
+            customer_id=rel.customer_id,
+            op=versioning.OP_DELETE,
+            target_kind=versioning.KIND_RELATIONSHIP,
+            target_id=rel.id,
+            before=versioning.relationship_payload(rel),
+            after=None,
+            actor=actor,
+            via=via,
+            source_ref=source_ref,
+            source_instance_id=source_instance_id,
+        )
+    versioning.record_event(
+        db,
+        customer_id=entity.customer_id,
+        op=versioning.OP_DELETE,
+        target_kind=versioning.KIND_ENTITY,
+        target_id=entity.id,
+        before=entity_before,
+        after=None,
+        actor=actor,
+        via=via,
+        source_ref=source_ref,
+        source_instance_id=source_instance_id,
+    )
     return removed
 
 
@@ -328,6 +437,32 @@ def _quad_conflict(
         )
 
 
+def _record_relationship_created(
+    db: Session,
+    relationship: EntityRelationship,
+    *,
+    actor: str | None,
+    via: str,
+    source_ref: str | None,
+    source_instance_id: int | None,
+) -> EntityRelationship:
+    """新关系落 op=create 事件（同事务；台账通道字段原样带入）。"""
+    versioning.record_event(
+        db,
+        customer_id=relationship.customer_id,
+        op=versioning.OP_CREATE,
+        target_kind=versioning.KIND_RELATIONSHIP,
+        target_id=relationship.id,
+        before=None,
+        after=versioning.relationship_payload(relationship),
+        actor=actor,
+        via=via,
+        source_ref=source_ref,
+        source_instance_id=source_instance_id,
+    )
+    return relationship
+
+
 def create_relationship(
     db: Session,
     datasets_db: Session,
@@ -342,6 +477,11 @@ def create_relationship(
     junction_dataset_id: str | None = None,
     junction_source_column: str | None = None,
     junction_target_column: str | None = None,
+    relationship_id: int | None = None,
+    actor: str | None = None,
+    via: str = versioning.VIA_CONSOLE,
+    source_ref: str | None = None,
+    source_instance_id: int | None = None,
 ) -> EntityRelationship:
     """声明关系（v2 四种基数）。
 
@@ -417,9 +557,18 @@ def create_relationship(
             junction_source_column=junction_source_column,
             junction_target_column=junction_target_column,
         )
+        if relationship_id is not None:
+            relationship.id = int(relationship_id)
         db.add(relationship)
         db.flush()
-        return relationship
+        return _record_relationship_created(
+            db,
+            relationship,
+            actor=actor,
+            via=via,
+            source_ref=source_ref,
+            source_instance_id=source_instance_id,
+        )
 
     if kind == "1:n":
         # 反向声明校验（镜像 n:1）：声明源列 ∈ 源主键（「一」侧身份）、
@@ -488,9 +637,18 @@ def create_relationship(
         declared_kind=declared,
         label=(label.strip() or None) if isinstance(label, str) else None,
     )
+    if relationship_id is not None:
+        relationship.id = int(relationship_id)
     db.add(relationship)
     db.flush()
-    return relationship
+    return _record_relationship_created(
+        db,
+        relationship,
+        actor=actor,
+        via=via,
+        source_ref=source_ref,
+        source_instance_id=source_instance_id,
+    )
 
 
 def declared_view(rel: EntityRelationship) -> dict[str, Any]:
@@ -523,9 +681,20 @@ def declared_view(rel: EntityRelationship) -> dict[str, Any]:
 
 
 def delete_relationship(
-    db: Session, *, customer_id: str, entity_id: int, rel_id: int
+    db: Session,
+    *,
+    customer_id: str,
+    entity_id: int,
+    rel_id: int,
+    actor: str | None = None,
+    via: str = versioning.VIA_CONSOLE,
+    source_ref: str | None = None,
+    source_instance_id: int | None = None,
 ) -> None:
-    """删关系：须属本企业且以 ``entity_id`` 实体为端点，否则一律 404。"""
+    """删关系：须属本企业且以 ``entity_id`` 实体为端点，否则一律 404。
+
+    删除前抓全量 before 落 op=delete 事件（同事务）。
+    """
     rel = db.get(EntityRelationship, rel_id)
     if (
         rel is None
@@ -533,8 +702,22 @@ def delete_relationship(
         or (rel.from_entity_id != entity_id and rel.to_entity_id != entity_id)
     ):
         raise EntityNotFound(f"关系 {rel_id} 不存在")
+    before = versioning.relationship_payload(rel)
     db.delete(rel)
     db.flush()
+    versioning.record_event(
+        db,
+        customer_id=customer_id,
+        op=versioning.OP_DELETE,
+        target_kind=versioning.KIND_RELATIONSHIP,
+        target_id=rel_id,
+        before=before,
+        after=None,
+        actor=actor,
+        via=via,
+        source_ref=source_ref,
+        source_instance_id=source_instance_id,
+    )
 
 
 def list_relationships(db: Session, *, customer_id: str) -> list[EntityRelationship]:

@@ -40,6 +40,10 @@ export type FakeResponse = {
   ok: boolean;
   status: number;
   json: () => Promise<unknown>;
+  /** 附件下载端点（如本体导出）用：正文转 Blob（缺省无此方法）。 */
+  blob?: () => Promise<Blob>;
+  /** 附件下载端点用：响应头（Content-Disposition/Content-Type 等）。 */
+  headers?: Headers;
 };
 
 export type FetchCall = {
@@ -82,6 +86,34 @@ export type LifecycleArtifactSeed = {
 
 function jsonResponse(body: unknown, status = 200): FakeResponse {
   return { ok: status < 400, status, json: () => Promise.resolve(body) };
+}
+
+/** 附件响应（非 JSON 端点，如本体导出）：正文按字符串直出、blob() 供客户端
+ *  转 Blob；headers 带 Content-Disposition/Content-Type（与真后端同形）。 */
+function binaryResponse(
+  body: string,
+  status: number,
+  headers: Headers,
+): FakeResponse {
+  return {
+    ok: status < 400,
+    status,
+    headers,
+    json: () => {
+      try {
+        return Promise.resolve(JSON.parse(body));
+      } catch (err) {
+        return Promise.reject(err);
+      }
+    },
+    blob: () => Promise.resolve(new Blob([body])),
+  };
+}
+
+/** 假后端本体 digest：64 位十六进制（按版本号合成——真实 sha256 由 api 侧
+ *  负责；此处只需形状与唯一性，时间线/导出断言用）。 */
+function fakeOntologyDigest(version: number): string {
+  return version.toString(16).padStart(8, "0").repeat(8);
 }
 
 function headersOf(init?: RequestInit): Record<string, string> {
@@ -186,6 +218,43 @@ export interface ConsoleBackendOptions {
    *  cell 无 link 工具等注入）。 */
   failEntityMaterializeStatus?: number;
   failEntityMaterializeDetail?: string | ApiDetailItem[];
+  /** 种子本体版本时间线（add-ontology-versioning；假后端按版本倒序下发；
+   *  缺省空数组 = 尚无快照空态）。 */
+  ontologyVersions?: FakeOntologyVersionSeed[];
+  /** 未发布变更计数（缺省 0；since_version 缺省取最新种子版本）。 */
+  ontologyUnpublished?: number;
+  /** 版本 diff 注入（GET /ontology/versions/{n}/diff；base/target 由假后端
+   *  按请求补全；缺省空差异 = has_changes:false）。 */
+  ontologyDiff?: FakeOntologyDiffSeed;
+  /** 打发布版 unchanged 注入（true = 同 digest 未新增版本，message 如实）。 */
+  ontologyPublishUnchanged?: boolean;
+  /** 回滚 plan 注入（缺省三类空；summary/diff 由假后端按契约推导）。 */
+  ontologyRollbackPlan?: FakeOntologyRollbackPlanSeed;
+  /** 回滚执行后 identity_changed 注入（缺省空数组）。 */
+  ontologyRollbackIdentityChanged?: unknown[];
+  /** 完整性自检注入（缺省 consistent=true、空差异、baseline=最新快照或空）。 */
+  ontologyIntegrity?: FakeOntologyIntegritySeed;
+  /** 强制 GET /api/v1/ontology/versions 返回该状态。 */
+  failOntologyVersionsStatus?: number;
+  failOntologyVersionsDetail?: string;
+  /** 强制 POST /api/v1/ontology/versions 返回该状态（如 422 本体为空）。 */
+  failOntologyPublishStatus?: number;
+  failOntologyPublishDetail?: string;
+  /** 强制版本 diff 端点返回该状态。 */
+  failOntologyDiffStatus?: number;
+  failOntologyDiffDetail?: string;
+  /** 强制本体导出端点返回该状态（detail 如实回显）。 */
+  failOntologyExportStatus?: number;
+  failOntologyExportDetail?: string;
+  /** 强制回滚 preview 端点返回该状态。 */
+  failOntologyRollbackPlanStatus?: number;
+  failOntologyRollbackPlanDetail?: string;
+  /** 强制回滚执行端点返回该状态（422 对象 detail 注入用）。 */
+  failOntologyRollbackStatus?: number;
+  failOntologyRollbackDetail?: string | Record<string, unknown>;
+  /** 强制完整性自检端点返回该状态。 */
+  failOntologyIntegrityStatus?: number;
+  failOntologyIntegrityDetail?: string;
   /** 种子域动作类型（wire-entity-write-surface）：实体级客户声明类型；
    *  内置两行由假后端按 api 语义合成注入（builtin=true、负 id、entity_id/
    *  dataset_id/时间戳 null）——客户面只读。 */
@@ -439,6 +508,73 @@ export type FakeEntityRelationshipRow = {
   junctionTargetColumn: string | null;
 };
 
+/** 本体版本种子（add-ontology-versioning）：digest 缺省按版本号合成 64 hex；
+ *  规模计数缺省取种子实体/关系数。 */
+export type FakeOntologyVersionSeed = {
+  version: number;
+  digest?: string;
+  trigger?: "manual" | "daily";
+  label?: string | null;
+  created_by?: string | null;
+  created_at?: string;
+  entity_count?: number;
+  relationship_count?: number;
+};
+
+/** 本体 diff 注入（三组条目形状同 api 契约；缺省空差异）。 */
+export type FakeOntologyDiffSeed = {
+  entities?: {
+    added?: unknown[];
+    removed?: unknown[];
+    changed?: unknown[];
+  };
+  relationships?: {
+    added?: unknown[];
+    removed?: unknown[];
+    changed?: unknown[];
+  };
+};
+
+/** 回滚 plan 注入（缺省三类空；summary 与 diff 由假后端按契约推导）。 */
+export type FakeOntologyRollbackPlanSeed = {
+  create_entities?: unknown[];
+  update_entities?: unknown[];
+  delete_entities?: unknown[];
+  create_relationships?: unknown[];
+  delete_relationships?: unknown[];
+};
+
+/** 完整性自检注入（缺省一致：baseline 取最新快照、differences 空差异）。 */
+export type FakeOntologyIntegritySeed = {
+  consistent?: boolean;
+  baseline?: {
+    kind: "snapshot" | "empty";
+    version: number | null;
+    digest: string | null;
+    events_folded: number;
+  };
+  current?: {
+    digest: string;
+    entity_count: number;
+    relationship_count: number;
+  };
+  folded_digest?: string;
+  differences?: FakeOntologyDiffSeed;
+  escape_hint?: string | null;
+};
+
+/** 本体版本假后端行（getOntologyVersions 断言面；wire snake_case 形状）。 */
+export type FakeOntologyVersionRow = {
+  version: number;
+  digest: string;
+  trigger: "manual" | "daily";
+  label: string | null;
+  created_by: string | null;
+  created_at: string;
+  entity_count: number;
+  relationship_count: number;
+};
+
 /** 团队成员种子（wire-team-spaces）：logtoSub 即 Bearer sub 匹配键。 */
 export type FakeTeamMemberSeed = {
   logtoSub: string;
@@ -659,6 +795,8 @@ export function installConsoleBackend(
   getPackSubscriptions: (customerId?: string) => string[];
     getEntities: () => FakeEntityRow[];
     getEntityRelationships: () => FakeEntityRelationshipRow[];
+    /** 本体版本时间线断言面（add-ontology-versioning；版本倒序）。 */
+    getOntologyVersions: () => FakeOntologyVersionRow[];
     getTeamMembers: () => FakeTeamMemberRow[];
     getTeamInvites: () => FakeTeamInviteRow[];
     /** 「我的团队」清单断言面（wire-team-spaces-v2；wire snake_case 形状）。 */
@@ -816,6 +954,22 @@ export function installConsoleBackend(
     });
     nextEntityRelationshipId = Math.max(nextEntityRelationshipId, seed.id + 1);
   }
+  // ── 本体版本假后端状态（add-ontology-versioning 任务 5）：种子直存、按
+  //    版本倒序；POST 打发布版追加一行（版本号 +1、digest 按版本号合成）。
+  //    diff/plan/integrity 由注入种子 + 契约推导（形状与真后端逐字段一致）。──
+  const ontologyVersionsStore: FakeOntologyVersionRow[] = (
+    options.ontologyVersions ?? []
+  ).map((seed) => ({
+    version: seed.version,
+    digest: seed.digest ?? fakeOntologyDigest(seed.version),
+    trigger: seed.trigger ?? "daily",
+    label: seed.label ?? null,
+    created_by: seed.created_by ?? null,
+    created_at: seed.created_at ?? "2026-11-01T10:00:00",
+    entity_count: seed.entity_count ?? entitiesStore.size,
+    relationship_count: seed.relationship_count ?? entityRelationshipsStore.size,
+  }));
+  ontologyVersionsStore.sort((a, b) => b.version - a.version);
   // ── 域动作读面假后端状态（wire-entity-write-surface）：客户声明类型按
   //    实体挂载；内置两行只读合成注入（负 id、builtin=true）；实例台账
   //    result_ref 直存（内置声明执行回填实体/关系 id）。──
@@ -5510,6 +5664,516 @@ export function installConsoleBackend(
       return Promise.resolve(jsonResponse({ ...pipeline.schedule }));
     }
 
+    // ── 本体版本读面（add-ontology-versioning 任务 5）：时间线/未发布计数、
+    //    打发布版（两种结果均 201）、diff、导出（附件）、回滚 plan/执行
+    //    （执行 owner-only）、完整性自检。信封逐字段对齐 api 契约；回滚
+    //    中途失败的 422 detail 为对象 {message,executed,note}（原样上抛）。──
+    const ownOntologyVersion = (
+      version: number,
+    ): FakeOntologyVersionRow | undefined =>
+      ontologyVersionsStore.find((row) => row.version === version);
+    const latestOntologyVersion = (): FakeOntologyVersionRow | undefined =>
+      ontologyVersionsStore[0];
+    /** 实体 manifest 条（键集与 api entity_payload 一致；v2 两字段种子不带
+     *  时如实 null）。 */
+    const ontologyEntityRecord = (
+      row: FakeEntityRow,
+    ): Record<string, unknown> => ({
+      id: row.id,
+      name: row.name,
+      dataset_id: row.datasetId,
+      pk_columns: [...row.pkColumns],
+      description: row.description,
+      display_column: null,
+      column_notes: null,
+    });
+    /** 关系 manifest 条（存储方向；declared_kind 假后端与 kind 同值）。 */
+    const ontologyRelationshipRecord = (
+      row: FakeEntityRelationshipRow,
+    ): Record<string, unknown> => ({
+      id: row.id,
+      from_entity_id: row.fromEntityId,
+      from_column: row.fromColumn,
+      to_entity_id: row.toEntityId,
+      to_column: row.toColumn,
+      kind: row.kind,
+      declared_kind: row.kind,
+      label: row.label,
+      junction_dataset_id: row.junctionDatasetId,
+      junction_source_column: row.junctionSourceColumn,
+      junction_target_column: row.junctionTargetColumn,
+    });
+    /** diff 主体（三组 + 计数 + has_changes；注入种子缺省空差异）。 */
+    const ontologyDiffOut = (
+      seed: FakeOntologyDiffSeed | undefined,
+    ): Record<string, unknown> => {
+      const entities = {
+        added: seed?.entities?.added ?? [],
+        removed: seed?.entities?.removed ?? [],
+        changed: seed?.entities?.changed ?? [],
+      };
+      const relationships = {
+        added: seed?.relationships?.added ?? [],
+        removed: seed?.relationships?.removed ?? [],
+        changed: seed?.relationships?.changed ?? [],
+      };
+      const entityCounts = {
+        added: entities.added.length,
+        removed: entities.removed.length,
+        changed: entities.changed.length,
+      };
+      const relationshipCounts = {
+        added: relationships.added.length,
+        removed: relationships.removed.length,
+        changed: relationships.changed.length,
+      };
+      return {
+        entities,
+        relationships,
+        counts: {
+          entities: {
+            ...entityCounts,
+            total: entityCounts.added + entityCounts.removed + entityCounts.changed,
+          },
+          relationships: {
+            ...relationshipCounts,
+            total:
+              relationshipCounts.added +
+              relationshipCounts.removed +
+              relationshipCounts.changed,
+          },
+        },
+        has_changes:
+          entityCounts.added +
+            entityCounts.removed +
+            entityCounts.changed +
+            relationshipCounts.added +
+            relationshipCounts.removed +
+            relationshipCounts.changed >
+          0,
+      };
+    };
+    /** 回滚 plan 种子（三类空数组缺省）+ summary 推导。 */
+    const ontologyRollbackPlanSeed = options.ontologyRollbackPlan ?? {};
+    const ontologyRollbackPlanArrays = () => ({
+      create_entities: ontologyRollbackPlanSeed.create_entities ?? [],
+      update_entities: ontologyRollbackPlanSeed.update_entities ?? [],
+      delete_entities: ontologyRollbackPlanSeed.delete_entities ?? [],
+      create_relationships: ontologyRollbackPlanSeed.create_relationships ?? [],
+      delete_relationships: ontologyRollbackPlanSeed.delete_relationships ?? [],
+    });
+    /** 回滚执行步目标 id（种子条目带 id；缺省 0——仅断言用）。 */
+    const seedTargetId = (item: unknown, key: "id" | "target" = "id"): number => {
+      if (!item || typeof item !== "object") return 0;
+      const raw = (item as Record<string, unknown>)[key];
+      return typeof raw === "number" ? raw : 0;
+    };
+
+    if (path === "/api/v1/ontology/versions" && method === "GET") {
+      if (options.failOntologyVersionsStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failOntologyVersionsDetail ??
+                `ontology versions ${options.failOntologyVersionsStatus}`,
+            },
+            options.failOntologyVersionsStatus,
+          ),
+        );
+      }
+      const latest = latestOntologyVersion();
+      return Promise.resolve(
+        jsonResponse({
+          versions: ontologyVersionsStore.map((row) => ({ ...row })),
+          unpublished: {
+            count: options.ontologyUnpublished ?? 0,
+            since_version: latest ? latest.version : null,
+          },
+        }),
+      );
+    }
+    if (path === "/api/v1/ontology/versions" && method === "POST") {
+      if (options.failOntologyPublishStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failOntologyPublishDetail ??
+                `ontology publish ${options.failOntologyPublishStatus}`,
+            },
+            options.failOntologyPublishStatus,
+          ),
+        );
+      }
+      const payload = (calls[calls.length - 1]!.body ?? {}) as {
+        label?: unknown;
+      };
+      const label = typeof payload.label === "string" ? payload.label.trim() : "";
+      if (label.length > 80) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: `版本标签超过 80 字上限（当前 ${label.length} 字符）` },
+            422,
+          ),
+        );
+      }
+      if (
+        ownEntityRows().length === 0 &&
+        ownEntityRelationshipRows().length === 0
+      ) {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: "本体为空（没有任何实体与关系）——无可发布的版本" },
+            422,
+          ),
+        );
+      }
+      const latest = latestOntologyVersion();
+      // 同 digest 不新增版本（真后端两种结果均 201——unchanged 也 201）。
+      if (options.ontologyPublishUnchanged && latest) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              version: latest.version,
+              digest: latest.digest,
+              trigger: latest.trigger,
+              label: latest.label,
+              created_by: latest.created_by,
+              created_at: latest.created_at,
+              unchanged: true,
+              message: `当前本体与 v${latest.version} 内容一致（digest 相同），未新增版本`,
+            },
+            201,
+          ),
+        );
+      }
+      const version = (latest?.version ?? 0) + 1;
+      const created: FakeOntologyVersionRow = {
+        version,
+        digest: fakeOntologyDigest(version),
+        trigger: "manual",
+        label: label || null,
+        created_by: customerId,
+        created_at: new Date().toISOString().slice(0, 19),
+        entity_count: ownEntityRows().length,
+        relationship_count: ownEntityRelationshipRows().length,
+      };
+      ontologyVersionsStore.unshift(created);
+      return Promise.resolve(
+        jsonResponse(
+          {
+            version: created.version,
+            digest: created.digest,
+            trigger: created.trigger,
+            label: created.label,
+            created_by: created.created_by,
+            created_at: created.created_at,
+            unchanged: false,
+            message: null,
+          },
+          201,
+        ),
+      );
+    }
+    const ontologyDiffMatch = path.match(
+      /^\/api\/v1\/ontology\/versions\/(\d+)\/diff$/,
+    );
+    if (ontologyDiffMatch && method === "GET") {
+      if (options.failOntologyDiffStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failOntologyDiffDetail ??
+                `ontology diff ${options.failOntologyDiffStatus}`,
+            },
+            options.failOntologyDiffStatus,
+          ),
+        );
+      }
+      const version = Number(ontologyDiffMatch[1]);
+      const snapshot = ownOntologyVersion(version);
+      if (!snapshot) {
+        return Promise.resolve(
+          jsonResponse({ detail: `本体版本 v${version} 不存在` }, 404),
+        );
+      }
+      const against = url.searchParams.get("against") ?? "current";
+      let target: {
+        kind: "version" | "current";
+        version: number | null;
+        digest: string;
+      };
+      if (against === "current") {
+        target = {
+          kind: "current",
+          version: null,
+          // 当前态 digest 假后端按固定值合成（真实 sha256 由 api 侧裁决）。
+          digest: fakeOntologyDigest(9999),
+        };
+      } else {
+        const other = ownOntologyVersion(Number(against));
+        if (!other) {
+          return Promise.resolve(
+            jsonResponse({ detail: `本体版本 v${against} 不存在` }, 404),
+          );
+        }
+        target = {
+          kind: "version",
+          version: other.version,
+          digest: other.digest,
+        };
+      }
+      return Promise.resolve(
+        jsonResponse({
+          base: {
+            kind: "version",
+            version: snapshot.version,
+            digest: snapshot.digest,
+          },
+          target,
+          ...ontologyDiffOut(options.ontologyDiff),
+        }),
+      );
+    }
+    if (path === "/api/v1/ontology/export" && method === "GET") {
+      if (options.failOntologyExportStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failOntologyExportDetail ??
+                `ontology export ${options.failOntologyExportStatus}`,
+            },
+            options.failOntologyExportStatus,
+          ),
+        );
+      }
+      const versionParam = url.searchParams.get("version") ?? "current";
+      const format = url.searchParams.get("format") === "yaml" ? "yaml" : "json";
+      let versionLabel: number | "current" = "current";
+      let digest = fakeOntologyDigest(9999);
+      let entities: unknown[] = ownEntityRows().map(ontologyEntityRecord);
+      let relationships: unknown[] = ownEntityRelationshipRows().map(
+        ontologyRelationshipRecord,
+      );
+      if (versionParam !== "current") {
+        const snapshot = ownOntologyVersion(Number(versionParam));
+        if (!snapshot) {
+          return Promise.resolve(
+            jsonResponse(
+              { detail: `本体版本 v${versionParam} 不存在` },
+              404,
+            ),
+          );
+        }
+        versionLabel = snapshot.version;
+        digest = snapshot.digest;
+        // 快照 manifest 未在种子内保存全量——时间线导出仅给规模与 digest
+        // （组件测试只需文件名/请求契约；内容形状仍与真后端同键集）。
+        entities = [];
+        relationships = [];
+      }
+      const document = {
+        schema_version: 1,
+        exported_at: new Date().toISOString().slice(0, 19),
+        customer_id: customerId,
+        version: versionLabel,
+        digest,
+        entities,
+        relationships,
+      };
+      const body =
+        format === "yaml"
+          ? [
+              `schema_version: ${document.schema_version}`,
+              `exported_at: ${document.exported_at}`,
+              `customer_id: ${document.customer_id}`,
+              `version: ${document.version}`,
+              `digest: ${document.digest}`,
+              `entities: ${JSON.stringify(document.entities)}`,
+              `relationships: ${JSON.stringify(document.relationships)}`,
+            ].join("\n")
+          : JSON.stringify(document);
+      return Promise.resolve(
+        binaryResponse(
+          body,
+          200,
+          new Headers({
+            "Content-Type": `application/${format}; charset=utf-8`,
+            "Content-Disposition": `attachment; filename="ontology-${versionLabel}.${format}"`,
+            "X-Ontology-Digest": digest,
+            "X-Ontology-Version": String(versionLabel),
+          }),
+        ),
+      );
+    }
+    const ontologyRollbackPlanMatch = path.match(
+      /^\/api\/v1\/ontology\/versions\/(\d+)\/rollback\/plan$/,
+    );
+    if (ontologyRollbackPlanMatch && method === "POST") {
+      if (options.failOntologyRollbackPlanStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failOntologyRollbackPlanDetail ??
+                `ontology rollback plan ${options.failOntologyRollbackPlanStatus}`,
+            },
+            options.failOntologyRollbackPlanStatus,
+          ),
+        );
+      }
+      const version = Number(ontologyRollbackPlanMatch[1]);
+      const snapshot = ownOntologyVersion(version);
+      if (!snapshot) {
+        return Promise.resolve(
+          jsonResponse({ detail: `本体版本 v${version} 不存在` }, 404),
+        );
+      }
+      const plan = ontologyRollbackPlanArrays();
+      const summary = {
+        entities: {
+          create: plan.create_entities.length,
+          update: plan.update_entities.length,
+          delete: plan.delete_entities.length,
+        },
+        relationships: {
+          create: plan.create_relationships.length,
+          delete: plan.delete_relationships.length,
+        },
+      };
+      const empty =
+        summary.entities.create +
+          summary.entities.update +
+          summary.entities.delete +
+          summary.relationships.create +
+          summary.relationships.delete ===
+        0;
+      return Promise.resolve(
+        jsonResponse({
+          version: snapshot.version,
+          digest: snapshot.digest,
+          current_digest: fakeOntologyDigest(9999),
+          empty,
+          plan: { ...plan, summary, diff: ontologyDiffOut(options.ontologyDiff) },
+        }),
+      );
+    }
+    const ontologyRollbackMatch = path.match(
+      /^\/api\/v1\/ontology\/versions\/(\d+)\/rollback$/,
+    );
+    if (ontologyRollbackMatch && method === "POST") {
+      const version = Number(ontologyRollbackMatch[1]);
+      const snapshot = ownOntologyVersion(version);
+      if (!snapshot) {
+        return Promise.resolve(
+          jsonResponse({ detail: `本体版本 v${version} 不存在` }, 404),
+        );
+      }
+      if (options.failOntologyRollbackStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failOntologyRollbackDetail ??
+                `ontology rollback ${options.failOntologyRollbackStatus}`,
+            },
+            options.failOntologyRollbackStatus,
+          ),
+        );
+      }
+      const plan = ontologyRollbackPlanArrays();
+      const executed = [
+        ...plan.create_entities.map((item) => ({
+          action: "create_entity",
+          target: seedTargetId(item),
+        })),
+        ...plan.update_entities.map((item) => ({
+          action: "update_entity",
+          target: seedTargetId(item),
+        })),
+        ...plan.delete_entities.map((item) => ({
+          action: "delete_entity",
+          target: seedTargetId(item),
+        })),
+        ...plan.create_relationships.map((item) => ({
+          action: "create_relationship",
+          target: seedTargetId(item),
+        })),
+        ...plan.delete_relationships.map((item) => ({
+          action: "delete_relationship",
+          target: seedTargetId(item),
+        })),
+      ];
+      const identityChanged = options.ontologyRollbackIdentityChanged ?? [];
+      const digestMatch = identityChanged.length === 0;
+      return Promise.resolve(
+        jsonResponse({
+          version: snapshot.version,
+          executed,
+          identity_changed: identityChanged,
+          current_digest: digestMatch
+            ? snapshot.digest
+            : fakeOntologyDigest(9998),
+          target_digest: snapshot.digest,
+          digest_match: digestMatch,
+          message: digestMatch
+            ? "回滚完成，当前态与目标版本一致"
+            : "回滚完成，但当前态与目标版本 digest 不一致（见 identity_changed）",
+        }),
+      );
+    }
+    if (path === "/api/v1/ontology/integrity" && method === "GET") {
+      if (options.failOntologyIntegrityStatus) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                options.failOntologyIntegrityDetail ??
+                `ontology integrity ${options.failOntologyIntegrityStatus}`,
+            },
+            options.failOntologyIntegrityStatus,
+          ),
+        );
+      }
+      const seed = options.ontologyIntegrity;
+      const latest = latestOntologyVersion();
+      const differences = ontologyDiffOut(seed?.differences);
+      const consistent = seed?.consistent ?? !differences.has_changes;
+      return Promise.resolve(
+        jsonResponse({
+          customer_id: customerId,
+          consistent,
+          baseline:
+            seed?.baseline ??
+            (latest
+              ? {
+                  kind: "snapshot",
+                  version: latest.version,
+                  digest: latest.digest,
+                  events_folded: 0,
+                }
+              : { kind: "empty", version: null, digest: null, events_folded: 0 }),
+          current: seed?.current ?? {
+            digest: fakeOntologyDigest(9999),
+            entity_count: ownEntityRows().length,
+            relationship_count: ownEntityRelationshipRows().length,
+          },
+          folded_digest:
+            seed?.folded_digest ??
+            (consistent ? fakeOntologyDigest(9999) : fakeOntologyDigest(9998)),
+          differences,
+          escape_hint:
+            seed?.escape_hint ??
+            (consistent
+              ? null
+              : "当前态与事件流不一致：可能存在绕过 entities/service.py 的直改（裸 SQL）；事件流无法凭自身解释这些条目，详见 differences"),
+        }),
+      );
+    }
+
     return Promise.resolve(jsonResponse({ detail: "not found" }, 404));
   }) as unknown as typeof fetch;
 
@@ -5549,6 +6213,8 @@ export function installConsoleBackend(
       [...entitiesStore.values()].map((row) => ({ ...row })),
     getEntityRelationships: (): FakeEntityRelationshipRow[] =>
       [...entityRelationshipsStore.values()].map((row) => ({ ...row })),
+    getOntologyVersions: (): FakeOntologyVersionRow[] =>
+      ontologyVersionsStore.map((row) => ({ ...row })),
     getTeamMembers: (): FakeTeamMemberRow[] =>
       [...teamMembersStore.values()].map((row) => ({ ...row })),
     getTeamInvites: (): FakeTeamInviteRow[] =>

@@ -229,12 +229,27 @@ def _resolve_entity(values: dict, name: str, sess, customer_id: str) -> Entity:
 # ------------------------------------------------------------------ 创建干跑/实跑
 
 
-def _create_declaration(sess, bt: BuiltinActionType, values: dict, customer_id: str) -> str:
+def _create_declaration(
+    sess,
+    bt: BuiltinActionType,
+    values: dict,
+    customer_id: str,
+    *,
+    actor: str | None = None,
+    via: str = "action_gate",
+    source_ref: str | None = None,
+    source_instance_id: int | None = None,
+) -> str:
     """跑真实创建函数（**不含 commit**）——返回结果引用 id 字符串。
 
     preflight 以 savepoint 包裹后回滚（干跑）；execute 直调后 commit（实跑）。
     校验器在 add/flush 前失败，干跑零残留；形态问题以 PreflightError 形态上抛
     （调用方各自映射）。
+
+    wire-ontology-versioning 任务 2.3：created 事件随创建函数在**同事务**内
+    追加，``via=action_gate`` 且原样带入舰队血缘（``source_ref``）与来源
+    动作实例 id（``domain_action_instances.id``）——干跑在 savepoint 内回滚，
+    不留下事件。
     """
     from .service import InvalidActionType  # noqa: PLC0415
 
@@ -256,6 +271,10 @@ def _create_declaration(sess, bt: BuiltinActionType, values: dict, customer_id: 
             pk_columns=pk_columns,
             display_column=display,
             column_notes=notes,
+            actor=actor,
+            via=via,
+            source_ref=source_ref,
+            source_instance_id=source_instance_id,
         )
         return str(entity.id)
     if op == "relationship.create":
@@ -295,6 +314,10 @@ def _create_declaration(sess, bt: BuiltinActionType, values: dict, customer_id: 
             junction_dataset_id=junction_id,
             junction_source_column=junction_source or None,
             junction_target_column=junction_target or None,
+            actor=actor,
+            via=via,
+            source_ref=source_ref,
+            source_instance_id=source_instance_id,
         )
         return str(relationship.id)
     raise InvalidActionType(f"未知 metadata op: {op!r}")
@@ -349,8 +372,20 @@ def execute_metadata_effect(
     from .service import InvalidActionType  # noqa: PLC0415
 
     values = dict((instance.args_json or {}).get("values") or {})
+    #: 事件流的通道与血缘（wire-ontology-versioning 任务 2.3）：via 恒
+    #: action_gate；source_ref 与 source_instance_id 与动作实例一致
+    gate_actor = f"domain-action:{bt.id}:{instance.id}"
     try:
-        result_ref = _create_declaration(sess, bt, values, customer_id)
+        result_ref = _create_declaration(
+            sess,
+            bt,
+            values,
+            customer_id,
+            actor=gate_actor,
+            via="action_gate",
+            source_ref=instance.source_ref,
+            source_instance_id=instance.id,
+        )
         sess.entities.commit()
     except (InvalidActionType, PreflightError, *_VALIDATION_ERRORS, SQLAlchemyError) as exc:
         try:

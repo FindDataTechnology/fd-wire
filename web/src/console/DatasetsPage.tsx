@@ -89,7 +89,11 @@ export function isQuotaError(err: unknown): boolean {
   ) {
     return false;
   }
-  return /限额|配额|超限|上限|quota|limit/i.test(err.detail ?? "");
+  // detail 可能是对象（结构化错误体，如回滚中途失败）——本判定只看文案，
+  // 非字符串按「无文案」处理。
+  return /限额|配额|超限|上限|quota|limit/i.test(
+    typeof err.detail === "string" ? err.detail : "",
+  );
 }
 
 /** 字节数 → 人类可读（单位换算，非业务数字文案）。 */

@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { DomainActionsPanel } from "./DomainActionsPanel";
 import { EntityObjectBrowser } from "./EntityObjectBrowser";
+import { OntologyVersionSection } from "./OntologyVersionSection";
 import {
   ConsoleApiError,
   ENTITY_RELATIONSHIP_KINDS,
@@ -46,7 +47,12 @@ export function entityErrorLines(err: unknown, fallback: string): string[] {
         (item, i) => item.msg ?? `${item.type ?? "invalid"} #${i + 1}`,
       );
     }
-    if (err.detail) return [err.detail];
+    if (typeof err.detail === "string") return [err.detail];
+    if (err.detail) {
+      // 对象 detail（如回滚中途失败）取 message 原文，绝不 [object Object]。
+      const message = err.detail.message;
+      if (typeof message === "string" && message) return [message];
+    }
   }
   return [fallback];
 }
@@ -125,6 +131,10 @@ export function EntitiesPage() {
           </button>
         )}
       </div>
+
+      {/* 本体版本区（add-ontology-versioning 任务 5.2）：独立拉自己的数据，
+          实体页空态时照常显示（时间线/未发布数/导出/发布/完整性自检）。 */}
+      <OntologyVersionSection />
 
       {createOpen && (
         <CreateEntityForm

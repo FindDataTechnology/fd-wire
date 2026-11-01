@@ -24,7 +24,15 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import EntitiesBase
@@ -125,4 +133,92 @@ class EntityRelationship(EntitiesBase):
         return (
             f"<EntityRelationship {self.from_entity_id}.{self.from_column}"
             f" ->({self.kind}) {self.to_entity_id}.{self.to_column}>"
+        )
+
+
+# ------------------------------------------------------------------ 版本（0049）
+#
+# 本体版本机制（wire-ontology-versioning）两表与本体**同库同事务**
+# （design D1）：事件写失败即本体写失败，不存在「本体变了但没有事件」的窗口。
+# 事件表 append-only——系统不提供改删接口（service 唯一写入口）。
+
+
+class OntologyEvent(EntitiesBase):
+    """一条本体变更事件（append-only；before/after 全量 JSON）。
+
+    ``seq`` 是客户内顺序号（同客户单调递增；``(customer_id, seq)`` 建索引
+    供折叠与未发布变更计数），``id`` 是全局自增（跨客户唯一）。
+    """
+
+    __tablename__ = "ontology_events"
+    __table_args__ = (
+        Index("ix_ontology_events_customer_seq", "customer_id", "seq"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    customer_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: 客户内顺序号（1 起；插入时 max+1，同事务内取值）
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: create | update | delete
+    op: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: entity | relationship
+    target_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: 变更前全量（create 为 null）
+    before_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    #: 变更后全量（delete 为 null）
+    after_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    #: 谁改的（控制台=成员 sub；闸执行=domain-action:{type}:{instance}；回滚=owner sub）
+    actor: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: action_gate | console | rollback
+    via: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: 舰队血缘（经动作闸执行时从实例原样带入；控制台/回滚路径为 null）
+    source_ref: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    source_instance_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utc_now_naive
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试便利
+        return (
+            f"<OntologyEvent {self.customer_id}#{self.seq} "
+            f"{self.op} {self.target_kind}:{self.target_id}>"
+        )
+
+
+class OntologySnapshot(EntitiesBase):
+    """一条本体版本快照（客户内版本号单调；manifest 当前态全量）。"""
+
+    __tablename__ = "ontology_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "customer_id", "version", name="uq_ontology_snapshots_customer_version"
+        ),
+        Index(
+            "ix_ontology_snapshots_customer_created", "customer_id", "created_at"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    customer_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: 客户内版本号（1 起单调递增）
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: 规范 manifest 的 sha256（导出物完整性校验值同源）
+    digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: {"entities": [...], "relationships": [...]}（规范形态，键序固定）
+    manifest_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    #: daily | manual（日版=时间线，手动版=发布决策）
+    trigger: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: 手动版标签（≤80 字；日版为 null）
+    label: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    #: 创建人（手动版=成员 sub；日任务为 null）
+    created_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utc_now_naive
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试便利
+        return (
+            f"<OntologySnapshot {self.customer_id}v{self.version} "
+            f"{self.trigger} {self.digest[:8]}>"
         )

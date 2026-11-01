@@ -96,7 +96,9 @@ export function TeamPage() {
       if (err instanceof ConsoleApiError && err.status === 403) {
         setForbidden(true);
         setLoadError(
-          err.detail ?? t("console.team.forbiddenTitle"),
+          typeof err.detail === "string"
+            ? err.detail
+            : t("console.team.forbiddenTitle"),
         );
       } else {
         setLoadError(apiErrorText(err, t("console.team.errorTitle")));

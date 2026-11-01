@@ -44,7 +44,12 @@ from .pipeline import router as pipeline_router
 # 图谱；图谱紧凑块注入 AI 构建上下文见 ai/routes）
 from .domain_actions import router as domain_actions_router
 from .entities import init_db as init_entities_db
+from .entities import ontology_router as ontology_router
 from .entities import router as entities_router
+from .entities import (
+    start_snapshot_scheduler as start_ontology_snapshot_scheduler,
+    stop_snapshot_scheduler as stop_ontology_snapshot_scheduler,
+)
 # 资产目录（wire-asset-catalog）：数据集资产元数据 + 目录浏览端点
 # （表挂 DatasetsBase 走 datasets 库；生产迁移 alembic 0030）
 from .assets import router as assets_router
@@ -172,6 +177,10 @@ async def lifespan(_: FastAPI):
     # 实体语义层（wire-entity-layer）：entities / entity_relationships
     # 幂等建表兜底（生产走 alembic 0026；零引擎调用——纯元数据声明层）。
     init_entities_db()
+    # 本体版本日快照（wire-ontology-versioning 3.2）：每日 03:30 UTC（与既有
+    # pg_dump 同刻）为客户打一份本体快照；零变更与无本体客户静默跳过。
+    # ONTOLOGY_SNAPSHOT_ENABLED=false 可关。
+    start_ontology_snapshot_scheduler()
     # 受理后自动出单补扫（wire-demand-auto-export）：tick 循环扫
     # in_progress 且无任何出单尝试留档的需求单自动出单（缺省 60s；
     # DEMAND_AUTO_EXPORT_ENABLED=false 可关）。零迁移——事件挂既有
@@ -189,6 +198,7 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         stop_pipeline_worker()
+        stop_ontology_snapshot_scheduler()
         stop_auto_export_sweeper()
         await stop_xingyan_sync()
         stop_alert_evaluator()
@@ -283,6 +293,11 @@ app.include_router(packs_router)
 # 实体语义层（wire-entity-layer）：实体/关系声明 + 同源图谱（console 身份；
 # 免费档全功能——零引擎调用的元数据层，AI 上下文注入走 ai/routes）
 app.include_router(entities_router)
+# 本体版本面（wire-ontology-versioning）：/api/v1/ontology/versions（时间线 +
+# 未发布变更计数 + 打发布版）/ …/diff / …/rollback（plan 预览 + owner 执行）/
+# export（json|yaml + 可选出处）/ integrity（逃逸写自检）。表在本体同库
+# （alembic 0049）；事件与本体同事务写入（entities/service.py 单点收口）。
+app.include_router(ontology_router)
 app.include_router(domain_actions_router)
 # 资产目录（wire-asset-catalog）：/api/v1/assets 浏览筛选 +
 # /api/v1/datasets/{id}/asset-meta 元数据读写与留痕（console 身份；
