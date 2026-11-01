@@ -40,8 +40,8 @@
 - [x] 6.1 文档：本体版本语义（进版=打快照；未发布变更=事件计数）、写面收敛纪律（禁裸 SQL）、导出格式 schema_version、恢复两条线（语义版本 vs pg_dump）
 - [x] 6.2 红线/约定更新：`docs/` 与实体层 README 注明"绕过 service 的直改不进事件流"
 - [x] 6.3 全量测试：api 全套 + web 全套 + 迁移双方言；`openspec validate add-ontology-versioning --strict` 绿
-- [ ] 6.4 出片上产（沿 paas-release 配方：净化快照→镜像→relay→ccr 实证→bump→rollout）
-- [ ] 6.5 真机验证：drillcust001 上打一版手动发布版 → 改一个实体 → 看未发布变更 1 → diff → 导出 json/yaml → 回滚到发布版 → 再打版 digest 一致；完整性自检 200 一致
+- [x] 6.4 出片上产（沿 paas-release 配方：净化快照→镜像→relay→ccr 实证→bump→rollout）
+- [x] 6.5 真机验证：drillcust001 上打一版手动发布版 → 改一个实体 → 看未发布变更 1 → diff → 导出 json/yaml → 回滚到发布版 → 再打版 digest 一致；完整性自检 200 一致
 
 ## 7. 归档
 

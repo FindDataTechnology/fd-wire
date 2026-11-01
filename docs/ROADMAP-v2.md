@@ -157,7 +157,7 @@ EntityObjectBrowser+i18n+文档 v2。api 1505 全绿 / web 1024 全绿 / wire-op
 - [x] C3 `wire-object-view`（owner 输出面）：对象详情页（属性+关联对象），读边界沿 record-view
   纪律（只执行声明查询）；免费档降级为声明+图谱（现状），对象浏览为付费档。
 - [x] C4 AI 构建上下文注入改用对象口径（有界注入 ≤50/≤100 不变；空图谱零漂移不变）。
-- [x] C5 **本体版本（2026-11-01 实施，待上产）**：change `add-ontology-versioning`（fd-wire 根）
+- [x] C5 **本体版本（2026-11-01 实施并上产，已归档）**：change `add-ontology-versioning`（fd-wire 根，strict 绿）——api/web 滚 `sha-9ba9ef9`（快照源=bd41366）；迁移 0049 双库落位；真机演练 drillcust001 全过（打版→改实体→未发布 1→diff→导出 json/yaml→回滚 digest 对齐→再打版 unchanged→integrity 一致）
   ——本体从「只有当前态」升为「有语义版本」。①事件流 `ontology_events`（append-only，
   与本体同库同事务；写面收敛到 `entities/service.py` 单点，三条写路径 actor/via/血缘分列）；
   ②快照 `ontology_snapshots`（客户内版本号单调 + 规范 manifest + digest；日快照 03:30 UTC
