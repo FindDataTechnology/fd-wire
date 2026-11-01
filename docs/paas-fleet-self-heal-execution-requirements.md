@@ -97,4 +97,5 @@ action-registry 的 pending 提案 SHALL 增加"政策批准人"通道：命中�
 
 - **E7 · 看护集群推理通道独立**：watcher（工厂集群）与被看护系统共用同一 LLM 网关/账号池，平台网关故障时看护者自己也 fail/skip（实测 15 failed + 26 skipped）。SHALL：看护集群可配置独立推理通道或独立账号池（至少独立于被巡检对象的容量配额）；不满足时巡检岗 SHALL 在清单中标注「看护通道同源」。
 - **E8 · 单模型容量下限**：平台默认模型（deepseek-v4.1-flash/glm-5.3-flash）当前只有单一上游账号（windows-sub2api 中转，priority 已拉高），其自身 429（no_reset_time→默认 5s 窗）即造成全平台该模型 503 爆发（实测 10 分钟窗 44 次选择失败）。SHALL：平台默认模型至少两个上游账号；上游 429 无 reset 头时网关 SHALL 采用指数退避而非固定 5s 重试打满。**实施记录（2026-11-01）**：双上游已建——主网关账号 49/50/51（token.finddatatech.cloud 三尾网节点，键=FD_TOKEN_API_KEY，priority=90；坑=必须直指尾网节点，走公网域名 sub2api pod 不可达）；受控摘除 46 实验流量由 49 接住，turn 1372 ok 端到端实证。429 指数退避仍挂（sub2api 代码面）。
+- **E10 · 提案状态机落库面**：优化岗报告宣称「fleet-iteration 提案 N 条续持 proposed」但 `fleet_iterations` 表实测 0 行——提案通道只有 escalate（拍板件）一条腿，宣称与落库脱钩（2026-11-01 两轮实证）。SHALL：fleet-iteration 提案落 `fleet_iterations`（或并入 decision_items）并有读面；岗位纪律「提案计数以读面回读为准」依赖此状态机存在。
 - **E9 · turn 级 timeout 尾挂**（与本稿 E1 同族，转正式条目）：巡检工作产物完整落地后 turn 仍被 runtime 判 timeout（实测 turn 768/770/1192 三例同形状）。SHALL：回合预算判定以「产物落账时间」为准或产物落地后进入宽限收尾窗，不允许已交付产物被标失败。
