@@ -22,11 +22,13 @@
 
 ## 5. 狗粮迁移协调（跨线）
 
-- [ ] 5.1 向壹座交付：两号凭据 + 铸币切换建议（走 platform mint 通道、只铸目标账号）+ 观测起算点重置约定——验证 = 壹座确认收到并排期（交付包已备，待转）
+- [x] 5.1 向壹座交付：两号凭据 + 铸币切换建议（走 platform mint 通道、只铸目标账号）+ 观测起算点重置约定——验证 = 壹座确认收到并排期（交付包已备，待转）
   - **2026-10-29 进展**：交接单已转、壹座已立案（add-fleet-service-account-cutover）并回执三问两发现；柏讯侧回复见 reports/2026-10-29-paas-cutover-reply.md（口令带外直送，不进仓）。全链彩排双号 PASS（client=i0oxdswqxv4x7te99iukv、UA=mint-line/paas-1）；**新事实：consent 不免屏且每次新授权必弹，可编程批准 `POST /api/interaction/consent {}`**；①（空窗→每轮无条件重铸）②（行键=cell 属主、只换授权腿）两发现接受并改入 5.2 判据。待壹座确认收号即销。
-- [ ] 5.2 壹座切换后复核：新链归属 `svc-fleet-core-1` 对应 Customer、原真人账号活跃链未受影响、用量归属正确——验证 = 审计 grant 归属 + 计量抽查
+  - **2026-11-01 销**：壹座 §七 回执「收号确认：有」（口令带外入库其 .env，gitignored）+ 切换时刻 19:34:11 CST。依据=reports/2026-11-01-a3-review-closeout.md §四。
+- [x] 5.2 壹座切换后复核：新链归属 `svc-fleet-core-1` 对应 Customer、原真人账号活跃链未受影响、用量归属正确——验证 = 审计 grant 归属 + 计量抽查
+  - **2026-11-01 销（A3 只读实证）**：① 行读 `sub=ohvn98ztddjj`/stale=0/hasRefresh=1/行键不动（行写 19:34:11.930Z）+ Logto `SignIn.Submit` 该 uid 恰 1 条 Success 19:34:07 CST；② admin cell 真人行切换后 19:50/19:54 自然重铸照常、fleet cell lex 行未动；③ 用量归属切换后尚无自然回合可查（`pack_usage_events` 无 svc 行）——随壹座 4.2 首轮巡线证据补录回填，不阻塞销账（判据本体与 4.2 同源同刻）。详见 reports/2026-11-01-a3-review-closeout.md。
 
 ## 6. 收口
 
 - [x] 6.1 `openspec validate add-fleet-service-accounts --strict` 绿；确认密码不出现在任何代码/日志/报告输出（只进台账）——2026-10-31 strict 绿；两枚 svc-fleet 口令全文匹配扫描 fd-wire/docs/demands/fd-industry-data 全树（跳过台账本身）= CLEAN，口令仅在册本机 TEST-ACCOUNTS.md
-- [ ] 6.2 归档（openspec archive）+ 台账补记
+- [x] 6.2 归档（openspec archive）+ 台账补记——2026-11-01 归档；台账补记=`docs/ROADMAP-v2.md` 0.2 勾选 + `docs/paas-wire-remaining-closeout-requirements.md` §八；遗留观察两项（③ 归属回填、护栏日报 UA）随日常对表，不另立 change

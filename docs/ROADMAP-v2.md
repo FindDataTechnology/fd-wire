@@ -94,15 +94,16 @@ v1 把「类 Palantir」六层全部压在柏讯一个仓里盘点，切法错�
   （上游模型网关 503/502 窗口，与 token 网关旧挂账同源；识律政心监测舰窗口内 0/6 全非 ok）——
   车道熔断+降级重试实弹零触发（0 条 `degradedTo`），即 `fix-fleet-model-drift` 5.2
   「等中毒复发验真机」所候场景正在发生；网关韧性转挂账，证据随本次分层数据递 paas 侧续推。
-- [ ] 0.2 服务账号（柏讯仓，in-flight `add-fleet-service-accounts` 9/12）：按 tasks 走完含狗粮迁移。
-  **2026-10-31 柏讯侧收口**：strict 绿 + 两枚口令全树零泄漏扫描 CLEAN（6.1 销）；
-  剩 5.1（待壹座确认收号）、5.2（壹座切换后复核）、6.2 归档——球在壹座。
-  **2026-11-01 只读复核（切换未发生）**：壹座仓 `add-fleet-service-account-cutover` 仅勾
-  1.1–1.3/2.1/2.3，2.2 与 3.1–3.3、4.x 全空；Logto `Interaction.SignIn.Submit` 自 10-29
-  彩排后无 `svc-fleet-*` 记录；两支 cell（`1da519d4c1c0bf89` / `3fdc7b8e8ac03b68`）的
-  `user_line_credentials.wire-customer` token 解码 `sub` 仍是真人
-  （`pih8r05mwh8w` / `7jbveavwyk1x`），非 `ohvn98ztddjj`——切换卡在壹座 3.2。
-  **验收** = 现役舰队凭据全部脱离真人测试账号，审计能区分人与机器。
+- [x] 0.2 服务账号——**已收口（2026-11-01，change `add-fleet-service-accounts` 归档，spec
+  `fleet-service-accounts` 5 requirements 入库）**。10-29 两号发号入库+彩排双 PASS →
+  壹座 2026-11-01 **19:34:11 CST** 完成 fleet cell `3fdc7b8e` wire-customer 行原子切换
+  （行读实证 `sub=ohvn98ztddjj`/stale=0/hasRefresh=1/行键不动；Logto 该 uid 恰 1 条
+  `SignIn.Submit` Success 19:34:07）；柏讯 A3 只读复核 ①授权腿 ②其余链零受影响 ④护栏 UA
+  **过**，③ 用量归属随壹座 4.2 首轮自然回合补录回填（不阻塞）。**事实修正**：旧链自 10-31
+  起已 stale 断供（`token_exp`=ID token exp、mint+1h；14d 墙在 RT 侧），切换兼修复。
+  **边界**：切换面=fleet cell 一行；本体建设舰队所在 admin cell `1da519d4c1c0bf89` 授权腿
+  仍为真人链（壹座自动化管），如需同切由壹座扩覆盖，不算本波缺口。
+  回执=归档内 `reports/2026-11-01-a3-review-closeout.md` + 跨线文档 §七/§八。
 - [ ] 0.3 岗位身份注入（壹座 R1-a/R1-b）：`source_ref` 三元组真跑可落库。**验收** = 成员回合产物
   版本行带真实 fleet/post/member（见 `paas-wire-content-fleet-requirements.md` §三 P1）。
 - [ ] 0.4 在途收尾：柏讯情报舰队（`wire-intel-sentiment-fleet-requirements.md`）、谦面 en 覆盖与

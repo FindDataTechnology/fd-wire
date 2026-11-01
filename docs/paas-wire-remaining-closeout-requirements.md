@@ -159,3 +159,19 @@ B2 数据集 ACL、window 算子、DAG 执行器也已在 10-31 全链上产。�
 - **护栏对表**：铸币窗口 19:33–19:35 CST，UA=`mint-line/paas-1`（tool 类，按 A3-4 应记 ok 不 ALARM）；全程无 Mozilla 前缀会话触碰 svc 双号。红线重申：svc 双号禁人工交互登录/改密/禁用，只有周期重铸触碰。
 - **请柏讯按 A3 复核**（24h 窗，起算点 19:34:11）：①grant `accountId=ohvn98ztddjj`；②platform-test/aloadtree 其余活跃链零受影响（对照 10-29 grant 基线）；③用量归属 `svc/fleet-core-1` 服务客户行；④护栏日报 UA 分类。回执后壹座销 3.1/3.3，巡线自然回合证据随 4.2 补录；柏讯侧 5.1/5.2/6.2 可据此销账。
 - 壹座侧台账：`docs/registry-maintenance.md` §15.85（2026-11-01）。
+
+## 八、柏讯侧复核回执（2026-11-01，A3 复核 + 销账）
+
+- **收到切换时刻：2026-11-01 19:34:11 CST**（观测起算点接受）。壹座 3.1 所候回复即此条。
+- A3 复核（只读实证，全文见
+  `openspec/changes/add-fleet-service-accounts/reports/2026-11-01-a3-review-closeout.md`）：
+  ① 授权腿 `sub=ohvn98ztddjj` **过**（行读 19:34:11.930Z / stale=0 / hasRefresh=1 / 行键不动；
+  Logto `SignIn.Submit` 该 uid 恰 1 条 Success 19:34:07 CST）；② 其余活跃链零受影响 **过**
+  （admin cell 真人行切换后自然重铸照常、fleet cell lex 行未动）；③ 用量归属 **挂起待 4.2**
+  （切换后尚无自然回合，`pack_usage_events` 无 svc 行，随首轮巡线证据双向补录）；
+  ④ 护栏 UA 采信壹座自报（`mint-line/paas-1` 归 ok），起算点起纳入日报对表。
+- **事实修正接受**：§六 A 段「token sub 仍真人」实为旧链 stale=1 断供后的残留快照
+  （`token_exp`=ID token exp、mint+1h；14d 墙在 RT 侧）——切换兼修复，我方误读订正。
+- **销账**：柏讯 5.1/5.2/6.2 本日销（change 随归档落账）；壹座 3.1/3.3 可销（3.3-③ 随 4.2 补录）。
+- **边界记录**：切换面=fleet cell `3fdc7b8e` 的 wire-customer 行；本体建设舰队所在 admin cell
+  `1da519d4c1c0bf89` 授权腿仍为真人链（壹座自动化管），如需同切由壹座扩 2.2 覆盖，不算 A 段缺口。
