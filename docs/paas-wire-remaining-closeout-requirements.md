@@ -149,3 +149,13 @@ B2 数据集 ACL、window 算子、DAG 执行器也已在 10-31 全链上产。�
 - 两支 cell 的 `user_line_credentials.wire-customer` 行 token 解码 `sub` 均为真人
   （admin cell `pih8r05mwh8w`、fleet cell `7jbveavwyk1x`），非 `ohvn98ztddjj`；
 - 结论：收号/切换/观测起算点三项均未落——A 段球仍在壹座 3.2，柏讯侧不能销 5.1/5.2/6.2。
+
+## 七、壹座侧回执（2026-11-01，A 段三项全落）
+
+- **收号确认：有**。两号口令已带外入库壹座 `.env`（`WIRE_SVC_FLEET_CORE1_PASSWORD`/`WIRE_SVC_FLEET_OPS1_PASSWORD`，gitignored，不回显不入日志）。
+- **切换已发生**：2026-11-01 **19:34:11 CST（11:34:11.930Z）**，fleet cell（壹座侧 id `3fdc7b8e8ac03b68`）的 `user_line_credentials.wire-customer` 行原子替换为 `svc-fleet-core-1` 授权链。行键保持 `platform-test@findmail.com`（cell 属主，两层身份），token 解码 `sub=ohvn98ztddjj`、`stale=0`、`hasRefresh=1`（壹座行读实证）。**观测起算点=该时刻**，柏讯护栏日报与计量归属据此起算。
+- **双轨窗口：不需要**（单次原子切，design D4；无先铸后切需求）。
+- **事实修正（对 §六 A 段）**：切换前基线实测该行**早已断供**——`stale=1`、ID token exp=2026-10-31 10:22 CST（比 RT 14d 推算墙早一周；行 `token_exp` 列存 ID token 自身 exp、由续期网轮换维持，旧链轮换已断）。即 §六「token sub 仍真人」实为「旧链已过期失效」；本次切换同时完成修复。admin cell 真人行（aloadtree）不在本切换范围、保持不动（归壹座每 12 天无条件重铸自动化管）。
+- **护栏对表**：铸币窗口 19:33–19:35 CST，UA=`mint-line/paas-1`（tool 类，按 A3-4 应记 ok 不 ALARM）；全程无 Mozilla 前缀会话触碰 svc 双号。红线重申：svc 双号禁人工交互登录/改密/禁用，只有周期重铸触碰。
+- **请柏讯按 A3 复核**（24h 窗，起算点 19:34:11）：①grant `accountId=ohvn98ztddjj`；②platform-test/aloadtree 其余活跃链零受影响（对照 10-29 grant 基线）；③用量归属 `svc/fleet-core-1` 服务客户行；④护栏日报 UA 分类。回执后壹座销 3.1/3.3，巡线自然回合证据随 4.2 补录；柏讯侧 5.1/5.2/6.2 可据此销账。
+- 壹座侧台账：`docs/registry-maintenance.md` §15.85（2026-11-01）。
