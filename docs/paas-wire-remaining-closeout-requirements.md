@@ -120,3 +120,32 @@ B2 数据集 ACL、window 算子、DAG 执行器也已在 10-31 全链上产。�
 
 请按 A/B 两段分别回执：A 段给收号与切换时刻；B 段给所选路径（1/2/3）与铸造时刻。
 柏讯侧据回执更新 `docs/ROADMAP-v2.md` 0.2 与「本体建设内容腿」两行，并同步记忆台账。
+
+---
+
+## 六、柏讯侧 2026-11-01 只读复核（先验后销）
+
+### B 段：已落地（销账）
+
+- 舰队在 **cell `1da519d4c1c0bf89` 的 `fleets.db`**（非 platform 主库）：
+  `本体建设舰队` = `fleet_1793422472811_i28xac`，state=active；
+- 五岗齐全且父子链与蓝图一致：`本体盘账员`(ob-scout) → `本体建模师`(ob-modeler) →
+  `纪律校验闸`(ob-reviewer) → `声明提案员`(ob-deployer) → `台账主编`(ob-chief)；
+  cadence 03:10/03:40/04:10/04:40/05:10 Asia/Shanghai 逐字相符；
+- 运行证据：`fleet_runs` **37**、`member_turn_events` **73**（按岗 7/19/16/18/13）、
+  `member_reports` **12**；盘账岗首轮自报「`wire_datasets_list` 取靶 cell 全 6 数据集，
+  逐集 `wire_dataset_rows` 实读（只读，零写面），画像 15 组候选」；
+- 提案腿真闭合：`ai_action_proposals` 里 `entity-declare`/`entity-relation-declare`
+  （动作 id -1/-2）10-31 四条 executed；台账第 14 轮记「在册实体 5 个、关系 5 条」；
+- **口径修正**：本稿 B1 说的「registry 未在册」不准确——pack 的 `registryName: "wire-ops"`
+  是 cell 本地别名，注册表服务名是 `wire-ops-mcp`（22 工具）；pack 是直装进 cell，
+  不经市场货架属刻意形态（路径 3）。A3 判据中的「创建舰队」一项按此销账。
+
+### A 段：未发生（继续挂账）
+
+- 壹座仓 change `add-fleet-service-account-cutover`：1.1–1.3、2.1、2.3 已勾，
+  **2.2（范围改写）与 3.1–3.3（知会/切换/复核）、4.x 全空**；
+- Logto `Interaction.SignIn.Submit` 自 2026-10-29 彩排后无 `svc-fleet-*` 记录；
+- 两支 cell 的 `user_line_credentials.wire-customer` 行 token 解码 `sub` 均为真人
+  （admin cell `pih8r05mwh8w`、fleet cell `7jbveavwyk1x`），非 `ohvn98ztddjj`；
+- 结论：收号/切换/观测起算点三项均未落——A 段球仍在壹座 3.2，柏讯侧不能销 5.1/5.2/6.2。

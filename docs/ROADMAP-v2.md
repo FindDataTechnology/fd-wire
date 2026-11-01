@@ -97,6 +97,11 @@ v1 把「类 Palantir」六层全部压在柏讯一个仓里盘点，切法错�
 - [ ] 0.2 服务账号（柏讯仓，in-flight `add-fleet-service-accounts` 9/12）：按 tasks 走完含狗粮迁移。
   **2026-10-31 柏讯侧收口**：strict 绿 + 两枚口令全树零泄漏扫描 CLEAN（6.1 销）；
   剩 5.1（待壹座确认收号）、5.2（壹座切换后复核）、6.2 归档——球在壹座。
+  **2026-11-01 只读复核（切换未发生）**：壹座仓 `add-fleet-service-account-cutover` 仅勾
+  1.1–1.3/2.1/2.3，2.2 与 3.1–3.3、4.x 全空；Logto `Interaction.SignIn.Submit` 自 10-29
+  彩排后无 `svc-fleet-*` 记录；两支 cell（`1da519d4c1c0bf89` / `3fdc7b8e8ac03b68`）的
+  `user_line_credentials.wire-customer` token 解码 `sub` 仍是真人
+  （`pih8r05mwh8w` / `7jbveavwyk1x`），非 `ohvn98ztddjj`——切换卡在壹座 3.2。
   **验收** = 现役舰队凭据全部脱离真人测试账号，审计能区分人与机器。
 - [ ] 0.3 岗位身份注入（壹座 R1-a/R1-b）：`source_ref` 三元组真跑可落库。**验收** = 成员回合产物
   版本行带真实 fleet/post/member（见 `paas-wire-content-fleet-requirements.md` §三 P1）。
@@ -152,6 +157,11 @@ EntityObjectBrowser+i18n+文档 v2。api 1505 全绿 / web 1024 全绿 / wire-op
 - [x] C3 `wire-object-view`（owner 输出面）：对象详情页（属性+关联对象），读边界沿 record-view
   纪律（只执行声明查询）；免费档降级为声明+图谱（现状），对象浏览为付费档。
 - [x] C4 AI 构建上下文注入改用对象口径（有界注入 ≤50/≤100 不变；空图谱零漂移不变）。
+
+**内容腿（2026-11-01 只读复核）**：本体建设舰队已在 cell `1da519d4c1c0bf89` 物化并跑出真产物
+（五岗、37 run/73 回合/第 14 轮台账；实体 5 + 关系 5 经 `wire_action_propose` executed 落库，
+盘账岗对靶 cell 全 6 数据集出 15 组候选）——Wave C 的「内容面」由人工转入舰队驱动；
+平台侧两缺陷（parks 归因/工具面错位）已由壹座 `fix-parked-preset-attribution` 修复在产。
 
 **验收**：声明两实体+关系后，集群经 MCP search→get→沿关系取关联对象全链通；AI 构建带对象语义。
 
