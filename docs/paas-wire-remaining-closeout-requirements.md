@@ -175,3 +175,14 @@ B2 数据集 ACL、window 算子、DAG 执行器也已在 10-31 全链上产。�
 - **销账**：柏讯 5.1/5.2/6.2 本日销（change 随归档落账）；壹座 3.1/3.3 可销（3.3-③ 随 4.2 补录）。
 - **边界记录**：切换面=fleet cell `3fdc7b8e` 的 wire-customer 行；本体建设舰队所在 admin cell
   `1da519d4c1c0bf89` 授权腿仍为真人链（壹座自动化管），如需同切由壹座扩 2.2 覆盖，不算 A 段缺口。
+
+## 九、柏讯侧定谳与补录（2026-11-02，夜死机理 + 复用检测 + billing 口径）
+
+- **夜死机理定谳（催办①回执）**：两窗审计抓到切换后全部 3 条 RevokeToken（恰 2+1 落窗内），每条与同毫秒 `ExchangeTokenBy.RefreshToken` 失败行成对、ip 均 103.236.94.60（mint 主机）、UA=node、grant_type=refresh_token、result=Success：
+  - 11-01 20:48:59 CST `ohvn98ztddjj`（svc 链，grant `Dt92SxNY…`）
+  - 11-01 20:54:50 CST `pih8r05mwh8w`（aloadtree@wire-console，grant `P7jSgvk…`）
+  - 11-02 06:28:48 CST `pih8r05mwh8w`（aloadtree@lex-console，grant `FXs6vQv…`）
+  - 源码定谳（Logto 1.42 fork）：`lib/actions/grants/refresh_token.js` L121——**出示已轮换（consumed）RT 即 `destroy + revoke(grantId)`，整个 grant 连带全部衍生 token 撤销**；`RevokeToken` 审计行由 grant.revoked 事件监听器发射（`event-listeners/grant.ts`），故 10-25 勘验期审计零 RevokeToken=当时无复用，**出现 RevokeToken 即复用证据**。结论：**夜死=同行竞争出示旧 RT→复用检测→整链撤销**；与 10-25 定案「会话绑定三条件+14d 绝对租约」（非竞争杀链）互补成完整机理图。贵侧「同行单刷新者」纪律正对此因，07:42:28 起新形态（行龄 3h46m 两次轮换零 stale）已实证有效。
+- **复用检测状态确认（催办②回执）**：**恒启用、无租户开关**——SPA RT 恒轮换（clientAuthMethod='none' 且非 sender-constrained → rotate 恒 true，`oidc/defaults.ts`），rotation 开启即带复用检测（provider 内建，logto_configs 无覆盖位）。复用后果=整 grant 撤销、链死需重 mint、审计显式留痕。定谳后贵侧「只用 read-row、禁行外刷新探针」建议升为长期纪律（行外探针=人工制造复用风险）。
+- **billing 补录（3.3-③ 双向对账）**：柏讯 `billing_ledger_entries` 全表 0 行（历史+11-02 复核），系**口径使然**——LedgerKind 仅 grant/overage/hardstop/demand/adjustment 五种结算类目（`billing/models.py`），巡线/MCP 调用非结算事件永不落行；「svc 消费行」只在发生超额/单独立项结算时出现。用量归属判据按「消费发生在 svc 授权链下」**成立**：Logto 审计 grant `accountId=ohvn98ztddjj` + 11-01 20:42:03 及 11-02 晨间成功交换行；pack_usage_events 归属 cell 属主会话身份（platform-test@findmail.com）系两层身份设计使然（行键层），非归属错误。**3.3-③ 可按此口径销**；4.2 证据（917/607 真实回合+10:04/11:28 双续期）两侧互认。
+- **起算点更新接受**：观测起算点=11-02 07:42:28 重铸时刻（fleet RT 新墙≈11-16；自动化每轮无条件重铸下恒被清零，与 ①发现修正后的口径一致）。
