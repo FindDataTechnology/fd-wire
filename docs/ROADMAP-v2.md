@@ -101,8 +101,9 @@ v1 把「类 Palantir」六层全部压在柏讯一个仓里盘点，切法错�
   `SignIn.Submit` Success 19:34:07）；柏讯 A3 只读复核 ①授权腿 ②其余链零受影响 ④护栏 UA
   **过**，③ 用量归属随壹座 4.2 首轮自然回合补录回填（不阻塞）。**事实修正**：旧链自 10-31
   起已 stale 断供（`token_exp`=ID token exp、mint+1h；14d 墙在 RT 侧），切换兼修复。
-  **边界**：切换面=fleet cell 一行；本体建设舰队所在 admin cell `1da519d4c1c0bf89` 授权腿
-  仍为真人链（壹座自动化管），如需同切由壹座扩覆盖，不算本波缺口。
+  **边界（2026-11-04 已消除）**：壹座 11-04 07:05 CST 已将 admin cell 两行（wire-customer/lex）
+  授权腿同切 `svc-fleet-ops-1`（行读 sub=vsc4tv88zxhb 双行 + Logto 实证；壹座台账 §15.123 续记、
+  跨线文档 §九追记 85e9cfc）——全外科线授权腿服务账号化、真人链零在役。
   回执=归档内 `reports/2026-11-01-a3-review-closeout.md` + 跨线文档 §七/§八。
 - [ ] 0.3 岗位身份注入（壹座 R1-a/R1-b）：`source_ref` 三元组真跑可落库。**验收** = 成员回合产物
   版本行带真实 fleet/post/member（见 `paas-wire-content-fleet-requirements.md` §三 P1）。

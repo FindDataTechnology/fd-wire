@@ -52,6 +52,11 @@
 admin cell 归其每 12 天无条件重铸自动化管）。若后续要求本体舰队链也切 svc，需壹座扩 2.2 覆盖行——
 柏讯侧不视其为 A 段验收缺口（A3 判据未含）。
 
+**2026-11-04 补记**：上述边界已消除——壹座当日 07:05 CST 将 admin cell 两行（wire-customer/lex）
+授权腿同切 `svc-fleet-ops-1`（行读 sub=vsc4tv88zxhb 双行、stale=0、hasRefresh=1；Logto
+`SignIn.Submit` vsc4tv88zxhb 07:05:13 CST Success）。全外科线授权腿服务账号化、真人链零在役
+（壹座台账 §15.123 续记、跨线文档 §九追记 85e9cfc）。
+
 ## 四、销账
 
 - 柏讯 `add-fleet-service-accounts` **5.1 / 5.2 / 6.2 据此销**（6.2 随本单归档落账）；
