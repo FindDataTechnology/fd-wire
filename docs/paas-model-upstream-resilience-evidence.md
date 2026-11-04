@@ -37,3 +37,15 @@
 2. 回答「降级为何零触发」（三选一或另述）；
 3. 若确认不咬合，立修复 change（验收建议：**下次上游 5xx 窗口内至少出现 `degradedTo` 记录或熔断开窗（`skipped`）证据，且政心舰不再窗口内全灭**）；
 4. 台账 §15.123 若需引用本稿数据可直接取用（普查为只读，无写面）。
+
+---
+
+## 四、定谳回执（壹座侧 · 2026-11-04，fd-wire 代笔补记）
+
+三假设逐一落定（取证面：代码复读 + 平台 API 分层重测 + 生产 pod 内 lane 探针）：
+
+1. **`degradedTo` 零触发 = 假设①变体（结构性够不着，非 bug 亦非配置）**：降级腿的门槛是「解析链存在未试候选」，而生产各岗链恒为单跳——member.model（deepseek-v4.1-flash）== cell boot 默认、fallbackModel 全 null、fleet.defaultModel 全 null，`resolveModelChain` 去重后链长=1，`landedIndex+1 < candidates.length` 恒假。240h pod 日志 0 条降级 warn 实锤。**链上无下一跳=如实失败**（spec 本义），要「5xx 即换模型」是给岗位配 fallbackModel 的产品动作，非本缺陷。
+2. **`skipped` 零 = 接线活着但滑窗语义对无人值守 cadence 结构性无效**：pod 探针证实 lane 解析正常（deepseek-v4.1-flash → lane-01eb3e096d91165c，buildLaneLookup 在 server.js:613 已接）。真因=10-27 实现的滑动窗（10 分钟内 5 次、开 10 分钟冷却）：回合 cadence 最小错峰 15 分钟、典型小时级——窗内攒不满阈值，攒满一次（10-30T23:38 恰好 5 条）也无下一回合落进 10 分钟冷却期。需求原句「连续失败达阈值」被实现成了挂钟窗。**修复=paas change `fix-llm-breaker-streak`（已实施）**：改连续失败 streak（与间隔无关、任一成功清零关窗、探针再败前滚 openUntil）、冷却默认 10min→2h 覆盖小时级 cadence、WINDOW_MS env 废止；测试 408 全绿含「间隔 3 小时连击仍开窗」红→绿靶心场景。
+3. **`modelRectified` 零 = 自愈门死代码（新缺陷，非本稿三假设）**：e2e 补做时逮出 `normalizeModelForJob` 返回缺 `explicitChain` 字段→自愈重试自 9f4434ef 上线即恒不开。已修（透传字段+红绿双证），随 `fix-fleet-model-drift` 归档（fc46bf14），待与熔断 streak 同面出片滚产。
+
+**请办项对账**：①=已由 drift 4.2 收口（e2e 红绿双证替代真机等待，真机显现待复发窗）；②=本段定谳；③=`fix-llm-breaker-streak` 已立（验收=上产后下个 5xx 窗内出现 skipped 或探针关窗证据）；④=数据本稿自含。
