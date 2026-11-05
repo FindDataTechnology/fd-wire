@@ -25,7 +25,7 @@
 | ~~P1-9~~ ✅结案（2026-11-06：归属已登记——R 根 wire-analysis-presets Purpose 实现归属三锚点；非 fd-wire 模块，C 级评级源于审计对表口径错判） | **wire-analysis-presets 账本归属错位**：本仓零实现入口（评级 C） | cluster-E §5 | 核实现主体所在仓，spec 迁移或补实现 |
 | ~~P1-10~~ ✅已修（annotate-content-fleet-impl-state 453df3c：4 条悬空 Requirement 加实现态注记；实查修正初步清单——凭据轨/周期物化有在产落点未标，R1/R7 坐实悬空补标，证据在 proposal） | **wire-content-fleet spec 能力悬空**：fleet 段实例化/凭据轨/信号驱动/重复节奏拒仓内零代码；AI_CELL_ENDPOINT_MAP 漂移已咬生产（bcf57e3） | cluster-F §4 | spec 标注实现态（哪些 requirement 未落地）；漂移治理另立 |
 | ~~P1-11~~ ✅改判结案（2026-11-06 实查：R 根 wire-analysis-console:79-113——信息流面板+强断言发布门——2026-10-27 已入册，证据门/信息流契约非 shadow；「舰队产物归调度」经 annotate-content-fleet-impl-state change 已裁决不属悬空（委托半边在本仓在产）——三处均不补 spec） | **shadow 能力两处**：产物证据发布门（已上产 enforce）+信息流契约无 spec 条目；refresh-scheduler「舰队产物归调度」Requirement 无实现痕迹 | cluster-F、cluster-E §7 | 前者补 spec；后者核挂账出处 |
-| P1-12 | **cell 退租链收敛不足一月**：4 次 fix + R5(P0)/R6(P1) 缺陷入册 | cluster-A §11 | 挂观察名单下轮复检。**判据更新（2026-11-06）**：摘牌条件=remove-cell-openbao-dependency 提交并归档、修后出片、下次真实退租实弹零手工补完，三件齐备（11-05 pgauto001 purge 崩溃如实记录） |
+| ~~P1-12~~ ✅摘牌（2026-11-06 三判据齐备：①remove-cell-openbao-dependency 提交 987b878 并归档 2026-11-06；②修后出片 sha-06f3acb 双镜像+cheap1 部署态与 HEAD md5 一致；③实弹退租演练 drillp1106 全链零手工补完——provision→grant→deprovision(retention 0)→purge-expired，FileSecretStore 写入/清除双向实证，六点零残留=status not_found/容器 0/卷 0/secrets 0/PG db+role 0/0/preflight map 无，registry 条目空。11-05 pgauto001 purge 崩溃同链复验通过） | **cell 退租链收敛不足一月**：4 次 fix + R5(P0)/R6(P1) 缺陷入册 | cluster-A §11 | ~~挂观察名单下轮复检~~（判据已全部满足，摘牌） |
 | ~~P1-13~~ ✅已修（align-wire-platform-platform-reality 归档：公开面补橱窗/星研、后台边界钉工单延伸、对接清单补 A2A；12 原 Scenario 零削弱） | **wire-platform 总纲 3 条过时**：公开面清单缺橱窗+星研内容面；后台边界被萬星直连/工单编排逼近；兄弟线对接清单缺 A2A（另证：「13 条 wire 契约」说法过时，ops-mcp 已 22 工具） | cluster-F §12 | 总纲按现势改写 |
 
 ## P2 — 卫生/文档/边界裁决
