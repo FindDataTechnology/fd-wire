@@ -630,6 +630,8 @@ const en: Translation = {
       plan: "Plan",
       logout: "Sign out",
       activeTeam: "Active team",
+      // Shell parity (extract-console-shell task 1.3): console topbar back-to-portal entry.
+      backToPortal: "Back to portal",
     },
     auth: {
       loading: "Starting the console…",

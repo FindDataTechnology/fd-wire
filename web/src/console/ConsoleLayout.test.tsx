@@ -1,7 +1,10 @@
 // 控制台外壳分组测试（wire-console-shell）：四组渲染、页签齐全且归属正确、
 // 当前项 aria-current、分组标题随语言切换、路由不受分组影响。
+// 摘壳 parity（extract-console-shell）：顶栏品牌字+返回门户（href=#/）、
+// 语言切换点击即切侧栏文案且写持久化键 wire-web-lang、demands/new 场景
+//（tab=demands）活跃页签=我的需求。
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import "../i18n";
 import i18n from "../i18n";
 import {
@@ -28,10 +31,12 @@ function renderShell(tab: ConsoleTab) {
 
 beforeEach(() => {
   i18n.changeLanguage("zh");
+  localStorage.clear();
 });
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
 });
 
 describe("ConsoleLayout（侧栏分组）", () => {
@@ -154,5 +159,67 @@ describe("ConsoleLayout（侧栏分组）", () => {
     expect(
       screen.getByTestId("console-nav-keys").getAttribute("href"),
     ).toBe("#/console/keys");
+  });
+});
+
+describe("ConsoleLayout（摘壳 parity：extract-console-shell）", () => {
+  it("顶栏品牌字与返回门户链接在场（console-back-portal，href=#/）", () => {
+    renderShell("datasets");
+
+    expect(screen.getByTestId("console-back-portal").getAttribute("href")).toBe(
+      "#/",
+    );
+    // 品牌字在顶栏（摘壳后控制台自带品牌承载，比照 AdminLayout 品牌条）。
+    expect(screen.getByTestId("console-topbar").textContent).toContain("柏讯");
+    expect(screen.getByTestId("console-topbar").textContent).toContain(
+      "返回门户",
+    );
+  });
+
+  it("语言切换点击即切侧栏分组/页签文案，持久化键 wire-web-lang 写入", () => {
+    renderShell("datasets");
+
+    // 中文基线
+    expect(
+      screen.getByTestId("console-nav-group-label-overview").textContent,
+    ).toBe("概览");
+    expect(screen.getByTestId("console-nav-datasets").textContent).toBe(
+      "我的数据",
+    );
+    // 点击 EN → 即时切换（同一次渲染内分组标题与页签全量跟随）
+    fireEvent.click(screen.getByText("EN"));
+    expect(
+      screen.getByTestId("console-nav-group-label-overview").textContent,
+    ).toBe("Overview");
+    expect(
+      screen.getByTestId("console-nav-group-label-data").textContent,
+    ).toBe("Data");
+    expect(screen.getByTestId("console-nav-datasets").textContent).toBe(
+      "My data",
+    );
+    // 持久化键写入（与门户同一机制：i18n/index.ts LANGUAGE_KEY）
+    expect(localStorage.getItem("wire-web-lang")).toBe("en");
+    // 激活态沿用门户 langButton 惯例
+    expect(screen.getByText("EN").className).toContain("bg-slate-200");
+    // 切回中文同样即时生效
+    fireEvent.click(screen.getByText("中"));
+    expect(
+      screen.getByTestId("console-nav-group-label-overview").textContent,
+    ).toBe("概览");
+    expect(localStorage.getItem("wire-web-lang")).toBe("zh");
+  });
+
+  it("demands/new 场景（App 传 tab=demands）：活跃页签=我的需求（aria-current）", () => {
+    renderShell("demands");
+
+    expect(
+      screen.getByTestId("console-nav-demands").getAttribute("aria-current"),
+    ).toBe("page");
+    for (const item of CONSOLE_TABS) {
+      if (item.id === "demands") continue;
+      expect(
+        screen.getByTestId(`console-nav-${item.id}`).getAttribute("aria-current"),
+      ).toBeNull();
+    }
   });
 });

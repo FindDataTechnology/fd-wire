@@ -216,6 +216,43 @@ describe("ConsoleView（tab 切换）", () => {
     expect(await screen.findByTestId("artifacts-empty")).toBeTruthy();
   });
 
+  it("demands/new 折入控制台壳（extract-console-shell 1.4）：DemandNewView 在壳内、页签高亮 demands、landing_tab 不写", async () => {
+    const backend = installConsoleBackend([], {
+      preferences: { "demo-customer": { ui_locale: "zh" } },
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    seedConsoleSession({ sub: "demo-customer", planCode: "basic" });
+    const { rerender } = render(
+      <ConsoleView tab="demands" demandNewIndicator="CN_COAL" />,
+    );
+
+    // 壳在场 + 表单照常（锚点预填行为不变）
+    expect(await screen.findByTestId("console-topbar")).toBeTruthy();
+    expect(await screen.findByTestId("demand-description")).toBeTruthy();
+    expect(screen.getByTestId("demand-prefilled-code").textContent).toBe(
+      "CN_COAL",
+    );
+    // 活跃页签=我的需求（aria-current 落 demands）
+    expect(
+      screen.getByTestId("console-nav-demands").getAttribute("aria-current"),
+    ).toBe("page");
+    // 我的需求列表不与提交表单同屏
+    expect(screen.queryByTestId("my-demands-page")).toBeNull();
+    // 深链/子页往返不是页签导航：无 landing_tab 写回
+    expect(
+      backend.calls.filter(
+        (c) =>
+          c.url.pathname === "/api/console/me/preferences" &&
+          c.method === "PUT" &&
+          (c.body as { landing_tab?: string })?.landing_tab !== undefined,
+      ),
+    ).toEqual([]);
+
+    // 回到普通 demands 路由（App 的 console tab）→ 我的需求列表照常
+    rerender(<ConsoleView tab="demands" />);
+    expect(await screen.findByTestId("my-demands-page")).toBeTruthy();
+  });
+
   it("chat tab 显示名「AI 构建」（id 保持 chat）；#/console/chat 落助手整页形态", async () => {
     vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
     seedConsoleSession({ sub: "demo-customer", planCode: "basic" });
@@ -588,8 +625,8 @@ describe("ConsoleView（管理员控制台可达性）", () => {
       expect(screen.getByTestId(`console-nav-${tab}`)).toBeTruthy();
     }
     expect(await screen.findByTestId("upload-section")).toBeTruthy();
-    // 落地后门户顶栏照常呈现（控制台路由不被摘壳）。
-    expect(portalConsoleTab()).not.toBeNull();
+    // 落地后门户顶栏不再包裹控制台（extract-console-shell 1.1 摘壳）。
+    expect(portalConsoleTab()).toBeNull();
 
     // 可达性核心断言：从控制台回到裸 #/console（重挂载 = 真实导航），
     // 不再被分流改跳后台——否则管理员在控制台与后台之间永远出不来。
@@ -621,8 +658,9 @@ describe("ConsoleView（管理员控制台可达性）", () => {
     expect(await screen.findByTestId("console-topbar")).toBeTruthy();
     expect(window.location.hash).toBe("#/console");
     expect(screen.queryByTestId("admin-brand-bar")).toBeNull();
-    // 落控制台后门户顶部导航照常呈现（不因角色分流而消失）。
-    expect(portalConsoleTab()).not.toBeNull();
+    // 落控制台后门户顶部导航不再包裹（extract-console-shell 1.1 摘壳；
+    // 分流改跳的是壳层归属，不是门户顶栏的存废）。
+    expect(portalConsoleTab()).toBeNull();
   });
 
   it("普通客户（无 wire-admin）裸登录：落地仍是既有偏好序（不受分流影响）", async () => {

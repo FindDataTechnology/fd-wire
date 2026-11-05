@@ -1,18 +1,26 @@
 // 控制台布局：左侧栏（工作台 / AI 构建 / 产物 / 我的数据 / 实体 / 源包 /
-// 我的需求 / 用量 / 数据面 Key）+ 顶栏（登录客户标识 + 当前档位 + 登出）+
-// 内容区。工作台为首位聚合主页（wire-personal-workbench 任务 2.2）；默认
-// 落地仍是「我的数据」（landing_tab 值域新增 workbench 仅作候选）。
+// 我的需求 / 用量 / 数据面 Key）+ 顶栏（品牌字 + 返回门户 + 语言切换 +
+// org/plan/身份 + 活跃队徽标 + 登出）+ 内容区。工作台为首位聚合主页
+//（wire-personal-workbench 任务 2.2）；默认落地仍是「我的数据」
+//（landing_tab 值域新增 workbench 仅作候选）。
 // chat tab 显示名「AI 构建」，id 保持 chat 不变（路由兼容，任务 2.2）；
 // 页面为壹座试用引导卡（ChatPage）。
 // demands tab 已转正（wire-ux-consolidation 任务 4.3）：「我的需求」只读列表
-//（MyDemandsPage），不再是「上线中」占位。
+//（MyDemandsPage），不再是「上线中」占位；需求单提交子页
+//（#/console/demands/new）折入本壳（extract-console-shell 1.4，页签高亮
+// demands）。
 // 身份来自登录会话（auth.ts，Authorization: Bearer）；X-Customer-Id 可编辑的
 // 开发占位顶栏已退场（wire-self-serve-launch 任务 4.4）。
 // 顶栏活跃队徽标（wire-team-spaces-v2 6.4）：多队身份（GET /api/console/teams
 // 长度 > 1）才在用户区旁渲染当前队名；单队/拉取失败静默零渲染。
+// 摘壳 parity（extract-console-shell 1.2/1.3）：控制台不再被门户顶栏包裹，
+// 顶栏自带语言切换（与门户 langButton 同一 i18n 机制与持久化）与返回门户
+// 入口（比照 AdminLayout admin-back-portal 模式）。
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { getTeams } from "./api";
+import { getTeams, putPreferences } from "./api";
+import { loadSession } from "./auth";
+import { switchLanguage, type Language } from "../i18n";
 
 export type ConsoleTab =
   | "workbench"
@@ -141,7 +149,7 @@ export function ConsoleLayout({
   onLogout: () => void;
   children: ReactNode;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   // 活跃队徽标（wire-team-spaces-v2 6.4）：挂载即拉一次 GET /api/console/teams
   // ——多队身份才亮徽标（数据面随活跃队切换，切完由 TeamPage 整页 reload
   // 重建本组件）；单队/失败静默（徽标缺席不阻塞控制台）。
@@ -163,6 +171,39 @@ export function ConsoleLayout({
       cancelled = true;
     };
   }, []);
+
+  // 语言切换（extract-console-shell 1.2）：与门户顶栏 langButton 同一
+  // i18n 读写路径与持久化语义——本地 switchLanguage（i18n/changeLanguage +
+  // localStorage wire-web-lang）即时生效（侧栏分组标题/页签/内容全量跟随）；
+  // 登录态顺带把 ui_locale 即写 server（fire-and-forget，静默失败——偏好
+  // 同步绝不打断切换本身）；未登录仅本地，不发任何请求。
+  const handleLanguageSwitch = (lang: Language) => {
+    switchLanguage(lang);
+    if (!loadSession()?.idToken) return;
+    try {
+      void putPreferences({ ui_locale: lang }).catch(() => {
+        /* 偏好写失败静默：本地语言已生效，下次登录再收敛 */
+      });
+    } catch {
+      /* 会话读取异常等：仅本地语言切换 */
+    }
+  };
+
+  // 按钮样式沿门户 langButton 惯例（App.tsx）：激活态 bg-slate-200，
+  // 文案沿用门户惯例（中文态显示 EN、英文态显示 中——两种语言并排常驻）。
+  const langButton = (lang: Language, label: string) => (
+    <button
+      type="button"
+      onClick={() => handleLanguageSwitch(lang)}
+      className={`px-2 py-1 rounded text-xs transition-colors ${
+        i18n.language === lang
+          ? "bg-slate-200 font-medium"
+          : "hover:bg-slate-100"
+      }`}
+    >
+      {label}
+    </button>
+  );
 
   return (
     <div className="flex min-h-[32rem] flex-col rounded-lg border border-slate-200 bg-white shadow-sm md:flex-row">
@@ -217,6 +258,19 @@ export function ConsoleLayout({
           data-testid="console-topbar"
           className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-200 px-6 py-3"
         >
+          {/* 品牌字 + 返回门户（extract-console-shell 1.3）：比照 AdminLayout
+              AdminBrandBar 的品牌条布局——控制台摘壳后顶栏承载品牌与门户
+              出口，门户浏览 → 控制台作业随时可回。 */}
+          <a href="#/" className="text-sm font-semibold tracking-wide">
+            {t("brand.name")}
+          </a>
+          <a
+            href="#/"
+            data-testid="console-back-portal"
+            className="text-xs text-slate-500 underline hover:text-slate-800"
+          >
+            {t("console.topbar.backToPortal")}
+          </a>
           <div className="flex items-center gap-2">
             <span className="text-xs text-slate-500">
               {t("console.topbar.org")}
@@ -256,14 +310,23 @@ export function ConsoleLayout({
               {activeTeamName}
             </span>
           )}
-          <button
-            type="button"
-            data-testid="console-logout"
-            onClick={onLogout}
-            className="ml-auto rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:bg-slate-100"
-          >
-            {t("console.topbar.logout")}
-          </button>
+          {/* 顶栏右侧（extract-console-shell 1.2）：语言切换（identity 区旁、
+              登出左侧）+ 登出——语言切换沿用门户 langButton 的样式与
+              i18n 持久化机制。 */}
+          <div className="ml-auto flex items-center gap-2">
+            <div className="flex items-center rounded-md border border-slate-200 overflow-hidden">
+              {langButton("zh", "中")}
+              {langButton("en", "EN")}
+            </div>
+            <button
+              type="button"
+              data-testid="console-logout"
+              onClick={onLogout}
+              className="rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:bg-slate-100"
+            >
+              {t("console.topbar.logout")}
+            </button>
+          </div>
         </div>
         <div className="min-w-0 flex-1 p-6">{children}</div>
       </div>

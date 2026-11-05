@@ -594,6 +594,8 @@ const zh = {
       plan: "档位",
       logout: "登出",
       activeTeam: "当前团队",
+      // 摘壳 parity（extract-console-shell 1.3）：控制台顶栏返回门户入口。
+      backToPortal: "返回门户",
     },
     auth: {
       loading: "控制台启动中…",

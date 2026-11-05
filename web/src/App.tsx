@@ -3,7 +3,7 @@
 // routes are parsed by parseHash below (catalog list, catalog detail, console
 // tabs, demand placeholder).
 // 页脚分发（wire-ux-consolidation 任务 1.2）：门户视图挂全量页脚，
-// #/console/* 挂紧凑页脚，#/admin 不渲染页脚。
+// #/console/*（含需求单提交子页）与 #/admin 不渲染页脚。
 // 公开分享页（wire-dashboard-share；form/record-view/doc 后续变更同壳追加）：
 // #/share/{dashboard|form|record-view|doc}/{id}?t=&v= 完全独立成壳（极简顶栏
 // + 分享页脚，noindex），不进上方任何布局。
@@ -11,6 +11,9 @@
 // - Logto 回调走真实路径 /console/callback（App 挂载时检测 pathname 进入
 //   CallbackView，完成后回 hash 路由）；
 // - 「内部后台」导航按登录角色显隐（ID token roles 含 wire-admin 才渲染）。
+// 控制台摘壳（extract-console-shell 1.1/1.4）：门户站点顶栏只包裹门户视图
+// ——console 与 demandNew（折入控制台壳的 #/console/demands/new）同 admin
+// 一样不被门户顶栏包裹；控制台自有完整顶栏（ConsoleLayout）。
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { HomeView } from "./views/HomeView";
@@ -18,7 +21,6 @@ import { ConsoleView } from "./views/ConsoleView";
 import { LoginView } from "./views/LoginView";
 import { CatalogView } from "./views/CatalogView";
 import { CatalogDetailView } from "./views/CatalogDetailView";
-import { DemandNewView } from "./views/DemandNewView";
 import { ShareView } from "./views/ShareView";
 import { PricingView } from "./views/PricingView";
 import { DocsView } from "./views/DocsView";
@@ -182,7 +184,14 @@ function renderRoute(route: Route) {
     case "console":
       return <ConsoleView tab={route.tab} />;
     case "demandNew":
-      return <DemandNewView indicator={route.indicator} />;
+      // 需求单提交子页折入控制台壳（extract-console-shell 1.4）：路由解析
+      // 不变（#/console/demands/new 深链与 ?indicator= 预填照旧），渲染改由
+      // ConsoleLayout 承载——活跃页签=「我的需求」（demands），内容区是
+      // DemandNewView。落地序逻辑不受影响：demands/new 非裸入口，ConsoleView
+      // 的偏好落地/分流只对裸 #/console 生效。
+      return (
+        <ConsoleView tab="demands" demandNewIndicator={route.indicator} />
+      );
     case "admin":
       return <AdminView section={route.section} />;
     case "shareDashboard":
@@ -239,11 +248,16 @@ export function App() {
   }, []);
 
   const route = parseHash(hash);
-  // 控制台/内部后台是工作台布局（自带侧栏与宽内容区），主容器放宽。
-  const wideMain = route.name === "console" || route.name === "admin";
+  // 控制台/内部后台是工作台布局（自带侧栏与宽内容区），主容器放宽；
+  // demandNew 折入控制台壳（extract-console-shell 1.4）后同属工作台布局。
+  const wideMain =
+    route.name === "console" ||
+    route.name === "admin" ||
+    route.name === "demandNew";
   // 页脚分发（wire-console-ux-fixes 任务 3.1）：控制台是工作台布局（自带
-  // 侧栏与常驻顶栏），页脚从内容流里摘除——admin/console/demandNew 一律
-  // 无页脚，其余门户视图（含登录页）保留全量 SiteFooter。
+  // 侧栏与常驻顶栏），页脚从内容流里摘除——admin/console/demandNew（折入
+  // 控制台壳的提交子页）一律无页脚，其余门户视图（含登录页）保留全量
+  // SiteFooter。
   const footer =
     route.name === "admin" ||
     route.name === "console" ||
@@ -323,10 +337,14 @@ export function App() {
 
   return (
     <div className="min-h-screen">
-      {/* 内部后台独立成壳（wire-console-ux-fixes 任务 5.2）：#/admin 不被
-          门户站点顶栏包裹——后台自有极简顶条（AdminLayout），门户页签/
-          语言切换/登录入口都只在门户与控制台面呈现。 */}
-      {route.name !== "admin" && (
+      {/* 独立成壳（wire-console-ux-fixes 任务 5.2 + extract-console-shell
+          任务 1.1）：#/admin 与 #/console/*（含折入控制台壳的
+          #/console/demands/new）都不被门户站点顶栏包裹——后台与控制台各有
+          自有顶条/顶栏（AdminBrandBar / ConsoleLayout），门户页签、登录入口
+          与语言切换只在门户视图呈现。 */}
+      {route.name !== "admin" &&
+        route.name !== "console" &&
+        route.name !== "demandNew" && (
         <header className="border-b border-slate-200">
           <div className="max-w-5xl mx-auto px-4 py-4 flex items-center gap-4">
             <a href="#/" className="text-lg font-semibold tracking-wide">
@@ -345,7 +363,7 @@ export function App() {
                 t("nav.showcase"),
                 route.name === "showcase" || route.name === "showcaseDetail",
               )}
-              {tab("#/console", t("nav.console"), route.name === "console" || route.name === "demandNew")}
+              {tab("#/console", t("nav.console"), false)}
 
               {signedIn ? (
                 // 已登录：登录入口让位控制台直达（登录态下再挂「登录」是误导）。

@@ -159,7 +159,7 @@ describe("App shell（admin 导航按角色显隐 · Logto 回调真实路径）
     expect(screen.queryByTestId("nav-console-enter")).toBeNull();
   });
 
-  it("门户头部会话条件：已登录「登录」换「进入控制台」（门户页 + console 页）", async () => {
+  it("门户头部会话条件：已登录「登录」换「进入控制台」（门户页）；console 页摘壳无门户顶栏", async () => {
     // 门户页（#/pricing）：同步读 sessionStorage 的会话，头部换控制台直达。
     seedConsoleSession({ sub: "demo-customer" });
     window.location.hash = "#/pricing";
@@ -171,16 +171,97 @@ describe("App shell（admin 导航按角色显隐 · Logto 回调真实路径）
     unmount();
     cleanup();
     sessionStorage.clear();
-    // console 页（已登录）：门户顶栏同样换钮（admin 壳例外已在上一用例钉住）。
+    // console 页（已登录）：摘壳（extract-console-shell 1.1）后门户顶栏整体
+    // 缺席——「进入控制台」钮不再出现在控制台页（控制台自有顶栏在场）。
     vi.unstubAllGlobals();
     vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
     seedConsoleSession({ sub: "demo-customer" });
     window.location.hash = "#/console";
     render(<App />);
-    expect(screen.getByTestId("nav-console-enter")).toBeTruthy();
+    expect(await screen.findByTestId("console-topbar")).toBeTruthy();
+    expect(screen.queryByTestId("nav-console-enter")).toBeNull();
     expect(screen.queryByText("登录", { selector: "a" })).toBeNull();
-    // 控制台壳正常渲染（假后端承接，零未处理网络）。
-    await screen.findByTestId("console-topbar");
+  });
+});
+
+describe("App 控制台摘壳独立成壳（extract-console-shell）", () => {
+  beforeEach(() => {
+    i18n.changeLanguage("zh");
+    resetCatalogStatsCacheForTests();
+    localStorage.clear();
+    sessionStorage.clear();
+    window.location.hash = "#/console";
+    vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+    sessionStorage.clear();
+    window.location.hash = "";
+  });
+
+  /** 门户顶栏缺席的结构断言：登录钮/进入控制台钮（testid）+ 门户页签文案
+   *  （官网——门户 nav 独有，控制台侧栏无此文案）。 */
+  const expectPortalTopbarAbsent = () => {
+    expect(screen.queryByTestId("nav-login")).toBeNull();
+    expect(screen.queryByTestId("nav-console-enter")).toBeNull();
+    expect(screen.queryByText("官网")).toBeNull();
+    expect(screen.queryByText("进入控制台")).toBeNull();
+  };
+
+  it("已登录 console 页：门户顶栏缺席，控制台自有顶栏与返回门户在场", async () => {
+    seedConsoleSession({ sub: "demo-customer" });
+    render(<App />);
+    expect(await screen.findByTestId("console-topbar")).toBeTruthy();
+    expectPortalTopbarAbsent();
+    // parity（extract-console-shell 1.3）：返回门户入口 href=#/
+    expect(
+      screen.getByTestId("console-back-portal").getAttribute("href"),
+    ).toBe("#/");
+  });
+
+  it("已登录 demands/new：同壳承载（侧栏/顶栏/返回门户在场，我的需求页签高亮，表单照常）", async () => {
+    seedConsoleSession({ sub: "demo-customer" });
+    window.location.hash = "#/console/demands/new?indicator=CN_COAL";
+    render(<App />);
+    expect(await screen.findByTestId("console-topbar")).toBeTruthy();
+    expectPortalTopbarAbsent();
+    // 活跃页签=我的需求（aria-current 落 demands）
+    expect(
+      screen.getByTestId("console-nav-demands").getAttribute("aria-current"),
+    ).toBe("page");
+    // 表单在壳内照常可达：锚点预填与描述区（深链 ?indicator= 行为不变）
+    expect(screen.getByTestId("demand-prefilled-code").textContent).toBe(
+      "CN_COAL",
+    );
+    expect(screen.getByTestId("demand-description")).toBeTruthy();
+    expect(
+      screen.getByTestId("console-back-portal").getAttribute("href"),
+    ).toBe("#/");
+    // 页脚分发不变：控制台任一页无页脚
+    expect(screen.queryByTestId("site-footer")).toBeNull();
+    expect(screen.queryByTestId("console-footer")).toBeNull();
+  });
+
+  it("未登录 console 页：门户顶栏缺席，登录引导卡在场（ConsoleView 登录门，壳外）", async () => {
+    render(<App />);
+    expect(await screen.findByTestId("console-signin")).toBeTruthy();
+    expectPortalTopbarAbsent();
+    // 现状壳结构：登录引导卡渲染在 ConsoleLayout 之外——无顶栏即无
+    // console-back-portal（保持现状行为，摘壳不以引导态为界）。
+    expect(screen.queryByTestId("console-back-portal")).toBeNull();
+    expect(screen.queryByTestId("console-topbar")).toBeNull();
+  });
+
+  it("未登录 demands/new：ConsoleView 登录门在场（表单待登录后呈现），门户顶栏缺席", async () => {
+    window.location.hash = "#/console/demands/new?indicator=CN_COAL";
+    render(<App />);
+    expect(await screen.findByTestId("console-signin")).toBeTruthy();
+    expectPortalTopbarAbsent();
+    expect(screen.queryByTestId("demand-description")).toBeNull();
+    expect(screen.queryByTestId("console-back-portal")).toBeNull();
   });
 });
 
@@ -244,10 +325,15 @@ describe("App 页脚分发（wire-ux-consolidation 任务 1.2）", () => {
     expect(screen.queryByTestId("console-footer")).toBeNull();
   });
 
-  it("#/console/demands/new（需求单占位子页）同样无页脚", () => {
+  it("#/console/demands/new（提交子页折入控制台壳）同样无页脚", async () => {
+    // 提交子页折入控制台壳（extract-console-shell 1.4）后走 ConsoleView
+    // 登录门：表单在登录会话内呈现（匿名深链落登录引导卡，现状壳结构）。
+    vi.unstubAllGlobals();
+    vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
+    seedConsoleSession({ sub: "demo-customer" });
     window.location.hash = "#/console/demands/new?indicator=CN_COAL";
     render(<App />);
-    expect(screen.getByTestId("demand-description")).toBeTruthy();
+    expect(await screen.findByTestId("demand-description")).toBeTruthy();
     expect(screen.queryByTestId("console-footer")).toBeNull();
     expect(screen.queryByTestId("site-footer")).toBeNull();
   });
@@ -272,7 +358,9 @@ describe("App 顶栏语言切换（wire-personal-preferences）", () => {
     window.location.hash = "";
   });
 
-  it("登录态切语言 → PUT {ui_locale} 即写 server（fire-and-forget）", async () => {
+  it("登录态在控制台顶栏切语言 → PUT {ui_locale} 即写 server（fire-and-forget）", async () => {
+    // 摘壳后（extract-console-shell 1.2）控制台顶栏自带语言切换，与门户
+    // langButton 同一 i18n 机制与持久化语义（登录态顺带写 server）。
     // 预置 ui_locale=zh（避免首登领养 PUT 混入断言）。
     const backend = installConsoleBackend([], {
       preferences: { "demo-customer": { ui_locale: "zh" } },
@@ -286,6 +374,7 @@ describe("App 顶栏语言切换（wire-personal-preferences）", () => {
     await waitFor(() => {
       expect(i18n.language).toBe("en");
     });
+    expect(localStorage.getItem("wire-web-lang")).toBe("en");
     await waitFor(() => {
       expect(
         backend.calls.find(
@@ -300,12 +389,14 @@ describe("App 顶栏语言切换（wire-personal-preferences）", () => {
     expect(backend.getPreferences("demo-customer").ui_locale).toBe("en");
   });
 
-  it("未登录切语言 → 仅本地（不携带任何偏好写请求）", async () => {
+  it("未登录在门户页切语言 → 仅本地（不携带任何偏好写请求）", async () => {
+    // 匿名控制台是登录引导态（无顶栏无语言钮）——「未登录仅本地」的切换
+    // 入口在门户顶栏（摘壳后语言切换按壳归属），落 #/docs（静态门户页）。
     const backend = installConsoleBackend([]);
     vi.stubGlobal("fetch", backend.fetchImpl);
+    window.location.hash = "#/docs";
     render(<App />);
-    // 匿名登录引导（无会话），顶栏语言按钮仍在。
-    await screen.findByTestId("console-signin");
+    expect(await screen.findByTestId("mcp-endpoint")).toBeTruthy();
 
     fireEvent.click(screen.getByText("EN"));
     await waitFor(() => {

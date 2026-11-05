@@ -45,6 +45,7 @@ import { DatasetsPage } from "../console/DatasetsPage";
 import { EntitiesPage } from "../console/EntitiesPage";
 import { PacksPage } from "../console/PacksPage";
 import { MyDemandsPage } from "../console/MyDemandsPage";
+import { DemandNewView } from "./DemandNewView";
 import { UsagePage } from "../console/UsagePage";
 import { KeysPage } from "../console/KeysPage";
 import { TeamPage } from "../console/TeamPage";
@@ -102,8 +103,24 @@ function convergeLocale(prefs: ConsolePreferences): void {
   }
 }
 
-export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
+export function ConsoleView({
+  tab = "datasets",
+  demandNewIndicator,
+}: {
+  tab?: ConsoleTab;
+  /** 需求单提交子页模式（extract-console-shell 1.4）：由 App 的 demandNew
+   *  路由传入（#/console/demands/new?indicator=… 的 query 值，可为 null）。
+   *  传入即「提交子页折入控制台壳」：布局页签钉死 demands（活跃页签=我的
+   *  需求），内容区渲染 DemandNewView 而非 MyDemandsPage；undefined=普通
+   *  控制台路由，行为与折入前完全一致。 */
+  demandNewIndicator?: string | null;
+}) {
   const { t } = useTranslation();
+  // 提交子页模式判定：App 的 demandNew 路由恒传（string | null），普通
+  // console 路由不传（undefined）——用 undefined 作「非子页」哨兵。
+  const demandNewMode = demandNewIndicator !== undefined;
+  // 布局页签：提交子页钉死「我的需求」（demands）高亮；普通路由照常。
+  const layoutTab: ConsoleTab = demandNewMode ? "demands" : tab;
   const [phase, setPhase] = useState<BootstrapPhase>({ kind: "loading" });
   // 会话建立只跑一轮；retry 由显式事件触发（bootstrapToken 重新计数）。
   const [bootstrapToken, setBootstrapToken] = useState(0);
@@ -256,8 +273,12 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
   //（置顶→artifacts / landing_tab 跳转）经 suppressTabWriteRef 不回写——
   // 跳转本身不得覆盖用户存的落地习惯。标记按目标页签消费（见 ref 注释：
   // 真实浏览器里首帧可能已是目标页签，按变化消费会漏清、吞下一次用户写回）。
+  // 提交子页（demandNew 模式，extract-console-shell 1.4）整段跳过：深链/
+  // 从子页往返不是页签导航，不得写 landing_tab（lastTabRef 也不动，返回
+  // 原页签后照常按变化写回）。
   useEffect(() => {
     if (phase.kind !== "ready") return;
+    if (demandNewMode) return;
     if (suppressTabWriteRef.current !== null && tab === suppressTabWriteRef.current) {
       // 到达程序跳转目标：清标记且不回写；此后用户切页签照常即写。
       suppressTabWriteRef.current = null;
@@ -276,7 +297,7 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
         console.warn("landing_tab 写回失败", tab);
         setTabSyncError(true);
       });
-  }, [tab, phase.kind]);
+  }, [tab, phase.kind, demandNewMode]);
 
   // 离开 artifacts 页签即清落地展开锚（重进该页不再自动展开——展开只属于
   // 置顶落地那一次，用户后续的收起意图优先）。按「从 artifacts 离开」判定：
@@ -449,7 +470,7 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
 
   return (
     <ConsoleLayout
-      tab={tab}
+      tab={layoutTab}
       customerName={customer?.name ?? session.identity}
       planCode={customer?.plan_code ?? ""}
       identity={session.identity}
@@ -507,16 +528,25 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
       {/* 内容区层错误边界（wire-console-ux-fixes 任务 2.2）：单页异常只降级
           页签内容（amber 错误卡 + 重试），侧栏/顶栏/密钥条仍在。 */}
       <ErrorBoundary>
-        {tab === "datasets" && (
-          <DatasetsPage planCode={customer?.plan_code ?? ""} />
+        {demandNewMode ? (
+          // 需求单提交子页折入控制台壳（extract-console-shell 1.4）：表单
+          // 进控制台 chrome（与「从控制台发起需求」的用户心智一致）；表单
+          // 本体行为不变（预填/六入参提交/401 引导/422 逐条回显）。
+          <DemandNewView indicator={demandNewIndicator ?? null} />
+        ) : (
+          <>
+            {tab === "datasets" && (
+              <DatasetsPage planCode={customer?.plan_code ?? ""} />
+            )}
+            {tab === "entities" && <EntitiesPage />}
+            {tab === "packs" && <PacksPage />}
+            {tab === "demands" && <MyDemandsPage />}
+            {tab === "usage" && <UsagePage />}
+            {tab === "keys" && <KeysPage />}
+            {tab === "team" && <TeamPage />}
+            {tab === "market" && <MarketPage />}
+          </>
         )}
-        {tab === "entities" && <EntitiesPage />}
-        {tab === "packs" && <PacksPage />}
-        {tab === "demands" && <MyDemandsPage />}
-        {tab === "usage" && <UsagePage />}
-        {tab === "keys" && <KeysPage />}
-        {tab === "team" && <TeamPage />}
-        {tab === "market" && <MarketPage />}
       </ErrorBoundary>
       {/* AI 助手浮层（wire-assistant-panel）：全页签常驻、一处挂载。只在
           ready 态渲染——未登录/阻塞态没有会话，浮层无从发起请求（对应
