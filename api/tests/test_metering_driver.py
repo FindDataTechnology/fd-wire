@@ -165,3 +165,39 @@ def test_start_disabled_is_noop(tmp_path, monkeypatch) -> None:
     with driver_env(tmp_path, monkeypatch, METERING_DRIVER_ENABLED="false") as (_fake, _c):
         asyncio.run(_call())
         assert driver_mod._task is None
+
+
+def test_tick_unconfigured_warns_once_and_records_snapshot(tmp_path, monkeypatch) -> None:
+    """未配置直读：显式告警一次（不逐 tick 刷屏）+ last_tick 快照可探（P1-7）。"""
+    with driver_env(tmp_path, monkeypatch) as (_fake, _client):
+        driver_mod._poll_skip_warned = False
+        driver_mod._last_tick = None
+        first = tick_once(collection=None, sub2api=None, now=OCT)
+        assert first["polled"] is None
+        assert first["settled"] is None
+        # 快照：最近一轮 tick 可探（时刻+两段结果）。
+        snap = driver_mod.last_tick_snapshot()
+        assert snap is not None and snap["at"] == OCT.isoformat()
+        assert snap["polled"] is None and snap["settled"] is None
+        # 显式告警旗已立；重复 tick 不重置、不刷屏（旗保持）。
+        assert driver_mod._poll_skip_warned is True
+        tick_once(collection=None, sub2api=None, now=OCT)
+        assert driver_mod._poll_skip_warned is True
+        assert driver_mod._poll_skip_warned is not False
+
+
+def test_channel_status_helpers_shape(tmp_path, monkeypatch) -> None:
+    """探针辅助面：last_tick_snapshot/driver_running 形状契约。"""
+    with driver_env(tmp_path, monkeypatch) as (fake, _client):
+        driver_mod._last_tick = None
+        assert driver_mod.last_tick_snapshot() is None
+        assert driver_mod.driver_running() is False  # 未启动
+        tick_once(
+            collection=FakeCollection(_events(rows=600_000)),
+            sub2api=fake.client(),
+            now=OCT,
+        )
+        snap = driver_mod.last_tick_snapshot()
+        assert snap is not None
+        assert snap["polled"] is not None and snap["polled"]["fetched"] >= 1
+        assert snap["settled"] is not None

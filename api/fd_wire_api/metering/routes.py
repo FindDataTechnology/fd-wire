@@ -225,3 +225,25 @@ def list_anomalies(
         q = q.where(MeteringAnomaly.reason == reason)
     items = [row.as_dict() for row in db.execute(q).scalars().all()]
     return {"anomalies": items, "count": len(items)}
+
+
+@router.get("/channel-status", dependencies=[Depends(require_ingest_token)])
+def channel_status() -> dict[str, Any]:
+    """归集通道状态探针（wire-metering-explicit-alerting，P1-7）。
+
+    只读：直读是否配置、驱动最近一轮 tick 时刻与两段结果、后台驱动是否
+    存活。运维据此证实「生产走直读还是推送、最近一轮是否活着」——不再
+    靠静默默认。鉴权与 ingest 面同令牌（fail-closed 同口径）。
+    """
+    from . import driver as driver_mod
+
+    settings = get_settings()
+    return {
+        "poll": {
+            "configured": bool(
+                settings.registry_mongo_uri and settings.registry_mongo_db
+            ),
+            "last_tick": driver_mod.last_tick_snapshot(),
+        },
+        "driver": {"running": driver_mod.driver_running()},
+    }

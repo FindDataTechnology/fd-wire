@@ -1,7 +1,7 @@
 # dataset-export Specification
 
 ## Purpose
-TBD - created by archiving change wire-dataset-export. Update Purpose after archive.
+规定柏讯数据集的 CSV 导出面：登录客户经导出端点拉取自己数据集的当前行集（凭据与会话双轨、行数与档位约束如实、跨企业不可见），以及数据集详情页的导出入口行为。
 
 ## Requirements
 

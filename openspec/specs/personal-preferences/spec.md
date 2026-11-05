@@ -1,7 +1,7 @@
 # personal-preferences Specification
 
 ## Purpose
-TBD - created by archiving change wire-personal-preferences. Update Purpose after archive.
+规定控制台个人偏好的存储与同步：按 Logto sub 一人一行存 ui_locale/landing_tab/pinned_dashboard_id 三键、读写契约（部分更新+422 如实定位+置顶读时自愈），以及 web 侧跨端同步与落地序语义。
 
 ## Requirements
 

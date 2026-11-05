@@ -1,7 +1,7 @@
 # cell-postgres-storage Specification
 
 ## Purpose
-TBD - created by archiving change wire-cell-postgres-storage. Update Purpose after archive.
+规定 cell 数据根从 SQLite 向 PostgreSQL 的可选演进：可选 PG 数据根与双方言行为一致、一 cell 一库与属主凭据纪律、试点迁移与回退保底、cell-manager 自动建库发凭据，以及凭据入 OpenBAO 且令牌受限。
 
 ## Requirements
 

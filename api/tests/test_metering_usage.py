@@ -89,3 +89,30 @@ def test_usage_empty_db(metering_client: TestClient) -> None:
     body = metering_client.get("/internal/metering/usage").json()
     assert body["breakdown"] == []
     assert body["totals"] == {"calls": 0, "rows": 0}
+
+
+def test_channel_status_endpoint_auth_and_shape(metering_client: TestClient) -> None:
+    """通道状态探针（wire-metering-explicit-alerting）：令牌矩阵+形状。"""
+    # 无令牌 401；错令牌 401；正确令牌 200 且形状齐（configured/last_tick/driver）。
+    # 夹具把令牌挂在 client 默认头——负例须显式覆盖 Authorization。
+    assert (
+        metering_client.get(
+            "/internal/metering/channel-status", headers={"Authorization": ""}
+        ).status_code
+        == 401
+    )
+    assert (
+        metering_client.get(
+            "/internal/metering/channel-status", headers={"Authorization": "Bearer nope"}
+        ).status_code
+        == 401
+    )
+    resp = metering_client.get(
+        "/internal/metering/channel-status", headers=auth_headers()
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body.keys()) == {"poll", "driver"}
+    assert set(body["poll"].keys()) == {"configured", "last_tick"}
+    assert set(body["driver"].keys()) == {"running"}
+    assert isinstance(body["driver"]["running"], bool)

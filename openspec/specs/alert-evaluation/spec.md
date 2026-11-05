@@ -1,7 +1,7 @@
 # alert-evaluation Specification
 
 ## Purpose
-TBD - created by archiving change wire-alert-evaluation. Update Purpose after archive.
+规定数据集告警的评测面：告警规则契约与校验、按调度的评测执行与状态机（ok/firing 等）、通知发出、以及内部后台的管理面（规则 CRUD 与运行态可见）。
 
 ## Requirements
 

@@ -1,7 +1,7 @@
 # dataset-form-editing Specification
 
 ## Purpose
-TBD - created by archiving change wire-dataset-form-editing. Update Purpose after archive.
+规定数据集行内编辑的双档统一行为：api 档（免费层）本地修正层、cell 档引擎直改、有效视图对两种档位的统一合并口径，以及控制台行内编辑器的呈现与提交流。
 
 ## Requirements
 

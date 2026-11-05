@@ -42,6 +42,11 @@ logger = logging.getLogger(__name__)
 
 _task: asyncio.Task[None] | None = None
 
+# 最近一轮 tick 快照（进程内；channel-status 探针读，wire-metering-explicit-alerting）。
+_last_tick: dict[str, Any] | None = None
+# 直读未配置告警只发一次（不逐 tick 刷屏；wire-metering-explicit-alerting）。
+_poll_skip_warned = False
+
 
 def _closed_period(now: datetime | None = None) -> str:
     """结算聚合域：上一个**已关闭**的自然月（``YYYY-MM``）。
@@ -56,11 +61,22 @@ def _closed_period(now: datetime | None = None) -> str:
 
 
 def _poll_once(collection: Any | None) -> dict[str, int] | None:
-    """一段：审计摄取。返回落库计数；未配置返回 None。调用方以外的异常
-    由 tick 捕获记日志（下轮水位重叠窗兜底重拉）。"""
+    """一段：审计摄取。返回落库计数；未配置返回 None（显式告警一次）。
+
+    未配置不再是静默跳过（wire-metering-explicit-alerting）：与 settle 段
+    同 idiom 记 WARNING——直读通道未开闸要留痕；推送通道部署下这是预期态，
+    但「预期」必须由运维经 channel-status 探针证实，不由静默默认。
+    """
+    global _poll_skip_warned
     settings = get_settings()
     configured = bool(settings.registry_mongo_uri and settings.registry_mongo_db)
     if collection is None and not configured:
+        if not _poll_skip_warned:
+            _poll_skip_warned = True
+            logger.warning(
+                "metering poll 段跳过：REGISTRY_MONGO_URI/DB 未配置（直读通道未开闸）；"
+                "推送通道部署此为预期，否则计量在静默丢失——经 /internal/metering/channel-status 证实"
+            )
         return None
     session = get_session()
     try:
@@ -118,7 +134,22 @@ def tick_once(
         outcome["settled"] = _settle_once(sub2api, now)
     except Exception:  # noqa: BLE001 - 结算失败不动任何账（settle 内部语义）
         logger.exception("metering settle 段失败；下一轮同幂等键重放")
+    global _last_tick
+    _last_tick = {
+        "at": (now or datetime.now(timezone.utc)).isoformat(),
+        **outcome,
+    }
     return outcome
+
+
+def last_tick_snapshot() -> dict[str, Any] | None:
+    """最近一轮 tick 快照（channel-status 探针读；进程内，不落库）。"""
+    return dict(_last_tick) if _last_tick else None
+
+
+def driver_running() -> bool:
+    """后台驱动循环是否存活（未启动/已退出均 False）。"""
+    return _task is not None and not _task.done()
 
 
 async def _loop() -> None:

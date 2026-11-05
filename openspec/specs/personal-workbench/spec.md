@@ -1,7 +1,7 @@
 # personal-workbench Specification
 
 ## Purpose
-TBD - created by archiving change wire-personal-workbench. Update Purpose after archive.
+规定控制台工作台（workbench）的聚合读面：单端点聚合数据集/免费配额/数据包/产物/告警/需求单六段概要、跨客户隔离、工作台页渲染，以及作为裸入口落地序候选页之一的地位。
 
 ## Requirements
 
