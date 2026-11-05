@@ -43,7 +43,7 @@ spec:
         - name: api
           # 不可变标签纪律（mcp-service-deploy spec：禁 latest/浮动标签）。
           # 出片 tag=testaction004 build-pool 快照 sha=877cc66（真 ce8e93a：指标注册事件 subject 补 key——时间线契约对齐；底座=dd72128 指标落成数据集全链）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-b750016
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-c5113c2
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -215,7 +215,10 @@ spec:
             # email 型客户名无法按约定派生（customer_id 会拼进 cell 路径段，
             # 且容器/库名禁 @）——映射值指其 cell-manager 专户的 registry 入口。
             # 注意：map 非空即全显式口径，未列出的客户一律「未开通」——
-            # 新付费客户开户必须在此追加一行（cell 开户配方见 HANDOFF §5）。
+            # 新付费客户开户必须在此追加一行（cell 开户配方见
+            # docs/paas-wire-line-install-gate-and-fleet-audit-requirements.md §七，
+            # 步骤细节见 openspec/changes/archive/2026-10-26-wire-content-fleet/
+            # reports/2026-10-24-handoff-execution.md §三）。
             - name: AI_CELL_ENDPOINT_MAP
               value: >-
                 wire-tester2@findmail.com=https://mcp.finddatatech.cloud/fd-wire-cell-wiretester2/mcp,drillcust001=https://mcp.finddatatech.cloud/fd-wire-cell-drillcust001/mcp,pgauto001=https://mcp.finddatatech.cloud/fd-wire-cell-pgauto001/mcp
