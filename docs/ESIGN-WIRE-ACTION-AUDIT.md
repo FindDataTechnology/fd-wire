@@ -59,5 +59,20 @@ POST /api/admin/esignature/tasks/{task_id}/archive  # 归档
 
 - 本文件由 `add-esignature-wire-actions` apply 生成；测试全绿时间 2026-11-05
   （fd-lex 165 passed / fd-wire 全量见任务台账）。
-- **生产复核（部署后补一行）**：按任务 5.1 上产后，重跑两侧测试套件版本=上线镜像
-  sha，并在生产 openapi（/api/admin 面需令牌）抽查四路径与签署人面 401 形态。
+- ~~生产复核（部署后补一行）~~ **已补（2026-11-06，任务 5.1 上产后）**：
+
+### 六、生产复核记录（2026-11-06，5.1 上产后）
+
+| 项 | 结果 |
+|---|---|
+| fd-lex-api 镜像 | `sha-8a8df01`（源 04954f0；池 testaction003，BUILD_CONTEXT=server 补丁后出片）ArgoCD Synced，pod Ready |
+| fd-wire-api 镜像 | `sha-c5113c2`（源 2b6844a；同池 BUILD_CONTEXT=api）ArgoCD Synced，pod Ready |
+| 凭据注入 | `fd-wire-env` secret 注入 LEX_ESIGN_BASE_URL（集群内 svc）+ LEX_ESIGN_INTERNAL_TOKEN（与 fd-lex INTERNAL_API_TOKEN 同值，secret 传输不入 git） |
+| 机器面鉴权探针（生产 in-pod） | 无令牌 POST tasks=401；错令牌=401；`INTERNAL_API_TOKEN` 已在 fd-lex-env ✓ |
+| **红线复核（生产实证）** | X-Admin-Token 触 /realname 与 /sign=**404**（签署人面无路径+只认会话头）；wire 镜像内 MACHINE_PATHS 段级断言通过；wire ACTION_TO_TOOL_NAME 无 esignature 条目（无新增 MCP 工具） |
+| 跨服务真链（stub 窗口） | wire pod → HttpLexEsignClient → fd-lex 真拉：initiate（建+发起 pending）→status→nudge（reminded=true）全过；归档腿经 lex service 全链（completed + evidence_ready + cards=2）后，wire 跨服务 get_status=completed、archive_task 幂等（同 evidence_ready=true, cards=2） |
+| fail-closed 复核（撤 stub 后） | ESIGN_PROVIDER 移除 → wire 发起如实报「签署腿未配置：请配置 ESIGN_PROVIDER…」+**零残留**（e2e-esign-probe 任务数=0 实证）；生产常态=fail-closed |
+| 壹座 registry 快照 | **无需重烘**：新动作为 wire 内部闸动作（ACTION_TO_TOOL_NAME 无映射、esignature_status 为副驾内部读工具），不进 wire MCP tool_list；wire-ops-mcp 薄包未变 |
+| stub 局限备忘 | stub adapter 信封为**进程内存态**：kubectl exec 每次独立进程+pod 滚动重启都会丢信封（fetch_report 404）——跨进程全链必须在单进程内完成（离线测试形态即正确形态）；生产厂商 adapter 无此局限（状态在厂商侧） |
+
+**留尾**：壹座 pack allowTools 扩容（承接单 4.2，paas 侧姊妹单）到位后重跑一次真 agent 路径（合同岗 propose→owner 柏讯确认→执行）。
