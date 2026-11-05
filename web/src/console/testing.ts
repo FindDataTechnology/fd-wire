@@ -1873,6 +1873,10 @@ export function installConsoleBackend(
         "usage",
         "keys",
         "team",
+        // 与 api LANDING_TABS/web ConsoleTab 同步（fix-landing-tab-market-drift）；
+        // 假后端这份手抄清单由 api/tests/test_landing_tab_lockstep.py 的同集
+        // 断言间接看护（真源在 preferences.py，此处漂移会让假后端误拒）。
+        "market",
       ];
       if (
         payload.ui_locale !== undefined &&
@@ -1892,7 +1896,7 @@ export function installConsoleBackend(
       ) {
         return Promise.resolve(
           jsonResponse(
-            { detail: `landing_tab 必须是十个控制台页签之一（当前 ${String(payload.landing_tab)}）` },
+            { detail: `landing_tab 必须是控制台页签之一（当前 ${String(payload.landing_tab)}）` },
             422,
           ),
         );

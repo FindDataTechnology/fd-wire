@@ -42,9 +42,11 @@ router = APIRouter(tags=["console"])
 #: ui_locale 值域（应用层校验；DB 不设 CHECK——值域演进免迁移）
 UI_LOCALES = frozenset({"zh", "en"})
 
-#: landing_tab 值域 = 控制台十页签（与 web ConsoleView 页签面冻结对表；
-#: workbench 为 wire-personal-workbench 新增——漏加则切页签写回被 422
-#: 静默吞掉，工作台永远成不了落地候选，生产冒烟实弹抓出）
+#: landing_tab 值域 = 控制台十一页签（与 web ConsoleLayout.tsx ConsoleTab
+#: 联合类型冻结对表，api/tests/test_landing_tab_lockstep.py 可执行对拍；
+#: workbench 为 wire-personal-workbench 新增、market 为
+#: fix-landing-tab-market-drift 补齐——漏加则切页签写回被 422 静默吞掉，
+#: 该页签永远成不了落地候选，生产冒烟已两次实弹抓出）
 LANDING_TABS = frozenset(
     {
         "workbench",
@@ -57,6 +59,7 @@ LANDING_TABS = frozenset(
         "usage",
         "keys",
         "team",
+        "market",
     }
 )
 

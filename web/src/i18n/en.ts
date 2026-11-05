@@ -597,6 +597,11 @@ const en: Translation = {
     boot: {
       loading: "Entering the console…",
     },
+    prefs: {
+      // Landing-tab write-back failure surfacing (fix-landing-tab-market-drift)
+      tabWriteFailed:
+        "Failed to save the landing tab preference — your next visit will land on the previous tab",
+    },
     title: "Console",
     chartTitle: "Dashboard placeholder",
     chartEmpty: "No data yet",

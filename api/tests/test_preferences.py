@@ -208,7 +208,12 @@ def test_ui_locale_domain_cycle(env):
 
 def test_landing_tab_domain_cycle(env):
     client = env.client
-    tabs = ("workbench", "chat", "artifacts", "datasets", "entities", "packs", "demands", "usage", "keys", "team")
+    # 值域从 LANDING_TABS 导入而非手抄——枚举扩页签时本测试自动跟上
+    # （手抄清单正是 market 漏测的根因之一；另见 test_landing_tab_lockstep.py）。
+    from fd_wire_api.console.preferences import LANDING_TABS
+
+    tabs = tuple(sorted(LANDING_TABS))
+    assert "market" in tabs  # fix-landing-tab-market-drift：复发缺陷回归锚
     for tab in tabs:
         resp = client.put(PREFS_URL, json={"landing_tab": tab}, headers=OWNER)
         assert resp.status_code == 200, tab

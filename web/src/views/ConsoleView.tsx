@@ -111,6 +111,9 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
   // 个人偏好（wire-personal-preferences）：null = 未拉到（端点失败/未返回），
   // 拉到后驱动 locale 收敛、落地序与看板置顶徽标。
   const [prefs, setPrefs] = useState<ConsolePreferences | null>(null);
+  // 落地页签写回失败的用户可见提示（fix-landing-tab-market-drift）：
+  // 不再静默吞——用户须知道本次切换没存上；下一次写回成功即消除。
+  const [tabSyncError, setTabSyncError] = useState(false);
   // 置顶跳转要展开的看板产物 id：仅传给产物页做挂载期初始化；离开
   // artifacts 页签即清（回到该页不重复自动展开——展开只发生在落地那一次）。
   const [initialDashboardId, setInitialDashboardId] = useState<number | null>(
@@ -264,9 +267,15 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
     const prev = lastTabRef.current;
     lastTabRef.current = tab;
     if (prev == null || prev === tab) return;
-    void putPreferences({ landing_tab: tab }).catch(() => {
-      /* 写回失败静默：落地偏好下次仍按旧值 */
-    });
+    void putPreferences({ landing_tab: tab })
+      .then(() => setTabSyncError(false))
+      .catch(() => {
+        // 写回失败显式提示（fix-landing-tab-market-drift）：不再静默吞——
+        // 落地偏好下次仍按旧值，静默吞曾把 workbench/market 两页签的落地
+        // 意图无声丢掉（后者为前科复发）。
+        console.warn("landing_tab 写回失败", tab);
+        setTabSyncError(true);
+      });
   }, [tab, phase.kind]);
 
   // 离开 artifacts 页签即清落地展开锚（重进该页不再自动展开——展开只属于
@@ -472,6 +481,17 @@ export function ConsoleView({ tab = "datasets" }: { tab?: ConsoleTab }) {
           <p className="mt-2 text-xs text-emerald-700">
             {t("console.keyOnce.hint")}
           </p>
+        </div>
+      )}
+      {/* 落地页签写回失败条（fix-landing-tab-market-drift）：fire-and-forget
+          保留，但失败 MUST 用户可见——静默吞曾把 workbench/market 两页签的
+          落地意图无声丢掉。下一次写回成功自动消除。 */}
+      {tabSyncError && (
+        <div
+          data-testid="console-prefs-tab-sync-error"
+          className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800"
+        >
+          {t("console.prefs.tabWriteFailed")}
         </div>
       )}
       {tab === "workbench" && <WorkbenchPage />}

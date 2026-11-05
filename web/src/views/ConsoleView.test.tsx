@@ -460,6 +460,53 @@ describe("ConsoleView（个人偏好：跨端同步语义）", () => {
     ).toBe(true);
   });
 
+  it("切到 market 页签 → PUT landing_tab=market；写回 422 → 用户可见提示条（不再静默吞）", async () => {
+    const backend = installConsoleBackend([], {
+      failPreferencesStatus: 422,
+      failPreferencesDetail: "landing_tab 必须是控制台页签之一",
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    seedConsoleSession({ sub: "demo-customer" });
+    window.location.hash = "#/console";
+    render(<App />);
+
+    await screen.findByTestId("console-topbar");
+    // 用户切到 market（web 十一页签；api 旧十值曾 422 静默吞——复发缺陷）。
+    window.location.hash = "#/console/market";
+    await waitFor(() => expectActiveTab("market"));
+    await waitFor(() => {
+      expect(
+        preferencePuts(backend).find(
+          (c) => (c.body as { landing_tab?: string })?.landing_tab === "market",
+        ),
+      ).toBeTruthy();
+    });
+    // 写回失败用户可见：提示条在场（fix-landing-tab-market-drift）。
+    expect(
+      screen.getByTestId("console-prefs-tab-sync-error").textContent,
+    ).toContain("落地页签偏好保存失败");
+  });
+
+  it("写回成功无提示条；market 写回被服务端接受（api 值域已补齐）", async () => {
+    const backend = installConsoleBackend([]);
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    seedConsoleSession({ sub: "demo-customer" });
+    window.location.hash = "#/console";
+    render(<App />);
+
+    await screen.findByTestId("console-topbar");
+    window.location.hash = "#/console/market";
+    await waitFor(() => expectActiveTab("market"));
+    await waitFor(() => {
+      expect(
+        preferencePuts(backend).find(
+          (c) => (c.body as { landing_tab?: string })?.landing_tab === "market",
+        ),
+      ).toBeTruthy();
+    });
+    expect(screen.queryByTestId("console-prefs-tab-sync-error")).toBeNull();
+  });
+
   it("显式 #/console/usage 直达：偏好不劫持（不重定向、不展开置顶、不写 landing_tab）", async () => {
     const backend = installConsoleBackend([], {
       preferences: {

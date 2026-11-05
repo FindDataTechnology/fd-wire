@@ -562,6 +562,10 @@ const zh = {
     boot: {
       loading: "正在进入控制台…",
     },
+    prefs: {
+      // 落地页签写回失败显式提示（fix-landing-tab-market-drift）
+      tabWriteFailed: "落地页签偏好保存失败——下次进入仍按上次值落地",
+    },
     title: "控制台",
     chartTitle: "仪表盘占位",
     chartEmpty: "暂无数据",
