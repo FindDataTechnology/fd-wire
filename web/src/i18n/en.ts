@@ -12,6 +12,7 @@ const en: Translation = {
     catalog: "Catalog",
     showcase: "Showcase",
     console: "Console",
+    consoleEnter: "Open Console",
     admin: "Admin",
     login: "Sign in",
   },
@@ -469,7 +470,6 @@ const en: Translation = {
   },
   badge: {
     comingSoon: "In rollout · coming soon",
-    comingSoonShort: "Coming soon",
   },
   catalog: {
     title: "Indicator catalog",

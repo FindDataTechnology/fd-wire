@@ -252,6 +252,11 @@ export function App() {
       : <SiteFooter />;
   // Logto 回调：真实路径 /console/callback 优先于 hash 路由（完成后回 hash）。
   const callbackActive = isConsoleCallbackPath(window.location.pathname);
+  // 门户头部会话条件（close-wire-implementation-gaps 4.1）：同步读 sessionStorage
+  //（沿本文件语言同步的 loadSession 用法）——已登录（有 idToken）时「登录」
+  // 换「进入控制台」（#console 直达），未登录保持「登录」。渲染时机跟
+  // hashchange 重渲染走（上方 effect 每次路由变化 setState 即重渲染本壳）。
+  const signedIn = !!loadSession()?.idToken;
   // 内部后台入口不再挂在门户顶栏（wire-console-ux-fixes 5.2）：后台独立成壳，
   // 管理员由分流落地直达 #/admin；角色门禁仍在 AdminView 与 admin API 双闸。
 
@@ -342,12 +347,24 @@ export function App() {
               )}
               {tab("#/console", t("nav.console"), route.name === "console" || route.name === "demandNew")}
 
-              <a
-                href="#/login"
-                className="ml-2 px-3 py-1.5 rounded-md text-sm border border-slate-300 hover:bg-slate-100 transition-colors"
-              >
-                {t("nav.login")}
-              </a>
+              {signedIn ? (
+                // 已登录：登录入口让位控制台直达（登录态下再挂「登录」是误导）。
+                <a
+                  href="#/console"
+                  data-testid="nav-console-enter"
+                  className="ml-2 px-3 py-1.5 rounded-md text-sm border border-slate-300 hover:bg-slate-100 transition-colors"
+                >
+                  {t("nav.consoleEnter")}
+                </a>
+              ) : (
+                <a
+                  href="#/login"
+                  data-testid="nav-login"
+                  className="ml-2 px-3 py-1.5 rounded-md text-sm border border-slate-300 hover:bg-slate-100 transition-colors"
+                >
+                  {t("nav.login")}
+                </a>
+              )}
               <div className="ml-2 flex items-center rounded-md border border-slate-200 overflow-hidden">
                 {langButton("zh", "中")}
                 {langButton("en", "EN")}

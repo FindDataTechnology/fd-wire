@@ -150,6 +150,38 @@ describe("App shell（admin 导航按角色显隐 · Logto 回调真实路径）
       screen.getByTestId("admin-back-portal").getAttribute("href"),
     ).toBe("#/");
   });
+
+  it("门户头部会话条件（close-wire-implementation-gaps 4.1）：未登录「登录」在场、「进入控制台」缺席", () => {
+    window.location.hash = "#/pricing";
+    render(<App />);
+    const login = screen.getByText("登录", { selector: "a" });
+    expect(login.getAttribute("href")).toBe("#/login");
+    expect(screen.queryByTestId("nav-console-enter")).toBeNull();
+  });
+
+  it("门户头部会话条件：已登录「登录」换「进入控制台」（门户页 + console 页）", async () => {
+    // 门户页（#/pricing）：同步读 sessionStorage 的会话，头部换控制台直达。
+    seedConsoleSession({ sub: "demo-customer" });
+    window.location.hash = "#/pricing";
+    const { unmount } = render(<App />);
+    const enter = screen.getByTestId("nav-console-enter");
+    expect(enter.getAttribute("href")).toBe("#/console");
+    expect(enter.textContent).toBe("进入控制台");
+    expect(screen.queryByText("登录", { selector: "a" })).toBeNull();
+    unmount();
+    cleanup();
+    sessionStorage.clear();
+    // console 页（已登录）：门户顶栏同样换钮（admin 壳例外已在上一用例钉住）。
+    vi.unstubAllGlobals();
+    vi.stubGlobal("fetch", installConsoleBackend([]).fetchImpl);
+    seedConsoleSession({ sub: "demo-customer" });
+    window.location.hash = "#/console";
+    render(<App />);
+    expect(screen.getByTestId("nav-console-enter")).toBeTruthy();
+    expect(screen.queryByText("登录", { selector: "a" })).toBeNull();
+    // 控制台壳正常渲染（假后端承接，零未处理网络）。
+    await screen.findByTestId("console-topbar");
+  });
 });
 
 describe("App 页脚分发（wire-ux-consolidation 任务 1.2）", () => {

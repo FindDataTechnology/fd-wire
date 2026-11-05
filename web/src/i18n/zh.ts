@@ -10,6 +10,7 @@ const zh = {
     catalog: "指标目录",
     showcase: "看板橱窗",
     console: "控制台",
+    consoleEnter: "进入控制台",
     admin: "内部后台",
     login: "登录",
   },
@@ -441,7 +442,6 @@ const zh = {
   },
   badge: {
     comingSoon: "上线中 · 即将开放",
-    comingSoonShort: "上线中",
   },
   catalog: {
     title: "指标目录",

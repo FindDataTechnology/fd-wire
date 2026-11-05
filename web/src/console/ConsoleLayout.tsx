@@ -63,7 +63,6 @@ export const CONSOLE_TABS: ReadonlyArray<{
   id: ConsoleTab;
   href: string;
   labelKey: string;
-  placeholder?: boolean;
 }> = [
   // 工作台（wire-personal-workbench 任务 2.2）：侧栏首位——聚合各页信息
   // 资产的单屏主页；默认落地不变（仍是「我的数据」，landing_tab 值域新增
@@ -122,30 +121,6 @@ export function tabsInGroup(
   return group.tabs
     .map((id) => TAB_BY_ID.get(id))
     .filter((tab): tab is NonNullable<typeof tab> => tab !== undefined);
-}
-
-export function ConsolePlaceholder({
-  titleKey,
-  bodyKey,
-}: {
-  titleKey: string;
-  bodyKey: string;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div
-      data-testid="console-placeholder"
-      className="mx-auto max-w-xl rounded-lg border border-amber-200 bg-amber-50/50 p-8"
-    >
-      <div className="flex items-center gap-3">
-        <h1 className="text-xl font-semibold">{t(titleKey)}</h1>
-        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
-          {t("badge.comingSoon")}
-        </span>
-      </div>
-      <p className="mt-4 text-sm text-slate-600">{t(bodyKey)}</p>
-    </div>
-  );
 }
 
 export function ConsoleLayout({
@@ -229,17 +204,6 @@ export function ConsoleLayout({
                       }`}
                     >
                       <span>{t(item.labelKey)}</span>
-                      {item.placeholder && (
-                        <span
-                          className={`ml-auto rounded px-1 py-0.5 text-[10px] ${
-                            current
-                              ? "bg-white/20 text-white"
-                              : "bg-amber-100 text-amber-700"
-                          }`}
-                        >
-                          {t("badge.comingSoonShort")}
-                        </span>
-                      )}
                     </a>
                   );
                 })}
