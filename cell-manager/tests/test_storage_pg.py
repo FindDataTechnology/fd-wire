@@ -1,6 +1,6 @@
-"""storage_pg 单元（无 PG、无网）：psycopg 连接替身 + OpenBAO 替身。
+"""storage_pg 单元（无 PG、无网）：psycopg 连接替身 + 凭据托管替身。
 
-覆盖契约清单：七步成功（URL 形态、口令只进局部与 OpenBAO）、幂等重入
+覆盖契约清单：七步成功（URL 形态、口令只进局部与托管条目）、幂等重入
 （复用条目不 ALTER）、自愈轮换（角色在、条目缺 → ALTER+put）、隔离四查
 失败（fail-closed、回滚不误删既有资产）、teardown_created 只删本次新建、
 destroy 幂等、psycopg 缺失指引、标识符白名单。
@@ -14,7 +14,7 @@ import sys
 import pytest
 
 import cell_manager.storage_pg as storage_pg
-from cell_manager.openbao import OpenbaoError
+from cell_manager.secrets_store import SecretsStoreError
 from cell_manager.storage_pg import PostgresStorage, StorageProvisionError
 
 ADMIN_URL = "postgresql+psycopg://adm:admpw@pg.internal:5433/postgres"
@@ -122,16 +122,24 @@ class FakePgConnection:
         self.closed = True
 
 
-class FakeOpenbao:
-    def __init__(self, entries: dict | None = None, *, fail_put=False) -> None:
+class FakeSecretStore:
+    """凭据托管文件轨道的进程内替身（语义对齐 FileSecretStore 三件套）。"""
+
+    def __init__(
+        self, entries: dict | None = None, *, fail_put=False, fail_delete=False
+    ) -> None:
         self.entries: dict[str, dict] = dict(entries or {})
         self.put_calls: list[tuple[str, dict]] = []
         self.delete_calls: list[str] = []
         self.fail_put = fail_put
+        self.fail_delete = fail_delete
 
     def put(self, path, data):
         if self.fail_put:
-            raise OpenbaoError("OpenBAO PUT secret/data/x failed (HTTP 503) — 先解封 OpenBAO")
+            raise SecretsStoreError(
+                f"credential store put {path!r} failed (OSError: [Errno 13] "
+                "Permission denied) — 地址核对：检查 CELL_SECRETS_DIR 目录权限与磁盘"
+            )
         self.put_calls.append((path, dict(data)))
         self.entries[path] = dict(data)
 
@@ -140,12 +148,17 @@ class FakeOpenbao:
 
     def delete(self, path):
         self.delete_calls.append(path)
+        if self.fail_delete:
+            raise SecretsStoreError(
+                f"credential store delete {path!r} failed (OSError: [Errno 5] "
+                "I/O error) — 核对条目文件权限"
+            )
         self.entries.pop(path, None)
 
 
-def make_storage(state: FakePgState, openbao: FakeOpenbao) -> PostgresStorage:
+def make_storage(state: FakePgState, secrets: FakeSecretStore) -> PostgresStorage:
     storage = PostgresStorage(
-        admin_url=ADMIN_URL, url_host=URL_HOST, url_port=URL_PORT, openbao=openbao
+        admin_url=ADMIN_URL, url_host=URL_HOST, url_port=URL_PORT, secrets=secrets
     )
     # monkeypatch 等价物：模块级 _connect 换替身（测试不连真库）
     storage_pg._connect = lambda url: FakePgConnection(state)  # type: ignore[assignment]
@@ -174,7 +187,7 @@ def fresh_state(role_exists=False, db_exists=False) -> FakePgState:
 class TestSevenStepProvision:
     def test_fresh_provision_full_flow(self):
         state = fresh_state()
-        bao = FakeOpenbao()
+        bao = FakeSecretStore()
         storage = make_storage(state, bao)
 
         url = storage.provision("acme")
@@ -200,7 +213,7 @@ class TestSevenStepProvision:
         assert any("FROM PUBLIC" in s for s, _ in state.sql("REVOKE"))
         # ⑤ 四查真的发生了（4 条 has_database_privilege）
         assert len([1 for s, _ in state.executed if "has_database_privilege" in s]) == 4
-        # ⑥ 条目入 OpenBAO：url/password/created_at，password 与 DDL 一致
+        # ⑥ 条目入托管：url/password/created_at，password 与 DDL 一致
         (path, entry), *_ = bao.put_calls
         assert path == "wire/cell-db/acme"
         assert entry["url"] == url and entry["password"] == pw
@@ -221,7 +234,7 @@ class TestSevenStepProvision:
     def test_superuser_admin_skips_grant(self):
         state = fresh_state()
         state.is_super = True
-        storage = make_storage(state, FakeOpenbao())
+        storage = make_storage(state, FakeSecretStore())
 
         storage.provision("acme")
 
@@ -232,7 +245,7 @@ class TestSevenStepProvision:
         # 不经 make_storage（那会替掉 _connect）：走真实 import 路径
         monkeypatch.setitem(sys.modules, "psycopg", None)  # import 即 ImportError
         storage = PostgresStorage(
-            admin_url=ADMIN_URL, url_host=URL_HOST, url_port=URL_PORT, openbao=FakeOpenbao()
+            admin_url=ADMIN_URL, url_host=URL_HOST, url_port=URL_PORT, secrets=FakeSecretStore()
         )
 
         with pytest.raises(StorageProvisionError, match=r"pip install 'cell-manager\[postgres\]'"):
@@ -240,7 +253,7 @@ class TestSevenStepProvision:
 
     def test_invalid_identifier_rejected_before_any_sql(self):
         state = fresh_state()
-        storage = make_storage(state, FakeOpenbao())
+        storage = make_storage(state, FakeSecretStore())
 
         with pytest.raises(StorageProvisionError, match=r"\^\\?\[a-z\]\[a-z0-9_\]"):
             storage.provision("Acme-Corp")
@@ -252,7 +265,7 @@ class TestSevenStepProvision:
 class TestIdempotentReentry:
     def test_role_db_entry_all_exist_reuses_password_without_ddl(self):
         state = fresh_state(role_exists=True, db_exists=True)
-        bao = FakeOpenbao(entries={"wire/cell-db/acme": {"password": "oldpw", "url": "u"}})
+        bao = FakeSecretStore(entries={"wire/cell-db/acme": {"password": "oldpw", "url": "u"}})
         storage = make_storage(state, bao)
 
         url = storage.provision("acme")
@@ -272,14 +285,14 @@ class TestIdempotentReentry:
 class TestSelfHealRotation:
     def test_role_exists_entry_missing_rotates(self):
         state = fresh_state(role_exists=True, db_exists=True)
-        bao = FakeOpenbao()
+        bao = FakeSecretStore()
         storage = make_storage(state, bao)
 
         url = storage.provision("acme")
         new_pw = state.passwords["wire_cell_acme"]
 
         assert new_pw != "preexistingpw" and HEX48_RE.match(new_pw)
-        # ALTER ROLE 新口令 + OpenBAO 落条目
+        # ALTER ROLE 新口令 + 托管落条目
         (alter_sql, alter_params), *_ = state.sql("ALTER ROLE")
         assert new_pw not in alter_sql and alter_params == (new_pw,)
         assert bao.put_calls and bao.entries["wire/cell-db/acme"]["password"] == new_pw
@@ -287,24 +300,41 @@ class TestSelfHealRotation:
         # 角色非本次新建：回滚标记只记 secret（轮换后条目与口令自洽，保留）
         assert storage._created["acme"] == {"role": False, "db": False, "secret": True}
 
-    def test_sealed_openbao_fails_closed_without_ddl_orphan(self):
-        # 角色新建路径上 OpenBAO 封印：建角色/库已发生但凭据不入库 → 报错；
-        # 足迹标记仍指向新建资产，供 manager 回滚清理
+    def test_store_put_failure_fails_closed_without_ddl_orphan(self):
+        # 角色新建路径上托管写失败（原「OpenBAO 封印」等价形态）：建角色/库已
+        # 发生但凭据不入托管 → 报错；足迹标记仍指向新建资产，供 manager 回滚清理
         state = fresh_state()
-        bao = FakeOpenbao(fail_put=True)
+        bao = FakeSecretStore(fail_put=True)
         storage = make_storage(state, bao)
 
-        with pytest.raises(OpenbaoError, match="解封"):
+        with pytest.raises(SecretsStoreError, match="put"):
             storage.provision("acme")
         assert storage._created["acme"] == {"role": True, "db": True, "secret": False}
 
 
 class TestIsolationFailure:
+    def test_no_probe_role_skips_isolation_legs_without_violation(self):
+        # 2026-11-05 真机实证：拆掉三个测试 cell 后实例上唯一非超管登录角色
+        # 就是管理角色本身 → probe 为 None。两项「无关角色」检查应跳过（保留
+        # skip 注记可观测），SHALL NOT 被当成违规令 provision 一律失败。
+        state = FakePgState(probe_role=None)
+        role = db = "wire_cell_acme"
+        state.privileges.update({(role, db): True, (role, "wire_platform"): False})
+        bao = FakeSecretStore()
+        storage = make_storage(state, bao)
+
+        url = storage.provision("acme")
+
+        checks = storage.report("acme")["isolation_checks"]
+        assert "skipped" in checks["unrelated->cell_db"]
+        assert "skipped" in checks["unrelated->wire_platform"]
+        assert url.startswith(f"postgresql+psycopg://{role}:")
+
     def test_owner_lost_own_db_fails_closed_and_keeps_preexisting(self):
         # v1 手工形态（角色/库既有）四查不符：抛错，且不清既有资产
         state = fresh_state(role_exists=True, db_exists=True)
         state.privileges[("wire_cell_acme", "wire_cell_acme")] = False  # 假想 ACL 坏
-        storage = make_storage(state, FakeOpenbao())
+        storage = make_storage(state, FakeSecretStore())
 
         with pytest.raises(StorageProvisionError, match="isolation check failed.*wire_cell_acme"):
             storage.provision("acme")
@@ -316,7 +346,7 @@ class TestIsolationFailure:
         # REVOKE 失效形态：无关角色能连 cell 库 → fail-closed
         state = fresh_state()
         state.privileges[(PROBE_ROLE, "wire_cell_acme")] = True
-        bao = FakeOpenbao()
+        bao = FakeSecretStore()
         storage = make_storage(state, bao)
 
         with pytest.raises(StorageProvisionError, match="isolation check failed"):
@@ -341,7 +371,7 @@ class TestIsolationFailure:
 
         state = fresh_state()
         storage = PostgresStorage(
-            admin_url=ADMIN_URL, url_host=URL_HOST, url_port=URL_PORT, openbao=FakeOpenbao()
+            admin_url=ADMIN_URL, url_host=URL_HOST, url_port=URL_PORT, secrets=FakeSecretStore()
         )
         original_connect = storage_pg._connect
         storage_pg._connect = lambda url: ExplodingOnRevoke(state)  # type: ignore[assignment]
@@ -358,7 +388,7 @@ class TestTeardownCreated:
     def test_drops_only_what_this_run_created(self):
         state = FakePgState(roles={"wire_cell_other"}, dbs={"wire_cell_other"})
         state.default_isolation("wire_cell_acme", "wire_cell_acme")
-        bao = FakeOpenbao()
+        bao = FakeSecretStore()
         storage = make_storage(state, bao)
 
         storage.provision("acme")
@@ -372,14 +402,14 @@ class TestTeardownCreated:
 
     def test_no_markers_is_noop(self):
         state = fresh_state()
-        storage = make_storage(state, FakeOpenbao())
+        storage = make_storage(state, FakeSecretStore())
         storage.teardown_created("acme")  # 未 provision 过：安静返回
         assert state.executed == []
 
     def test_rotation_path_keeps_preexisting_role(self):
         # 自愈轮换后回滚：角色既有 → 不删；条目保留（与 ALTER 后口令自洽）
         state = fresh_state(role_exists=True, db_exists=True)
-        bao = FakeOpenbao()
+        bao = FakeSecretStore()
         storage = make_storage(state, bao)
         storage.provision("acme")
 
@@ -392,17 +422,18 @@ class TestTeardownCreated:
 class TestDestroy:
     def test_destroy_on_nothing_is_quiet(self):
         state = fresh_state()
-        bao = FakeOpenbao()
+        bao = FakeSecretStore()
         storage = make_storage(state, bao)
 
-        storage.destroy("acme")  # 幂等：不存在即安静
+        result = storage.destroy("acme")  # 幂等：不存在即安静
 
         assert [s for s, _ in state.executed if "DROP" in s.upper()] == []
         assert "wire/cell-db/acme" in bao.delete_calls  # 条目清理仍执行（幂等）
+        assert result == {"credential_deleted": True, "credential_error": None}
 
     def test_destroy_drops_database_before_role(self):
         state = fresh_state(role_exists=True, db_exists=True)
-        bao = FakeOpenbao(entries={"wire/cell-db/acme": {"password": "x"}})
+        bao = FakeSecretStore(entries={"wire/cell-db/acme": {"password": "x"}})
         storage = make_storage(state, bao)
 
         storage.destroy("acme")
@@ -413,6 +444,24 @@ class TestDestroy:
         assert drops[1].upper().startswith("DROP ROLE")
         assert "wire_cell_acme" not in state.roles and "wire_cell_acme" not in state.dbs
         assert bao.entries == {}
+
+    def test_destroy_credential_delete_failure_is_resilient(self):
+        # remove-cell-openbao-dependency 回归点：主资产（库/角色）删成后托管条目
+        # 删除失败 SHALL NOT 中止编排（原 OpenBAO 不在场即整段 abort、半途而废），
+        # 错误如实返回供 manager.purge 进审计 detail
+        state = fresh_state(role_exists=True, db_exists=True)
+        bao = FakeSecretStore(
+            entries={"wire/cell-db/acme": {"password": "x"}}, fail_delete=True
+        )
+        storage = make_storage(state, bao)
+
+        result = storage.destroy("acme")  # 不抛
+
+        drops = [s for s, _ in state.executed if s.strip().upper().startswith("DROP")]
+        assert len(drops) == 2  # 库与角色照删
+        assert "wire_cell_acme" not in state.roles and "wire_cell_acme" not in state.dbs
+        assert result["credential_deleted"] is False
+        assert "delete" in (result["credential_error"] or "")
 
     def test_destroy_failure_raises_with_step(self):
         state = fresh_state(role_exists=True, db_exists=True)
@@ -431,7 +480,7 @@ class TestDestroy:
 
         storage_pg._connect = connect  # type: ignore[assignment]
         storage = PostgresStorage(
-            admin_url=ADMIN_URL, url_host=URL_HOST, url_port=URL_PORT, openbao=FakeOpenbao()
+            admin_url=ADMIN_URL, url_host=URL_HOST, url_port=URL_PORT, secrets=FakeSecretStore()
         )
         with pytest.raises(StorageProvisionError, match="drop-database"):
             storage.destroy("acme")

@@ -2,18 +2,20 @@
 
 把 v1 手工配方（docs/cell-postgres-storage.md §3）自动化：一 cell 一库
 ``wire_cell_<customer_id>`` + 同名属主登录角色 + ``REVOKE CONNECT … FROM
-PUBLIC`` + 隔离四查 + 口令生成 + OpenBAO 凭据托管。provision 七步：
+PUBLIC`` + 隔离四查 + 口令生成 + secrets 文件凭据托管（remove-cell-
+openbao-dependency：OpenBAO 已退役，凭据落 ``<home>/secrets/`` 0600 文件，
+生命周期编排不再触任何外部凭据服务）。provision 七步：
 
 ① psycopg 连管理库（延迟 import，缺失给 ``pip install 'cell-manager[postgres]'``
   指引）② 角色探测 pg_roles → 无则 CREATE ROLE LOGIN（随机 48-hex 口令）
 ③ 库探测 pg_database → 无则 CREATE DATABASE OWNER ④ REVOKE CONNECT … FROM
 PUBLIC（无条件，幂等）⑤ 隔离四查（has_database_privilege；「无关登录角色」
-取 admin 角色以外的任一非超管登录角色，取不到跳过该项并注明）⑥ OpenBAO
-条目：有→复用口令；无且角色新建→put；无且角色已存在（v1 手工迁移形态）
-→自愈轮换（新口令 + ALTER ROLE + put）⑦ 拼 ``postgresql+psycopg://`` URL
-返回（即注入容器的 ``DAAS_DATABASE_URL``）。
+取 admin 角色以外的任一非超管登录角色，取不到跳过该项并注明）⑥ 凭据托管
+条目（secrets 文件轨道）：有→复用口令；无且角色新建→put；无且角色已存在
+（v1 手工迁移形态）→自愈轮换（新口令 + ALTER ROLE + put）⑦ 拼
+``postgresql+psycopg://`` URL 返回（即注入容器的 ``DAAS_DATABASE_URL``）。
 
-红线（docs §2）：口令只在本模块局部变量与 OpenBAO 条目间流转——异常
+红线（docs §2）：口令只在本模块局部变量与凭据托管文件间流转——异常
 消息 / teardown / destroy 路径一律不含口令（例外：provision 的返回值
 URL 本身就是注入 env 的凭据值）。DDL 标识符一律双引号包裹前先过
 ``^[a-z][a-z0-9_]{0,39}$``（customer_id 已有 validate_customer_id，此处
@@ -28,10 +30,14 @@ from typing import Any
 
 from cell_manager.audit import utc_now_iso
 from cell_manager.errors import CellManagerError
-from cell_manager.openbao import OpenbaoClient, OpenbaoError
+from cell_manager.secrets_store import FileSecretStore, SecretsStoreError
 
 #: cell 库 / 属主角色名前缀（与 v1 手工配方一致，docs §3.3）
 CELL_DB_PREFIX = "wire_cell_"
+
+#: 凭据托管逻辑路径前缀（原 CELL_OPENBAO_PATH_PREFIX 缺省值固化为常量；
+#: 文件轨道不再有「按前缀授权」的 policy 概念，前缀只用于命名空间）
+CREDENTIAL_PATH_PREFIX = "wire/cell-db"
 
 #: 平台元数据库（隔离四查的「越库被拒」对象；baseline REVOKE 见 docs §3.2）
 PLATFORM_DATABASE = "wire_platform"
@@ -94,14 +100,12 @@ class PostgresStorage:
         admin_url: str,
         url_host: str,
         url_port: str | int,
-        openbao: OpenbaoClient,
-        path_prefix: str = "wire/cell-db",
+        secrets: FileSecretStore,
     ) -> None:
         self._admin_url = admin_url
         self._url_host = url_host
         self._url_port = str(url_port)
-        self._openbao = openbao
-        self._path_prefix = path_prefix.strip("/")
+        self._secrets = secrets
         #: provision 足迹标记（回滚只删本次新建者）：customer_id →
         #: {"role": bool, "db": bool, "secret": bool}
         self._created: dict[str, dict[str, bool]] = {}
@@ -124,8 +128,8 @@ class PostgresStorage:
         return name
 
     def secret_path(self, customer_id: str) -> str:
-        """OpenBAO 逻辑路径（policy wire-cell-db 只放行该前缀）。"""
-        return f"{self._path_prefix}/{customer_id}"
+        """凭据托管逻辑路径（FileSecretStore 映射为 secrets 目录下同名 JSON 文件）。"""
+        return f"{CREDENTIAL_PATH_PREFIX}/{customer_id}"
 
     def report(self, customer_id: str) -> dict[str, Any]:
         """最近一次 provision 的验收输出（隔离四查真值 / 建了什么）。"""
@@ -183,23 +187,23 @@ class PostgresStorage:
             # ⑤ 隔离四查（has_database_privilege；不符即 fail-closed）
             step = "verify-isolation"
             checks = self._verify_isolation(conn, role, db)
-            # ⑥ OpenBAO 凭据：有则复用；无则按角色新旧 put / 自愈轮换
-            step = "openbao-credential"
+            # ⑥ 凭据托管（secrets 文件轨道）：有则复用；无则按角色新旧 put / 自愈轮换
+            step = "credential-store"
 
             def _url(pw: str) -> str:
                 return f"{URL_SCHEME}://{role}:{pw}@{self._url_host}:{self._url_port}/{db}"
 
-            entry = self._openbao.get(path)
+            entry = self._secrets.get(path)
             if entry is not None:
                 if not isinstance(entry.get("password"), str) or not entry["password"]:
                     raise StorageProvisionError(
-                        f"openbao entry at secret/data/{path} is malformed "
+                        f"credential entry at {path} is malformed "
                         "(missing non-empty 'password') — 现场核对条目后重试"
                     )
                 password = entry["password"]
             elif markers["role"]:
                 # 角色本次新建：CREATE ROLE 时的口令落库托管
-                self._openbao.put(
+                self._secrets.put(
                     path,
                     {"url": _url(password), "password": password,
                      "created_at": utc_now_iso()},
@@ -209,7 +213,7 @@ class PostgresStorage:
                 # 角色已存在但条目缺失（v1 手工迁移形态）：自愈轮换
                 password = secrets.token_hex(PASSWORD_TOKEN_BYTES)
                 conn.execute(f'ALTER ROLE "{role}" PASSWORD %s', (password,))
-                self._openbao.put(
+                self._secrets.put(
                     path,
                     {"url": _url(password), "password": password,
                      "created_at": utc_now_iso()},
@@ -221,13 +225,13 @@ class PostgresStorage:
             self._reports[customer_id] = {
                 "database": db,
                 "role": role,
-                "openbao_path": path,
+                "credential_path": path,
                 "created_role": markers["role"],
                 "created_database": markers["db"],
                 "isolation_checks": checks,
             }
             return final_url
-        except (StorageProvisionError, OpenbaoError):
+        except (StorageProvisionError, SecretsStoreError):
             raise  # 指引消息原样透传（已抹敏）
         except Exception as exc:
             raise StorageProvisionError(
@@ -287,15 +291,20 @@ class PostgresStorage:
             violations.append(
                 f"owner {role!r} may CONNECT platform database {PLATFORM_DATABASE!r}"
             )
-        if checks["unrelated->cell_db"] is not False:
-            violations.append(
-                f"unrelated role {checks.get('probe_role', '?')!r} may CONNECT {db!r}"
-            )
-        if checks["unrelated->wire_platform"] is not False:
-            violations.append(
-                "unrelated role "
-                f"{checks.get('probe_role', '?')!r} may CONNECT {PLATFORM_DATABASE!r}"
-            )
+        # probe 缺失（实例上只有一个非超管登录角色，或已被回收）时两项是
+        # skip 注记字符串，不是布尔假值——只在该腿真跑过时校验（2026-11-05
+        # 真机冒烟实证：拆掉三个测试 cell 角色后 probe 变 None，原判定把
+        # 字符串当违规、provision 一律失败）。
+        if probe is not None:
+            if checks["unrelated->cell_db"] is not False:
+                violations.append(
+                    f"unrelated role {checks.get('probe_role', '?')!r} may CONNECT {db!r}"
+                )
+            if checks["unrelated->wire_platform"] is not False:
+                violations.append(
+                    "unrelated role "
+                    f"{checks.get('probe_role', '?')!r} may CONNECT {PLATFORM_DATABASE!r}"
+                )
         if violations:
             raise StorageProvisionError(
                 f"isolation check failed for database {db!r}: "
@@ -326,7 +335,7 @@ class PostgresStorage:
             # 条目只在角色被本次新建时删除：角色已存在（自愈轮换路径）时
             # 条目与 ALTER 后的口令仍自洽，保留即一致。
             if markers.get("role") and markers.get("secret"):
-                self._openbao.delete(self.secret_path(customer_id))
+                self._secrets.delete(self.secret_path(customer_id))
         except Exception:  # noqa: BLE001 —— 回滚尽力，原异常优先
             pass
         finally:
@@ -337,11 +346,17 @@ class PostgresStorage:
                 except Exception:  # noqa: BLE001
                     pass
 
-    def destroy(self, customer_id: str) -> None:
+    def destroy(self, customer_id: str) -> dict[str, Any]:
         """purge 用：无条件幂等删库 + 删角色（先探测存在），失败抛出。
 
-        同时删除 OpenBAO 托管条目——否则残留条目会让同客户重开时「复用
+        同时删除凭据托管条目——否则残留条目会让同客户重开时「复用
         旧口令」与新建角色的随机口令错配（自愈轮换只救条目缺失的形态）。
+        凭据条目删除走 resilient 语义（remove-cell-openbao-dependency 回归
+        点：原 OpenBAO 不在场时本步抛错、purge 在「库角色已删」之后半途而废）：
+        主资产（库/角色）删除成功后，条目删除失败不中止编排，错误如实
+        返回给调用方进审计 detail；重跑 purge 可幂等补删。
+
+        返回 ``{"credential_deleted": bool, "credential_error": str | None}``。
         """
         db = self._identifier(customer_id)
         step = "connect"
@@ -369,8 +384,16 @@ class PostgresStorage:
             if conn is not None:
                 try:
                     conn.close()
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001 —— 清理尽力
                     pass
-        self._openbao.delete(self.secret_path(customer_id))  # 幂等（404 → 成功）
+        credential_deleted, credential_error = True, None
+        try:
+            self._secrets.delete(self.secret_path(customer_id))  # 幂等（缺文件 → 成功）
+        except SecretsStoreError as exc:  # noqa: BLE001 —— resilient：残留可见可补 > 卡死半途
+            credential_deleted, credential_error = False, str(exc)
         self._created.pop(customer_id, None)
         self._reports.pop(customer_id, None)
+        return {
+            "credential_deleted": credential_deleted,
+            "credential_error": credential_error,
+        }

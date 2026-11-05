@@ -38,8 +38,7 @@ def pg_env(home, **overrides) -> dict:
         "CELL_PG_ADMIN_URL": "postgresql+psycopg://adm:admpw@pg.internal:5433/postgres",
         "CELL_PG_URL_HOST": "pg.internal",
         "CELL_PG_URL_PORT": "5433",
-        "CELL_OPENBAO_ADDR": "http://openbao.internal:8200",
-        "CELL_OPENBAO_TOKEN": "openbao-tok-1",
+        "CELL_SECRETS_DIR": str(home / "secrets"),
     }
     env.update(overrides)
     return env
@@ -50,10 +49,13 @@ class RecordingStorage:
 
     last_instance: "RecordingStorage | None" = None
 
-    def __init__(self, *, admin_url, url_host, url_port, openbao, path_prefix="wire/cell-db"):
+    def __init__(self, *, admin_url, url_host, url_port, secrets, **kwargs):
         self.calls: list[tuple[str, str]] = []
         self.fail_provision = False
         self.url = PG_URL
+        self.destroy_result = {
+            "credential_deleted": True, "credential_error": None
+        }
         RecordingStorage.last_instance = self
 
     def provision(self, customer_id: str) -> str:
@@ -67,8 +69,9 @@ class RecordingStorage:
     def teardown_created(self, customer_id: str) -> None:
         self.calls.append(("teardown_created", customer_id))
 
-    def destroy(self, customer_id: str) -> None:
+    def destroy(self, customer_id: str) -> dict:
         self.calls.append(("destroy", customer_id))
+        return dict(self.destroy_result)
 
     def secret_path(self, customer_id: str) -> str:
         return f"wire/cell-db/{customer_id}"
@@ -88,14 +91,14 @@ class RecordingStorage:
 
 @pytest.fixture
 def pg_storage(monkeypatch):
-    """把 manager 里的 PostgresStorage / OpenbaoClient 换成桩（构造参数对齐）。
+    """把 manager 里的 PostgresStorage / FileSecretStore 换成桩（构造参数对齐）。
 
     返回委托代理：属性读写转发到最近构造的桩实例（manager __init__
     时构造），并清掉上个测试泄漏的类级 last_instance。
     """
     monkeypatch.setattr(manager_module, "PostgresStorage", RecordingStorage)
     monkeypatch.setattr(
-        manager_module, "OpenbaoClient", lambda addr, token: ("fake-openbao", addr)
+        manager_module, "FileSecretStore", lambda secrets_dir: ("fake-secret-store", secrets_dir)
     )
     RecordingStorage.last_instance = None
 
@@ -141,7 +144,7 @@ class TestProvisionPostgres:
         detail = entries[-1]["detail"]
         assert detail["storage"] == "postgres"
         assert detail["database"] == "wire_cell_acme"
-        assert detail["openbao_path"] == "wire/cell-db/acme"
+        assert detail["credential_path"] == "wire/cell-db/acme"
         assert "DAAS_DATABASE_URL" in detail["injected_credential_env"]
         assert detail["storage_isolation"]["owner->cell_db"] is True
         assert "pg-secret-pw" not in json.dumps(entries)
@@ -202,6 +205,27 @@ class TestPurgeAndDeprovision:
 
         assert ("destroy", "acme") in pg_storage.calls
 
+    def test_purge_completes_when_credential_delete_failed(self, pg_manager, pg_storage, clock):
+        # remove-cell-openbao-dependency 回归点：托管条目删除失败（原 OpenBAO
+        # 不在场即整个 purge 半途崩溃）→ 编排继续完成主资产清理，错误如实进
+        # 审计 detail，簿记仍删除
+        pg_storage.destroy_result = {
+            "credential_deleted": False,
+            "credential_error": "credential store delete 'wire/cell-db/acme' failed",
+        }
+        pg_manager.provision("acme")
+        pg_manager.deprovision("acme")
+        clock.advance(days=31)
+
+        status = pg_manager.purge("acme")  # 不抛
+
+        assert status.state == "not_found"
+        assert ("destroy", "acme") in pg_storage.calls
+        detail = read_audit(pg_manager._config)[-1]["detail"]
+        assert detail["credential_deleted"] is False
+        assert "delete" in (detail["credential_error"] or "")
+        assert pg_manager.status("acme").state == "not_found"
+
     def test_deprovision_keeps_database(self, pg_manager, pg_storage):
         pg_manager.provision("acme")
         pg_manager.deprovision("acme")
@@ -237,7 +261,7 @@ class TestSqliteProfileUnchanged:
         detail = read_audit(config)[-1]["detail"]
         assert "storage" not in detail
         assert "database" not in detail
-        assert "openbao_path" not in detail
+        assert "credential_path" not in detail
         assert "DAAS_DATABASE_URL" not in detail["injected_credential_env"]
         # state record 仍记画像（值 sqlite）
         assert manager._state.get("acme")["storage"] == "sqlite"
@@ -276,14 +300,12 @@ class TestConfigValidation:
         with pytest.raises(ConfigError, match="CELL_STORAGE"):
             CellManagerConfig.from_env(env=pg_env(home, CELL_STORAGE="mysql"))
 
-    def test_postgres_requires_all_five_envs_fail_closed(self, home):
+    def test_postgres_requires_three_pg_envs_fail_closed(self, home):
         full = pg_env(home)
         for missing in (
             "CELL_PG_ADMIN_URL",
             "CELL_PG_URL_HOST",
             "CELL_PG_URL_PORT",
-            "CELL_OPENBAO_ADDR",
-            "CELL_OPENBAO_TOKEN",
         ):
             env = {k: v for k, v in full.items() if k != missing}
             with pytest.raises(ConfigError, match=missing):
@@ -292,10 +314,26 @@ class TestConfigValidation:
     def test_postgres_defaults_ok_and_sqlite_needs_nothing(self, home):
         config = CellManagerConfig.from_env(env=pg_env(home))
         assert config.storage == "postgres"
-        assert config.openbao_path_prefix == "wire/cell-db"
+        assert config.resolved_secrets_dir() == home / "secrets"
         # sqlite：什么都不配也合法
         bare = CellManagerConfig.from_env(env={"CELL_MANAGER_HOME": str(home)})
         assert bare.storage == "sqlite"
+
+    def test_deprecated_openbao_env_warns_but_does_not_fail(self, home, caplog):
+        # remove-cell-openbao-dependency 回归点：旧 env 残留不阻断、只告警
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="cell_manager.config"):
+            config = CellManagerConfig.from_env(
+                env=pg_env(
+                    home,
+                    CELL_OPENBAO_ADDR="http://127.0.0.1:8200",
+                    CELL_OPENBAO_TOKEN="stale-tok",
+                )
+            )
+        assert config.storage == "postgres"  # 构造成功、不再 fail-closed
+        assert "CELL_OPENBAO_ADDR" in caplog.text
+        assert "deprecated" in caplog.text
 
     def test_port_must_be_numeric(self, home):
         with pytest.raises(ConfigError, match="CELL_PG_URL_PORT"):

@@ -49,19 +49,20 @@
                                   docs/cell-postgres-storage.md §2）
     CELL_PG_URL_HOST/PORT        cell 容器视角的 PG 地址（拼
                                   DAAS_DATABASE_URL 用，与管理地址可以不同）
-    CELL_OPENBAO_ADDR/TOKEN      OpenBAO（cheap-1 mcp-openbao）KV v2 地址与
-                                  专用 token（policy wire-cell-db 仅允许
-                                  secret/data/wire/cell-db/*）
-    CELL_OPENBAO_PATH_PREFIX     凭据逻辑路径前缀（默认 wire/cell-db）
+    CELL_SECRETS_DIR             凭据托管目录（默认 <home>/secrets；一 cell 一
+                                  文件 0600，remove-cell-openbao-dependency：
+                                  OpenBAO 退役后凭据落本地文件轨道）
 
-    storage=postgres 时 CELL_PG_ADMIN_URL / CELL_PG_URL_HOST / CELL_PG_URL_PORT /
-    CELL_OPENBAO_ADDR / CELL_OPENBAO_TOKEN **全部必需**（fail-closed，缺哪个
-    点名哪个）；另需 ``pip install 'cell-manager[postgres]'``（psycopg）。
+    storage=postgres 时 CELL_PG_ADMIN_URL / CELL_PG_URL_HOST / CELL_PG_URL_PORT
+    **全部必需**（fail-closed，缺哪个点名哪个）；另需 ``pip install
+    'cell-manager[postgres]'``（psycopg）。CELL_OPENBAO_* 系列已废弃：读取到时
+    仅记一条告警日志，不再参与构造与校验（sqlite 画像与 postgres 画像同此口径）。
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 import os
 from dataclasses import dataclass, field
@@ -222,11 +223,10 @@ class CellManagerConfig:
     #: cell 容器视角的 PG 地址（CELL_PG_URL_HOST / CELL_PG_URL_PORT）
     pg_url_host: str = ""
     pg_url_port: str = ""
-    #: OpenBAO KV v2 地址与专用 token（CELL_OPENBAO_ADDR / CELL_OPENBAO_TOKEN）
-    openbao_addr: str = ""
-    openbao_token: str = ""
-    #: 凭据逻辑路径前缀（CELL_OPENBAO_PATH_PREFIX；默认 wire/cell-db）
-    openbao_path_prefix: str = "wire/cell-db"
+    #: 凭据托管目录（CELL_SECRETS_DIR；None=缺省 <home>/secrets。一 cell 一
+    #: 文件 0600，remove-cell-openbao-dependency：替代已退役 OpenBAO 的本地
+    #: 文件轨道）
+    secrets_dir: Path | None = None
     #: cell 存储配额 MB（CELL_PG_QUOTA_MB；可选正整数。注入容器 env
     #: FD_CELL_STORAGE_QUOTA_MB，引擎 PG 根侧整批拒绝超限写入；sqlite 根
     #: 不生效。变更配额需重建容器——env 语义，文档见
@@ -273,7 +273,8 @@ class CellManagerConfig:
                 f"CELL_READINESS_TIMEOUT must be > 0, got {readiness_timeout}"
             )
         # cell 数据根画像（wire-cell-pg-provisioning）：sqlite=零变化；
-        # postgres=一 cell 一库 + OpenBAO 凭据托管，五项 env fail-closed 必需。
+        # postgres=一 cell 一库 + secrets 文件凭据托管，三项 PG env
+        # fail-closed 必需（OpenBAO 依赖已随 remove-cell-openbao-dependency 移除）。
         storage = e.get("CELL_STORAGE", "sqlite").strip().lower()
         if storage not in ("sqlite", "postgres"):
             raise ConfigError(
@@ -282,11 +283,8 @@ class CellManagerConfig:
         pg_admin_url = e.get("CELL_PG_ADMIN_URL", "").strip()
         pg_url_host = e.get("CELL_PG_URL_HOST", "").strip()
         pg_url_port = e.get("CELL_PG_URL_PORT", "").strip()
-        openbao_addr = e.get("CELL_OPENBAO_ADDR", "").strip()
-        openbao_token = e.get("CELL_OPENBAO_TOKEN", "").strip()
-        openbao_path_prefix = (
-            e.get("CELL_OPENBAO_PATH_PREFIX", "").strip() or "wire/cell-db"
-        )
+        secrets_dir_raw = e.get("CELL_SECRETS_DIR", "").strip()
+        secrets_dir = Path(secrets_dir_raw) if secrets_dir_raw else home / "secrets"
         raw_quota = e.get("CELL_PG_QUOTA_MB", "").strip()
         pg_quota_mb: int | None = None
         if raw_quota:
@@ -311,8 +309,6 @@ class CellManagerConfig:
                     ("CELL_PG_ADMIN_URL", pg_admin_url),
                     ("CELL_PG_URL_HOST", pg_url_host),
                     ("CELL_PG_URL_PORT", pg_url_port),
-                    ("CELL_OPENBAO_ADDR", openbao_addr),
-                    ("CELL_OPENBAO_TOKEN", openbao_token),
                 )
                 if not value
             ]
@@ -322,6 +318,15 @@ class CellManagerConfig:
                     + ", ".join(missing)
                     + " to be set (fail-closed；sqlite 画像不受影响)"
                 )
+        # CELL_OPENBAO_* 已废弃（remove-cell-openbao-dependency）：OpenBAO 实例
+        # 退役后不再是生命周期编排的依赖。读取到旧配置不报错、不阻断（升级窗
+        # 口的 env.sh 可能残留），只点名告警一次，指引清理。
+        stale_openbao = sorted(k for k in e if k.startswith("CELL_OPENBAO_"))
+        if stale_openbao:
+            logging.getLogger("cell_manager.config").warning(
+                "deprecated env ignored (OpenBAO retired, credential custody "
+                "now on CELL_SECRETS_DIR file track): %s", ", ".join(stale_openbao)
+            )
         return cls(
             home=home,
             data_root=data_root,
@@ -345,13 +350,15 @@ class CellManagerConfig:
             pg_admin_url=pg_admin_url,
             pg_url_host=pg_url_host,
             pg_url_port=pg_url_port,
-            openbao_addr=openbao_addr,
-            openbao_token=openbao_token,
-            openbao_path_prefix=openbao_path_prefix,
+            secrets_dir=secrets_dir,
             pg_quota_mb=pg_quota_mb,
         )
 
     # ---- 派生命名（隔离保证：每 cell 独立卷目录 + 独立容器名 + 独立条目路径） ----
+
+    def resolved_secrets_dir(self) -> Path:
+        """凭据托管目录（env 未给 CELL_SECRETS_DIR 时缺省 <home>/secrets）。"""
+        return self.secrets_dir if self.secrets_dir is not None else self.home / "secrets"
 
     def volume_dir(self, customer_id: str) -> Path:
         return self.data_root / validate_customer_id(customer_id)

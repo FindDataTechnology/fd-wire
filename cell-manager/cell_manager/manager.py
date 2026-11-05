@@ -31,7 +31,7 @@ from cell_manager.config import CellManagerConfig, validate_customer_id
 from cell_manager.db import init_volume
 from cell_manager.drivers.base import BindMount, ContainerDriver, ContainerSpec
 from cell_manager.errors import CellManagerError, InvalidCellStateError, UnknownCellError
-from cell_manager.openbao import OpenbaoClient
+from cell_manager.secrets_store import FileSecretStore
 from cell_manager.provenance import ProvenanceForwarder
 from cell_manager.registry.base import RegistryClient, ServerEntry
 from cell_manager.state import ACTIVE, PAUSED, RETENTION, StateStore
@@ -105,16 +105,16 @@ class CellManager:
         #: env 未配置 CELL_PROVENANCE_URL 时为 None（纯 JSONL 审计）。
         self._provenance = provenance_forwarder
         #: PG 数据根画像（wire-cell-pg-provisioning）：CELL_STORAGE=postgres 时
-        #: 自动建库+发凭据（一 cell 一库，凭据入 OpenBAO）；sqlite 画像恒 None，
-        #: 所有 postgres 分支零触达、行为与现状完全一致。
+        #: 自动建库+发凭据（一 cell 一库，凭据入 secrets 文件轨道）；sqlite 画像
+        #: 恒 None，所有 postgres 分支零触达、行为与现状完全一致。
+        #: （remove-cell-openbao-dependency：OpenBAO 退役，编排不再触外部凭据服务）
         self._storage: PostgresStorage | None = None
         if config.storage == "postgres":
             self._storage = PostgresStorage(
                 admin_url=config.pg_admin_url,
                 url_host=config.pg_url_host,
                 url_port=config.pg_url_port,
-                openbao=OpenbaoClient(config.openbao_addr, config.openbao_token),
-                path_prefix=config.openbao_path_prefix,
+                secrets=FileSecretStore(config.resolved_secrets_dir()),
             )
 
     # ==================== 生命周期操作（均落审计） ====================
@@ -262,7 +262,7 @@ class CellManager:
                 detail.update(
                     storage="postgres",
                     database=f"wire_cell_{customer_id}",
-                    openbao_path=self._storage.secret_path(customer_id),
+                    credential_path=self._storage.secret_path(customer_id),
                 )
                 detail["injected_credential_env"].append("DAAS_DATABASE_URL")
                 # 隔离四查的自动验证输出（docs §7.5 试点锚点要可观测；
@@ -335,11 +335,15 @@ class CellManager:
                 self._driver.remove(container_name, force=True)
             if volume_path.exists():
                 shutil.rmtree(volume_path)
-            # PG 画像：与删卷同批清 wire_cell_<id> 库+角色（幂等、失败抛出，
-            # 不静默半删——容器/卷已清、库角色残留时 purge 可整段重跑）。
-            # deprovision 不动库（保留期语义，见方法 docstring 与 docs §7.3）。
+            # PG 画像：与删卷同批清 wire_cell_<id> 库+角色（失败抛出，不静默
+            # 半删——容器/卷已清、库角色残留时 purge 可整段重跑）；凭据托管
+            # 条目删除走 resilient 语义，失败不中止编排、如实进审计（remove-
+            # cell-openbao-dependency 回归点：原 OpenBAO 不在场时本步抛错、
+            # purge 在「库角色已删」之后半途而废）。deprovision 不动库
+            # （保留期语义，见方法 docstring 与 docs §7.3）。
+            credential: dict[str, Any] | None = None
             if record.get("storage") == "postgres" and self._storage is not None:
-                self._storage.destroy(customer_id)
+                credential = self._storage.destroy(customer_id)
             unregistered = self._registry.unregister(record["registry_path"])
             # 授权束回收兜底（正常路径 deprovision 阶段已删；此处幂等再删一次，
             # 防中途 cancel 后直奔 purge 的绕行）。
@@ -348,13 +352,17 @@ class CellManager:
             # 删不掉不中止其余清理（残留可见可补 > 卡死半途），但如实留痕。
             scope_deleted, scope_error = self._delete_scope_resilient(customer_id)
             self._state.delete(customer_id)
-            return _not_found(customer_id), {
+            detail = {
                 "volume_removed": str(volume_path),
                 "registry_unregistered": unregistered,
                 "scope_deleted": scope_deleted,
                 "scope_error": scope_error,
                 "irreversible": True,
             }
+            if credential is not None:
+                detail["credential_deleted"] = credential["credential_deleted"]
+                detail["credential_error"] = credential["credential_error"]
+            return _not_found(customer_id), detail
 
         return self._run("purge", customer_id, _do)
 
