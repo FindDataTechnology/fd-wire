@@ -10,6 +10,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
+from typing import Literal
 
 from ..billing.models import CustomerStatus
 from ..billing.money import micro_to_yuan, micro_to_yuan_str
@@ -202,3 +203,35 @@ class UsageOverviewOut(BaseModel):
     tracks: list[TrackRow]
     by_source: list[TrackRow]
     totals: TrackRow
+
+
+class ContactMessageOut(BaseModel):
+    """商留提交行（contact_messages 运营视图）。
+
+    红线（spec contact-intake）：``ip_hash`` 不进响应模型——来源只以哈希
+    留档，任何 API 面都不回显。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    email: str
+    company: str | None = None
+    message: str
+    status: str
+    created_at: datetime
+
+
+class ContactMessagesOut(BaseModel):
+    """商留列表页：本页条目 + 匹配总数 + 全表未读数（分区入口徽标数据源）。"""
+
+    items: list[ContactMessageOut]
+    total: int
+    unread: int
+
+
+class ContactMessagePatchIn(BaseModel):
+    """标记已读（status→read 是唯一合法目标；其余值 422 如实拒）。"""
+
+    status: Literal["read"]

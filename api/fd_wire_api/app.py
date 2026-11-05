@@ -103,6 +103,11 @@ from .schedules import start_refresh_scheduler, stop_refresh_scheduler
 # 登录客户信息资产全貌单次往返（packs/datasets/ai/demands 四切片纯读聚合；
 # 无新表无 init_db，未配置 lifespan 兜底）
 from .workbench import router as workbench_router
+# 商留通道表单化（add-contact-intake）：/api/v1/contact 公开提交端点
+# （无认证、honeypot 闸、ip_hash/email 双维度 24h 防灌水）+ 落库后
+# fire-and-forget 运营邮件通知（contact_messages 走元数据库，alembic 0051）
+from .contact import init_db as init_contact_db
+from .contact import router as contact_router
 # 星研内容供给（xingyan-content-supply）：官网三区 feed 幂等摄取为只读快照
 # （xingyan_items/xingyan_claims/xingyan_sync_state 落元数据库，alembic 0046）
 # + 公开目录/检索面与 claim 级解析 + 每日摄取循环（写入口唯一是摄取管道）
@@ -192,6 +197,9 @@ async def lifespan(_: FastAPI):
     # 并暴露陈旧标记。XINGYAN_SYNC_ENABLED=false 可关）。
     init_xingyan_db()
     start_xingyan_sync()
+    # 商留通道（add-contact-intake）：contact_messages 幂等建表兜底
+    # （生产走 alembic 0051；公开提交面无后台循环——通知按提交即发）。
+    init_contact_db()
     # 变换管线租约队列 worker（wire-dag-executor D3）：领取 queued run 执行，
     # 心跳/死租约重领取/断点恢复全在 queue 内（PIPELINE_WORKER_ENABLED 可关）。
     start_pipeline_worker()
@@ -224,6 +232,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# 商留通道表单化（add-contact-intake）：/api/v1/contact 公开提交（无认证；
+# honeypot 与防灌水闸在 service 层；ip 只以截断哈希落库，响应不回显内部
+# 标识）——表落元数据库（alembic 0051），运营处置面在 admin contacts 分区
+app.include_router(contact_router)
 app.include_router(example.router)
 app.include_router(metering_router)
 # billing 域路由（wire-self-serve-launch 1.3/3.1）：公开档位 + 内部额度查询

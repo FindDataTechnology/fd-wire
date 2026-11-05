@@ -1,11 +1,12 @@
 // 内部后台布局（#/admin/*）：左侧栏（客户 / 账本 / 需求单 / 目录治理 / 用量 /
-// 本地数据）+ 顶栏（登录身份 + 返回前台 + 登出）+ 内容区。
+// 本地数据 / 商留）+ 顶栏（登录身份 + 返回前台 + 登出）+ 内容区。
 // admin 双闸（wire-self-serve-launch 任务 5.2）：X-Admin-Token 输入框与
 // dev-admin-token 默认值退场——浏览器只持登录 Bearer，服务端令牌由 nginx
 // 注入；本组件只负责按登录角色呈现（入口显隐在 App 导航与 AdminView 门禁）。
-import { type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { markAdminSplitDone } from "../console/auth";
+import { fetchContactMessages } from "./api";
 
 export type AdminSection =
   | "customers"
@@ -13,7 +14,8 @@ export type AdminSection =
   | "demands"
   | "catalog"
   | "usage"
-  | "localdata";
+  | "localdata"
+  | "contacts";
 
 export const ADMIN_SECTIONS: ReadonlyArray<{
   id: AdminSection;
@@ -30,6 +32,11 @@ export const ADMIN_SECTIONS: ReadonlyArray<{
     href: "#/admin/localdata",
     labelKey: "admin.nav.localData",
   },
+  {
+    id: "contacts",
+    href: "#/admin/contacts",
+    labelKey: "admin.nav.contacts",
+  },
 ];
 
 export function parseAdminSection(segment: string | undefined): AdminSection {
@@ -39,11 +46,33 @@ export function parseAdminSection(segment: string | undefined): AdminSection {
     segment === "demands" ||
     segment === "catalog" ||
     segment === "usage" ||
-    segment === "localdata"
+    segment === "localdata" ||
+    segment === "contacts"
   ) {
     return segment;
   }
   return "customers";
+}
+
+/** 商留未读数（add-contact-intake 1.4）：分区入口徽标的数据源。
+ *  尽力而为：后台任一页都发一次轻量请求（limit=1 只取 unread 计数），
+ *  失败静默（无表/端点不可达时徽标不呈现，绝不阻塞后台本身）。 */
+function useContactUnread(): number | null {
+  const [unread, setUnread] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchContactMessages({ limit: 1 })
+      .then((page) => {
+        if (!cancelled) setUnread(page.unread);
+      })
+      .catch(() => {
+        /* 徽标是尽力而为——401/403/网络失败静默 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return unread;
 }
 
 /** 后台品牌条（wire-console-ux-fixes 任务 5.2）：后台独立成壳后自带的极简
@@ -85,6 +114,7 @@ export function AdminLayout({
   children: ReactNode;
 }) {
   const { t } = useTranslation();
+  const contactUnread = useContactUnread();
 
   return (
     <div className="flex min-h-[32rem] flex-col rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -107,6 +137,18 @@ export function AdminLayout({
               }`}
             >
               <span>{t(item.labelKey)}</span>
+              {/* 商留未读徽标（分区入口可见，spec contact-intake）：仅
+                  contacts 分区且未读数已取到且 >0 时呈现。 */}
+              {item.id === "contacts" &&
+                contactUnread != null &&
+                contactUnread > 0 && (
+                  <span
+                    data-testid="admin-nav-contacts-unread"
+                    className="ml-2 rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+                  >
+                    {contactUnread > 99 ? "99+" : contactUnread}
+                  </span>
+                )}
             </a>
           ))}
         </nav>

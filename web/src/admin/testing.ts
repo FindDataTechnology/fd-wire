@@ -10,6 +10,7 @@ import type {
   AdminWorkorderResult,
   AggRow,
   CatalogPendingResponse,
+  ContactMessage,
   CustomerLocalDataOverview,
   CustomerUsage,
   DemandStatus,
@@ -105,6 +106,9 @@ export interface AdminBackendOptions {
    *  传多条即按 status + limit/offset 真实切片（分页测试面——缺省行为与
    *  改造前逐字节一致，既有单条断言不被打破）。 */
   catalogItems?: CatalogPendingResponse["items"];
+  /** 商留提交列表覆盖（add-contact-intake）：缺省空列表（未读 0——既有
+   *  后台用例的导航徽标请求不打到联系人端点时不渲染）。 */
+  contactMessages?: ContactMessage[];
 }
 
 /** 「转生成工单」缺省成功响应（形状对齐 api 仓 export_workorder_service）。 */
@@ -158,6 +162,7 @@ export function installAdminBackend(options: AdminBackendOptions = {}): {
   const customers = [...(options.customers ?? [])];
   const demands = [...(options.demands ?? [])];
   const ledger = [...(options.ledger ?? [])];
+  const contactMessages = [...(options.contactMessages ?? [])];
   const notes: ReviewNote[] = [];
   const tracks = options.tracks ?? [
     { key: "customer", calls: 12, rows: 3400 },
@@ -506,6 +511,42 @@ export function installAdminBackend(options: AdminBackendOptions = {}): {
       return Promise.resolve(
         jsonResponse(notes.filter((n) => n.indicator_id === indicatorId)),
       );
+    }
+
+    // -- 商留通道（add-contact-intake 1.4）----------------------------------
+    // 列表按已注入数据真实倒序切片（total=匹配总数、unread=整表未读数，
+    // 与后端 ContactMessagesOut 同语义）；PATCH 仅接受 status=read。
+    if (path === "/internal/admin/contact-messages" && method === "GET") {
+      const limit = Number(url.searchParams.get("limit")) || 50;
+      const offset = Number(url.searchParams.get("offset")) || 0;
+      const sorted = [...contactMessages].sort((a, b) => {
+        if (a.created_at !== b.created_at) {
+          return a.created_at < b.created_at ? 1 : -1;
+        }
+        return b.id - a.id;
+      });
+      return Promise.resolve(
+        jsonResponse({
+          items: sorted.slice(offset, offset + limit),
+          total: contactMessages.length,
+          unread: contactMessages.filter((m) => m.status === "new").length,
+        }),
+      );
+    }
+    match = path.match(/^\/internal\/admin\/contact-messages\/(\d+)$/);
+    if (match && method === "PATCH") {
+      const id = Number(match[1]);
+      const message = contactMessages.find((m) => m.id === id);
+      if (!message) {
+        return Promise.resolve(
+          jsonResponse({ detail: `contact message ${id} 不存在` }, 404),
+        );
+      }
+      if (body?.status !== "read") {
+        return Promise.resolve(jsonResponse({ detail: "非法目标态" }, 422));
+      }
+      message.status = "read";
+      return Promise.resolve(jsonResponse(message));
     }
 
     // -- 客户本地数据只读概览 ----------------------------------------------

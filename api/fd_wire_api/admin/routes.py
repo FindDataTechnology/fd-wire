@@ -54,6 +54,11 @@ from ..billing.plans import get_plan
 from ..billing.sub2api import Sub2ApiError, Sub2ApiClient, sub2api_client_dep
 from ..catalog.db import readonly_session
 from ..catalog.models import IndicatorSnapshot
+# 商留通道（add-contact-intake 1.4）：contact_messages 与本台六分区表同落
+# 平台库，但会话纪律归 contact 切片所有——复用 demands.db.get_db 的先例，
+# admin 侧经 contact 会话直查（不经 admin 会话跨包写）。
+from ..contact.db import get_db as get_contact_db
+from ..contact.models import ContactMessage
 from ..dbcompat import period_expression
 from ..delivery.scope_client import ScopeClient, scope_client_dep
 from ..demands import delivery as delivery_service
@@ -72,6 +77,9 @@ from .db import get_db
 from .models import CatalogReviewNote
 from .schemas import (
     CatalogPendingOut,
+    ContactMessageOut,
+    ContactMessagePatchIn,
+    ContactMessagesOut,
     CustomerCreateIn,
     CustomerOut,
     CustomerPatchIn,
@@ -101,6 +109,9 @@ _MIRROR_STATUSES = ("verified", "registered")
 #: 单页上限——与公开指标目录列表（catalog/service.py）的 page_size 上限同值，
 #: 使后台目录治理页与公开目录共用一套分页红线（规模再大也只按页取）。
 _CATALOG_PENDING_MAX_LIMIT = 100
+
+#: 商留列表单页上限（默认 50；超限收敛而非报错——与目录治理同款宽容）。
+_CONTACT_MESSAGES_MAX_LIMIT = 200
 
 
 # ---------------------------------------------------------------------------
@@ -795,3 +806,63 @@ def usage_overview(
         by_source=by_source,
         totals=totals,
     )
+
+
+# ---------------------------------------------------------------------------
+# 商留通道（add-contact-intake 任务 1.4）：contact_messages 处置面
+# ---------------------------------------------------------------------------
+
+
+@router.get("/contact-messages", response_model=ContactMessagesOut)
+def list_contact_messages(
+    limit: int = Query(default=50),
+    offset: int = Query(default=0),
+    db: Session = Depends(get_contact_db),
+) -> ContactMessagesOut:
+    """商留提交列表（时间倒序分页，默认 50）+ 匹配总数 + 全表未读数。
+
+    ``unread`` 是整表 status=new 计数（非本页）——admin contacts 分区入口
+    徽标的数据源。分页语义与目录治理同款：limit 超限按上限收敛而非报错。
+    红线：响应模型不带 ``ip_hash``——来源只以哈希留档，任何面不回显。
+    """
+    page_limit = min(max(1, limit), _CONTACT_MESSAGES_MAX_LIMIT)
+    page_offset = max(0, offset)
+    total = db.execute(
+        select(func.count()).select_from(ContactMessage)
+    ).scalar_one()
+    unread = db.execute(
+        select(func.count())
+        .select_from(ContactMessage)
+        .where(ContactMessage.status == "new")
+    ).scalar_one()
+    rows = (
+        db.execute(
+            select(ContactMessage)
+            .order_by(ContactMessage.created_at.desc(), ContactMessage.id.desc())
+            .offset(page_offset)
+            .limit(page_limit)
+        )
+        .scalars()
+        .all()
+    )
+    return ContactMessagesOut(
+        items=[ContactMessageOut.model_validate(r) for r in rows],
+        total=total,
+        unread=unread,
+    )
+
+
+@router.patch("/contact-messages/{message_id}", response_model=ContactMessageOut)
+def patch_contact_message(
+    message_id: int,
+    payload: ContactMessagePatchIn,
+    db: Session = Depends(get_contact_db),
+) -> ContactMessageOut:
+    """标记已读（status→read，唯一合法目标；非法值 422 由 Literal 承载）。"""
+    row = db.get(ContactMessage, message_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"contact message {message_id} 不存在")
+    row.status = payload.status
+    db.commit()
+    db.refresh(row)
+    return ContactMessageOut.model_validate(row)

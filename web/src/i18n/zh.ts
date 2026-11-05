@@ -46,6 +46,41 @@ const zh = {
     value3Desc:
       "控制台已上线：AI 对话构建分析产物并即时预览；公网上传或经连接器同步「我的数据」物化后参与分析——目录没有的指标提需求单，交付私有范围。",
     lineNote: "寻数五线并进：壹座之上、萬星闪耀——Wire 以数据行讫，直连商业决策。",
+    // 商留通道表单卡（add-contact-intake）：「联系开通」CTA 原位展开的
+    // 站内表单——提交走公开端点 /api/v1/contact，成功态如实反馈（受理
+    // 承诺）；400 逐字段回显、429 如实呈现限流口径（语言中性 code 由
+    // 前端本地化，绝不透传服务端原始 code 照抄）。
+    contact: {
+      title: "联系开通",
+      intro: "留下您的需求与联系方式，运营会尽快与您联系（通常 1 个工作日内）。",
+      nameLabel: "姓名",
+      namePlaceholder: "如何称呼您",
+      emailLabel: "邮箱",
+      emailPlaceholder: "name@company.com",
+      companyLabel: "公司（选填）",
+      companyPlaceholder: "公司 / 团队名称",
+      messageLabel: "需求描述",
+      messagePlaceholder: "想了解或开通什么数据能力？",
+      honeypotLabel: "Website",
+      submit: "提交",
+      submitting: "提交中…",
+      successTitle: "已收到您的提交",
+      successBody: "我们已记录您的联系方式，运营会尽快与您联系。",
+      errorGeneric: "提交失败，请稍后重试。",
+      errorRateLimited:
+        "提交过于频繁——同一来源 24 小时内最多 5 条、同一邮箱最多 3 条，请稍后再试。",
+      errorRejected: "提交未通过校验，请调整后重试。",
+      errors: {
+        nameRequired: "请填写姓名。",
+        nameTooLong: "姓名需在 80 字符以内。",
+        emailRequired: "请填写邮箱。",
+        emailInvalid: "邮箱格式不正确。",
+        emailTooLong: "邮箱需在 120 字符以内。",
+        companyTooLong: "公司名称需在 120 字符以内。",
+        messageRequired: "请填写需求描述。",
+        messageTooLong: "需求描述需在 2000 字符以内。",
+      },
+    },
   },
   pricing: {
     title: "定价",
@@ -2988,6 +3023,7 @@ const zh = {
       catalog: "目录治理",
       usage: "用量",
       localData: "本地数据",
+      contacts: "商留",
     },
     topbar: {
       identity: "登录身份",
@@ -3209,6 +3245,32 @@ const zh = {
         online: "在线",
         offline: "离线",
       },
+    },
+    // 商留通道（add-contact-intake 任务 1.4）：官网「联系开通」表单提交
+    // 的处置面——时间倒序列表 + 未读徽标 + 标记已读（唯一写动作）。
+    contacts: {
+      title: "商留通道",
+      subtitle:
+        "官网「联系开通」表单提交列表（时间倒序）——未读徽标提示新提交，标记已读留痕；运营通知邮件同步发送运营邮箱。",
+      colTime: "提交时间",
+      colName: "姓名",
+      colEmail: "邮箱",
+      colCompany: "公司",
+      colMessage: "需求描述",
+      colStatus: "状态",
+      colAction: "操作",
+      status: {
+        new: "未读",
+        read: "已读",
+      },
+      markRead: "标记已读",
+      marked: "已标记。",
+      unreadBadge: "{{count}} 条未读",
+      prev: "上一页",
+      next: "下一页",
+      pageInfo: "第 {{from}}-{{to}} 条 / 共 {{total}} 条",
+      ipHashNote:
+        "来源 IP 仅以截断哈希留档（防灌水计数维度），不存原文、不在任何面呈现。",
     },
   },
   login: {

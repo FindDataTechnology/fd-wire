@@ -50,6 +50,45 @@ const en: Translation = {
       "Live in the console: build analytical artifacts through AI conversation with instant preview; upload over the public web or sync via connectors (My data) to materialize into your analysis — file a demand for anything missing, delivered into your private scope.",
     lineNote:
       "One of five FindData lines — Yizuo aggregates, Wanxing shines; Wire settles by the row, straight into decisions.",
+    // Contact intake form card (add-contact-intake): the "Contact us" CTA
+    // expands an in-page form posting to the public /api/v1/contact endpoint;
+    // success is reported as it is (received, not fulfilled). 400 errors map
+    // per field, 429 states the rate honestly — language-neutral server codes
+    // are localized here, never echoed verbatim.
+    contact: {
+      title: "Contact us to get started",
+      intro:
+        "Leave your requirement and contact details — our team will get back to you shortly (usually within one business day).",
+      nameLabel: "Name",
+      namePlaceholder: "How should we address you",
+      emailLabel: "Email",
+      emailPlaceholder: "name@company.com",
+      companyLabel: "Company (optional)",
+      companyPlaceholder: "Company / team name",
+      messageLabel: "What you need",
+      messagePlaceholder: "Which data capability would you like to explore?",
+      honeypotLabel: "Website",
+      submit: "Submit",
+      submitting: "Submitting…",
+      successTitle: "We received your submission",
+      successBody:
+        "Your contact details are on file — our team will reach out soon.",
+      errorGeneric: "Submission failed. Please try again later.",
+      errorRateLimited:
+        "Too many submissions — at most 5 per source and 3 per email within 24 hours. Please try again later.",
+      errorRejected:
+        "Your submission did not pass validation. Please adjust and retry.",
+      errors: {
+        nameRequired: "Please enter your name.",
+        nameTooLong: "Name must be at most 80 characters.",
+        emailRequired: "Please enter your email.",
+        emailInvalid: "The email address looks invalid.",
+        emailTooLong: "Email must be at most 120 characters.",
+        companyTooLong: "Company name must be at most 120 characters.",
+        messageRequired: "Please describe what you need.",
+        messageTooLong: "Message must be at most 2000 characters.",
+      },
+    },
   },
   pricing: {
     title: "Pricing",
@@ -3163,6 +3202,7 @@ const en: Translation = {
       catalog: "Catalog governance",
       usage: "Usage",
       localData: "Local data",
+      contacts: "Contacts",
     },
     topbar: {
       identity: "Signed in as",
@@ -3397,6 +3437,33 @@ const en: Translation = {
         online: "online",
         offline: "offline",
       },
+    },
+    // Contact intake (add-contact-intake task 1.4): the handling surface for
+    // homepage "Contact us" submissions — reverse-chronological list, unread
+    // badge and mark-as-read (the only write action).
+    contacts: {
+      title: "Contact intake",
+      subtitle:
+        "Submissions from the homepage contact form (newest first) — the unread badge flags new entries, mark-as-read keeps the audit trail; an operations notification email goes out on every submission.",
+      colTime: "Submitted",
+      colName: "Name",
+      colEmail: "Email",
+      colCompany: "Company",
+      colMessage: "Message",
+      colStatus: "Status",
+      colAction: "Action",
+      status: {
+        new: "Unread",
+        read: "Read",
+      },
+      markRead: "Mark as read",
+      marked: "Marked.",
+      unreadBadge: "{{count}} unread",
+      prev: "Previous",
+      next: "Next",
+      pageInfo: "Entries {{from}}-{{to}} of {{total}}",
+      ipHashNote:
+        "Source IP is stored only as a truncated hash (rate-limit dimension) — never in plain text, never rendered anywhere.",
     },
   },
   login: {

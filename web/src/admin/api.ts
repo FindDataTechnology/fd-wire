@@ -517,3 +517,46 @@ export function fetchCustomerLocalDataOverview(): Promise<
     method: "GET",
   });
 }
+
+// ---------------------------------------------------------------------------
+// 商留通道（add-contact-intake 任务 1.4）
+// ---------------------------------------------------------------------------
+
+/** 商留提交行（对齐 api 仓 fd_wire_api/admin/schemas.py ContactMessageOut；
+ *  红线：服务端响应模型不带 ip_hash——来源只以哈希留档，任何面不回显）。 */
+export interface ContactMessage {
+  id: number;
+  name: string;
+  email: string;
+  company: string | null;
+  message: string;
+  status: "new" | "read";
+  created_at: string;
+}
+
+/** 商留列表页（本页条目 + 匹配总数 + 全表未读数——分区入口徽标数据源）。 */
+export interface ContactMessagesPage {
+  items: ContactMessage[];
+  total: number;
+  unread: number;
+}
+
+/** 商留列表（时间倒序分页，limit 默认 50；limit/offset 与目录治理同语义）。 */
+export function fetchContactMessages(
+  page: { limit?: number; offset?: number } = {},
+): Promise<ContactMessagesPage> {
+  const qs = new URLSearchParams();
+  qs.set("limit", String(page.limit ?? 50));
+  qs.set("offset", String(page.offset ?? 0));
+  return requestJson(`/internal/admin/contact-messages?${qs.toString()}`, {
+    method: "GET",
+  });
+}
+
+/** 标记已读（status→read 是唯一合法目标；404/422 由 AdminApiError 如实上抛）。 */
+export function markContactMessageRead(messageId: number): Promise<ContactMessage> {
+  return requestJson(`/internal/admin/contact-messages/${messageId}`, {
+    method: "PATCH",
+    body: { status: "read" },
+  });
+}

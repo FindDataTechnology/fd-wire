@@ -1,5 +1,5 @@
-// 内部后台容器（#/admin/*）：角色门禁 + 布局壳 + 按左侧栏切换六页（客户/
-// 账本/需求单/目录治理/用量/本地数据）。
+// 内部后台容器（#/admin/*）：角色门禁 + 布局壳 + 按左侧栏切换七页（客户/
+// 账本/需求单/目录治理/用量/本地数据/商留）。
 // admin 双闸（wire-self-serve-launch 任务 5.2）：无 wire-admin 角色的登录
 // 用户在此被角色门禁拦下（导航入口已在 App 按角色显隐，路由直达也进不来）；
 // 子页请求自动附 Authorization: Bearer（见 admin/api.ts），不再持有任何
@@ -18,6 +18,7 @@ import { DemandsPage } from "./DemandsPage";
 import { CatalogGovernancePage } from "./CatalogGovernancePage";
 import { UsageOverviewPage } from "./UsageOverviewPage";
 import { LocalDataPage } from "./LocalDataPage";
+import { ContactsPage } from "./ContactsPage";
 
 export function AdminView({
   section = "customers",
@@ -65,6 +66,7 @@ export function AdminView({
       {active === "catalog" && <CatalogGovernancePage />}
       {active === "usage" && <UsageOverviewPage />}
       {active === "localdata" && <LocalDataPage />}
+      {active === "contacts" && <ContactsPage />}
     </AdminLayout>
   );
 }
