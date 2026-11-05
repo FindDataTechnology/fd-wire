@@ -183,6 +183,26 @@ spec:
             - name: METERING_INGEST_TOKEN
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: metering_ingest_token }
+            # SMTP 直发（demands 新单通知 + alerts 告警邮件，close-wire-implementation-gaps 1.5）：
+            # 共享 common/mail.py，env 缺 HOST 即未配置——两渠道各自显式跳过+告警一次。
+            # 生产=阿里 DirectMail（smtpdm.aliyun.com:465 SSL），发件域 finddatatech.cloud，
+            # 账号复用 CRM chatwoot 同源（fd-infra-deploy 建 wire-mail-secrets，值源
+            # secrets/crm-mail.env 的 SMTP_PASSWORD；不与 chatwoot 共用 secret 对象）。
+            - name: SMTP_HOST
+              valueFrom:
+                secretKeyRef: { name: wire-mail-secrets, key: smtp_host, optional: true }
+            - name: SMTP_PORT
+              value: "465"
+            - name: SMTP_USE_SSL
+              value: "1"
+            - name: SMTP_FROM
+              value: wire@finddatatech.cloud
+            - name: SMTP_USER
+              valueFrom:
+                secretKeyRef: { name: wire-mail-secrets, key: smtp_user, optional: true }
+            - name: SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: wire-mail-secrets, key: smtp_password, optional: true }
             # 内部端点令牌（catalog sync / demands / ai 共用，demands 与内部路由校验）
             - name: FD_WIRE_INTERNAL_TOKEN
               valueFrom:

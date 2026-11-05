@@ -1,8 +1,12 @@
 """新单邮件通知（wire-ux-consolidation 任务 3.3）。
 
 新需求单进入 ``submitted`` 时向运营邮箱（wire@finddatatech.cloud）发送
-通知邮件（需求摘要 + 联系方式）。仓内此前没有邮件设施——本模块即最简
-smtplib 直发实现，不引入队列。
+通知邮件（需求摘要 + 联系方式）。
+
+SMTP 设施（配置解析与直发）已提为共享模块 :mod:`fd_wire_api.common.mail`
+（close-wire-implementation-gaps 1.1）——本模块改为薄委托：``_smtp_config``
+/``_smtp_send`` 保持原签名转发（测试经 monkeypatch 本模块出口拦截出站），
+行为不变。
 
 纪律（通知与提交解耦，spec 场景「通知失败不阻塞」）：
 - 提交路径只投递后台线程，SMTP 往返全部在线程内完成；
@@ -10,11 +14,11 @@ smtplib 直发实现，不引入队列。
 - 发送失败（网络/SMTP 拒绝/渲染异常）仅日志留痕（warning），客户提交
   照常成功——``notify_new_demand`` 自身绝不向上抛异常。
 
-设置项（env，与仓内 ``os.getenv`` 模式一致）：
+设置项（env，由 :mod:`fd_wire_api.common.mail` 统一解析）：
 - ``SMTP_HOST`` / ``SMTP_PORT``（缺 HOST 即未配置，默认端口 25）；
 - ``SMTP_FROM``（缺省 ``wire@finddatatech.cloud``）；
 - ``SMTP_USER`` / ``SMTP_PASSWORD``（可选，配置后 LOGIN）；
-- ``SMTP_STARTTLS``（可选，"1"/"true" 时 STARTTLS）；
+- ``SMTP_STARTTLS`` / ``SMTP_USE_SSL``（可选加密姿态，见共享模块）；
 - ``DEMAND_NOTIFY_TO``（收件人，缺省 wire@finddatatech.cloud）。
 
 测试纪律：全部 mock（monkeypatch :func:`_smtp_send` 或
@@ -25,38 +29,22 @@ from __future__ import annotations
 
 import logging
 import os
-import smtplib
 import threading
-from email.message import EmailMessage
 from typing import Callable
 
+from ..common import mail
 from .models import Demand
 from .statemachine import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
-#: 运营通知收件人（spec：wire@finddatatech.cloud）。
-DEFAULT_NOTIFY_TO = "wire@finddatatech.cloud"
-
-#: SMTP 发送超时（秒）——后台线程也不允许无限挂起。
-_SMTP_TIMEOUT_SECONDS = 10.0
+#: 运营通知收件人（spec：wire@finddatatech.cloud；与共享邮件模块默认发件同址）。
+DEFAULT_NOTIFY_TO = mail.DEFAULT_FROM_ADDR
 
 
 def _smtp_config() -> dict | None:
-    """解析 SMTP 配置；未配置（缺 SMTP_HOST）返回 None。"""
-    host = (os.getenv("SMTP_HOST") or "").strip()
-    if not host:
-        return None
-    port = int(os.getenv("SMTP_PORT", "25").strip() or "25")
-    return {
-        "host": host,
-        "port": port,
-        "from_addr": (os.getenv("SMTP_FROM") or DEFAULT_NOTIFY_TO).strip(),
-        "user": (os.getenv("SMTP_USER") or "").strip() or None,
-        "password": os.getenv("SMTP_PASSWORD") or "",
-        "starttls": (os.getenv("SMTP_STARTTLS") or "").strip().lower()
-        in {"1", "true", "yes", "on"},
-    }
+    """解析 SMTP 配置（共享模块薄委托）；未配置（缺 SMTP_HOST）返回 None。"""
+    return mail.smtp_config()
 
 
 def render_notification(demand: Demand) -> tuple[str, str]:
@@ -84,20 +72,8 @@ def render_notification(demand: Demand) -> tuple[str, str]:
 
 
 def _smtp_send(subject: str, body: str, *, to_addr: str, config: dict) -> None:
-    """经 smtplib 直发一封纯文本邮件（登录/STARTTLS 可选）。"""
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = config["from_addr"]
-    message["To"] = to_addr
-    message.set_content(body)
-    with smtplib.SMTP(
-        config["host"], config["port"], timeout=_SMTP_TIMEOUT_SECONDS
-    ) as smtp:
-        if config["starttls"]:
-            smtp.starttls()
-        if config["user"]:
-            smtp.login(config["user"], config["password"])
-        smtp.send_message(message)
+    """经 smtplib 直发一封纯文本邮件（共享模块薄委托；测试拦截点）。"""
+    mail.smtp_send(subject, body, to_addr=to_addr, config=config)
 
 
 def _deliver(demand: Demand) -> None:

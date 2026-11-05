@@ -5,7 +5,10 @@
   last_evaluated_at（due 判定驱动列，error 路径同样推进）、last_notified_at
   （冷却再通知的基准）、updated_at。
 - ``alert_events``：append-only 事件流（firing/resolved/error/notify_failed
-  四类）——带值与阈值；error/notify_failed 的 detail 存原因（≤500 截断）。
+  四类）——带值与阈值；error/notify_failed 的 detail 存原因（≤500 截断）；
+  notify_failed 的 detail 以「（渠道=email|webhook）」尾注标注投递渠道
+  （close-wire-implementation-gaps：通知渠道 webhook+邮件并存，渠道维度
+  不另立 kind，沿四类事件）。
   索引 (customer_id, id desc) 与 (artifact_id, id desc) 服务管理端点的
   倒序时间线查询。
 
@@ -32,6 +35,25 @@ ALERT_STATES: tuple[str, ...] = ("ok", "firing")
 ALERT_EVENT_KINDS: tuple[str, ...] = ("firing", "resolved", "error", "notify_failed")
 #: 事件 detail 截断上限
 EVENT_DETAIL_LIMIT = 500
+#: notify_failed 的投递渠道合法值（渠道维度记 detail 尾注，不另立事件类别）
+ALERT_NOTIFY_CHANNELS: tuple[str, ...] = ("email", "webhook")
+#: notify_failed detail 的渠道尾注格式（渠道维度去重按该尾注过滤——
+#: 同轮双渠道失败各自留痕，不因同 kind 去重互相吞掉）
+_NOTIFY_CHANNEL_SUFFIX = "（渠道={channel}）"
+
+
+def notify_failed_detail(channel: str, error: str) -> str:
+    """notify_failed 事件 detail 的渠道标注格式：``原因（渠道=x）`` 尾注。
+
+    尾注放末尾的原因：既有 webhook 面的 detail 前缀格式（``异常类型: 摘要``）
+    被既有测试与日志口径钉住，渠道维度以尾注增量标注，不破坏前缀。
+    """
+    return f"{error}{_NOTIFY_CHANNEL_SUFFIX.format(channel=channel)}"
+
+
+def notify_channel_marker(channel: str) -> str:
+    """渠道尾注标记（去重查询按 detail 含该标记过滤同渠道失败）。"""
+    return _NOTIFY_CHANNEL_SUFFIX.format(channel=channel)
 
 
 class AlertState(AiBase):
@@ -74,13 +96,16 @@ class AlertEvent(AiBase):
         Integer, ForeignKey("artifacts.id"), nullable=False
     )
     customer_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    #: firing | resolved | error | notify_failed
+    #: firing | resolved | error | notify_failed（notify_failed 的 detail
+    #: 以「（渠道=email|webhook）」尾注标注投递渠道）
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
     #: 归约值（firing/resolved/notify_failed 携带；error 为 NULL）
     value: Mapped[float | None] = mapped_column(Float, nullable=True)
     #: 规则阈值快照（condition.value）
     threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
-    #: error/notify_failed 的原因摘要（≤500 字截断）
+    #: error/notify_failed 的原因摘要（≤500 字截断）；notify_failed 附
+    #: 渠道尾注「（渠道=email|webhook）」（截断可能吃掉尾注——极端长错误
+    #: 信息下渠道去重放宽为多记一条，如实留痕优先）
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False, default=utc_now_naive)
 

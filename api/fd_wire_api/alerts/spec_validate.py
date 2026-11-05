@@ -9,6 +9,7 @@
       "condition": {"op": "gt|gte|lt|lte|eq|neq", "value": 100},
       "intervalMinutes": 30,
       "webhookUrl": "https://…",       # 可选
+      "notifyEmails": ["ops@c.example"],  # 可选，收件邮箱数组 ≤10 条
       "cooldownMinutes": 60            # 可选，缺省 60
     }
 
@@ -21,13 +22,18 @@
 - ``intervalMinutes``：整数 ∈ [5, 1440]；``cooldownMinutes`` 可省（缺省
   60），在则整数 ∈ [1, 1440]；
 - ``webhookUrl`` 可省，在则以 http:// 或 https:// 开头（前缀校验，不做
-  网络探测）。
+  网络探测）；
+- ``notifyEmails`` 可省（缺省空），在则字符串数组：每项须邮箱形态（最简
+  ``本地@域名.后缀``，不做投递探测），条数上限
+  :data:`NOTIFY_EMAILS_MAX`（10）；与 ``webhookUrl`` 可并存互不阻塞。
 
 返回错误文案（None=合法）；文案定位字段（如 ``intervalMinutes 必须…``）
 可直接作保存面 400 detail 与试运行面 422 detail。
 """
 
 from __future__ import annotations
+
+import re
 
 from ..artifacts import query_contract
 
@@ -41,6 +47,10 @@ INTERVAL_MIN, INTERVAL_MAX = 5, 1440
 COOLDOWN_MIN, COOLDOWN_MAX = 1, 1440
 #: 冷却缺省（分钟）
 DEFAULT_COOLDOWN_MINUTES = 60
+#: notifyEmails 收件条数上限（close-wire-implementation-gaps 决策 3）
+NOTIFY_EMAILS_MAX = 10
+#: 邮箱形态（最简：本地@域名含点；空白即拒，不做投递探测）
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _int_in_range(value: object, *, low: int, high: int) -> bool:
@@ -121,6 +131,20 @@ def validate_alert_spec(inner: object) -> str | None:
         ):
             return f"webhookUrl 可省，在则必须以 http:// 或 https:// 开头（收到 {url!r}）"
 
+    # notifyEmails：可省（缺省空），在则字符串数组、每项邮箱形态、≤10 条
+    if "notifyEmails" in inner:
+        emails = inner["notifyEmails"]
+        if not isinstance(emails, list):
+            return f"notifyEmails 可省，在则必须是字符串数组（收到 {emails!r}）"
+        if len(emails) > NOTIFY_EMAILS_MAX:
+            return (
+                f"notifyEmails 最多 {NOTIFY_EMAILS_MAX} 条"
+                f"（收到 {len(emails)} 条）"
+            )
+        for item in emails:
+            if not isinstance(item, str) or not _EMAIL_RE.match(item):
+                return f"notifyEmails 每项必须是邮箱形态的字符串（收到 {item!r}）"
+
     return None
 
 
@@ -128,11 +152,12 @@ def normalize_alert_spec(inner: dict) -> dict:
     """评估器消费视图：校验后的内层 → 带缺省补全的参数 dict。
 
     调用方保证先过 :func:`validate_alert_spec`（None 才进本函数）；
-    ``cooldownMinutes`` 补缺省 60，其余原样。
+    ``cooldownMinutes`` 补缺省 60，``notifyEmails`` 补缺省空列表，其余原样。
     """
     cooldown = inner.get("cooldownMinutes")
     if not isinstance(cooldown, int) or isinstance(cooldown, bool):
         cooldown = DEFAULT_COOLDOWN_MINUTES
+    raw_emails = inner.get("notifyEmails")
     return {
         "query": query_contract.parse_panel_query(inner["query"]),
         "column": inner["aggregate"].get("column"),
@@ -142,4 +167,5 @@ def normalize_alert_spec(inner: dict) -> dict:
         "interval_minutes": inner["intervalMinutes"],
         "cooldown_minutes": cooldown,
         "webhook_url": inner.get("webhookUrl") or None,
+        "notify_emails": list(raw_emails) if isinstance(raw_emails, list) else [],
     }

@@ -11,15 +11,20 @@
    执行路径，评估口径=刷新口径）→ 归约单值 → 条件判定 would_fire；
 4. 状态机**边缘触发**（ok ⇄ firing）：翻转记 firing/resolved 事件 + 通知；
    同态 firing 且距上次通知超过 cooldown 再通知（不记事件）；首评 ok 静默；
-5. 通知=webhook POST（5s 超时；未配 webhookUrl 只落事件零外呼）；投递
-   失败记 notify_failed 事件不阻塞评估；
+5. 通知双渠道并存互不阻塞（close-wire-implementation-gaps）：``webhookUrl``
+   POST（5s 超时）+ ``notifyEmails`` SMTP 发信（共享
+   :mod:`fd_wire_api.common.mail`）；冷却共用 ``cooldownMinutes``；渠道均
+   未配零外呼；任一渠道失败记 notify_failed（detail 尾注渠道，同渠道冷却
+   去重）不阻塞评估、不阻塞另一渠道；平台 SMTP env 缺失时邮件如实跳过并
+   记**一次**结构化告警（沿 b381fe8 metering 显式告警一次口径），绝不静默
+   吞掉「承诺了邮件但平台没配」；
 6. error/notify_failed 事件按冷却窗去重（同规则同 kind 距上次 ≥ cooldown
    才再记，防刷屏）；每条评估完写 last_evaluated_at/updated_at（error 路径
    同样推进——下轮按 interval 重试）。
 
 测试面：``tick_once`` 是同步函数可直接调（注入 ai 会话 / datasets 会话 /
-引擎工厂 / 时钟）；出站 webhook 是模块级 :func:`deliver_webhook`，测试
-monkeypatch 之（绝不真打网）。
+引擎工厂 / 时钟）；出站 webhook :func:`deliver_webhook` 与出站邮件
+:func:`deliver_mail` 都是模块级函数，测试 monkeypatch 之（绝不真打网）。
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import operator
+import os
 from datetime import datetime, timezone
 
 import httpx
@@ -39,6 +45,7 @@ from ..ai.models import utc_now_naive
 from ..artifacts import query_contract
 from ..artifacts import service as artifacts_service
 from ..artifacts.models import Artifact
+from ..common import mail
 from ..datasets import api_store
 from ..datasets.db import get_session as get_datasets_session
 from ..datasets.ingest import (
@@ -47,7 +54,13 @@ from ..datasets.ingest import (
     EngineUnavailable,
     get_engine_client_factory,
 )
-from .models import EVENT_DETAIL_LIMIT, AlertEvent, AlertState
+from .models import (
+    EVENT_DETAIL_LIMIT,
+    AlertEvent,
+    AlertState,
+    notify_channel_marker,
+    notify_failed_detail,
+)
 from .settings import get_settings
 from .spec_validate import (
     DEFAULT_COOLDOWN_MINUTES,
@@ -79,6 +92,67 @@ def deliver_webhook(url: str, payload: dict) -> None:
     with httpx.Client(timeout=5.0) as client:
         response = client.post(url, json=payload)
         response.raise_for_status()
+
+
+def deliver_mail(to_addr: str, subject: str, body: str, config: dict) -> None:
+    """出站邮件投递（共享 SMTP 设施直发；``to_addr`` 可为逗号连收件人）。
+
+    模块级函数——测试 monkeypatch 本函数拦截邮件出站（绝不真打网），与
+    :func:`deliver_webhook` 同款拦截面。
+    """
+    mail.smtp_send(subject, body, to_addr=to_addr, config=config)
+
+
+# SMTP 未配置的结构化告警只发一次（进程生命周期一次，不逐 tick 刷屏）——
+# 沿 b381fe8 metering driver 的 _poll_skip_warned 口径（wire-metering-
+# explicit-alerting）：「预期态」必须由运维经告警证实，不由静默默认。
+_mail_skip_warned = False
+
+
+def _warn_smtp_unconfigured_once() -> None:
+    """邮件渠道因平台 SMTP env 缺失而跳过时，记一次结构化告警。"""
+    global _mail_skip_warned
+    if not _mail_skip_warned:
+        _mail_skip_warned = True
+        logger.warning(
+            "告警邮件渠道跳过：SMTP 未配置（SMTP_HOST 为空）——规则已配 "
+            "notifyEmails 但平台未配邮件出站 env（SMTP_*），邮件承诺未兑现；"
+            "评估与 webhook 渠道不受影响，部署面须补齐 SMTP_* env"
+        )
+
+
+def render_alert_mail(
+    *,
+    title: str,
+    state: str,
+    value: float,
+    threshold: float,
+    op: str,
+    at: str,
+    artifact_id: int,
+) -> tuple[str, str]:
+    """渲染告警邮件（纯函数）：主题含规则名与状态，正文含归约值/阈值/时间
+    与产物链接（``WIRE_ENTRY_URL`` 未配置时如实降级为产物号）。
+    """
+    subject = f"[柏讯·告警] {title} {state}"
+    base = (os.getenv("WIRE_ENTRY_URL") or "").strip().rstrip("/")
+    link = (
+        f"{base}/#/console/artifacts"
+        if base
+        else "（平台未配置入口地址，请经控制台查看）"
+    )
+    body = (
+        f"告警规则「{title}」进入 {state} 状态。\n"
+        f"\n"
+        f"规则名：{title}\n"
+        f"状态：{state}\n"
+        f"归约值：{value}\n"
+        f"阈值：{op} {threshold}\n"
+        f"时间：{at}\n"
+        f"产物：#{artifact_id}\n"
+        f"产物链接：{link}\n"
+    )
+    return subject, body
 
 
 # ------------------------------------------------------------- 查询与归约
@@ -206,18 +280,21 @@ def _record_event(
     detail: str | None = None,
     now: datetime,
     dedupe_cooldown_minutes: int | None = None,
+    dedupe_detail_marker: str | None = None,
 ) -> bool:
     """追加一条事件（append-only）；带去重窗时同规则同 kind 冷却内跳过。
 
+    ``dedupe_detail_marker``：渠道维度去重过滤（notify_failed 用）——去重
+    查询只看 detail 含该标记的事件，同轮双渠道失败各自留痕不互吞。
     返回是否真落了行（去重跳过返回 False）。
     """
     if dedupe_cooldown_minutes is not None:
-        last = session.scalar(
-            select(AlertEvent)
-            .where(AlertEvent.artifact_id == artifact.id, AlertEvent.kind == kind)
-            .order_by(AlertEvent.id.desc())
-            .limit(1)
+        stmt = select(AlertEvent).where(
+            AlertEvent.artifact_id == artifact.id, AlertEvent.kind == kind
         )
+        if dedupe_detail_marker is not None:
+            stmt = stmt.where(AlertEvent.detail.contains(dedupe_detail_marker))
+        last = session.scalar(stmt.order_by(AlertEvent.id.desc()).limit(1))
         if (
             last is not None
             and (now - last.created_at).total_seconds()
@@ -248,14 +325,19 @@ def _notify(
     value: float,
     now: datetime,
 ) -> bool:
-    """webhook 通知（firing/resolved 沿共用）；失败记 notify_failed（冷却去重）。
+    """通知投递（firing/resolved 沿共用）：webhook 与邮件双渠道并存互不阻塞。
 
-    返回是否投递成功（成功时推进 state.last_notified_at）。未配 webhookUrl
-    零外呼返回 False（不算失败）。
+    - ``webhookUrl`` 在则 POST，失败记 notify_failed（detail 尾注渠道
+      webhook，同渠道冷却去重）；
+    - ``notifyEmails`` 在则 SMTP 发信（一封多发），平台 SMTP env 缺失时
+      如实跳过并记一次结构化告警（:func:`_warn_smtp_unconfigured_once`），
+      发送失败记 notify_failed（尾注渠道 email）；
+    - 任一渠道失败不阻塞评估、不阻塞另一渠道；渠道均未配置零外呼返回
+      False（不算失败）。
+
+    返回是否有任一渠道投递成功（成功时推进 state.last_notified_at——冷却
+    再通知的基准两渠道共用 ``cooldownMinutes``）。
     """
-    url = params.get("webhook_url")
-    if not isinstance(url, str) or not url:
-        return False
     payload = {
         "artifact_id": artifact.id,
         "title": artifact.title,
@@ -265,23 +347,66 @@ def _notify(
         "op": params["op"],
         "at": now.replace(tzinfo=timezone.utc).isoformat(),
     }
-    try:
-        deliver_webhook(url, payload)
-    except Exception as exc:  # noqa: BLE001 - 投递失败不阻塞评估，如实留痕
-        logger.warning("告警 %s webhook 投递失败：%s", artifact.id, exc)
-        _record_event(
-            session,
-            artifact,
-            kind="notify_failed",
-            value=value,
-            threshold=params["value"],
-            detail=f"{type(exc).__name__}: {exc}",
-            now=now,
-            dedupe_cooldown_minutes=params["cooldown_minutes"],
-        )
-        return False
-    state.last_notified_at = now
-    return True
+    delivered = False
+
+    # 渠道一：webhook POST
+    url = params.get("webhook_url")
+    if isinstance(url, str) and url:
+        try:
+            deliver_webhook(url, payload)
+            delivered = True
+        except Exception as exc:  # noqa: BLE001 - 投递失败不阻塞评估，如实留痕
+            logger.warning("告警 %s webhook 投递失败：%s", artifact.id, exc)
+            _record_event(
+                session,
+                artifact,
+                kind="notify_failed",
+                value=value,
+                threshold=params["value"],
+                detail=notify_failed_detail("webhook", f"{type(exc).__name__}: {exc}"),
+                now=now,
+                dedupe_cooldown_minutes=params["cooldown_minutes"],
+                dedupe_detail_marker=notify_channel_marker("webhook"),
+            )
+
+    # 渠道二：邮件（notifyEmails 列表一封多发；SMTP 未配置跳过+告警一次）
+    emails = params.get("notify_emails") or []
+    if emails:
+        config = mail.smtp_config()
+        if config is None:
+            _warn_smtp_unconfigured_once()
+        else:
+            subject, body = render_alert_mail(
+                title=artifact.title,
+                state=state_name,
+                value=value,
+                threshold=params["value"],
+                op=params["op"],
+                at=payload["at"],
+                artifact_id=artifact.id,
+            )
+            try:
+                deliver_mail(", ".join(emails), subject, body, config)
+                delivered = True
+            except Exception as exc:  # noqa: BLE001 - 不阻塞评估与 webhook 渠道
+                logger.warning("告警 %s 邮件投递失败：%s", artifact.id, exc)
+                _record_event(
+                    session,
+                    artifact,
+                    kind="notify_failed",
+                    value=value,
+                    threshold=params["value"],
+                    detail=notify_failed_detail(
+                        "email", f"{type(exc).__name__}: {exc}"
+                    ),
+                    now=now,
+                    dedupe_cooldown_minutes=params["cooldown_minutes"],
+                    dedupe_detail_marker=notify_channel_marker("email"),
+                )
+
+    if delivered:
+        state.last_notified_at = now
+    return delivered
 
 
 def _finish_error(
@@ -567,12 +692,15 @@ def _evaluate_rule(
                 stats["notified"] += 1
             stats["resolved"] += 1
         elif would_fire and previous == "firing":
-            # 同态 firing：距上次通知 ≥ cooldown 且配了 webhook → 再通知（不记事件）
+            # 同态 firing：距上次通知 ≥ cooldown 且配了任一渠道 → 再通知（不记事件）
             notified_due = state.last_notified_at is None or (
                 (moment - state.last_notified_at).total_seconds()
                 >= params["cooldown_minutes"] * 60
             )
-            if params.get("webhook_url") and notified_due:
+            if (
+                (params.get("webhook_url") or params.get("notify_emails"))
+                and notified_due
+            ):
                 if _notify(
                     session,
                     artifact,
