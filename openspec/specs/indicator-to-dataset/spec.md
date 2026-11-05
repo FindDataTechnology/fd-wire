@@ -42,7 +42,7 @@ indicator_series_read）取序列，免费档 api 层本地物化、cell 档引�
 
 ### Requirement: 重复指标建集 SHALL 幂等拒绝并指路
 
-同一客户对同一指标已存在活跃数据集时再次建集 SHALL 返回 409，响应携带既有数据集标识；SHALL NOT 自动覆盖、自动刷新或静默建第二集。
+同一客户对同一指标已存在活跃数据集时再次建集 SHALL 返回 409，响应携带既有数据集标识；SHALL NOT 自动覆盖、自动刷新或静默建第二集。指标状态语义（verified/registered 及其导流规则）属主为 finddata 根 `wire-indicator-catalog`——本面消费其状态语义落地建集门槛，MUST NOT 另立状态口径。
 
 #### Scenario: 重复建集返回既有数据集
 - **WHEN** 客户对已有数据集的指标再次提交相同建集
