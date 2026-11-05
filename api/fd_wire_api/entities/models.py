@@ -71,6 +71,12 @@ class Entity(EntitiesBase):
     display_column: Mapped[str | None] = mapped_column(String(200), nullable=True)
     #: 列注记 {column: 注记}（单位/格式纯描述文本，≤50 字/列；service 校验）
     column_notes: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # ------------------------------------------------ 知识档位（0050）
+    #: 升格档位（add-entity-bench-contract）：raw/bronze/silver/gold 或 null
+    #: （null=未入升格流水线；词表 service 层单点校验）
+    tier: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    #: 敏感级（add-entity-bench-contract）：public/internal/confidential 或 null
+    sensitivity: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=utc_now_naive
     )
@@ -125,6 +131,11 @@ class EntityRelationship(EntitiesBase):
     junction_target_column: Mapped[str | None] = mapped_column(
         String(200), nullable=True
     )
+    # ------------------------------------------------ 知识档位（0050）
+    #: 升格档位（add-entity-bench-contract）：raw/bronze/silver/gold 或 null
+    tier: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    #: 敏感级（add-entity-bench-contract）：public/internal/confidential 或 null
+    sensitivity: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=utc_now_naive
     )

@@ -45,6 +45,14 @@ MAX_NAME_LENGTH = 100
 MAX_COLUMN_NOTE_LENGTH = 50
 MAX_COLUMN_NOTES = 50
 
+#: 知识档位词表（add-entity-bench-contract；单点——routes 校验与版本化
+#: 归一化同源引用。值域与知验台内核 promotion.py 逐字对齐）
+ENTITY_TIERS: tuple[str, ...] = ("raw", "bronze", "silver", "gold")
+ENTITY_SENSITIVITIES: tuple[str, ...] = ("public", "internal", "confidential")
+
+#: 关系更新面可写白名单（design D3：结构字段不可变，改结构走删除+重声明）
+RELATIONSHIP_MUTABLE_FIELDS: tuple[str, ...] = ("label", "tier", "sensitivity")
+
 #: AI 上下文注入的有界（design D4）：超限截断并如实标注
 PROMPT_MAX_ENTITIES = 50
 PROMPT_MAX_RELATIONSHIPS = 100
@@ -156,6 +164,29 @@ def _validate_column_notes(column_notes: Any, dataset: Dataset) -> dict | None:
     return notes or None
 
 
+def _validate_tier(value: Any, *, what: str = "tier") -> str | None:
+    """知识档位：null 或词表内值；词表外 422 指明非法值与合法词表。"""
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in ENTITY_TIERS:
+        raise InvalidEntity(
+            f"{what} 必须是 {'/'.join(ENTITY_TIERS)} 之一或 null（收到 {value!r}）"
+        )
+    return value
+
+
+def _validate_sensitivity(value: Any, *, what: str = "sensitivity") -> str | None:
+    """敏感级：null 或词表内值；词表外 422 指明非法值与合法词表。"""
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in ENTITY_SENSITIVITIES:
+        raise InvalidEntity(
+            f"{what} 必须是 {'/'.join(ENTITY_SENSITIVITIES)} 之一或 null"
+            f"（收到 {value!r}）"
+        )
+    return value
+
+
 def _check_name_conflict(
     db: Session, customer_id: str, name: str, *, exclude_id: int | None = None
 ) -> None:
@@ -208,6 +239,8 @@ def create_entity(
     description: str | None = None,
     display_column: str | None = None,
     column_notes: dict | None = None,
+    tier: str | None = None,
+    sensitivity: str | None = None,
     entity_id: int | None = None,
     actor: str | None = None,
     via: str = versioning.VIA_CONSOLE,
@@ -219,6 +252,8 @@ def create_entity(
     ``entity_id`` 仅由回滚执行器传入（按 manifest 恢复原身份，见
     ``versioning.execute_rollback``）；常规创建走自增。落行后**同事务**追加
     op=create 事件（事件写失败即整体失败）。
+    ``tier``/``sensitivity`` 词表校验后落行（声明面通常留空——声明即 raw
+    语义，档位经升格流水线落档；回滚恢复路径传目标值）。
     """
     name = _validate_name(name)
     dataset = _owned_dataset_or_none(datasets_db, dataset_id, customer_id)
@@ -227,6 +262,8 @@ def create_entity(
     columns = _validate_pk_columns(pk_columns, dataset)
     display = _validate_display_column(display_column, dataset)
     notes = _validate_column_notes(column_notes, dataset)
+    tier = _validate_tier(tier)
+    sensitivity = _validate_sensitivity(sensitivity)
     _check_name_conflict(db, customer_id, name)
     _check_dataset_binding_conflict(db, customer_id, dataset_id)
     entity = Entity(
@@ -239,6 +276,8 @@ def create_entity(
         else None,
         display_column=display,
         column_notes=notes,
+        tier=tier,
+        sensitivity=sensitivity,
     )
     if entity_id is not None:
         entity.id = int(entity_id)
@@ -271,6 +310,8 @@ def update_entity(
     description: str | None = None,
     display_column: str | None = None,
     column_notes: dict | None = None,
+    tier: str | None = None,
+    sensitivity: str | None = None,
     actor: str | None = None,
     via: str = versioning.VIA_CONSOLE,
     source_ref: str | None = None,
@@ -278,7 +319,9 @@ def update_entity(
 ) -> Entity:
     """整量更新（重校验——与创建同一条校验链，排除自身后的双唯一检查）。
 
-    无实际字段变化时不落事件（整量 PUT 的空转不算一次本体变更）。
+    ``tier``/``sensitivity`` 为增量可选档位字段（add-entity-bench-contract）：
+    null=未标注；词表外 422。无实际字段变化时不落事件（整量 PUT 的空转
+    不算一次本体变更）。
     """
     name = _validate_name(name)
     dataset = _owned_dataset_or_none(datasets_db, dataset_id, entity.customer_id)
@@ -287,6 +330,8 @@ def update_entity(
     columns = _validate_pk_columns(pk_columns, dataset)
     display = _validate_display_column(display_column, dataset)
     notes = _validate_column_notes(column_notes, dataset)
+    tier = _validate_tier(tier)
+    sensitivity = _validate_sensitivity(sensitivity)
     _check_name_conflict(db, entity.customer_id, name, exclude_id=entity.id)
     _check_dataset_binding_conflict(
         db, entity.customer_id, dataset_id, exclude_id=entity.id
@@ -300,6 +345,8 @@ def update_entity(
     )
     entity.display_column = display
     entity.column_notes = notes
+    entity.tier = tier
+    entity.sensitivity = sensitivity
     db.flush()
     after = versioning.entity_payload(entity)
     if after != before:
@@ -477,6 +524,8 @@ def create_relationship(
     junction_dataset_id: str | None = None,
     junction_source_column: str | None = None,
     junction_target_column: str | None = None,
+    tier: str | None = None,
+    sensitivity: str | None = None,
     relationship_id: int | None = None,
     actor: str | None = None,
     via: str = versioning.VIA_CONSOLE,
@@ -501,6 +550,9 @@ def create_relationship(
         raise InvalidEntity(
             f"关系 kind 必须是 {' 或 '.join(RELATIONSHIP_KINDS)}（收到 {kind!r}）"
         )
+    # 档位字段仅回滚恢复路径传值（声明面不暴露——关系档位经更新面落档）
+    tier = _validate_tier(tier)
+    sensitivity = _validate_sensitivity(sensitivity)
     target = db.get(Entity, to_entity_id)
     if target is None or target.customer_id != customer_id:
         raise EntityNotFound(f"目标实体 {to_entity_id} 不存在")
@@ -636,6 +688,8 @@ def create_relationship(
         kind=stored_kind,
         declared_kind=declared,
         label=(label.strip() or None) if isinstance(label, str) else None,
+        tier=tier,
+        sensitivity=sensitivity,
     )
     if relationship_id is not None:
         relationship.id = int(relationship_id)
@@ -677,6 +731,9 @@ def declared_view(rel: EntityRelationship) -> dict[str, Any]:
     view["junction_dataset_id"] = rel.junction_dataset_id
     view["junction_source_column"] = rel.junction_source_column
     view["junction_target_column"] = rel.junction_target_column
+    # 知识档位（add-entity-bench-contract）：非方向性字段，声明方向原样带出
+    view["tier"] = rel.tier
+    view["sensitivity"] = rel.sensitivity
     return view
 
 
@@ -718,6 +775,67 @@ def delete_relationship(
         source_ref=source_ref,
         source_instance_id=source_instance_id,
     )
+
+
+def update_relationship(
+    db: Session,
+    *,
+    customer_id: str,
+    entity_id: int,
+    rel_id: int,
+    label: str | None = None,
+    tier: str | None = None,
+    sensitivity: str | None = None,
+    actor: str | None = None,
+    via: str = versioning.VIA_CONSOLE,
+    source_ref: str | None = None,
+    source_instance_id: int | None = None,
+) -> EntityRelationship:
+    """更新关系可写字段（add-entity-bench-contract 任务 2.1）。
+
+    白名单 = label/tier/sensitivity；结构性字段（两端/列/kind/declared_kind/
+    junction 三键）**不可变**——路由层 schema ``extra="forbid"`` 使携带结构键
+    的请求 422（design D3 拒绝制，非静默忽略）。定位纪律与删除同款：须属本
+    企业且以 ``entity_id`` 实体为端点，否则 404。
+
+    label 语义：三键**必传**（路由 schema 强制，缺键 422）——整量语义与
+    实体 PUT 同口径：显式 null=清空，避免「我以为改了其实没传」的静默半更。
+    更新前后全量 payload 落 op=update 事件（同事务；无变化不落事件）。
+    """
+    rel = db.get(EntityRelationship, rel_id)
+    if (
+        rel is None
+        or rel.customer_id != customer_id
+        or (rel.from_entity_id != entity_id and rel.to_entity_id != entity_id)
+    ):
+        raise EntityNotFound(f"关系 {rel_id} 不存在")
+    if label is not None and (not isinstance(label, str) or not label.strip()):
+        raise InvalidEntity("关系 label 必须是非空字符串或 null（清空）")
+    if isinstance(label, str) and len(label.strip()) > 200:
+        raise InvalidEntity("关系 label 超过 200 字上限")
+    tier = _validate_tier(tier)
+    sensitivity = _validate_sensitivity(sensitivity)
+    before = versioning.relationship_payload(rel)
+    rel.label = (label.strip() or None) if isinstance(label, str) else None
+    rel.tier = tier
+    rel.sensitivity = sensitivity
+    db.flush()
+    after = versioning.relationship_payload(rel)
+    if after != before:
+        versioning.record_event(
+            db,
+            customer_id=customer_id,
+            op=versioning.OP_UPDATE,
+            target_kind=versioning.KIND_RELATIONSHIP,
+            target_id=rel.id,
+            before=before,
+            after=after,
+            actor=actor,
+            via=via,
+            source_ref=source_ref,
+            source_instance_id=source_instance_id,
+        )
+    return rel
 
 
 def list_relationships(db: Session, *, customer_id: str) -> list[EntityRelationship]:
@@ -864,6 +982,8 @@ def entity_graph(
             "pk_columns": list(entity.pk_columns or []),
             "display_column": entity.display_column,
             "column_notes": dict(entity.column_notes or {}),
+            "tier": entity.tier,
+            "sensitivity": entity.sensitivity,
             "dataset": dataset_summary(
                 datasets.get(entity.dataset_id), entity.dataset_id
             ),
@@ -946,6 +1066,8 @@ def entity_graph_prompt_block(
 
 
 __all__ = [
+    "ENTITY_SENSITIVITIES",
+    "ENTITY_TIERS",
     "EntityConflict",
     "EntityNotFound",
     "InvalidEntity",
@@ -955,6 +1077,7 @@ __all__ = [
     "PROMPT_MAX_ENTITIES",
     "PROMPT_MAX_RELATIONSHIPS",
     "RELATIONSHIP_KINDS",
+    "RELATIONSHIP_MUTABLE_FIELDS",
     "create_entity",
     "create_relationship",
     "dataset_summary",
@@ -968,4 +1091,5 @@ __all__ = [
     "list_relationships",
     "resolve_relationship_materialization",
     "update_entity",
+    "update_relationship",
 ]

@@ -718,6 +718,9 @@ def test_graph_shape_with_dataset_summary(client, db_session) -> None:
         "junction_dataset_id": None,
         "junction_source_column": None,
         "junction_target_column": None,
+        # 0050（add-entity-bench-contract）：知识档位（未升格恒 null）
+        "tier": None,
+        "sensitivity": None,
     }
 
 

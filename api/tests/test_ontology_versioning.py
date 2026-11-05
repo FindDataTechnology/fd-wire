@@ -950,7 +950,7 @@ def test_export_json_yaml_and_provenance(client, db_session) -> None:
     current = client.get("/api/v1/ontology/export", headers=CUST)
     assert current.status_code == 200, current.text
     document = json.loads(current.text)
-    assert document["schema_version"] == 1
+    assert document["schema_version"] == 2  # 0050：manifest 增档位两键
     assert document["customer_id"] == "cust-onto"
     assert document["version"] == "current"
     assert document["digest"] == versioning.manifest_digest(

@@ -99,10 +99,14 @@
 ```
 
 - `schema_version` 是**格式版本单一真源**（`versioning.SCHEMA_VERSION`）；后续不兼容
-  变更必须递增，消费方据此分支。
+  变更必须递增，消费方据此分支。**schema_version=2**（0050 起，add-entity-bench-contract）：
+  实体条与关系条各增 `tier` / `sensitivity` 两键（键恒出现、null 显式；词表
+  tier=`raw/bronze/silver/gold`、sensitivity=`public/internal/confidential`）。读
+  **schema_version=1 旧导出**的消费方按「键缺失 → null」归一——跨版本 diff 与
+  回滚 plan 在版本化模块内已做同样归一，不产生假差异。
 - `digest` 只覆盖内容（`entities` + `relationships` 的规范形态），**不含**
   `exported_at` / `version` / `customer_id`——同一内容在任何时刻导出 digest 恒一致，
-  可与快照行直接对账。
+  可与快照行直接对账。历史快照（v1 形态）digest 不重算不变。
 - 关系条是**存储方向**（`1:n` 声明已归一化为反向 `n:1`，`declared_kind: "1:n"`
   记录声明方向）；消费方按 `declared_kind ?? kind` 呈现声明方向。
 - `provenance=true` 时，每条实体/关系附最近一次 create/update 事件的 `source_ref`

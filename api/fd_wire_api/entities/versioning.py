@@ -42,7 +42,9 @@ from .models import (
 )
 
 #: 导出/快照 manifest 的格式版本（schema_version 单一真源）
-SCHEMA_VERSION = 1
+#: 2 = add-entity-bench-contract 0050：实体/关系条增 tier/sensitivity 两键
+#: （键恒出现、null 显式；消费方读旧导出按缺失→null 归一）
+SCHEMA_VERSION = 2
 
 #: 变更操作枚举
 OP_CREATE = "create"
@@ -74,6 +76,9 @@ ENTITY_FIELDS: tuple[str, ...] = (
     "description",
     "display_column",
     "column_notes",
+    # 知识档位（add-entity-bench-contract 0050）：键恒出现（null 显式）
+    "tier",
+    "sensitivity",
 )
 
 #: 关系条字段（四元组是关系身份，参与差异的只有其余语义字段）
@@ -84,6 +89,9 @@ RELATIONSHIP_FIELDS: tuple[str, ...] = (
     "junction_dataset_id",
     "junction_source_column",
     "junction_target_column",
+    # 知识档位（add-entity-bench-contract 0050）：键恒出现（null 显式）
+    "tier",
+    "sensitivity",
 )
 
 
@@ -147,6 +155,8 @@ def entity_payload(entity: Entity) -> dict[str, Any]:
         "description": entity.description,
         "display_column": entity.display_column,
         "column_notes": dict(entity.column_notes or {}) or None,
+        "tier": entity.tier,
+        "sensitivity": entity.sensitivity,
     }
 
 
@@ -164,11 +174,17 @@ def relationship_payload(rel: EntityRelationship) -> dict[str, Any]:
         "junction_dataset_id": rel.junction_dataset_id,
         "junction_source_column": rel.junction_source_column,
         "junction_target_column": rel.junction_target_column,
+        "tier": rel.tier,
+        "sensitivity": rel.sensitivity,
     }
 
 
 def normalize_entity(raw: Mapping[str, Any] | None) -> dict[str, Any]:
-    """任意实体条 → 规范实体条（已知键恒出现、类型归一）。"""
+    """任意实体条 → 规范实体条（已知键恒出现、类型归一）。
+
+    跨键集边界（0050 前快照无 tier/sensitivity 键）按缺失→null 归一
+    （design D5）——diff/回滚 plan 在新旧快照间不因键缺席产生假差异。
+    """
     data = dict(raw or {})
     return {
         "id": _as_int(data.get("id")),
@@ -178,11 +194,14 @@ def normalize_entity(raw: Mapping[str, Any] | None) -> dict[str, Any]:
         "description": _as_text(data.get("description")) or None,
         "display_column": _as_text(data.get("display_column")) or None,
         "column_notes": _as_notes(data.get("column_notes")),
+        "tier": _as_text(data.get("tier")) or None,
+        "sensitivity": _as_text(data.get("sensitivity")) or None,
     }
 
 
 def normalize_relationship(raw: Mapping[str, Any] | None) -> dict[str, Any]:
-    """任意关系条 → 规范关系条（已知键恒出现、类型归一）。"""
+    """任意关系条 → 规范关系条（已知键恒出现、类型归一；跨键集边界缺失键
+    按 null 归一——同 normalize_entity 注记）。"""
     data = dict(raw or {})
     return {
         "id": _as_int(data.get("id")),
@@ -196,6 +215,8 @@ def normalize_relationship(raw: Mapping[str, Any] | None) -> dict[str, Any]:
         "junction_dataset_id": _as_text(data.get("junction_dataset_id")),
         "junction_source_column": _as_text(data.get("junction_source_column")),
         "junction_target_column": _as_text(data.get("junction_target_column")),
+        "tier": _as_text(data.get("tier")) or None,
+        "sensitivity": _as_text(data.get("sensitivity")) or None,
     }
 
 
@@ -869,6 +890,8 @@ def execute_rollback(
                 description=after["description"],
                 display_column=after["display_column"],
                 column_notes=after["column_notes"],
+                tier=after["tier"],
+                sensitivity=after["sensitivity"],
                 actor=actor,
                 via=VIA_ROLLBACK,
             )
@@ -897,6 +920,8 @@ def execute_rollback(
                 description=payload["description"],
                 display_column=payload["display_column"],
                 column_notes=payload["column_notes"],
+                tier=payload["tier"],
+                sensitivity=payload["sensitivity"],
                 actor=actor,
                 via=VIA_ROLLBACK,
                 entity_id=restore_id,
@@ -940,6 +965,8 @@ def execute_rollback(
                 junction_dataset_id=payload["junction_dataset_id"],
                 junction_source_column=payload["junction_source_column"],
                 junction_target_column=payload["junction_target_column"],
+                tier=payload["tier"],
+                sensitivity=payload["sensitivity"],
                 actor=actor,
                 via=VIA_ROLLBACK,
                 relationship_id=restore_id,

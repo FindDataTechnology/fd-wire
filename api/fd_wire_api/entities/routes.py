@@ -74,6 +74,8 @@ class EntityCreateIn(BaseModel):
 
     v2 可选属性元数据：display_column（对象展示列）/ column_notes（列注记）——
     不带新键的 v0 请求行为逐字不变。
+    知识档位（add-entity-bench-contract 0050）：tier/sensitivity 增量可选
+    字段（词表校验在 service 单点；null=未标注）。
     """
 
     name: str
@@ -82,6 +84,8 @@ class EntityCreateIn(BaseModel):
     description: str | None = None
     display_column: str | None = None
     column_notes: dict[str, str] | None = None
+    tier: str | None = None
+    sensitivity: str | None = None
 
 
 class DatasetSummaryOut(BaseModel):
@@ -104,6 +108,8 @@ class EntityOut(BaseModel):
     description: str | None = None
     display_column: str | None = None
     column_notes: dict[str, str] | None = None
+    tier: str | None = None
+    sensitivity: str | None = None
     dataset: DatasetSummaryOut
     created_at: datetime
     updated_at: datetime
@@ -141,6 +147,8 @@ class RelationshipOut(BaseModel):
     junction_dataset_id: str | None = None
     junction_source_column: str | None = None
     junction_target_column: str | None = None
+    tier: str | None = None
+    sensitivity: str | None = None
     created_at: datetime
 
 
@@ -151,6 +159,8 @@ class GraphNodeOut(BaseModel):
     pk_columns: list[str]
     display_column: str | None = None
     column_notes: dict[str, str] | None = None
+    tier: str | None = None
+    sensitivity: str | None = None
     dataset: DatasetSummaryOut
 
 
@@ -165,6 +175,8 @@ class GraphEdgeOut(BaseModel):
     junction_dataset_id: str | None = None
     junction_source_column: str | None = None
     junction_target_column: str | None = None
+    tier: str | None = None
+    sensitivity: str | None = None
 
 
 class GraphOut(BaseModel):
@@ -192,6 +204,8 @@ def _entity_out(entity: Entity, datasets_db: Session) -> EntityOut:
         description=entity.description,
         display_column=entity.display_column,
         column_notes=dict(entity.column_notes or {}) or None,
+        tier=entity.tier,
+        sensitivity=entity.sensitivity,
         dataset=DatasetSummaryOut(
             **dataset_summary(dataset, entity.dataset_id)
         ),
@@ -262,6 +276,8 @@ def create_entity(
             description=payload.description,
             display_column=payload.display_column,
             column_notes=payload.column_notes,
+            tier=payload.tier,
+            sensitivity=payload.sensitivity,
             actor=actor_sub,
         )
     except service.EntityConflict as exc:
@@ -294,6 +310,8 @@ def update_entity(
             description=payload.description,
             display_column=payload.display_column,
             column_notes=payload.column_notes,
+            tier=payload.tier,
+            sensitivity=payload.sensitivity,
             actor=actor_sub,
         )
     except service.EntityConflict as exc:
@@ -391,6 +409,59 @@ def delete_relationship(
     except service.EntityNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"id": rel_id, "deleted": True}
+
+
+class RelationshipUpdateIn(BaseModel):
+    """关系更新请求体（add-entity-bench-contract 任务 2.1）。
+
+    白名单 label/tier/sensitivity，三键**必传**（缺键 422；显式 null=清空）
+    ——整量语义与实体 PUT 同口径，杜绝「我以为改了其实没传」的静默半更；
+    结构性字段（两端/列/kind/declared_kind/junction 三键）不可变——
+    ``extra="forbid"`` 使携带结构键的请求直接 422（design D3 拒绝制，
+    非静默忽略）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str | None
+    tier: str | None
+    sensitivity: str | None
+
+
+@router.put("/{entity_id}/relationships/{rel_id}", response_model=RelationshipOut)
+def update_relationship(
+    entity_id: int,
+    rel_id: int,
+    payload: RelationshipUpdateIn,
+    principal: tuple[Any, str, str] = Depends(require_console_customer_actor),
+    db: Session = Depends(get_entities_db),
+) -> RelationshipOut:
+    """更新关系可写字段（label/tier/sensitivity；结构键 422，404 不泄露）。
+
+    知验台 gold 关系回写的正道——替代「删除+重声明」（保事件连续性）。
+    更新落 op=update 事件（service 同事务；无变化不落事件）。
+    """
+    customer, actor_sub, _role = principal
+    customer_id = str(customer.name)
+    _entity_or_404(db, entity_id, customer_id)
+    try:
+        relationship = service.update_relationship(
+            db,
+            customer_id=customer_id,
+            entity_id=entity_id,
+            rel_id=rel_id,
+            label=payload.label,
+            tier=payload.tier,
+            sensitivity=payload.sensitivity,
+            actor=actor_sub,
+        )
+    except service.EntityNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except service.InvalidEntity as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return RelationshipOut.model_validate(
+        {**service.declared_view(relationship), "created_at": relationship.created_at}
+    )
 
 
 # ------------------------------------------------- 关系物化（wire-entity-link）

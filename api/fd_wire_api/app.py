@@ -43,10 +43,11 @@ from .pipeline import router as pipeline_router
 # 实体语义层（wire-entity-layer）：/api/v1/entities 全端点（实体+关系声明+
 # 图谱；图谱紧凑块注入 AI 构建上下文见 ai/routes）
 from .domain_actions import router as domain_actions_router
-from .entities import init_db as init_entities_db
-from .entities import ontology_router as ontology_router
-from .entities import router as entities_router
 from .entities import (
+    entities_internal_router,
+    init_db as init_entities_db,
+    ontology_router as ontology_router,
+    router as entities_router,
     start_snapshot_scheduler as start_ontology_snapshot_scheduler,
     stop_snapshot_scheduler as stop_ontology_snapshot_scheduler,
 )
@@ -293,6 +294,10 @@ app.include_router(packs_router)
 # 实体语义层（wire-entity-layer）：实体/关系声明 + 同源图谱（console 身份；
 # 免费档全功能——零引擎调用的元数据层，AI 上下文注入走 ai/routes）
 app.include_router(entities_router)
+# 实体读面机器通道（add-entity-bench-contract）：/api/v1/internal/entities
+# 只读镜像（X-Internal-Token + 客户 scope 白名单 env；无 dev 缺省，缺配置
+# 503；硬边界=只有 GET——写面仅 console 身份可达）
+app.include_router(entities_internal_router)
 # 本体版本面（wire-ontology-versioning）：/api/v1/ontology/versions（时间线 +
 # 未发布变更计数 + 打发布版）/ …/diff / …/rollback（plan 预览 + owner 执行）/
 # export（json|yaml + 可选出处）/ integrity（逃逸写自检）。表在本体同库

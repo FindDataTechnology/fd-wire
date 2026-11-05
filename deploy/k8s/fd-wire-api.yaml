@@ -187,6 +187,10 @@ spec:
             - name: FD_WIRE_INTERNAL_TOKEN
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: fd_wire_internal_token }
+            # 实体读面机器通道 scope 白名单（add-entity-bench-contract 0050）：
+            # 逗号分隔客户键；知验台连接器只读同步 drillcust001 本体起步
+            - name: FD_WIRE_INTERNAL_ENTITY_CUSTOMERS
+              value: drillcust001
             - name: FD_WIRE_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: fd_wire_admin_token }

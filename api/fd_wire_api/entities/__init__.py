@@ -15,6 +15,7 @@ from .db import (
     init_db,
     reset_entities_runtime,
 )
+from .internal import router as entities_internal_router
 from .models import Entity, EntityRelationship, OntologyEvent, OntologySnapshot
 from .routes import ontology_router, router
 from .service import (
@@ -35,6 +36,7 @@ __all__ = [
     "InvalidEntity",
     "OntologyEvent",
     "OntologySnapshot",
+    "entities_internal_router",
     "entity_graph",
     "entity_graph_prompt_block",
     "get_db",
