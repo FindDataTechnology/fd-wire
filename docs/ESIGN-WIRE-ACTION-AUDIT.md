@@ -76,3 +76,22 @@ POST /api/admin/esignature/tasks/{task_id}/archive  # 归档
 | stub 局限备忘 | stub adapter 信封为**进程内存态**：kubectl exec 每次独立进程+pod 滚动重启都会丢信封（fetch_report 404）——跨进程全链必须在单进程内完成（离线测试形态即正确形态）；生产厂商 adapter 无此局限（状态在厂商侧） |
 
 **留尾**：壹座 pack allowTools 扩容（承接单 4.2，paas 侧姊妹单）到位后重跑一次真 agent 路径（合同岗 propose→owner 柏讯确认→执行）。
+
+### 七、母单 7.1/8.1 收口复核（2026-11-06 03:00-03:30，lex-contract-esignature）
+
+**镜像事故与修复**：sha-31bc6ab（flush 修复首滚，源 2af908e）缺 `alembic`（migrate init `exec failed: "alembic": executable file not found in $PATH`）→ pod CrashLoopBackOff、**生产中断 ~30 分钟**（02:28-02:58）。根因=共享构建池 testaction003 变量竞态互踩；GHA 自 10-29 起账单故障全 failure（billing 边界，未硬闯）。处置：先回滚 sha-8a8df01（f11407a），主线随即以**专属快照仓 scs001/fd-lex-priv-images** 重出 sha-6ec77dc（源 1841130，含 flush 修复；ef88894）——镜像内 alembic 1.20.1 在位，`/api/version`=200，ArgoCD Synced Ready。
+
+**flush 修复后生产 stub 窗口（03:01+0800，pod sha-6ec77dc，双任务全链）**：
+- 控制台发起：actor=`e2e-esign-console`，task_created→envelope_created→**link_issued ×2**（同会话 flush 修复生效，不再 links=[] 死任务）
+- H5 相对方：realname_verified→signed（甲乙各 1，STUB-SIG），intent 显式确认
+- 计量：metering_records 4 行（2 任务×2 签署人，unit=signing quantity=1，caller=console-probe）
+- 完成+出证：task_completed，evidence zip（manifest/events/provider_report）落 PVC lex-esign-files
+- 坏账对账：31bc6ab 窗口遗留 4 个 pending 死任务（links=[]）留库待清理（零计量，不影响验收）
+
+**收口验证窗口（03:15-03:20，GitOps 临时 stub 注入 eebc0d2 → 验证 → 撤 39ff760）**：
+- 原件验证 verify_package：两任务 valid=True（content_integrity/package_anchor/signature_chain 全过）
+- 篡改一字：valid=False，content_integrity 如实失败（spec「篡改文件验证失败」生产实证）
+- 证据卡：evidence_cards=2/任务（SP001，evidence-card-organizer 字段表）
+- 撤 stub 后：发起探针=**HTTP 503「签署腿未配置…合同可保存为草稿」**（spec Req 7 机房口径同源），探针任务零残留（任务数=0），生产常态 fail-closed
+
+**8.1 阻断项（修复已落地未进产）**：8.1 收口审读发现两处 SHALL 标注缺口——H5 签署页原页脚虚假归属「由持牌电子签名服务商通道完成」（stub 下为假，spec Req 3 要求标注「内测环境、无司法效力」）；出证包 manifest 缺「内测假件、无司法效力」标注（spec Req 6）。修复=fd-lex b430bb9（H5 adapter 感知标注+manifest annotation，166 测试绿）。**待下张镜像（sha≥b430bb9，走 scs001/fd-lex-priv-images 专属池，同 ef88894 配方）滚动后重验，8.1 方可勾**。
