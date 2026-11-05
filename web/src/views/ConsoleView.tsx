@@ -50,7 +50,10 @@ import { UsagePage } from "../console/UsagePage";
 import { KeysPage } from "../console/KeysPage";
 import { TeamPage } from "../console/TeamPage";
 import { MarketPage } from "../console/MarketPage";
-import { CONTACT_MAILTO } from "../views/HomeView";
+
+// mailto 联系通道（本地常量）：HomeView 的 CONTACT_MAILTO 导出已随商留
+// 通道表单化退役（add-contact-intake）；控制台各处次级邮件链接保留。
+const CONTACT_MAILTO = "mailto:wire@finddatatech.cloud";
 
 type BootstrapPhase =
   | { kind: "loading" }

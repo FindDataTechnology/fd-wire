@@ -42,7 +42,10 @@ import { formatServerDate } from "./util";
 import { ConnectorsSection } from "./DatasetsConnectors";
 import { DatasetDetail } from "./DatasetDetail";
 import { PipelineView } from "./pipeline/PipelineView";
-import { CONTACT_MAILTO } from "../views/HomeView";
+
+// mailto 联系通道（本地常量）：HomeView 的 CONTACT_MAILTO 导出已随商留
+// 通道表单化退役（add-contact-intake）；控制台各处次级邮件链接保留。
+const CONTACT_MAILTO = "mailto:wire@finddatatech.cloud";
 
 const SYNC_BADGE_CLASS: Record<SyncStatus, string> = {
   idle: "bg-slate-100 text-slate-600 ring-slate-200",

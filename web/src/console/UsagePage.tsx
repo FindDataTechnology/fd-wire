@@ -7,7 +7,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { apiErrorText, fetchConsoleUsage, type ConsoleUsage } from "./api";
-import { CONTACT_MAILTO } from "../views/HomeView";
+
+// mailto 联系通道（本地常量）：HomeView 的 CONTACT_MAILTO 导出已随商留
+// 通道表单化退役（add-contact-intake）；控制台各处次级邮件链接保留。
+const CONTACT_MAILTO = "mailto:wire@finddatatech.cloud";
 
 /** 千分位呈现（数据来自端点，非源码面量）。 */
 export function formatCount(value: number): string {

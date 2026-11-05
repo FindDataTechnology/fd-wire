@@ -24,7 +24,10 @@ import {
 import { formatServerDate } from "./util";
 import { packName } from "./PacksPage";
 import { YIZUO_PLATFORM_URL } from "../components/footerConstants";
-import { CONTACT_MAILTO } from "../views/HomeView";
+
+// mailto 联系通道（本地常量）：HomeView 的 CONTACT_MAILTO 导出已随商留
+// 通道表单化退役（add-contact-intake）；控制台各处次级邮件链接保留。
+const CONTACT_MAILTO = "mailto:wire@finddatatech.cloud";
 
 /** by_kind 徽标键序：复用 api.ts 的 ARTIFACT_KINDS（六类，含表单构建器的
  * form——生产已有 form 产物，呈现口径必须与产物页一致，否则 active_total

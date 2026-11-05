@@ -9,7 +9,6 @@
 //   不带数字的文案。
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CONTACT_MAILTO } from "./HomeView";
 import { demandNewHref } from "../catalog/api";
 import {
   fetchPublicPlans,
@@ -19,6 +18,10 @@ import {
 } from "../pricing/api";
 import { formatCatalogTotal } from "../catalog/api";
 import { useCatalogStats } from "../catalog/useCatalogStats";
+
+// mailto 联系通道（本地常量）：HomeView 的 CONTACT_MAILTO 导出已随商留
+// 通道表单化退役（add-contact-intake）；控制台各处次级邮件链接保留。
+const CONTACT_MAILTO = "mailto:wire@finddatatech.cloud";
 
 /** 档位卡展示名：i18n 按 code 取；未登记的 code 兜底原样展示。 */
 function tierName(translate: (key: string) => string, code: string): string {
