@@ -8,7 +8,7 @@
 收件人（spec：SMTP_FROM 同址运营邮箱）：
 - env ``CONTACT_NOTIFY_EMAIL`` 显式覆盖；
 - 缺省 = :data:`fd_wire_api.common.mail.DEFAULT_FROM_ADDR`
-  （``SMTP_FROM`` 未配时的兜底同址 wire@finddatatech.cloud）。
+  （``SMTP_FROM`` 未配时的兜底 = DEFAULT_FROM_ADDR = support@finddatatech.cloud）。
 
 SMTP 未配置（缺 ``SMTP_HOST``）时**显式告警一次**（进程级 once，沿
 b381fe8 metering driver 的 ``_poll_skip_warned`` 口径——alerts/evaluator

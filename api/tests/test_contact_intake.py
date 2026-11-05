@@ -8,7 +8,7 @@
   边界值（80/120/120/2000）放行
 - 防灌水闸：同 IP 24h 第 6 次 429（不落库不计配额）；同 email 第 4 次 429；
   X-Forwarded-For 取第一跳
-- 运营通知：默认收件人 wire@finddatatech.cloud、四字段摘要齐备；
+- 运营通知：默认收件人 support@finddatatech.cloud、四字段摘要齐备；
   CONTACT_NOTIFY_EMAIL 覆盖；SMTP 未配置告警一次（进程级 once）；
   发送失败仍 202
 - admin：鉴权 fail-closed（未配 403/缺头错头 401）、时间倒序分页、
@@ -363,7 +363,7 @@ def test_notify_content_and_default_recipient(env, monkeypatch):
     assert len(recorder.calls) == 1
     sent = recorder.calls[0]
     # 收件人默认 = SMTP_FROM 同址运营邮箱（DEFAULT_FROM_ADDR）
-    assert sent["to_addr"] == "wire@finddatatech.cloud"
+    assert sent["to_addr"] == "support@finddatatech.cloud"
     # 主题带姓名；正文四字段摘要齐备
     assert "张三" in sent["subject"]
     assert "zhangsan@example.com" in sent["body"]

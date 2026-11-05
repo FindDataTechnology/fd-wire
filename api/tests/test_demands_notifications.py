@@ -126,7 +126,7 @@ def test_submitted_demand_notifies_operations_mailbox(client, monkeypatch):
     assert len(recorder.calls) == 1
     sent = recorder.calls[0]
     # 收件人是运营邮箱（默认 wire@finddatatech.cloud）
-    assert sent["to_addr"] == "wire@finddatatech.cloud"
+    assert sent["to_addr"] == "support@finddatatech.cloud"
     # 主题带需求编码与摘要
     assert d["code"] in sent["subject"]
     assert "光伏装机" in sent["subject"]

@@ -7,7 +7,7 @@ demands 新单通知（``demands/notifications.py``）全链验证过的 smtplib
 设置项（env，与仓内 ``os.getenv`` 模式一致）：
 
 - ``SMTP_HOST`` / ``SMTP_PORT``（缺 HOST 即未配置，默认端口 25）；
-- ``SMTP_FROM``（缺省 ``wire@finddatatech.cloud``）；
+- ``SMTP_FROM``（缺省 = DEFAULT_FROM_ADDR，见下方鉴权账户约束）；
 - ``SMTP_USER`` / ``SMTP_PASSWORD``（可选，配置后 LOGIN）；
 - ``SMTP_STARTTLS``（可选，"1"/"true" 时 STARTTLS）；
 - ``SMTP_USE_SSL``（可选，"1"/"true" 时隐式 SSL——smtpdm.aliyun.com:465
@@ -24,7 +24,9 @@ import smtplib
 from email.message import EmailMessage
 
 #: 平台默认发件地址（未配 SMTP_FROM 的兜底；demands 运营邮箱同址同源）。
-DEFAULT_FROM_ADDR = "wire@finddatatech.cloud"
+# DirectMail 鉴权账户约束（11-06 生产实弹 436 实锤）：MAIL FROM 必须与
+# SMTP 鉴权账户（support@，CRM 同源账号）一致，任意其他发件地址被拒。
+DEFAULT_FROM_ADDR = "support@finddatatech.cloud"
 
 #: SMTP 发送超时（秒）——后台线程也不允许无限挂起。
 SMTP_TIMEOUT_SECONDS = 10.0

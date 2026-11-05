@@ -196,7 +196,7 @@ spec:
             - name: SMTP_USE_SSL
               value: "1"
             - name: SMTP_FROM
-              value: wire@finddatatech.cloud
+              value: support@finddatatech.cloud
             - name: SMTP_USER
               valueFrom:
                 secretKeyRef: { name: wire-mail-secrets, key: smtp_user, optional: true }
