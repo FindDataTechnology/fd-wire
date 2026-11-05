@@ -35,6 +35,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from datetime import timezone as dt_timezone
 
@@ -43,6 +44,8 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..ai.settings import get_settings as get_ai_settings
+from ..ai.settings import parse_endpoint_map
 from ..billing.customers import ensure_customer
 from ..billing.models import Customer, CustomerStatus, LedgerEntry
 from ..billing.models import Plan as BillingPlan
@@ -89,6 +92,8 @@ router = APIRouter(
     tags=["admin"],
     dependencies=[Depends(require_admin_access)],
 )
+
+logger = logging.getLogger(__name__)
 
 #: 镜像状态的合法取值（与 indicator_snapshots 的 CHECK 约束一致）
 _MIRROR_STATUSES = ("verified", "registered")
@@ -138,6 +143,57 @@ def _assignable_plan_or_error(db: Session, plan_code: str) -> BillingPlan:
             detail=f"档位 {plan_code!r} 已禁用（不可指派）",
         )
     return plan
+
+
+#: cell 开户配方的实际出处（HANDOFF §5 引用不准确——fd-wire 仓无顶层
+#: HANDOFF*.md；配方权威指引在 docs 侧 §七，细节步骤在其指向的归档报告 §三）
+_CELL_ONBOARDING_RECIPE_DOC = (
+    "docs/paas-wire-line-install-gate-and-fleet-audit-requirements.md §七"
+)
+_CELL_ONBOARDING_RECIPE_REPORT = (
+    "openspec/changes/archive/2026-10-26-wire-content-fleet/"
+    "reports/2026-10-24-handoff-execution.md §三"
+)
+
+
+def _cell_mapping_warning(customer_name: str) -> str | None:
+    """开户时点的事前卡点提醒（close-wire-implementation-gaps 2.1）。
+
+    AI_CELL_ENDPOINT_MAP 已配置（解析非空 = 显式部署口径）且不含该客户键时
+    返回提醒文案——AI 构建循环按 ``billing_customers.name`` 解析 cell 端点
+    （console/auth.py 命名空间键口径），显式口径下缺键即「未开通」，客户
+    用 AI 时才会报错（bcf57e3 同型痛），开户时点提前暴露。
+
+    map 未配置（约定派生口径）或已有该客户映射 → None（不提醒）。
+    只读探测：复用 ``ai.settings.parse_endpoint_map`` 的既有解析，不改
+    ``ai.executor.resolve_cell_endpoint`` 的解析语义。
+    """
+    mapping = parse_endpoint_map(get_ai_settings().ai_cell_endpoint_map)
+    if not mapping or customer_name in mapping:
+        return None
+    return (
+        f"该客户（{customer_name}）无 cell 映射，AI 构建将不可用——请在 "
+        "deploy/k8s/fd-wire-api.yaml 的 AI_CELL_ENDPOINT_MAP 追加一行"
+        f"（cell 开户配方见 {_CELL_ONBOARDING_RECIPE_DOC}，"
+        f"步骤细节见 {_CELL_ONBOARDING_RECIPE_REPORT}）"
+    )
+
+
+def _customer_out_with_cell_hint(db: Session, customer: Customer) -> CustomerOut:
+    """开户响应出口（仅 create_customer 两条路径）：客户视图 + 显式口径
+    缺 cell 映射时的提醒字段与 warning 日志（事前卡点，2.1）。"""
+    out = _customer_out(db, customer)
+    warning = _cell_mapping_warning(customer.name)
+    if warning is not None:
+        logger.warning(
+            "create_customer: 客户 %s 无 AI_CELL_ENDPOINT_MAP 映射，"
+            "AI 构建将不可用（cell 开户配方见 %s，步骤细节见 %s）",
+            customer.name,
+            _CELL_ONBOARDING_RECIPE_DOC,
+            _CELL_ONBOARDING_RECIPE_REPORT,
+        )
+        out.cell_mapping_warning = warning
+    return out
 
 
 @router.get("/plans", response_model=list[PlanOut])
@@ -211,7 +267,10 @@ def create_customer(
       代建账户要么都有、要么都没有）；
     - 显式传 ``sub2api_user_id`` 保留为兼容路径（跳过代建，直接落本地行）；
     - 同名（任意档位）→ 422 如实拒（wire-console-resilience D3：客户名
-      全局唯一，提示改名）；禁用档 → 409；未知档位 → 422。
+      全局唯一，提示改名）；禁用档 → 409；未知档位 → 422；
+    - 显式部署口径（AI_CELL_ENDPOINT_MAP 已配）且缺该客户键 → 返回体带
+      ``cell_mapping_warning`` 提醒 + warning 日志（事前卡点，
+      close-wire-implementation-gaps 2.1；map 未配=约定派生口径不提醒）。
     """
     plan = _assignable_plan_or_error(db, payload.plan_code)
 
@@ -243,7 +302,7 @@ def create_customer(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="客户创建冲突（sub2api_user_id 已被其他客户占用？）",
             ) from exc
-        return _customer_out(db, customer)
+        return _customer_out_with_cell_hint(db, customer)
 
     # 自动代建路径（2.1）：sub2api 建户 → 落本地行；不可达即 502 中止
     try:
@@ -262,7 +321,7 @@ def create_customer(
             detail=f"同名客户已存在（id={customer.id}）",
         )
     db.flush()
-    return _customer_out(db, customer)
+    return _customer_out_with_cell_hint(db, customer)
 
 
 @router.patch("/customers/{customer_id}", response_model=CustomerOut)

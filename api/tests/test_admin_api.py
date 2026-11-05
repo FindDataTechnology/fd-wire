@@ -16,6 +16,7 @@ catalog 经 catalog_settings 指库（与其既有测试同款手法）。
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -25,6 +26,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from fd_wire_api.ai.db import reset_ai_runtime
 from fd_wire_api.admin import reset_admin_runtime
 from fd_wire_api.admin.db import AdminBase, get_session
 from fd_wire_api.app import app
@@ -424,6 +426,66 @@ def test_customer_create_validations(admin_env):
         headers=AUTH,
     )
     assert resp.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# 开户 cell 映射提醒（close-wire-implementation-gaps 2.1/2.2）
+# ---------------------------------------------------------------------------
+
+
+def test_create_customer_missing_cell_mapping_warns(admin_env, monkeypatch, caplog):
+    """显式部署口径（AI_CELL_ENDPOINT_MAP 已配）且缺该客户键 → 返回体带
+    cell_mapping_warning 提醒 + warning 日志（事前卡点）；自动代建与
+    sub2api_user_id 兼容两条返回路径都携带。"""
+    monkeypatch.setenv("AI_CELL_ENDPOINT_MAP", "other-cust=http://cell-1/mcp")
+    reset_ai_runtime()
+    try:
+        with caplog.at_level(logging.WARNING, logger="fd_wire_api.admin.routes"):
+            # 自动代建路径
+            created = create_customer(admin_env.client, "新付费客户")
+            # 兼容路径（显式 sub2api_user_id）
+            compat = create_customer(admin_env.client, "兼容路径客户", "free", "compat-caller")
+        warning = created["cell_mapping_warning"]
+        assert warning is not None
+        assert "新付费客户" in warning
+        assert "无 cell 映射" in warning
+        assert "AI_CELL_ENDPOINT_MAP" in warning
+        # 配方引用是实际路径（HANDOFF §5 引用不准，已改 docs 侧 §七）
+        assert "docs/paas-wire-line-install-gate-and-fleet-audit-requirements.md" in warning
+        assert compat["cell_mapping_warning"] is not None
+        # warning 日志同步落两条（两条路径各一）
+        hint_logs = [
+            r for r in caplog.records
+            if r.levelno == logging.WARNING and "无 AI_CELL_ENDPOINT_MAP 映射" in r.getMessage()
+        ]
+        assert len(hint_logs) == 2
+        # 提醒只在开户时点：列表端点不携带（恒 None）
+        listing = admin_env.client.get("/internal/admin/customers", headers=AUTH).json()
+        assert all(c["cell_mapping_warning"] is None for c in listing)
+    finally:
+        reset_ai_runtime()
+
+
+def test_create_customer_with_cell_mapping_no_warning(admin_env, monkeypatch):
+    """显式口径下该客户键已在 map 中 → 不提醒（cell_mapping_warning 为 None）。"""
+    monkeypatch.setenv("AI_CELL_ENDPOINT_MAP", "mapped-cust=http://cell-1/mcp")
+    reset_ai_runtime()
+    try:
+        created = create_customer(admin_env.client, "mapped-cust", "free", "mapped-caller")
+        assert created["cell_mapping_warning"] is None
+    finally:
+        reset_ai_runtime()
+
+
+def test_create_customer_map_unset_no_warning(admin_env, monkeypatch):
+    """map 未配置（约定派生口径）→ 不提醒（约定派生恒有端点值）。"""
+    monkeypatch.delenv("AI_CELL_ENDPOINT_MAP", raising=False)
+    reset_ai_runtime()
+    try:
+        created = create_customer(admin_env.client, "约定派生客户")
+        assert created["cell_mapping_warning"] is None
+    finally:
+        reset_ai_runtime()
 
 
 def test_customer_patch_plan_and_status(admin_env):

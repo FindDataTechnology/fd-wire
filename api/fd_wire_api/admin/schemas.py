@@ -74,6 +74,10 @@ class CustomerOut(BaseModel):
     plan_name: str
     status: str
     created_at: datetime
+    # 开户 cell 映射提醒（close-wire-implementation-gaps 2.1）：仅 create_customer
+    # 在显式部署口径（AI_CELL_ENDPOINT_MAP 已配）且缺该客户键时携带文案；
+    # 列表/改档等其余端点恒 None（map 未配=约定派生口径，不提醒）
+    cell_mapping_warning: str | None = None
 
 
 class CustomerCreateIn(BaseModel):
