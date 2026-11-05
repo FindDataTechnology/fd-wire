@@ -1,13 +1,13 @@
-# transform-pipeline Specification
+# transform-pipeline-view Specification
 
 ## Purpose
-TBD - created by archiving change wire-transform-pipeline-view. Update Purpose after archive.
+控制台管线视图面：把本企业数据集派生血缘渲染成可读的图（端点+可视化），并在数据集详情页提供重派生与定时重派生的管理入口。本能力是**视图面**——管线引擎契约（版本化步骤链、九算子、DAG 执行、租约队列）以 finddata 根 `wire-transform-pipelines` 为唯一真源，两侧不得各自记账。
 
-## Requirements
+## ADDED Requirements
 
 ### Requirement: 管线图端点
 
-登录客户可经 console 会话获取本企业数据集派生图
+登录客户 SHALL 可经 console 会话获取本企业数据集派生图
 （`GET /api/v1/pipeline/graph`）：nodes 为本企业全部数据集（id/key/名称/
 source_kind/storage_tier/行数/更新时间/有无定时重派生登记），edges 为
 父→子派生边（本地血缘元数据 source_ref；操作标注 v0 统一为 derived——
@@ -34,7 +34,7 @@ derive/join 区分未入本地登记），节点
 
 ### Requirement: 管线视图
 
-数据页提供「管线」子视图渲染派生图：按拓扑深度分列布局（源在最左、派生
+数据页 SHALL 提供「管线」子视图渲染派生图：按拓扑深度分列布局（源在最左、派生
 逐级向右），节点卡呈现名称/行数/更新时间/tier 徽标/调度徽标/kind 标注，
 SVG 连线父→子；点击节点跳该数据集详情页；无派生数据集时空态如实提示；
 窄屏退化为按深度分组的卡片列表。v0 只读——视图上不提供刷新或派生操作
@@ -54,7 +54,7 @@ SVG 连线父→子；点击节点跳该数据集详情页；无派生数据集�
 
 ### Requirement: 控制台重派生与定时管理
 
-派生数据集详情页（derived + cell 档）提供「重派生」按钮：级联默认开可关，
+派生数据集详情页（derived + cell 档）SHALL 提供「重派生」按钮：级联默认开可关，
 调用既有重派生端点（console 会话凭据），级联各级结果（数据集名/深度/
 成功失败与原因）如实呈现，刷新后行数与更新时间同步；并提供「定时重派生」
 登记管理：cron 五字段登记/更新、当前登记态（cron/enabled/最近运行时间/

@@ -6,15 +6,15 @@
 
 | # | 问题 | 证据 | 建议动作 |
 |---|------|------|----------|
-| P0-1 | **O2 计费口径真矛盾**：R 根 wire-billing 仍写「超额按行计费」，但代码/定价页/部署全在「到量即停 overage=0」（plans.py:44-56 PUBLIC_SEEDS 注释自证；且旧三档 LEGACY_SEEDS is_active=False 退场） | cluster-A §4/§5 | 拍板口径后改写 R spec（现网行为=到量即停是 portal-pricing 裁决的既成决定）；若要恢复超额计费属产品决策另立 |
-| P0-2 | **O8 需求双账分裂**：R wire-demand-pipeline 八态/gate 必过/人工报价三条 Requirement 已被代码废除（statemachine.py:31-46 三态+五废除态、gate 观测化、quote 一律 409），W demand-intake 明文废除五旧态，代码站 W 侧 | cluster-E §8、cluster-F §3 | R spec 收缩为域级规格或标 superseded；W 两本为真源（簇 E/F 证据已合并互证） |
-| P0-3 | **wire-ops-mcp 部署不可对账**：现网镜像 sha-e5b9185 不在 gitee 对象中，清单注释仍锚旧映射 99882f3；10-31 后 12 个新工具（含 wire_action_*）上产与否**未证实** | cluster-C §6 | 人工核 registry live 工具面 vs 22 工具声明；修复快照-镜像映射纪律（对照 law-bench「ls-remote 先于 relay 诊断」教训） |
+| ~~P0-1~~ ✅已修（2026-11-05，change fix-wire-billing-caliber 已归档） | **O2 计费口径真矛盾**：R 根 wire-billing 仍写「超额按行计费」，但代码/定价页/部署全在「到量即停 overage=0」（plans.py:44-56 PUBLIC_SEEDS 注释自证；且旧三档 LEGACY_SEEDS is_active=False 退场） | cluster-A §4/§5 | 拍板口径后改写 R spec（现网行为=到量即停是 portal-pricing 裁决的既成决定）；若要恢复超额计费属产品决策另立 |
+| ~~P0-2~~ ✅已修（retire-wire-demand-pipeline-spec 已归档） | **O8 需求双账分裂**：R wire-demand-pipeline 八态/gate 必过/人工报价三条 Requirement 已被代码废除（statemachine.py:31-46 三态+五废除态、gate 观测化、quote 一律 409），W demand-intake 明文废除五旧态，代码站 W 侧 | cluster-E §8、cluster-F §3 | R spec 收缩为域级规格或标 superseded；W 两本为真源（簇 E/F 证据已合并互证） |
+| ~~P0-3~~ ✅已核（探针三方实证 live=d5ca1dd、22 工具全上产；manifest 注释已修，fd-infra-deploy 4f00f22） | **wire-ops-mcp 部署不可对账**：现网镜像 sha-e5b9185 不在 gitee 对象中，清单注释仍锚旧映射 99882f3；10-31 后 12 个新工具（含 wire_action_*）上产与否**未证实** | cluster-C §6 | 人工核 registry live 工具面 vs 22 工具声明；修复快照-镜像映射纪律（对照 law-bench「ls-remote 先于 relay 诊断」教训） |
 
 ## P1 — 债务/复发缺陷/能力缺口
 
 | # | 问题 | 证据 | 建议动作 |
 |---|------|------|----------|
-| P1-1 | **landing_tab 三层漂移（复发型）**：spec 九页签 ⊂ api 十页签（无 market）⊂ web 十一页签（有 market）；切「数据市场」写回被 422 静默吞——workbench 同型缺陷有生产前科（preferences.py:45 注释自证），market 属复发 | cluster-D §5 | api LANDING_TABS 补 market 或 web 摘页签（拍板）；写回失败改显式提示不静默；补一条端到端值域对拍测试 |
+| ~~P1-1~~ ✅已修（fix-landing-tab-market-drift，c1c49fc：api 补 market+对拍测试+显式提示条；假后端第四本账顺手同步） | **landing_tab 三层漂移（复发型）**：spec 九页签 ⊂ api 十页签（无 market）⊂ web 十一页签（有 market）；切「数据市场」写回被 422 静默吞——workbench 同型缺陷有生产前科（preferences.py:45 注释自证），market 属复发 | cluster-D §5 | api LANDING_TABS 补 market 或 web 摘页签（拍板）；写回失败改显式提示不静默；补一条端到端值域对拍测试 |
 | P1-2 | **entity-layer 高变动不稳定期**：5 天 4 fix，含双修复事故（5975db1 误扫并发会话半成品→50a986c 再修）+ 1c5dfc5 袋键绕过列快照校验的生产缺陷 | cluster-B §14 | 1-2 周冻结非必要扩展；落实「归档前测试对账 tasks.md」纪律；并发会话 git add 范围约束 |
 | P1-3 | **O6 转换同名异根**：两账 Requirement 零交集（R=引擎契约九算子，W=可视化图端点），非真重复但同名撞车 + W Purpose TBD | cluster-C §1/§2 | R 为真源；W 改名 transform-pipeline-view 并回填 Purpose |
 | P1-4 | **O7 build 一物两账**：同仓同部署（dashboard/doc 工具就在 build-mcp），R 账 10-31 已吸收 W 账，W 成冗余窄拷贝 | cluster-C §3/§4 | W wire-artifact-build-mcp 归档或降为索引指针 |
