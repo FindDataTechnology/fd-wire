@@ -627,3 +627,43 @@ def test_migration_backfill_and_idempotent(alembic_to_0049):
     after = {row["name"]: (row["tier"], row["sensitivity"]) for row in rows_after}
     assert before == after
     engine.dispose()
+
+
+# ------------------------------------------------------------------ 袋键豁免（实施期缺陷回归）
+
+
+def test_bench_bag_key_bypasses_column_snapshot_check(client):
+    """_bench 元数据袋键不参与列快照校验（2026-11-05 真回写 422 缺陷回归）。
+
+    实体 PUT 携带 column_notes._bench（值含 reviewer/idempotency 溯源串、
+    超 50 字）应通过；真实列名缺失仍拒。
+    """
+    entities_db = next(app.dependency_overrides[get_entities_db]())
+    _seed_dataset(entities_db)
+    created = _create_entity(client)
+    entity_id = created.json()["id"]
+    long_stamp = "platform=knowledge-bench; tier=gold; sensitivity=internal; reviewer=op@x; review_at=2026-11-05T00:00:00"
+    resp = client.put(
+        f"/api/v1/entities/{entity_id}",
+        json={
+            "name": "订单",
+            "dataset_id": "ds-1",
+            "pk_columns": ["order_id"],
+            "column_notes": {"_bench": long_stamp},
+        },
+        headers=CUST,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["column_notes"]["_bench"] == long_stamp
+    # 普通列名不在快照仍拒（豁免只限下划线前缀）
+    resp = client.put(
+        f"/api/v1/entities/{entity_id}",
+        json={
+            "name": "订单",
+            "dataset_id": "ds-1",
+            "pk_columns": ["order_id"],
+            "column_notes": {"not_a_column": "x"},
+        },
+        headers=CUST,
+    )
+    assert resp.status_code == 422

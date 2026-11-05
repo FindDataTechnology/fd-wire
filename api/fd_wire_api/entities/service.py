@@ -142,7 +142,14 @@ def _validate_display_column(display_column: Any, dataset: Dataset) -> str | Non
 
 
 def _validate_column_notes(column_notes: Any, dataset: Dataset) -> dict | None:
-    """列注记（v2 属性元数据）：{column: 注记}，列 ∈ 快照、注记 ≤50 字、≤50 列。"""
+    """列注记（v2 属性元数据）：{column: 注记}，列 ∈ 快照、注记 ≤50 字、≤50 列。
+
+    例外（add-entity-bench-contract 实施期缺陷修复）：下划线前缀的元数据袋键
+    （``_bench``——知验台回写 stamp 承载 reviewer/idempotency 溯源）不参与
+    「列 ∈ 快照」校验，也不计入 50 列上限；注记仍是 ≤500 字的非空字符串。
+    袋键按定义不撞真实列名（真实列名来自数据集列快照），普通列名若以下划线
+    开头本就不会出现在快照校验通过面。
+    """
     if column_notes is None:
         return None
     if not isinstance(column_notes, dict):
@@ -150,6 +157,16 @@ def _validate_column_notes(column_notes: Any, dataset: Dataset) -> dict | None:
     known = _dataset_column_names(dataset)
     notes: dict[str, str] = {}
     for column, note in column_notes.items():
+        if isinstance(column, str) and column.startswith("_"):
+            # 元数据袋键：溯源/机器可读标记，非数据列——只校验形态
+            if not isinstance(note, str) or not note.strip():
+                raise InvalidEntity(f"元数据袋键 {column} 的值必须是非空字符串")
+            if len(note.strip()) > MAX_COLUMN_NOTE_LENGTH * 10:
+                raise InvalidEntity(
+                    f"元数据袋键 {column} 的值超过 {MAX_COLUMN_NOTE_LENGTH * 10} 字上限"
+                )
+            notes[column] = note.strip()
+            continue
         if column not in known:
             raise InvalidEntity(f"列注记的列 {column} 不在数据集 {dataset.id} 列快照中")
         if not isinstance(note, str) or not note.strip():
@@ -159,7 +176,8 @@ def _validate_column_notes(column_notes: Any, dataset: Dataset) -> dict | None:
                 f"列 {column} 的注记超过 {MAX_COLUMN_NOTE_LENGTH} 字上限"
             )
         notes[column] = note.strip()
-    if len(notes) > MAX_COLUMN_NOTES:
+    data_note_count = len([c for c in notes if not str(c).startswith("_")])
+    if data_note_count > MAX_COLUMN_NOTES:
         raise InvalidEntity(f"列注记最多 {MAX_COLUMN_NOTES} 列")
     return notes or None
 
