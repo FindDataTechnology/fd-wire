@@ -28,8 +28,8 @@ spec:
       containers:
         - name: web
           # TODO(go-live): 首次构建后回填实际 sha- tag。
-          # 出片 tag=testaction003 build-pool 快照 sha=06f3acb（真 4b9b7f5：门户登录钮会话条件（已登录→进入控制台）+ConsolePlaceholder 死代码清理，close-wire-implementation-gaps 4.x；内容门过= bundle「进入控制台」:2）。
-          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-06f3acb
+          # 出片 tag=testaction001 build-pool 快照 sha=bc90e24（真 0952ee7：控制台摘壳独立成壳——门户顶栏禁入 console/demandNew、ConsoleLayout 补语言切换+返回门户、demandNew 折入壳内，extract-console-shell；内容门过= bundle 进入控制台:2/backToPortal:3。003 池与并发会话互顶改走 001）。
+          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-bc90e24
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
