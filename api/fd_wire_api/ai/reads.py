@@ -69,6 +69,13 @@ READ_TOOL_SCHEMAS: list[dict] = [
         {},
         [],
     ),
+    _tool(
+        "esignature_status",
+        "查一个电子签签署任务的状态（状态/锚定哈希/签署人进度）。回答「合同签得"
+        "怎么样了」时用；发起/催签/归档走动作闸（wire.esignature.*），本工具只读。",
+        {"task_id": {"type": "string", "description": "签署任务 id（发起后返回）"}},
+        ["task_id"],
+    ),
 ]
 
 _READ_TOOL_NAMES = frozenset(item["function"]["name"] for item in READ_TOOL_SCHEMAS)
@@ -102,6 +109,8 @@ class ReadToolExecutor:
                 return self._artifact_get(customer_id, args)
             if tool_name == "demands_list":
                 return self._demands_list(customer_id)
+            if tool_name == "esignature_status":
+                return self._esignature_status(customer_id, args)
             return {"ok": False, "error": f"未知读工具: {tool_name!r}"}
         except Exception as exc:  # noqa: BLE001 - 读失败如实回灌，不中断对话
             return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
@@ -219,4 +228,37 @@ class ReadToolExecutor:
                 }
                 for row in rows
             ],
+        }
+
+    def _esignature_status(self, customer_id: str, args: dict) -> dict:
+        """电子签任务状态（只读；出网经 ai/lex_esign.py，机器面四操作之一）。
+
+        只读面零变更纪律：这里只有 GET；发起/催签/归档一律走动作闸
+        （wire.esignature.*，propose→人类确认）。通道未配置/任务不存在
+        如实回错误 dict（回灌模型，不抛断对话）。
+        """
+        from . import lex_esign
+        from .lex_esign import HttpLexEsignClient, LexEsignChannelNotConfigured, LexEsignError
+
+        task_id = str(args.get("task_id", "")).strip()
+        if not task_id:
+            return {"ok": False, "error": "缺少 task_id。"}
+        try:
+            with HttpLexEsignClient() as client:
+                detail = client.get_status(customer_id=customer_id, task_id=task_id)
+        except LexEsignChannelNotConfigured as exc:
+            return {"ok": False, "error": str(exc)}
+        except LexEsignError as exc:
+            if exc.status_code == 404:
+                return {"ok": False, "error": f"签署任务 {task_id} 不存在。"}
+            return {"ok": False, "error": f"签署任务 {task_id} 状态查询失败：{exc}"}
+        return {
+            "ok": True,
+            "task": {
+                "id": detail.get("id"),
+                "status": detail.get("status"),
+                "title": detail.get("title"),
+                "anchor_sha256": detail.get("anchor_sha256"),
+                "signers": detail.get("signers"),
+            },
         }

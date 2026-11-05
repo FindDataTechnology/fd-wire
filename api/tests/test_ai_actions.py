@@ -111,8 +111,9 @@ def _conversation(db, customer_id="cust-001", cid=101):
 
 
 def test_v1_roster_and_tier_mapping() -> None:
-    """v1 十三条（+源包订阅/退订，add-pack-subscribe-actions）；映射与壹座侧一致；名单外不存在。"""
-    assert len(REGISTRY) == 13
+    """v1 十三条（+源包订阅/退订，add-pack-subscribe-actions）+ 电子签三动作
+    （add-esignature-wire-actions）；映射与壹座侧一致；名单外不存在。"""
+    assert len(REGISTRY) == 16
     assert RISK_TO_TIER == {
         "write": "inline",
         "destructive": "second",
@@ -123,7 +124,11 @@ def test_v1_roster_and_tier_mapping() -> None:
     assert REGISTRY["wire.pack.subscribe"].risk == "write"  # 源包订阅免费
     assert REGISTRY["wire.pack.unsubscribe"].risk == "write"
     assert REGISTRY["wire.artifact.share.create"].tier == "async"
-    for banned in ("wire.key.mint", "wire.key.revoke", "wire.team.invite"):
+    assert REGISTRY["wire.esignature.initiate"].risk == "write"
+    assert REGISTRY["wire.esignature.nudge"].risk == "write"
+    assert REGISTRY["wire.esignature.archive"].risk == "write"
+    for banned in ("wire.key.mint", "wire.key.revoke", "wire.team.invite",
+                   "wire.esignature.sign", "wire.esignature.complete"):
         assert banned not in REGISTRY
 
 

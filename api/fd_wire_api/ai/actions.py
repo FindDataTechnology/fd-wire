@@ -21,6 +21,7 @@ console/auth）；审批角色 = 该队 owner/editor，viewer 对写操作一律
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -823,6 +824,167 @@ def _exec_revert(ctx: ActorContext, sess: GateSessions, args: dict[str, Any]) ->
         raise ExecutionError(_detail_of(exc)) from exc
 
 
+#: v1 注册表（design D3 冻结表，十一条 + 电子签三动作）。名单外的操作
+#: 副驾不提供——即使底层服务存在该能力（spec「名单外操作不提供」）。
+
+# ── 电子签机器通道动作（add-esignature-wire-actions 任务 2.2/2.3）────────────
+# 出网唯一口 ai/lex_esign.py（fd-lex /api/admin/esignature，X-Admin-Token）。
+# 红线（spec「不代签机器红线」）：三动作+读工具之外不存在任何签署路径；
+# preflight/execute 同源复校（设计 D4），失败如实报、零半写（fd-lex 侧原子）。
+
+_ESIGN_SIGNER_STATES = ("待签", "签署中")
+
+
+def _esign_client() -> "lex_esign.LexEsignClient":
+    from . import lex_esign
+
+    try:
+        return lex_esign.HttpLexEsignClient()
+    except lex_esign.LexEsignChannelNotConfigured as exc:
+        raise ExecutionError(str(exc)) from exc
+
+
+def _esign_status_or_preflight_fail(
+    client: "lex_esign.LexEsignClient", ctx: ActorContext, task_id: str
+) -> dict[str, Any]:
+    """查任务状态：不存在/他租户（对端同语义 404）→ PreflightError，
+    不泄露他租户存在性（与「未注册动作被拒绝」同语义）。"""
+    from . import lex_esign
+
+    try:
+        return client.get_status(customer_id=ctx.customer_id, task_id=task_id)
+    except lex_esign.LexEsignChannelNotConfigured as exc:
+        raise PreflightError(str(exc)) from exc
+    except lex_esign.LexEsignError as exc:
+        if exc.status_code == 404:
+            raise PreflightError(f"签署任务 {task_id} 不存在。") from exc
+        raise PreflightError(f"签署任务 {task_id} 状态查询失败：{exc}") from exc
+
+
+def _pf_esign_initiate(ctx: ActorContext, sess: GateSessions, args: dict[str, Any]) -> None:
+    _deny_viewer(ctx)
+    title = str(args.get("title", "")).strip()
+    if not title:
+        raise PreflightError("发起签署必须带 title。")
+    signers = args.get("signers")
+    if not isinstance(signers, list) or not signers or not all(
+        isinstance(s, dict) and str(s.get("name", "")).strip() for s in signers
+    ):
+        raise PreflightError("发起签署必须带至少一名签署人（signers[].name）。")
+    if not str(args.get("file_name", "")).strip() or not str(args.get("file_b64", "")).strip():
+        raise PreflightError("发起签署必须带定稿文件（file_name + file_b64）。")
+    try:
+        base64.b64decode(str(args["file_b64"]), validate=True)
+    except Exception as exc:  # noqa: BLE001 - 形状校验，非法即拒
+        raise PreflightError("file_b64 不是合法 base64。") from exc
+
+
+def _summarize_esign_initiate(args: dict[str, Any]) -> str:
+    """发起提议摘要：**file_b64 绝不入提议表**（全文纪律），只记名与形状。"""
+    signers = args.get("signers") or []
+    names = ",".join(
+        str(s.get("name", ""))[:40] for s in signers if isinstance(s, dict)
+    )
+    return (
+        f"title={str(args.get('title', ''))[:120]}; "
+        f"category={args.get('category', 'other')}; "
+        f"file_name={str(args.get('file_name', ''))[:120]}; "
+        f"file_b64=<b64:{len(str(args.get('file_b64', '')))} chars>; "
+        f"signers[{len(signers)}]={names}; "
+        f"acknowledged={args.get('acknowledged', False)}"
+    )
+
+
+def _exec_esign_initiate(ctx: ActorContext, sess: GateSessions, args: dict[str, Any]) -> str:
+    payload = {
+        "customer_id": ctx.customer_id,
+        "title": str(args.get("title", "")).strip(),
+        "category": str(args.get("category", "other")),
+        "file_name": str(args.get("file_name", "")).strip(),
+        "file_b64": str(args.get("file_b64", "")),
+        "signers": [
+            {"name": str(s.get("name", "")).strip(), "role_label": s.get("role_label")}
+            for s in (args.get("signers") or [])
+            if isinstance(s, dict)
+        ],
+        "acknowledged": bool(args.get("acknowledged", False)),
+    }
+    with _esign_client() as client:
+        task = client.initiate_task(payload)
+    return (
+        f"电子签任务已发起：task_id={task.get('id')}（状态 {task.get('status')}，"
+        f"锚定哈希 {str(task.get('anchor_sha256', ''))[:16]}…）。"
+        "签署链接在识律控制台任务页查看与投递（不经本通道）。"
+    )
+
+
+def _pf_esign_nudge(ctx: ActorContext, sess: GateSessions, args: dict[str, Any]) -> None:
+    _deny_viewer(ctx)
+    task_id = args.get("task_id")
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise PreflightError("催签必须带 task_id。")
+    from . import lex_esign
+
+    try:
+        with lex_esign.HttpLexEsignClient() as client:
+            detail = _esign_status_or_preflight_fail(client, ctx, task_id)
+    except lex_esign.LexEsignChannelNotConfigured as exc:
+        raise PreflightError(str(exc)) from exc
+    if detail.get("status") not in lex_esign.NUDGEABLE_STATES:
+        raise PreflightError(
+            f"签署任务 {task_id} 状态 {detail.get('status')} 不可催签。"
+        )
+
+
+def _exec_esign_nudge(ctx: ActorContext, sess: GateSessions, args: dict[str, Any]) -> str:
+    task_id = str(args.get("task_id", "")).strip()
+    from . import lex_esign
+
+    with _esign_client() as client:
+        detail = _esign_status_or_preflight_fail(client, ctx, task_id)
+        if detail.get("status") not in lex_esign.NUDGEABLE_STATES:
+            raise ExecutionError(f"签署任务 {task_id} 状态已漂移为 {detail.get('status')}，催签中止。")
+        result = client.nudge(customer_id=ctx.customer_id, task_id=task_id)
+    return (
+        f"已催签：task_id={result.get('task_id')}（状态 {result.get('status')}，"
+        f"签署人 {len(result.get('signers') or [])} 名）；提醒已入识律台账，"
+        "签署链接由控制台人工投递。"
+    )
+
+
+def _pf_esign_archive(ctx: ActorContext, sess: GateSessions, args: dict[str, Any]) -> None:
+    _deny_viewer(ctx)
+    task_id = args.get("task_id")
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise PreflightError("归档必须带 task_id。")
+    from . import lex_esign
+
+    try:
+        with lex_esign.HttpLexEsignClient() as client:
+            detail = _esign_status_or_preflight_fail(client, ctx, task_id)
+    except lex_esign.LexEsignChannelNotConfigured as exc:
+        raise PreflightError(str(exc)) from exc
+    if detail.get("status") not in lex_esign.ARCHIVABLE_STATES:
+        raise PreflightError(
+            f"签署任务 {task_id} 状态 {detail.get('status')} 不可归档（须全部签署完成）。"
+        )
+
+
+def _exec_esign_archive(ctx: ActorContext, sess: GateSessions, args: dict[str, Any]) -> str:
+    task_id = str(args.get("task_id", "")).strip()
+    from . import lex_esign
+
+    with _esign_client() as client:
+        detail = _esign_status_or_preflight_fail(client, ctx, task_id)
+        if detail.get("status") not in lex_esign.ARCHIVABLE_STATES:
+            raise ExecutionError(f"签署任务 {task_id} 状态已漂移为 {detail.get('status')}，归档中止。")
+        result = client.archive_task(customer_id=ctx.customer_id, task_id=task_id)
+    return (
+        f"已归档：task_id={result.get('task_id')}（出证就绪={result.get('evidence_ready')}，"
+        f"证据卡 {result.get('cards')} 张，锚定哈希 {str(result.get('anchor_sha256', ''))[:16]}…）。"
+    )
+
+
 #: v1 注册表（design D3 冻结表，十一条）。名单外的操作副驾不提供——
 #: 即使底层服务存在该能力（spec「名单外操作不提供」）。
 REGISTRY: dict[str, ActionDef] = {
@@ -939,6 +1101,37 @@ REGISTRY: dict[str, ActionDef] = {
             impact=lambda a: f"撤销数据集 {a.get('dataset_id')} 的修正 #{a.get('correction_id')}",
             preflight=_pf_revert,
             execute=_exec_revert,
+        ),
+        ActionDef(
+            id="wire.esignature.initiate",
+            risk=RISK_WRITE,
+            impact=lambda a: (
+                f"发起电子签任务「{str(a.get('title', ''))[:80]}」"
+                f"（{len(a.get('signers') or [])} 名签署人；确认后经识律机器通道建档并进入待签）"
+            ),
+            preflight=_pf_esign_initiate,
+            execute=_exec_esign_initiate,
+            summarize=_summarize_esign_initiate,
+        ),
+        ActionDef(
+            id="wire.esignature.nudge",
+            risk=RISK_WRITE,
+            impact=lambda a: (
+                f"催签电子签任务 #{a.get('task_id')}"
+                "（台账留痕提醒；签署链接明文不经机器通道）"
+            ),
+            preflight=_pf_esign_nudge,
+            execute=_exec_esign_nudge,
+        ),
+        ActionDef(
+            id="wire.esignature.archive",
+            risk=RISK_WRITE,
+            impact=lambda a: (
+                f"归档电子签任务 #{a.get('task_id')}"
+                "（幂等确保出证包并返回证据摘要）"
+            ),
+            preflight=_pf_esign_archive,
+            execute=_exec_esign_archive,
         ),
     )
 }
