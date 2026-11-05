@@ -560,3 +560,36 @@ export function markContactMessageRead(messageId: number): Promise<ContactMessag
     body: { status: "read" },
   });
 }
+
+// ---------------------------------------------------------------------------
+// cell 配给状态页（add-self-serve-cell-provision 任务 1.3：首期只读）
+// ---------------------------------------------------------------------------
+
+/** cell 配给请求行（对齐 api 仓 fd_wire_api/admin/schemas.py
+ *  CellProvisionRequestOut；steps 为执行步骤痕，failed 时承载排查入口）。 */
+export interface AdminProvisionRequest {
+  id: number;
+  customer_id: string;
+  state: "queued" | "running" | "done" | "failed";
+  steps: Array<Record<string, unknown>>;
+  error: string | null;
+  created_at: string;
+}
+
+/** cell 配给列表页（新→旧分页；total 为匹配总数）。 */
+export interface ProvisionRequestsPage {
+  items: AdminProvisionRequest[];
+  total: number;
+}
+
+/** cell 配给请求列表（只读；limit/offset 与商留列表同语义）。 */
+export function fetchProvisionRequests(
+  page: { limit?: number; offset?: number } = {},
+): Promise<ProvisionRequestsPage> {
+  const qs = new URLSearchParams();
+  qs.set("limit", String(page.limit ?? 50));
+  qs.set("offset", String(page.offset ?? 0));
+  return requestJson(`/internal/admin/cell-provision-requests?${qs.toString()}`, {
+    method: "GET",
+  });
+}

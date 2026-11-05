@@ -3203,6 +3203,7 @@ const en: Translation = {
       usage: "Usage",
       localData: "Local data",
       contacts: "Contacts",
+      provisions: "Cell provisioning",
     },
     topbar: {
       identity: "Signed in as",
@@ -3464,6 +3465,29 @@ const en: Translation = {
       pageInfo: "Entries {{from}}-{{to}} of {{total}}",
       ipHashNote:
         "Source IP is stored only as a truncated hash (rate-limit dimension) — never in plain text, never rendered anywhere.",
+    },
+    // Cell provisioning status page (add-self-serve-cell-provision task 1.3):
+    // observation surface for the upgrade-triggered automatic provisioning
+    // chain — read-only for phase one (no action buttons).
+    provisions: {
+      title: "Cell provisioning",
+      subtitle:
+        "Automatic cell provisioning triggered by plan upgrades (newest first) — the host runner claims tasks and executes provision/grant/relay/registry, then writes results back; failed rows fall back to the manual chain (retry = upgrade the customer again).",
+      colCustomer: "Customer",
+      colState: "State",
+      colError: "Failure reason",
+      colCreatedAt: "Enqueued",
+      state: {
+        queued: "Queued",
+        running: "Running",
+        done: "Done",
+        failed: "Failed",
+      },
+      readonlyNote:
+        "This page is read-only: provisioning runs automatically on the host runner; failed rows are retried by upgrading the customer again (idempotent re-queue) or handled via the existing manual chain.",
+      prev: "Previous",
+      next: "Next",
+      pageInfo: "Entries {{from}}-{{to}} of {{total}}",
     },
   },
   login: {

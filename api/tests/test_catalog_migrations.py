@@ -48,9 +48,9 @@ def test_chain_head_follows_catalog_source_db(migrated_sqlite) -> None:
     engine = create_engine(migrated_sqlite)
     with engine.connect() as conn:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
-    # 链头断言随最新迁移推进（0038_artifact_drafts：doc 草稿层表，
-    # wire-rich-text-docs——单链线性追加）
-    assert version == "0051_contact_intake"
+    # 链头断言随最新迁移推进（0052_bench_ontology_snapshots：知验台快照两表，
+    # add-bench-ontology-pull-client——单链线性追加）
+    assert version == "0053_cell_provision"
     engine.dispose()
 
 

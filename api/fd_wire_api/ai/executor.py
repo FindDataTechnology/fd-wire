@@ -50,18 +50,33 @@ _DEFAULT_ENDPOINT_BASE = "https://mcp.finddatatech.cloud"
 def resolve_cell_endpoint(
     customer_id: str, *, endpoint_map: str | dict[str, str] | None = None
 ) -> str | None:
-    """customer_id → cell MCP 端点；约定优于配置。
+    """customer_id → cell MCP 端点；三级解析（add-self-serve-cell-provision）。
 
-    解析序：``AI_CELL_ENDPOINT_MAP`` 显式命中优先（非标部署/测试覆盖）；
-    否则按 ``<AI_CELL_ENDPOINT_BASE>/fd-wire-cell-<customer_id>/mcp``
-    约定派生（基址缺省 registry 公网入口）。返回 None 仅当 map 已配
-    且未命中（显式部署口径下「未开通」），约定派生恒有值——派生端点
-    在 cell 未注册时握手期 404/405，由调用方包装「未开通」语义。
+    解析序：
+
+    1. ``AI_CELL_ENDPOINT_MAP`` 显式命中优先（存量口径不变——命中即返回）；
+       map 已配且未命中 → 查 DB 注册表（``customer_cell_endpoints``，自助
+       配给链回写）→ 仍未命中 None（显式部署口径「未开通」，语义保持）；
+    2. map 未配 → 查 DB 注册表（state='done' 且 endpoint_url 非空）→ 命中
+       即返回注册值（显式 env 覆盖仍最优先）；
+    3. DB 未命中/读失败（表未建、库不可达等一律静默吞掉）→ 按
+       ``<AI_CELL_ENDPOINT_BASE>/fd-wire-cell-<customer_id>/mcp`` 约定派生
+       （基址缺省 registry 公网入口）——免费路径行为不变（派生端点在 cell
+       未注册时握手期 404/405，由调用方包装「未开通」语义）。
     """
     raw = endpoint_map if endpoint_map is not None else get_settings().ai_cell_endpoint_map
     mapping = parse_endpoint_map(raw)
+    if mapping and customer_id in mapping:
+        return mapping[customer_id]
+    # DB 兜底源（惰性 import：ai 侧零依赖启动路径；读失败静默降级为未命中）
+    from ..cell_provision.service import lookup_registered_endpoint
+
+    registered = lookup_registered_endpoint(customer_id)
+    if registered:
+        return registered
     if mapping:
-        return mapping.get(customer_id)
+        # 显式部署口径：map 已配且 DB 亦未命中 → 未开通（既有测试钉住的语义）
+        return None
     base = (get_settings().ai_cell_endpoint_base or _DEFAULT_ENDPOINT_BASE).rstrip("/")
     return f"{base}/{_CELL_PATH_PREFIX}{customer_id}/mcp"
 

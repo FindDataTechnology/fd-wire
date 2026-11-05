@@ -6,10 +6,11 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Literal
 
 from ..billing.models import CustomerStatus
@@ -235,3 +236,38 @@ class ContactMessagePatchIn(BaseModel):
     """标记已读（status→read 是唯一合法目标；其余值 422 如实拒）。"""
 
     status: Literal["read"]
+
+
+class CellProvisionRequestOut(BaseModel):
+    """cell 配给请求行（add-self-serve-cell-provision；admin 状态页只读）。
+
+    ``steps`` 落库为 JSON 文本——响应前解析成数组（失败时承载 step 痕，
+    运营排查入口）；首期只读——无任何操作按钮/写面。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    customer_id: str
+    state: str
+    steps: list[dict] = []
+    error: str | None = None
+    created_at: datetime
+
+    @field_validator("steps", mode="before")
+    @classmethod
+    def _parse_steps_json(cls, value: object) -> object:
+        """库内 JSON 文本 → 数组（坏帧如实降级为空数组，不让列表页 500）。"""
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except ValueError:
+                return []
+        return value
+
+
+class CellProvisionRequestsOut(BaseModel):
+    """cell 配给列表页：本页条目 + 匹配总数（分页语义与商留列表一致）。"""
+
+    items: list[CellProvisionRequestOut]
+    total: int

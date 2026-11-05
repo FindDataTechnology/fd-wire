@@ -6,6 +6,7 @@ import type {
   AdminCustomer,
   AdminDemand,
   AdminPlan,
+  AdminProvisionRequest,
   AdminWanxingResult,
   AdminWorkorderResult,
   AggRow,
@@ -109,6 +110,8 @@ export interface AdminBackendOptions {
   /** 商留提交列表覆盖（add-contact-intake）：缺省空列表（未读 0——既有
    *  后台用例的导航徽标请求不打到联系人端点时不渲染）。 */
   contactMessages?: ContactMessage[];
+  /** cell 配给请求列表覆盖（add-self-serve-cell-provision）：缺省空列表。 */
+  provisionRequests?: AdminProvisionRequest[];
 }
 
 /** 「转生成工单」缺省成功响应（形状对齐 api 仓 export_workorder_service）。 */
@@ -163,6 +166,7 @@ export function installAdminBackend(options: AdminBackendOptions = {}): {
   const demands = [...(options.demands ?? [])];
   const ledger = [...(options.ledger ?? [])];
   const contactMessages = [...(options.contactMessages ?? [])];
+  const provisionRequests = [...(options.provisionRequests ?? [])];
   const notes: ReviewNote[] = [];
   const tracks = options.tracks ?? [
     { key: "customer", calls: 12, rows: 3400 },
@@ -547,6 +551,21 @@ export function installAdminBackend(options: AdminBackendOptions = {}): {
       }
       message.status = "read";
       return Promise.resolve(jsonResponse(message));
+    }
+
+    // -- cell 配给状态页（add-self-serve-cell-provision 1.3）----------------
+    // 只读列表（新→旧切片：total=匹配总数，与后端 CellProvisionRequestsOut
+    // 同语义）；首期无写面——PATCH/POST 一律 404。
+    if (path === "/internal/admin/cell-provision-requests" && method === "GET") {
+      const limit = Number(url.searchParams.get("limit")) || 50;
+      const offset = Number(url.searchParams.get("offset")) || 0;
+      const sorted = [...provisionRequests].sort((a, b) => b.id - a.id);
+      return Promise.resolve(
+        jsonResponse({
+          items: sorted.slice(offset, offset + limit),
+          total: provisionRequests.length,
+        }),
+      );
     }
 
     // -- 客户本地数据只读概览 ----------------------------------------------

@@ -113,7 +113,9 @@ from .contact import router as contact_router
 # + 公开目录/检索面与 claim 级解析 + 每日摄取循环（写入口唯一是摄取管道）
 from .xingyan import init_db as init_xingyan_db
 from .xingyan import internal_router as xingyan_internal_router
-
+from .xingyan import public_router as xingyan_router
+from .xingyan.runner import start_sync_loop as start_xingyan_sync
+from .xingyan.runner import stop_sync_loop as stop_xingyan_sync
 # 知验台本体拉取（add-bench-ontology-pull-client）：wire 消费 law-bench C3
 # 分发面——/api/v1/internal/bench-ontology 只读投影 + 手动拉取（X-Internal-Token
 # 内部闸；快照两表落元数据库，alembic 0052）+ 可选定时拉取循环
@@ -124,9 +126,11 @@ from .bench_pull.scheduler import (
     start_bench_pull_scheduler,
     stop_bench_pull_scheduler,
 )
-from .xingyan import public_router as xingyan_router
-from .xingyan.runner import start_sync_loop as start_xingyan_sync
-from .xingyan.runner import stop_sync_loop as stop_xingyan_sync
+# cell 开通自助化（add-self-serve-cell-provision）：内部领任务/回写端点
+# （X-Internal-Token 闸，cheap1 cell-manager runner 轮询消费；两表落元数据
+# 库，alembic 0053）。升档入队挂点在 admin/routes.patch_customer。
+from .cell_provision import init_db as init_cell_provision_db
+from .cell_provision import router as cell_provision_router
 
 
 @asynccontextmanager
@@ -216,6 +220,9 @@ async def lifespan(_: FastAPI):
     # 缺省 false——未配置知验台凭据的部署零行为变化）。
     init_bench_pull_db()
     start_bench_pull_scheduler()
+    # cell 开通自助化（add-self-serve-cell-provision）：配给队列与端点注册
+    # 表幂等建表兜底（生产走 alembic 0053；无后台循环——runner 侧轮询消费）。
+    init_cell_provision_db()
     # 变换管线租约队列 worker（wire-dag-executor D3）：领取 queued run 执行，
     # 心跳/死租约重领取/断点恢复全在 queue 内（PIPELINE_WORKER_ENABLED 可关）。
     start_pipeline_worker()
@@ -368,7 +375,13 @@ app.include_router(workbench_router)
 # 口径不要求身份）+ /internal/xingyan/sync 手动触发摄取
 app.include_router(xingyan_router)
 app.include_router(xingyan_internal_router)
+# 知验台本体拉取（add-bench-ontology-pull-client）：/api/v1/internal/bench-ontology
+# 只读投影面（域/版本/实体/关系——投影零写路径，不写 wire 自有 entities 表）
+# + POST pull 手动触发（X-Internal-Token 内部闸；快照平台级数据不挂客户租户）
 app.include_router(bench_pull_router)
+# cell 开通自助化（add-self-serve-cell-provision）：/internal/cell-provision/*
+# 内部领任务与回写端点（X-Internal-Token 闸；cheap1 cell-manager runner 消费）
+app.include_router(cell_provision_router)
 
 
 @app.get("/health")

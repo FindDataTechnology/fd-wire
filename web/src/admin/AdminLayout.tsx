@@ -15,7 +15,8 @@ export type AdminSection =
   | "catalog"
   | "usage"
   | "localdata"
-  | "contacts";
+  | "contacts"
+  | "provisions";
 
 export const ADMIN_SECTIONS: ReadonlyArray<{
   id: AdminSection;
@@ -37,6 +38,11 @@ export const ADMIN_SECTIONS: ReadonlyArray<{
     href: "#/admin/contacts",
     labelKey: "admin.nav.contacts",
   },
+  {
+    id: "provisions",
+    href: "#/admin/provisions",
+    labelKey: "admin.nav.provisions",
+  },
 ];
 
 export function parseAdminSection(segment: string | undefined): AdminSection {
@@ -47,7 +53,8 @@ export function parseAdminSection(segment: string | undefined): AdminSection {
     segment === "catalog" ||
     segment === "usage" ||
     segment === "localdata" ||
-    segment === "contacts"
+    segment === "contacts" ||
+    segment === "provisions"
   ) {
     return segment;
   }

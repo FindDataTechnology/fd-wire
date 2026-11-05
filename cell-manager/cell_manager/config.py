@@ -224,14 +224,28 @@ class CellManagerConfig:
     pg_url_host: str = ""
     pg_url_port: str = ""
     #: 凭据托管目录（CELL_SECRETS_DIR；None=缺省 <home>/secrets。一 cell 一
-    #: 文件 0600，remove-cell-openbao-dependency：替代已退役 OpenBAO 的本地
-    #: 文件轨道）
+    #: 文件 0600，remove-cell-openbao-dependency：
+    #: OpenBAO 退役后凭据落本地文件轨道）
     secrets_dir: Path | None = None
     #: cell 存储配额 MB（CELL_PG_QUOTA_MB；可选正整数。注入容器 env
     #: FD_CELL_STORAGE_QUOTA_MB，引擎 PG 根侧整批拒绝超限写入；sqlite 根
     #: 不生效。变更配额需重建容器——env 语义，文档见
     #: docs/cell-postgres-storage.md「存储配额」）
     pg_quota_mb: int | None = None
+    #: fd-wire 配给队列入口（FD_WIRE_INTERNAL_URL；runner 子命令用，
+    #: 形如 https://wire-api.internal）。空 = runner 不可用（fail-closed）。
+    fd_wire_internal_url: str = ""
+    #: fd-wire 内部令牌（FD_WIRE_INTERNAL_TOKEN；X-Internal-Token 头）。
+    fd_wire_internal_token: str = ""
+    #: relay 对外地址（FD_WIRE_RELAY_HOST；尾网地址如 100.64.0.11——registry
+    #: 条目 proxy_pass_url 必须是集群可达地址，docker 网络名会被渲染成注释块，
+    #: 2026-10-24 handoff §三实证）。空 = relay 步不可用（fail-closed）。
+    relay_host: str = ""
+    #: relay 监听端口基（FD_WIRE_RELAY_PORT_BASE；每客户端口=基 + crc32(cid)
+    #: % 2000 的稳定派生，冲突重跑自愈靠 socat reuseaddr+幂等重注册）。
+    relay_port_base: int = 18005
+    #: runner 轮询间隔秒（FD_WIRE_RUNNER_INTERVAL；常驻模式 sleep 步长）。
+    runner_poll_seconds: int = 300
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "CellManagerConfig":
@@ -302,6 +316,34 @@ class CellManagerConfig:
             raise ConfigError(
                 f"CELL_PG_URL_PORT must be a port number, got {pg_url_port!r}"
             )
+        # runner（add-self-serve-cell-provision 2.4）：fd-wire 队列入口与
+        # relay 画像。缺省为空 = runner 子命令不可用（运行期 fail-closed
+        # 点名缺哪个）；普通生命周期动作完全不受影响。
+        fd_wire_internal_url = e.get("FD_WIRE_INTERNAL_URL", "").strip().rstrip("/")
+        fd_wire_internal_token = e.get("FD_WIRE_INTERNAL_TOKEN", "").strip()
+        relay_host = e.get("FD_WIRE_RELAY_HOST", "").strip()
+        raw_relay_port = e.get("FD_WIRE_RELAY_PORT_BASE", "18005")
+        try:
+            relay_port_base = int(raw_relay_port)
+        except ValueError as exc:
+            raise ConfigError(
+                f"FD_WIRE_RELAY_PORT_BASE must be an integer, got {raw_relay_port!r}"
+            ) from exc
+        if not 1 <= relay_port_base <= 65535:
+            raise ConfigError(
+                f"FD_WIRE_RELAY_PORT_BASE must be a valid port, got {relay_port_base}"
+            )
+        raw_poll = e.get("FD_WIRE_RUNNER_INTERVAL", "300")
+        try:
+            runner_poll_seconds = int(raw_poll)
+        except ValueError as exc:
+            raise ConfigError(
+                f"FD_WIRE_RUNNER_INTERVAL must be an integer, got {raw_poll!r}"
+            ) from exc
+        if runner_poll_seconds <= 0:
+            raise ConfigError(
+                f"FD_WIRE_RUNNER_INTERVAL must be > 0, got {runner_poll_seconds}"
+            )
         if storage == "postgres":
             missing = [
                 name
@@ -352,6 +394,47 @@ class CellManagerConfig:
             pg_url_port=pg_url_port,
             secrets_dir=secrets_dir,
             pg_quota_mb=pg_quota_mb,
+            fd_wire_internal_url=fd_wire_internal_url,
+            fd_wire_internal_token=fd_wire_internal_token,
+            relay_host=relay_host,
+            relay_port_base=relay_port_base,
+            runner_poll_seconds=runner_poll_seconds,
+        )
+
+    # ---- runner（add-self-serve-cell-provision 2.4） ----
+
+    def require_runner_settings(self) -> tuple[str, str]:
+        """runner 运行前置（fail-closed，缺哪个点名哪个）：返回 (url, token)。"""
+        missing = [
+            name
+            for name, value in (
+                ("FD_WIRE_INTERNAL_URL", self.fd_wire_internal_url),
+                ("FD_WIRE_INTERNAL_TOKEN", self.fd_wire_internal_token),
+                ("FD_WIRE_RELAY_HOST", self.relay_host),
+            )
+            if not value
+        ]
+        if missing:
+            raise ConfigError(
+                "cell-manager runner requires " + ", ".join(missing) + " to be set"
+            )
+        return self.fd_wire_internal_url, self.fd_wire_internal_token
+
+    def relay_port(self, customer_id: str) -> int:
+        """每客户 relay 监听口：基口 + crc32(customer_id) 的稳定派生。"""
+        validate_customer_id(customer_id)
+        import zlib
+
+        return self.relay_port_base + (zlib.crc32(customer_id.encode("utf-8")) % 2000)
+
+    def relay_target_url(self, customer_id: str) -> str:
+        """registry 条目的 proxy_pass_url（relay 尾网地址 + 引擎 /mcp 路径）。"""
+        return f"http://{self.relay_host}:{self.relay_port(customer_id)}/mcp"
+
+    def registered_endpoint_url(self, customer_id: str) -> str:
+        """回写 fd-wire 的客户引擎入口 = registry 公网入口 + 条目路径 + /mcp。"""
+        return (
+            f"{self.registry_url.rstrip('/')}/{self.registry_path(customer_id)}/mcp"
         )
 
     # ---- 派生命名（隔离保证：每 cell 独立卷目录 + 独立容器名 + 独立条目路径） ----

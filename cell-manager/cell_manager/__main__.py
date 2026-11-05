@@ -41,6 +41,7 @@ ACTIONS = (
     "grant",
     "mint-key",
     "revoke-key",
+    "runner",
 )
 
 
@@ -51,9 +52,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"cell_manager {__version__}")
     parser.add_argument("action", choices=ACTIONS, help="生命周期 / 授权束操作")
-    parser.add_argument("customer_id", nargs="?", help="企业客户标识（purge-expired 可省略）")
+    parser.add_argument("customer_id", nargs="?", help="企业客户标识（purge-expired / runner 可省略）")
     parser.add_argument(
         "key_id", nargs="?", help="key 标识（仅 revoke-key：要吊销的 patch key id）"
+    )
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="仅 runner：执行一轮领任务→配给→回写后退出（缺省常驻轮询）",
     )
     return parser
 
@@ -72,6 +78,37 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             "action": action,
             "purged": [cell.to_dict() for cell in purged],
         }
+    if action == "runner":
+        # runner 子命令（add-self-serve-cell-provision 2.4）：--once 单轮 /
+        # 缺省常驻轮询（systemd 服务形态）。fd-wire 队列入口与 relay 画像
+        # fail-closed（缺哪个点名哪个）。
+        from cell_manager import runner
+        from cell_manager.config import CellManagerConfig
+
+        config = CellManagerConfig.from_env()
+        config.require_runner_settings()
+        client = runner.WireProvisionClient(
+            config.fd_wire_internal_url, config.fd_wire_internal_token
+        )
+        if args.once:
+            payload = runner.run_once(
+                manager=default_manager(),
+                grant_face=default_grant_manager(),
+                client=client,
+                config=config,
+                relay=runner.spawn_relay,  # 属性引用（测试可替换 relay 出口）
+                audit=_runner_audit(config),
+            )
+            return payload
+        rounds = runner.run_loop(
+            manager=default_manager(),
+            grant_face=default_grant_manager(),
+            client=client,
+            config=config,
+            relay=runner.spawn_relay,
+            audit=_runner_audit(config),
+        )
+        return {"ok": True, "action": "runner", "mode": "loop", "rounds": rounds}
     if not args.customer_id:
         raise SystemExit(f"error: action {action!r} requires a customer_id")
 
@@ -111,6 +148,13 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     payload["ok"] = True
     payload["action"] = action
     return payload
+
+
+def _runner_audit(config: Any):
+    """runner 审计出口（与生命周期共用同一 audit 文件；任务 2.5）。"""
+    from cell_manager.audit import AuditLog
+
+    return AuditLog(config.audit_log)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

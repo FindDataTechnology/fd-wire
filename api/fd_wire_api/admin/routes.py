@@ -59,6 +59,11 @@ from ..catalog.models import IndicatorSnapshot
 # admin 侧经 contact 会话直查（不经 admin 会话跨包写）。
 from ..contact.db import get_db as get_contact_db
 from ..contact.models import ContactMessage
+# cell 配给状态页（add-self-serve-cell-provision 1.3）：cell_provision 两表
+# 同落平台库，会话纪律归 cell_provision 切片所有（contact 分区同款先例）。
+from ..cell_provision.db import get_db as get_cell_provision_db
+from ..cell_provision.models import CellProvisionRequest
+from ..cell_provision import service as cell_provision_service
 from ..dbcompat import period_expression
 from ..delivery.scope_client import ScopeClient, scope_client_dep
 from ..demands import delivery as delivery_service
@@ -77,6 +82,7 @@ from .db import get_db
 from .models import CatalogReviewNote
 from .schemas import (
     CatalogPendingOut,
+    CellProvisionRequestsOut,
     ContactMessageOut,
     ContactMessagePatchIn,
     ContactMessagesOut,
@@ -345,22 +351,85 @@ def patch_customer(
     registry key（console_onboardings.key_id 在册者；self-serve-onboarding
     「停用即断」）。吊销失败不阻塞停用（治理动作不能因 registry 故障被
     卡死），行数门侧另有非 active 额度归零兜底。
+
+    cell 开通自助化（add-self-serve-cell-provision 2.2）：改档至**含 cell
+    档位**（付费档，月费>0）时自动入队 cell 配给请求（幂等键=客户名）+
+    fire-and-forget 运营邮件——cheap1 cell-manager runner 领任务执行
+    provision→grant→relay→registry 注册→端点落注册表；入队失败只告警
+    不阻塞改档（治理动作优先，配给可重试——failed 行重升档即复位）。
     """
     if payload.plan_code is None and payload.status is None:
         raise HTTPException(status_code=422, detail="至少提供 plan_code 或 status 之一")
     customer = _customer_or_404(db, customer_id)
+    plan_changed = False
     if payload.plan_code is not None:
         plan = _assignable_plan_or_error(db, payload.plan_code)
+        plan_changed = plan.id != customer.plan_id
         customer.plan_id = plan.id
     if payload.status is not None:
         customer.status = payload.status.value
-    db.flush()
+    # 先行提交：改档本体在此落库成事务；其后的 cell 配给入队走独立会话
+    # （cell_provision 引擎）与 key 吊销（外部 registry 通道）都是
+    # best-effort 后续步——sqlite 部署/测试下同文件双连接并发写会互等，
+    # 持锁窗口必须在本请求内闭合（PG 生产无此约束，提前提交同样无害）。
+    db.commit()
+    if payload.plan_code is not None and plan_changed:
+        # 改档后的 plan 行要重取（plan 变量在 payload.plan_code 分支内）
+        new_plan = db.get(BillingPlan, customer.plan_id)
+        if new_plan is not None and _cell_provision_due(new_plan):
+            _enqueue_cell_provision_best_effort(customer.name)
     if payload.status is not None and payload.status.value in (
         CustomerStatus.SUSPENDED.value,
         CustomerStatus.CLOSED.value,
     ):
         _revoke_customer_keys_best_effort(db, customer.id)
     return _customer_out(db, customer)
+
+
+#: cell 配给的档位闸：付费档（月费>0）含 cell（spec 边界「免费档仍无 cell」；
+#: basic ¥10 / standard ¥50 / 后台自定义付费档全部命中，free 恒不入队）。
+def _cell_provision_due(plan: BillingPlan) -> bool:
+    return (plan.monthly_price_micro or 0) > 0
+
+
+def _enqueue_cell_provision_best_effort(customer_name: str) -> None:
+    """改档入队 + 运营邮件（fire-and-forget；失败只告警，不阻塞改档动作）。
+
+    会话纪律：cell_provision 两表在本包自有引擎（平台库同库、独立会话），
+    不复用 admin 请求会话跨包写（contact 分区先例同款纪律）。
+    """
+    from ..cell_provision import notifications as cell_provision_notifications
+    from ..cell_provision import service as cell_provision_service
+    from ..cell_provision.db import new_session as cell_provision_session
+
+    try:
+        db = cell_provision_session()
+        try:
+            result = cell_provision_service.enqueue(db, customer_name)
+        finally:
+            db.close()
+        if result.created or result.requeued:
+            cell_provision_notifications.notify_provision_enqueued(result.row)
+            logger.info(
+                "patch_customer: 客户 %s 升档触发 cell 配给%s（request=%s）",
+                customer_name,
+                "入队" if result.created else "失败复位重入队",
+                result.row.id,
+            )
+        else:
+            logger.info(
+                "patch_customer: 客户 %s 已有在途/完成配给请求（request=%s "
+                "state=%s），幂等跳过",
+                customer_name,
+                result.row.id,
+                result.row.state,
+            )
+    except Exception:  # noqa: BLE001 —— 入队失败不阻塞改档；告警留痕人工兜底
+        logger.exception(
+            "patch_customer: 客户 %s 的 cell 配给入队失败（改档已生效；"
+            "请人工检查 cell_provision 库后重试升档或手动入队）",
+            customer_name,
+        )
 
 
 def _revoke_customer_keys_best_effort(db: Session, customer_id: int) -> None:
@@ -866,3 +935,27 @@ def patch_contact_message(
     db.commit()
     db.refresh(row)
     return ContactMessageOut.model_validate(row)
+
+
+# ---------------------------------------------------------------------------
+# cell 配给状态页（add-self-serve-cell-provision 任务 1.3：只读列表——
+# 排队/执行中/完成/失败 + 失败原因可见；首期无任何操作面）
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/cell-provision-requests",
+    response_model=CellProvisionRequestsOut,
+)
+def list_cell_provision_requests(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_cell_provision_db),
+) -> CellProvisionRequestsOut:
+    """cell 配给请求列表（新→旧分页；会话纪律与商留分区同款——admin 侧经
+    cell_provision 包会话直查，不经 admin 会话跨包写）。"""
+    total = db.execute(
+        select(func.count()).select_from(CellProvisionRequest)
+    ).scalar_one()
+    rows = cell_provision_service.list_requests(db, limit=limit, offset=offset)
+    return CellProvisionRequestsOut(items=rows, total=total)

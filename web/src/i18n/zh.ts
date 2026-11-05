@@ -3024,6 +3024,7 @@ const zh = {
       usage: "用量",
       localData: "本地数据",
       contacts: "商留",
+      provisions: "cell 配给",
     },
     topbar: {
       identity: "登录身份",
@@ -3271,6 +3272,28 @@ const zh = {
       pageInfo: "第 {{from}}-{{to}} 条 / 共 {{total}} 条",
       ipHashNote:
         "来源 IP 仅以截断哈希留档（防灌水计数维度），不存原文、不在任何面呈现。",
+    },
+    // cell 配给状态页（add-self-serve-cell-provision 任务 1.3）：升档触发的
+    // 自动配给链观测面——首期只读（无任何操作按钮）。
+    provisions: {
+      title: "cell 配给",
+      subtitle:
+        "升档触发的 cell 自动配给链状态（新→旧）——宿主 runner 领任务执行开通/授权/relay/注册后回写；失败行回退人工链（重试=对该客户重新升档）。",
+      colCustomer: "客户",
+      colState: "状态",
+      colError: "失败原因",
+      colCreatedAt: "入队时间",
+      state: {
+        queued: "排队中",
+        running: "执行中",
+        done: "已完成",
+        failed: "失败",
+      },
+      readonlyNote:
+        "本页只读：配给由宿主 runner 自动执行；失败处置=对该客户重新升档（幂等复位重入队）或走现行手动链。",
+      prev: "上一页",
+      next: "下一页",
+      pageInfo: "第 {{from}}-{{to}} 条 / 共 {{total}} 条",
     },
   },
   login: {
