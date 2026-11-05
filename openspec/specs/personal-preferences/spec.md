@@ -8,8 +8,9 @@
 ### Requirement: 偏好存储模型（per-sub）
 
 个人偏好 MUST按 Logto sub 存储（一人一行，owner 与团队成员通用）：三类键
-`ui_locale`（∈zh|en|null）、`landing_tab`（∈控制台九页签
-chat|artifacts|datasets|entities|packs|demands|usage|keys|team|null）、
+`ui_locale`（∈zh|en|null）、`landing_tab`（∈控制台十一页签
+workbench|chat|artifacts|datasets|entities|packs|demands|usage|keys|team|market|null，
+与 web `ConsoleTab` 联合类型冻结对表）、
 `pinned_dashboard_id`（整型|null，MUST为裸列+应用层校验，不跨 Base 建
 外键）。偏好是个人 UI 指针而非客户业务数据，MUST不进溯源账本/team_events；
 任何已映射身份（含 viewer）MUST可读写自己的偏好（不受 viewer 方法级只读
@@ -23,13 +24,18 @@ chat|artifacts|datasets|entities|packs|demands|usage|keys|team|null）、
 - **WHEN** 同一客户两个成员各自 PUT 不同 ui_locale
 - **THEN** 各自 GET 回读各自值，互不可见
 
+#### Scenario: market 页签可落地
+- **WHEN** 已落在「数据市场」页签的客户 PUT {"landing_tab": "market"}
+- **THEN** 200 且 GET 回读 market（值域与 web 页签面同集，api 独缺即缺陷）
+
 ### Requirement: 读写契约
 
 `GET /api/console/me/preferences` 对已映射身份 MUST返回三键全量（未设=null，
 行不存在不 404）；未映射身份 401。`PUT` MUST部分更新：请求体三键任意子集，
 缺键不动、显式 null 清空；成功响应=写后全量态（同 GET 形）。校验失败 MUST
-422 如实定位：ui_locale 非法、landing_tab 不在九页签内、pinned 不是本客户
-未归档 dashboard 产物（不存在/跨客户 MUST同文案，不泄露他户存在性）。
+422 如实定位：ui_locale 非法、landing_tab 不在控制台页签值域内（同上冻结
+对表口径）、pinned 不是本客户未归档 dashboard 产物（不存在/跨客户 MUST同
+文案，不泄露他户存在性）。
 
 #### Scenario: 部分更新与清空
 - **WHEN** 已有 {ui_locale:zh, landing_tab:artifacts}，PUT {"ui_locale": null}
@@ -55,8 +61,10 @@ ui_locale 有值→MUST覆盖本地 i18n 并生效；首次 GET 全空→MUST领
 本地语言上传一次）；顶栏切换语言 MUST即写 server（fire-and-forget，未登录
 仅本地）。落地：**裸 `#/console` 入口才走偏好**（显式页签直达不劫持），
 序=pinned（跳 artifacts 页签并直接展开该看板）> landing_tab > datasets；置顶
-跳转引起的页签变化 MUST不回写 landing_tab，用户切页签 MUST即写。看板产物行
-MUST提供置顶/取消置顶操作与默认徽标。
+跳转引起的页签变化 MUST不回写 landing_tab，用户切页签 MUST即写。landing_tab
+写回 MUST fire-and-forget 不阻塞切页签，但写回失败 MUST向用户显式提示
+（不得静默吞），下一次写回成功后提示消除。看板产物行 MUST提供置顶/取消置顶
+操作与默认徽标。
 
 #### Scenario: 跨设备语言同步
 - **WHEN** 设备 A 切换语言为 en，设备 B 裸登录进控制台
@@ -70,3 +78,7 @@ MUST提供置顶/取消置顶操作与默认徽标。
 #### Scenario: 显式直达不劫持
 - **WHEN** 浏览器开 #/console/usage
 - **THEN** 直接落 usage 页签（偏好不劫持；切页签行为照常即写）
+
+#### Scenario: 写回失败显式提示
+- **WHEN** 用户切页签触发 landing_tab 写回且服务端拒绝（如 422 值域漂移）或网络故障
+- **THEN** 控制台呈现失败提示条（用户知道本次切换未存上），不静默吞；下一次写回成功后提示消除

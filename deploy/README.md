@@ -357,3 +357,22 @@ sha256sum fd-wire-connector-linux-amd64   # 对照 manifest.json 的 platforms[]
   3. 清单 datasets 字面值改 secretKeyRef + 镜像 tag 同 commit 推 gitee；
   4. ArgoCD hard refresh 滚 api。
 - 回退：同序反向（ALTER 回旧密码 + secret 回旧值 + 滚回）。
+
+## 知验台本体拉取 env（add-bench-ontology-pull-client，2026-11-06）
+
+wire 消费 law-bench C3 分发面（`GET {base}/api/v1/distribution/{domain}/ontology`，头
+`X-Consumer-Token`）：快照落元数据库（alembic 0052），读面为内部端点
+`/api/v1/internal/bench-ontology/*`（`X-Internal-Token`，复用 `FD_WIRE_INTERNAL_TOKEN`，
+无新增密钥）。凭据纪律：**令牌只经 env 进程、永不落日志/异常/库**。
+
+| env | 取值 | 形态 / 归属 |
+|---|---|---|
+| `BENCH_PULL_URL` | 知验台分发面基址（如 `https://bench.finddatatech.cloud`） | 清单字面值（非密）；未配时拉取端点 503 指名该 env |
+| `BENCH_CONSUMER_TOKEN` | 消费者令牌（law-bench 分发面登记发放） | Secret `fd-wire-env`（需新增键 `bench_consumer_token` + 清单 secretKeyRef；启用前不注入即保持关闭） |
+| `BENCH_PULL_ENABLED` | `true` 才启定时循环 | 清单字面值，**缺省 false（零配置零行为变化）** |
+| `BENCH_PULL_DOMAINS` | 逗号分隔域清单（如 `photovoltaic,energy-storage`） | 清单字面值；定时循环拉这些域的最新发布 |
+| `BENCH_PULL_INTERVAL_SECONDS` | 定时循环间隔，缺省 `3600` | 清单字面值 |
+
+手动拉取不依赖定时循环：`POST /api/v1/internal/bench-ontology/{domain}/pull`
+（body 可选 `{"version": N}`）随时可触发；失败映射 404（对端无发布）/ 502（对端
+拒绝或网络/形状故障，语义保留）/ 503（凭据 env 未配，指名缺哪个）。
