@@ -3,6 +3,8 @@
 ## Purpose
 规定 cell 数据根从 SQLite 向 PostgreSQL 的可选演进：可选 PG 数据根与双方言行为一致、一 cell 一库与属主凭据纪律、试点迁移与回退保底、cell-manager 自动建库发凭据，以及凭据入 OpenBAO 且令牌受限。
 
+边界（2026-11-06 O4 裁决登记）：租户模型与生命周期属主为 finddata 根 `wire-cell-tenancy`；本 spec 只管数据根存储演进（SQLite 到 PG 可选迁移、双方言一致），两侧分立承接 SHALL NOT 重复记账。
+
 ## Requirements
 
 ### Requirement: 可选 PostgreSQL 数据根

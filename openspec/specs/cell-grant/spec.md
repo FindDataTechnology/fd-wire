@@ -3,6 +3,8 @@
 ## Purpose
 定义 cell 在 registry 侧授权束的铸造、跨客户隔离不变量与退租回收——客户经 wire 入口只能调用与看见自己的 cell 和共享业务面，授权随开户全自动生效、随退租全自动回收。
 
+边界（2026-11-06 O4 裁决登记）：租户模型与生命周期属主为 finddata 根 `wire-cell-tenancy`；本 spec 只管 registry 授权束（铸造、跨客户隔离、退租回收），两侧分立承接 SHALL NOT 重复记账。
+
 ## Requirements
 
 ### Requirement: 授权束随开户自动铸造

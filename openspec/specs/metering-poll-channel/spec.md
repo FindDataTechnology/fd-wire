@@ -3,6 +3,8 @@
 ## Purpose
 定义 wire 计量入账对 registry 审计流的归集通道口径：直读（拉模式）为正道、可达性以活探针为闸门、探针不过按推送（推模式）降级——保证真实客户调用在有限时间内入账，不静默丢账。
 
+边界（2026-11-06 O1 裁决登记）：本 spec 只管计量入账的归集通道口径；权威对账与计费口径见 finddata 根 `wire-facade-metering`（registry 门面计量）、`wire-billing`，两侧分立承接 SHALL NOT 重复记账。
+
 ## Requirements
 
 ### Requirement: 直读通道入账

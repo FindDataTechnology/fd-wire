@@ -3,6 +3,8 @@
 ## Purpose
 定义客户侧用量透明：登录客户可自助查询当月读取用量与档位额度余量，口径与计量入账、行数门、结算同源（metering_records 的 rows_returned），使「用完即停」对客户可见可预期。
 
+边界（2026-11-06 O1 裁决登记）：本 spec 只管客户用量展示；权威对账与计费口径见 finddata 根 `wire-facade-metering`（registry 门面计量）、`wire-billing`，两侧分立承接 SHALL NOT 重复记账。
+
 ## Requirements
 
 ### Requirement: 客户用量查询

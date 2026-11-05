@@ -22,10 +22,10 @@
 | ~~P1-6~~ ✅已修（两根两单：R 属主声明 clarify-catalog-ownership；W 去重+交叉引用 afd0325——分页条按证据保留，偏差记 proposal） | **O5 目录三本**：三本不合并但需定属主——R wire-indicator-catalog 为权威；W catalog-governance 删去与 R 重复的镜像同步两条；indicator-to-dataset 独立保留+状态语义交叉引用 | cluster-B §3/§4/§5 | 按此改三本 spec（属主+去重+交叉引用） |
 | ~~P1-7~~ ✅已修（wire-metering-explicit-alerting b381fe8：未配置显式告警一次 + /internal/metering/channel-status 探针，spec「通道状态可探」入册） | **O1 计量链静默失败史**：rows_returned 戳丢曾致断流一月（spec 自录）；driver 未配置时 fail-quiet、探针闸无代码级落点 | cluster-A §1/§2 | fail-quiet 改显式告警；探针闸落点进 spec 或代码二选一 |
 | P1-8 | **wire-analysis-console 两条客户承诺无实现**：时区调度（schedules 仅 UTC）、告警邮件（仅 webhook evaluator.py:73） | cluster-E §4 | 产品拍板：补实现或从 R spec 降级为 backlog 条目 |
-| P1-9 | **wire-analysis-presets 账本归属错位**：本仓零实现入口（评级 C） | cluster-E §5 | 核实现主体所在仓，spec 迁移或补实现 |
+| ~~P1-9~~ ✅结案（2026-11-06：归属已登记——R 根 wire-analysis-presets Purpose 实现归属三锚点；非 fd-wire 模块，C 级评级源于审计对表口径错判） | **wire-analysis-presets 账本归属错位**：本仓零实现入口（评级 C） | cluster-E §5 | 核实现主体所在仓，spec 迁移或补实现 |
 | ~~P1-10~~ ✅已修（annotate-content-fleet-impl-state 453df3c：4 条悬空 Requirement 加实现态注记；实查修正初步清单——凭据轨/周期物化有在产落点未标，R1/R7 坐实悬空补标，证据在 proposal） | **wire-content-fleet spec 能力悬空**：fleet 段实例化/凭据轨/信号驱动/重复节奏拒仓内零代码；AI_CELL_ENDPOINT_MAP 漂移已咬生产（bcf57e3） | cluster-F §4 | spec 标注实现态（哪些 requirement 未落地）；漂移治理另立 |
-| P1-11 | **shadow 能力两处**：产物证据发布门（已上产 enforce）+信息流契约无 spec 条目；refresh-scheduler「舰队产物归调度」Requirement 无实现痕迹 | cluster-F、cluster-E §7 | 前者补 spec；后者核挂账出处 |
-| P1-12 | **cell 退租链收敛不足一月**：4 次 fix + R5(P0)/R6(P1) 缺陷入册 | cluster-A §11 | 挂观察名单下轮复检 |
+| ~~P1-11~~ ✅改判结案（2026-11-06 实查：R 根 wire-analysis-console:79-113——信息流面板+强断言发布门——2026-10-27 已入册，证据门/信息流契约非 shadow；「舰队产物归调度」经 annotate-content-fleet-impl-state change 已裁决不属悬空（委托半边在本仓在产）——三处均不补 spec） | **shadow 能力两处**：产物证据发布门（已上产 enforce）+信息流契约无 spec 条目；refresh-scheduler「舰队产物归调度」Requirement 无实现痕迹 | cluster-F、cluster-E §7 | 前者补 spec；后者核挂账出处 |
+| P1-12 | **cell 退租链收敛不足一月**：4 次 fix + R5(P0)/R6(P1) 缺陷入册 | cluster-A §11 | 挂观察名单下轮复检。**判据更新（2026-11-06）**：摘牌条件=remove-cell-openbao-dependency 提交并归档、修后出片、下次真实退租实弹零手工补完，三件齐备（11-05 pgauto001 purge 崩溃如实记录） |
 | ~~P1-13~~ ✅已修（align-wire-platform-platform-reality 归档：公开面补橱窗/星研、后台边界钉工单延伸、对接清单补 A2A；12 原 Scenario 零削弱） | **wire-platform 总纲 3 条过时**：公开面清单缺橱窗+星研内容面；后台边界被萬星直连/工单编排逼近；兄弟线对接清单缺 A2A（另证：「13 条 wire 契约」说法过时，ops-mcp 已 22 工具） | cluster-F §12 | 总纲按现势改写 |
 
 ## P2 — 卫生/文档/边界裁决
@@ -47,4 +47,7 @@
 
 - 已修 9 项（P0×3 + P1-1/3/4/5/6/7/13 + P2 大部），open 项=P1-2（纪律）、P1-8（产品拍板）、P1-9（先查归属）、P1-11（补 spec 独立 change）、P1-12（观察名单）、O1/O3/O4 cross-ref（延后）、console/portal 双横栏（体验裁决）。
 - 代码修复（landing-tab、metering 探针）已推 main 未出片——现网仍 sha-1c5dfc5，出片滚动待拍板。
+- **更正（2026-11-06）**：现网已于 11-05 22:30 滚 sha-b750016（deploy 1fa3959），landing-tab 对拍+metering 探针已在产（channel-status 401、线上 bundle 含 market 实证），上条原文「现网仍 sha-1c5dfc5」作废；出片滚动挂账销案。
 - fd-wire 仓 cell-manager/* 未提交改动非本战役所为（疑并发会话），未触碰。
+
+- 2026-11-06 注记：close-wire-spec-residue 已归档（R 根三 delta+七 Purpose）、close-wire-implementation-gaps 实施中（P1-8 邮件半边/P1-9/P1-11/P1-12 全部有承接）。

@@ -3,6 +3,8 @@
 ## Purpose
 定义柏讯门户的正式登录与身份边界：Logto OIDC（SPA 授权码 + PKCE）验签、Logto sub 与客户账户的映射、内部后台的角色门禁，以及开发占位登录（手填 X-Customer-Id / X-Admin-Token）的退位口径。
 
+边界（2026-11-06 O3 裁决登记）：身份模型与归属（Logto org、长命凭据铸造与吊销）属主为 finddata 根 `wire-customer-identity`，本 spec 只管登录边界。
+
 ## Requirements
 
 ### Requirement: OIDC 登录与令牌卫生
