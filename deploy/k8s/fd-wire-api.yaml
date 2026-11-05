@@ -42,8 +42,8 @@ spec:
       containers:
         - name: api
           # 不可变标签纪律（mcp-service-deploy spec：禁 latest/浮动标签）。
-          # 出片 tag=testaction003 build-pool 快照 sha=06f3acb（真 4b9b7f5：告警邮件通道+SMTP 共享设施（wire-mail-secrets 已入簇）、create_customer 无 cell 映射显式提醒、close-wire-implementation-gaps 1.x/2.x；内容门过=mail.py:2/cell_mapping_warning:4/notify_failed:11）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-06f3acb
+          # 出片 tag=testaction001 build-pool 快照 sha=55ba5b3（真 6eb3ace：商留通道表单化——POST /api/v1/contact 公开面+防灌水+迁移 0051 已上库+admin contacts 分区，add-contact-intake；内容门过=routes:5/ip_hash_of:2/CONTACT_NOTIFY_EMAIL:4）。
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-55ba5b3
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
