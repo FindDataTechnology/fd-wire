@@ -42,8 +42,8 @@ spec:
       containers:
         - name: api
           # 不可变标签纪律（mcp-service-deploy spec：禁 latest/浮动标签）。
-          # 出片 tag=testaction001 build-pool 快照 sha=74ee673（真 492958d：cell 开通自助化——三级端点解析+配给队列+runner；迁移 0053 需先上库；内容门过=routes:5/customer_cell_endpoints:1）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-74ee673
+          # 出片 tag=testaction001 build-pool 快照 sha=24994bc（真 84468f8：会话上下文二车道——壹座岗位车道 conversation_id 可缺省落 NULL，add-esignature-selfaction-gate 设计偏差修正；测试 +2=15 过）。
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-24994bc
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
