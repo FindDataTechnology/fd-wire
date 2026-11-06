@@ -14,7 +14,7 @@
 
 | 目录 | 职责 | 状态 |
 |---|---|---|
-| `web/` | 官网 + 控制台前端（React19 + Vite6 + TS + Tailwind4 + echarts + i18next 双语） | 骨架 |
+| `web/` | 官网 + 控制台前端（React19 + Vite6 + TS + Tailwind4 + echarts + i18next 双语） | **在产**（2026-11-07 线上核证：SPA 门户已上线 wire.finddatatech.cloud，131 个 tsx，含定价/目录/控制台/分享页；本行「骨架」为陈文） |
 | `api/` | FastAPI 服务（`fd_wire_api`：结算/后台 API 起步） | 骨架 |
 | `cell-manager/` | 企业 cell 生命周期（开通/暂停/恢复/注销、容器+SQLite 卷、注册 registry） | v1 仅骨架 |
 
