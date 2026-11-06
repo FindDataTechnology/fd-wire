@@ -118,11 +118,17 @@ def artifact_out(artifact: AIDraftArtifact) -> DraftArtifactOut:
 
 
 class ActionProposeIn(BaseModel):
-    """提议入参（副驾循环内部与面板直发共用一份契约）。"""
+    """提议入参（副驾循环内部与面板直发共用一份契约）。
+
+    conversation_id 可空（add-esignature-selfaction-gate 设计偏差修正）：
+    壹座岗位车道（wire-ops-mcp 自理动作面）没有副驾会话上下文，提议落
+    conversation_id=None——与 domain.* 同口径（0043 起可空）。面板直发
+    车道照旧必带（带值时服务端仍做归属 404 校验）。
+    """
 
     action_id: str = Field(min_length=1, max_length=64)
     args: dict[str, Any] = Field(default_factory=dict)
-    conversation_id: int
+    conversation_id: int | None = None
 
 
 class ActionComplianceIn(BaseModel):

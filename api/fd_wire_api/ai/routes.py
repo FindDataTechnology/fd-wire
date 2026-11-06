@@ -413,8 +413,12 @@ def propose_action_endpoint(
 
     未注册/预检失败不落 pending（4xx 如实文案）——「板上没有的动作，
     副驾也不提供」的闸面收口。
+    会话上下文二车道（add-esignature-selfaction-gate）：带 conversation_id
+    =面板车道，归属校验照旧；缺省=壹座岗位车道（wire-ops-mcp 自理动作面），
+    提议落 conversation_id=None（domain.* 同口径），不校验不注入。
     """
-    _conversation_or_404(db, payload.conversation_id, actor.customer_id)
+    if payload.conversation_id is not None:
+        _conversation_or_404(db, payload.conversation_id, actor.customer_id)
     set_conversation_id(payload.conversation_id)
     try:
         proposal, missing = gate_propose(
@@ -504,12 +508,18 @@ def get_action_endpoint(
 
 @router.get("/api/v1/ai/actions", response_model=list[ActionOut])
 def list_actions_endpoint(
-    conversation_id: int,
+    conversation_id: int | None = None,
     actor: ActorContext = Depends(_actor_context),
     db: Session = Depends(get_db),
 ) -> list[ActionOut]:
-    """会话内提议列表（面板历史回放与草稿区的数据源）。"""
-    _conversation_or_404(db, conversation_id, actor.customer_id)
+    """提议列表（面板历史回放与草稿区的数据源）。
+
+    带 conversation_id=该会话内提议（面板车道，归属校验照旧）；缺省=
+    壹座岗位车道（wire-ops-mcp 自理动作面）——本企业全量提议台账，
+    conversation_id IS NULL 的岗位提议只有这条车道可见。
+    """
+    if conversation_id is not None:
+        _conversation_or_404(db, conversation_id, actor.customer_id)
     return [
         action_out(row)
         for row in gate_list_proposals(

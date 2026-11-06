@@ -404,3 +404,72 @@ def test_read_tool_no_proposal_row(db, sess, env_channel) -> None:
     from fd_wire_api.ai.models import AIActionProposal
 
     assert db.query(AIActionProposal).count() == 0
+
+
+# ── 壹座岗位车道：会话上下文可缺省（add-esignature-selfaction-gate 设计偏差修正）
+
+
+def test_propose_without_conversation_lands_null(db, sess, env_channel) -> None:
+    """MCP 车道（wire-ops-mcp 自理动作面）不带会话：提议落
+    conversation_id=None，与 domain.* 同口径；面板语义（带会话）不变。"""
+    from fd_wire_api.ai import actions
+    from fd_wire_api.ai.models import AIActionProposal
+
+    actions.set_conversation_id(None)  # 路由层对无会话车道的注入
+    rec = _Recorder([(201, {"task_id": "es_90", "status": "pending"})])
+    import fd_wire_api.ai.lex_esign as le
+
+    real_client = le.HttpLexEsignClient
+
+    def _fake(**kw):
+        kw.setdefault("http_client", httpx.Client(transport=httpx.MockTransport(rec.handler)))
+        return real_client(**kw)
+
+    le.HttpLexEsignClient = _fake  # type: ignore[assignment]
+    try:
+        proposal, _missing = propose(
+            db, sess, OWNER,
+            action_id="wire.esignature.initiate",
+            args={"title": "无会话提议", "category": "service",
+                  "file_name": "a.txt", "file_b64": "QUJD",
+                  "signers": [{"name": "甲"}]},
+        )
+        assert proposal.conversation_id is None
+        assert proposal.state == "pending_confirm"
+        # 同请求后面板的带会话提议仍落会话值（ContextVar 每请求设置，互不泄漏）
+        _conversation(db, cid=202)
+        rec._responses.extend([(200, _TASK_VIEW), (200, {"task_id": "es_90", "status": "pending"})])
+        proposal2, _ = propose(
+            db, sess, OWNER,
+            action_id="wire.esignature.nudge", args={"task_id": "es_90"},
+        )
+        assert proposal2.conversation_id == 202
+    finally:
+        le.HttpLexEsignClient = real_client
+    rows = db.query(AIActionProposal).order_by(AIActionProposal.id).all()
+    assert [r.conversation_id for r in rows] == [None, 202]
+
+
+def test_list_proposals_without_conversation_sees_all_customer_rows(db, sess) -> None:
+    """缺省会话的 list=本企业全量台账（岗位车道看 NULL 行的唯一窗口）。"""
+    from fd_wire_api.ai.models import AIActionProposal
+
+    db.add(AIActionProposal(
+        conversation_id=None, customer_id="cust-001",
+        action_id="wire.esignature.initiate", args_digest="d1",
+        args_summary="s", risk="write", tier="inline",
+        state="pending_confirm", impact_text="i", proposed_by="sub-owner",
+    ))
+    db.add(AIActionProposal(
+        conversation_id=7, customer_id="cust-001",
+        action_id="wire.artifact.publish", args_digest="d2",
+        args_summary="s", risk="write", tier="inline",
+        state="pending_confirm", impact_text="i", proposed_by="sub-owner",
+    ))
+    db.commit()
+    from fd_wire_api.ai.actions import list_proposals
+
+    all_rows = list_proposals(db, conversation_id=None, customer_id="cust-001")
+    assert len(all_rows) == 2
+    conv_rows = list_proposals(db, conversation_id=7, customer_id="cust-001")
+    assert [r.action_id for r in conv_rows] == ["wire.artifact.publish"]

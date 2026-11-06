@@ -323,6 +323,14 @@ def _current_conversation_id() -> int:
     return value
 
 
+def _current_conversation_id_or_none() -> int | None:
+    """会话上下文可缺省版（add-esignature-selfaction-gate）：壹座岗位车道
+    经路由层显式注入 None（domain.* 同口径落 NULL）；面板/副驾车道照旧
+    必带（路由层已校验归属，循环层自带会话）——这里不再把「无会话」当
+    错误，缺会话的提议落 conversation_id=None。"""
+    return _CONVERSATION.get()
+
+
 from contextvars import ContextVar  # noqa: E402 - 置于使用处之后，避免打断执行体段落
 
 _CONVERSATION: ContextVar[int | None] = ContextVar("ai_action_conversation", default=None)
@@ -1177,9 +1185,11 @@ def propose(
     summarize = def_.summarize or _summarize_scalars
     # 域动作（domain.*）来自实体页/入口工具面——**恒不带会话上下文**
     # （conversation_id 恒 None，0043 起可空；不读 contextvar——跨请求泄漏
-    # 的会话值会让实例台账误挂会话）；副驾通道照旧要求会话。
+    # 的会话值会让实例台账误挂会话）；副驾通道照旧要求会话。壹座岗位车道
+    # （add-esignature-selfaction-gate：wire-ops-mcp 自理动作面经路由层进
+    # 来，路由层未注入会话）同样落 None——与 domain.* 同口径。
     conversation_id = (
-        None if action_id.startswith("domain.") else _current_conversation_id()
+        None if action_id.startswith("domain.") else _current_conversation_id_or_none()
     )
     proposal = AIActionProposal(
         conversation_id=conversation_id,
@@ -1362,15 +1372,15 @@ def get_proposal(db: Session, ctx: ActorContext, proposal_id: int) -> AIActionPr
 
 
 def list_proposals(
-    db: Session, *, conversation_id: int, customer_id: str
+    db: Session, *, conversation_id: int | None, customer_id: str
 ) -> list[AIActionProposal]:
+    conditions = [AIActionProposal.customer_id == customer_id]
+    if conversation_id is not None:
+        conditions.append(AIActionProposal.conversation_id == conversation_id)
     rows = list(
         db.scalars(
             select(AIActionProposal)
-            .where(
-                AIActionProposal.conversation_id == conversation_id,
-                AIActionProposal.customer_id == customer_id,
-            )
+            .where(*conditions)
             .order_by(AIActionProposal.id)
         ).all()
     )
