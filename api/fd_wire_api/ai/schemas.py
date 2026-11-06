@@ -166,12 +166,16 @@ class ActionApproveOut(BaseModel):
 
 
 class ActionOut(BaseModel):
-    """提议详情/列表行（审计留痕指向经 result_summary 与 error 呈现）。"""
+    """提议详情/列表行（审计留痕指向经 result_summary 与 error 呈现）。
+
+    conversation_id 可空：壹座岗位车道（wire-ops-mcp 自理动作面）的提议落
+    NULL——与会话可缺省的入参同口径（add-esignature-selfaction-gate）。
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    conversation_id: int
+    conversation_id: int | None
     action_id: str
     state: str
     risk: str
