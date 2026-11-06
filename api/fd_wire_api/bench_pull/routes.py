@@ -24,11 +24,13 @@ detail）；``PullConfigError`` → 503（detail 指明缺哪个 env）。任何
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import os
+import secrets
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..demands.routes import _require_internal
 from . import projection
 from .client import (
     PullAuthError,
@@ -37,6 +39,24 @@ from .client import (
     PullTransportError,
 )
 from .store import get_db, pull_and_store
+
+_DEFAULT_INTERNAL_TOKEN = "wire-internal-dev"
+
+
+def _require_internal(
+    x_internal_token: str | None = Header(default=None, alias="X-Internal-Token"),
+) -> None:
+    """内部调用鉴权：与 demands 同款语义（FD_WIRE_INTERNAL_TOKEN 常量比对）。
+
+    本地自持而不 ``from ..demands.routes import``：demands.routes 初始化链
+    较重，bench_pull 在 app.py 的导入顺序先于 demands 时会构成循环导入。
+    """
+    expected = os.getenv("FD_WIRE_INTERNAL_TOKEN", _DEFAULT_INTERNAL_TOKEN)
+    if not x_internal_token or not secrets.compare_digest(x_internal_token, expected):
+        raise HTTPException(
+            status_code=401,
+            detail="内部端点需要有效的 X-Internal-Token",
+        )
 
 router = APIRouter(
     prefix="/api/v1/internal/bench-ontology",
