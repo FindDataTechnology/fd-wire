@@ -29,7 +29,7 @@ spec:
         - name: web
           # TODO(go-live): 首次构建后回填实际 sha- tag。
           # 出片 tag=testaction001 build-pool 快照 sha=55ba5b3（真 6eb3ace：HomeView 商留站内表单卡（mailto 占位退役）+admin contacts 分区，add-contact-intake；内容门过= bundle home.contact:1/contacts:3）。
-          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-6ea515a
+          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-1aa4aab
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
