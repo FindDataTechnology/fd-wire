@@ -14,6 +14,12 @@
 // 角色源 = 既有团队面 GET /api/console/team 的 me.role（未拉到按不可见处理）；
 // 版本区独立拉自己的数据，实体页空态时照常显示。
 // i18n：console.entities.version.*（zh/en 键位对仗，i18nKeys.test 把关）。
+// polish-wire-ontology-console 打磨（呈现层 only、行为无关）：加载占位
+// min-height 不闪跳；空态=虚线卡主/次句引导；错误卡带 HTTP 状态码（mono）；
+// diff 语义色沿 brief token（emerald 增 / rose 删 / amber 改·unchanged）、
+// 关系标识机器读 font-mono；宽 diff 横向滚动；回滚计划加危险提示。
+// 新键 emptyHint / rollbackWarning 已归并进 i18n/zh.ts、en.ts（中央归并波），
+// 组件直走 t()。
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -42,6 +48,9 @@ import {
   type OntologyVersionSummary,
   type TeamRole,
 } from "./api";
+
+// ---- 本轮新增文案已归并 i18n（polish-wire-ontology-console 中央归并波）----
+// console.entities.version.emptyHint / rollbackWarning 现直接读 zh/en 资源。
 
 /** 字段值展示：null/undefined → —；数组/对象 → 紧凑 JSON；其余原样。 */
 function fieldText(value: unknown): string {
@@ -100,7 +109,12 @@ function parseRollbackFailure(
   return { message: apiErrorText(err, fallback), executed: null, note: null };
 }
 
-/** 差异一组（增/删/字段级改）——diff 面板与完整性差异共用。 */
+/**
+ * 差异一组（增/删/字段级改）——diff 面板与完整性差异共用。
+ * 语义色沿 console token：emerald=新增 / rose=删除 / amber=字段级改；
+ * itemMono=条目标识是机器读（关系四元组/列名）时加 font-mono。
+ * min-w-max + 外层 overflow-x-auto：宽 diff 不破版、横向滚动。
+ */
 function DiffGroupView<
   TItem,
   TChange extends { fields: Record<string, OntologyFieldChange> },
@@ -110,19 +124,21 @@ function DiffGroupView<
   group,
   itemLabel,
   changeLabel,
+  itemMono = false,
 }: {
   testId: string;
   titleKey: string;
   group: OntologyDiffGroup<TItem, TChange>;
   itemLabel: (item: TItem) => string;
   changeLabel: (change: TChange) => string;
+  itemMono?: boolean;
 }) {
   const { t } = useTranslation();
   const total = group.added.length + group.removed.length + group.changed.length;
   return (
     <div
       data-testid={testId}
-      className="rounded border border-slate-200 bg-slate-50 p-2"
+      className="min-w-max rounded border border-slate-200 bg-slate-50 p-2"
     >
       <p className="text-xs font-medium text-slate-700">{t(titleKey)}</p>
       {total === 0 ? (
@@ -143,7 +159,12 @@ function DiffGroupView<
               </p>
               <ul className="ml-3 list-disc text-[11px] text-slate-600">
                 {group.added.map((item, index) => (
-                  <li key={`${testId}-added-${index}`}>+ {itemLabel(item)}</li>
+                  <li
+                    key={`${testId}-added-${index}`}
+                    className={itemMono ? "font-mono" : undefined}
+                  >
+                    + {itemLabel(item)}
+                  </li>
                 ))}
               </ul>
             </div>
@@ -157,7 +178,10 @@ function DiffGroupView<
               </p>
               <ul className="ml-3 list-disc text-[11px] text-slate-600">
                 {group.removed.map((item, index) => (
-                  <li key={`${testId}-removed-${index}`}>
+                  <li
+                    key={`${testId}-removed-${index}`}
+                    className={itemMono ? "font-mono" : undefined}
+                  >
                     − {itemLabel(item)}
                   </li>
                 ))}
@@ -174,7 +198,9 @@ function DiffGroupView<
               <ul className="ml-3 space-y-1 text-[11px] text-slate-600">
                 {group.changed.map((change, index) => (
                   <li key={`${testId}-changed-${index}`}>
-                    <span>{changeLabel(change)}</span>
+                    <span className={itemMono ? "font-mono" : undefined}>
+                      {changeLabel(change)}
+                    </span>
                     <ul className="ml-3 space-y-0.5">
                       {Object.entries(change.fields).map(([field, delta]) => (
                         <li
@@ -210,7 +236,12 @@ export function OntologyVersionSection() {
     null,
   );
   const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  // 加载失败：文本走 apiErrorText（有后端 detail 用 detail，否则兜底），
+  // status 单列供错误卡加 mono 状态码行（报因可读，不裸 403）。
+  const [loadError, setLoadError] = useState<{
+    text: string;
+    status: number | null;
+  } | null>(null);
 
   // 打发布版（label 可选；unchanged 时如实说明未新增版本）。
   const [publishOpen, setPublishOpen] = useState(false);
@@ -260,9 +291,13 @@ export function OntologyVersionSection() {
     } catch (err) {
       setVersions(null);
       setUnpublished(null);
-      setLoadError(
-        apiErrorText(err, t("console.entities.version.loadFailed")),
-      );
+      setLoadError({
+        text: apiErrorText(err, t("console.entities.version.loadFailed")),
+        status:
+          err instanceof ConsoleApiError && typeof err.status === "number"
+            ? err.status
+            : null,
+      });
     } finally {
       setLoading(false);
     }
@@ -658,7 +693,7 @@ export function OntologyVersionSection() {
                       {integrity.escape_hint}
                     </p>
                   )}
-                  <div className="mt-2 space-y-2">
+                  <div className="mt-2 space-y-2 overflow-x-auto">
                     <DiffGroupView
                       testId="ontology-integrity-entities"
                       titleKey="console.entities.version.entityGroup"
@@ -671,6 +706,7 @@ export function OntologyVersionSection() {
                       titleKey="console.entities.version.relationshipGroup"
                       group={integrity.differences.relationships}
                       itemLabel={relationshipLabel}
+                      itemMono
                       changeLabel={(change) =>
                         relationshipLabel(change.after)
                       }
@@ -692,7 +728,15 @@ export function OntologyVersionSection() {
           data-testid="ontology-version-error"
           className="mt-3 rounded-md border border-red-200 bg-red-50 p-3"
         >
-          <p className="text-xs text-red-700">{loadError}</p>
+          <p className="text-xs text-red-700">{loadError.text}</p>
+          {loadError.status != null && (
+            <p
+              data-testid="ontology-version-error-status"
+              className="mt-1 font-mono text-[11px] text-red-500"
+            >
+              HTTP {loadError.status}
+            </p>
+          )}
           <button
             type="button"
             data-testid="ontology-version-retry"
@@ -707,18 +751,23 @@ export function OntologyVersionSection() {
       {versions == null && loading && (
         <p
           data-testid="ontology-version-loading"
-          className="mt-3 text-xs text-slate-400"
+          className="mt-3 flex min-h-24 items-center text-xs text-slate-400"
         >
           {t("console.entities.version.loading")}
         </p>
       )}
 
       {versions != null && versions.length === 0 && (
-        <div
-          data-testid="ontology-version-empty"
-          className="mt-3 rounded border border-dashed border-slate-300 p-4 text-center text-xs text-slate-500"
-        >
-          {t("console.entities.version.empty")}
+        <div className="mt-3 rounded-lg border border-dashed border-slate-300 p-8 text-center">
+          <p
+            data-testid="ontology-version-empty"
+            className="text-sm text-slate-600"
+          >
+            {t("console.entities.version.empty")}
+          </p>
+          <p className="mt-1 text-xs text-slate-400">
+            {t("console.entities.version.emptyHint")}
+          </p>
         </div>
       )}
 
@@ -846,13 +895,13 @@ export function OntologyVersionSection() {
                   {diff && !diff.has_changes && (
                     <p
                       data-testid="ontology-diff-empty"
-                      className="mt-2 text-xs text-slate-500"
+                      className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800"
                     >
                       {t("console.entities.version.noDiff")}
                     </p>
                   )}
                   {diff && diff.has_changes && (
-                    <div className="mt-2 space-y-2">
+                    <div className="mt-2 space-y-2 overflow-x-auto">
                       <DiffGroupView
                         testId="ontology-diff-entities"
                         titleKey="console.entities.version.entityGroup"
@@ -865,6 +914,7 @@ export function OntologyVersionSection() {
                         titleKey="console.entities.version.relationshipGroup"
                         group={diff.relationships}
                         itemLabel={relationshipLabel}
+                        itemMono
                         changeLabel={(change) =>
                           relationshipLabel(change.after)
                         }
@@ -885,6 +935,13 @@ export function OntologyVersionSection() {
                       version: version.version,
                     })}
                   </p>
+                  {rollbackPlan && !rollbackPlan.empty && (
+                    <p className="mt-1 text-[11px] text-rose-600">
+                      {t("console.entities.version.rollbackWarning", {
+                        version: version.version,
+                      })}
+                    </p>
+                  )}
                   {rollbackLoading && (
                     <p className="mt-2 text-xs text-slate-400">
                       {t("console.entities.version.rollbackWorking")}
@@ -959,39 +1016,41 @@ export function OntologyVersionSection() {
                             </li>
                           </ul>
                           {rollbackPlan.plan.update_entities.length > 0 && (
-                            <ul
-                              data-testid="ontology-rollback-updates"
-                              className="mt-2 space-y-1 text-[11px] text-slate-600"
-                            >
-                              {rollbackPlan.plan.update_entities.map(
-                                (update) => (
-                                  <li
-                                    key={`${update.id ?? update.name}`}
-                                    data-testid="ontology-rollback-update"
-                                  >
-                                    <span className="font-mono">
-                                      {update.name} (#{update.id})
-                                    </span>
-                                    <ul className="ml-3 space-y-0.5">
-                                      {Object.entries(update.fields).map(
-                                        ([field, delta]) => (
-                                          <li
-                                            key={field}
-                                            data-testid="ontology-rollback-field"
-                                            data-field={field}
-                                            className="font-mono text-slate-500"
-                                          >
-                                            {field}:{" "}
-                                            {fieldText(delta.before)} →{" "}
-                                            {fieldText(delta.after)}
-                                          </li>
-                                        ),
-                                      )}
-                                    </ul>
-                                  </li>
-                                ),
-                              )}
-                            </ul>
+                            <div className="overflow-x-auto">
+                              <ul
+                                data-testid="ontology-rollback-updates"
+                                className="mt-2 min-w-max space-y-1 text-[11px] text-slate-600"
+                              >
+                                {rollbackPlan.plan.update_entities.map(
+                                  (update) => (
+                                    <li
+                                      key={`${update.id ?? update.name}`}
+                                      data-testid="ontology-rollback-update"
+                                    >
+                                      <span className="font-mono">
+                                        {update.name} (#{update.id})
+                                      </span>
+                                      <ul className="ml-3 space-y-0.5">
+                                        {Object.entries(update.fields).map(
+                                          ([field, delta]) => (
+                                            <li
+                                              key={field}
+                                              data-testid="ontology-rollback-field"
+                                              data-field={field}
+                                              className="font-mono text-slate-500"
+                                            >
+                                              {field}:{" "}
+                                              {fieldText(delta.before)} →{" "}
+                                              {fieldText(delta.after)}
+                                            </li>
+                                          ),
+                                        )}
+                                      </ul>
+                                    </li>
+                                  ),
+                                )}
+                              </ul>
+                            </div>
                           )}
                           <div className="mt-2 flex flex-wrap gap-2">
                             {isOwner && (

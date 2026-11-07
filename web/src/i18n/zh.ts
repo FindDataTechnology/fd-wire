@@ -2635,6 +2635,12 @@ const zh = {
       retry: "重试",
       empty: "尚未声明实体",
       emptyHint: "点击「声明实体」开始：选一个数据集、勾主键列、起业务名。",
+      // 空态两条起步引导（polish-wire-ontology-console 归并）：手动声明 /
+      // 本体建设舰队提案——提案先「待人工确认」，owner 在「动作」面板确认。
+      emptyManualTitle: "路径一：手动声明实体",
+      emptyFleetTitle: "路径二：本体建设舰队提案",
+      emptyFleetHint:
+        "集群 agent 经动作闸提交 entity-declare / entity-relation-declare 声明草案；提案先处于「待人工确认」，owner 在实体卡的「动作」面板确认后才生效。",
       createOpen: "声明实体",
       create: {
         title: "声明实体",
@@ -2667,6 +2673,7 @@ const zh = {
         disableFailed: "停用失败，请稍后重试。",
         confirmFailed: "确认失败，请稍后重试。",
         disabled: "已停用",
+        disable: "停用",
         noTypes: "本实体尚无动作类型——用下方构建器声明（如「批准」「标记异常」）。",
         builtinTitle: "内置声明动作",
         builtinBadge: "内置",
@@ -2692,6 +2699,17 @@ const zh = {
         confirm: "确认执行",
         reject: "拒绝",
         noInstances: "暂无实例。",
+        // 提案状态不误导（polish-wire-ontology-console 归并）：pending 行
+        // 明示「待人工确认」语义——确认后才生效，绝不出现「已生效」措辞；
+        // 状态徽标终态如实，未知状态不经 t()、透传 API 原文。
+        pendingHint: "提案待人工确认——owner 确认后才生效（提案 ≠ 已生效）。",
+        status: {
+          awaiting_confirmation: "待人工确认",
+          executed: "已执行",
+          rejected: "已拒绝",
+          failed: "失败",
+          disabled: "已停用",
+        },
       },
       objects: {
         toggle: "对象",
@@ -2704,6 +2722,23 @@ const zh = {
         relationEdge: "实体 #{{id}}",
         loading: "加载中…",
         loadFailed: "对象读取失败，请稍后重试。",
+        // 空态与检索空态（polish-wire-ontology-console 归并）：真空态如实
+        // 说明对象行来源；检索无命中给「清空检索」重置 CTA。
+        emptyTitle: "实体「{{name}}」的数据集暂无对象行",
+        emptyHint: "对象行来自实体绑定的数据集；数据写入后即可在此检索与浏览。",
+        filteredEmpty: "检索无命中。换个关键词，或清空检索查看全部对象。",
+        filteredEmptyReset: "清空检索",
+        relationEmpty: "该关系下暂无关联对象行。",
+        relationEmptyHint:
+          "确认关系两端数据集已写入数据后，即可在此遍历关联对象。",
+        // ACL 403 分型（呈现层映射，不重判）：档位闸 / 读闸 / unknown 兜底
+        // ——不显示裸 HTTP 403、不暴露判序细节。
+        aclTierGateMessage: "该操作需要 cell 物化层（基础档及以上套餐）。",
+        aclTierGateNext: "升级到基础档及以上套餐后可用（控制台「套餐与定价」）。",
+        aclReadDeniedMessage:
+          "该数据集为受限数据集，你当前没有读（view）授权。",
+        aclReadDeniedNext: "请联系数据集 owner 为你授予读（view）权限。",
+        aclUnknownNext: "如需访问，请联系数据集 owner 或管理员确认授权。",
       },
       card: {
         delete: "删除",
@@ -2757,6 +2792,19 @@ const zh = {
         view: "查看",
         failed: "物化连接失败，请稍后重试。",
         hint: "按关系声明把两端数据集连接为新的派生数据集（n:1/1:1 为 LEFT JOIN：左表行全保留、右列未命中置空；右列撞名自动加 right_ 前缀。m:n 经中间数据集展开关系对：一条桥行一行结果、孤儿桥如实计数）。",
+        // 动作闸确认面（polish-wire-ontology-console 归并）：点击「物化连接」
+        // 先展开后果摘要卡，owner 确认后才执行——连接键 / junction 展开
+        // 后果 / 衍生数据集缺省命名规则全部执行前可见。
+        summaryTitle: "确认物化连接——执行前请核对后果",
+        summaryKeyLabel: "连接键",
+        summaryJunctionLabel:
+          "经中间数据集 {{name}}（{{source}} × {{target}}）",
+        summaryJunctionNote:
+          "m:n 展开：经中间数据集展开关系对——一条桥行一行结果；无桥关联的行不入结果，孤儿桥丢弃并如实计数。",
+        summaryNamingNote:
+          "缺省命名「{{left}}×{{right}} 连接」，登记为派生子集进入「我的数据」；数据集 key 同名冲突自动追加 _2 / _3；成功后的实际名称以后端返回为准。",
+        confirm: "确认物化",
+        cancel: "取消",
       },
       graph: {
         title: "实体图谱",
@@ -2775,6 +2823,9 @@ const zh = {
         loadFailed: "版本加载失败",
         retry: "重试",
         empty: "尚无版本快照——首次日快照或手动打发布版后出现。",
+        // 空态引导（polish-wire-ontology-console 归并）：主句如实 + 次句指引。
+        emptyHint:
+          "点击上方「打发布版」即可创建第一个版本；日常快照由系统按日自动生成。",
         unpublishedBadge: "未发布变更 {{count}} 条",
         unpublishedSince: "相对 v{{version}}",
         publish: "打发布版",
@@ -2812,6 +2863,10 @@ const zh = {
         rollbackPlanTitle: "回滚到 v{{version}} 的计划",
         rollbackPlanFailed: "回滚预览失败",
         rollbackPlanEmpty: "当前本体已与 v{{version}} 内容一致，无需回滚。",
+        // 回滚危险提示（polish-wire-ontology-console 归并）：执行前明示改写
+        // 后果与「历史只增不减」语义。
+        rollbackWarning:
+          "危险操作：确认后将按此计划把当前本体改写到 v{{version}} 的状态。历史只增不减——回滚本身也会以回滚事件记录。",
         rollbackEntities: "实体：建 {{create}} / 改 {{update}} / 删 {{delete}}",
         rollbackRelationships: "关系：建 {{create}} / 删 {{delete}}",
         rollbackConfirm: "确认执行回滚",
@@ -2833,6 +2888,23 @@ const zh = {
         baselineSnapshot: "最早快照",
         baselineEmpty: "空基线",
       },
+    },
+    // ACL/档位 403 分型卡（polish-wire-ontology-console 归并）：实体页物化
+    // 路径的 403 呈现映射——报因 + 下一步 + 后端 detail 原文（mono）。判序
+    // （404→档位闸→ACL）由 API 层权威，这里只按已返回类别渲染；unknown 型
+    // 只如实透传，不显示裸 HTTP 403、不编造型别文案。
+    acl: {
+      tierGateTitle: "该动作需要 cell 物化层（基础档及以上套餐）",
+      tierGateNext:
+        "下一步：升级到基础档及以上套餐后可用（控制台「套餐与定价」）",
+      needWriteTitle:
+        "目标数据集为受限数据集：你没有编辑授权，写入类操作被拒",
+      needWriteNext: "下一步：请联系数据集 owner 为你授权（编辑 edit）",
+      readDeniedTitle:
+        "目标数据集为受限数据集：你没有读授权，读取被拒",
+      readDeniedNext: "下一步：请联系数据集 owner 为你授权（查看 view）",
+      unknownTitle: "操作被拒绝",
+      detailLabel: "后端返回：",
     },
     // 数据市场（wire-dataset-marketplace）：登录客户可检索已开放数据集，
     // 订阅（或申请批准）后经数据面只读取数；列表 SQL 层只查 market 档。

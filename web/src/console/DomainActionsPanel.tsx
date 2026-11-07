@@ -12,7 +12,8 @@ import {
 } from "../console/api";
 
 /** fetch 薄封装（api.ts requestJson 未导出；Bearer 头同款纪律，错误统一
- *  转 ConsoleApiError——detail 取响应体 detail）。 */
+ *  转 ConsoleApiError——detail 原样保留（string 或对象），文案取 string
+ *  detail 或对象 message，绝不 [object Object]）。 */
 async function jsonRequest<T>(url: string, method: string, body?: unknown): Promise<T> {
   const response = await fetch(url, {
     method,
@@ -21,11 +22,26 @@ async function jsonRequest<T>(url: string, method: string, body?: unknown): Prom
   });
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    const detail =
+    const rawDetail =
       typeof payload === "object" && payload !== null && "detail" in payload
-        ? String((payload as { detail: unknown }).detail)
-        : `HTTP ${response.status}`;
-    throw new ConsoleApiError(detail, response.status, detail);
+        ? (payload as { detail: unknown }).detail
+        : undefined;
+    let message = `HTTP ${response.status}`;
+    if (typeof rawDetail === "string" && rawDetail) {
+      message = rawDetail;
+    } else if (rawDetail && typeof rawDetail === "object") {
+      const m = (rawDetail as { message?: unknown }).message;
+      if (typeof m === "string" && m) message = m;
+    }
+    throw new ConsoleApiError(
+      message,
+      response.status,
+      typeof rawDetail === "string" && rawDetail
+        ? rawDetail
+        : rawDetail && typeof rawDetail === "object"
+          ? (rawDetail as Record<string, unknown>)
+          : undefined,
+    );
   }
   return payload as T;
 }
@@ -80,6 +96,18 @@ const STATUS_STYLES: Record<string, string> = {
   rejected: "bg-slate-100 text-slate-500",
   failed: "bg-rose-50 text-rose-700",
   disabled: "bg-slate-100 text-slate-500",
+};
+
+// 状态徽标 i18n 键（polish-wire-ontology-console 归并）：已知状态走
+// console.entities.actions.status.*；未知状态不经 t()、透传 API 原文
+// （awaiting_confirmation 明示「待人工确认」——提案 ≠ 已生效，绝不出现
+// 「已生效」措辞；终态如实 executed/rejected/failed/disabled）。
+const STATUS_I18N_KEYS: Record<string, string> = {
+  awaiting_confirmation: "console.entities.actions.status.awaiting_confirmation",
+  executed: "console.entities.actions.status.executed",
+  rejected: "console.entities.actions.status.rejected",
+  failed: "console.entities.actions.status.failed",
+  disabled: "console.entities.actions.status.disabled",
 };
 
 interface Props {
@@ -310,7 +338,7 @@ export function DomainActionsPanel({ entity, datasets, onChanged }: Props) {
       )}
 
       {error && (
-        <p data-testid="entity-actions-error" className="mt-2 text-xs text-rose-700">
+        <p data-testid="entity-actions-error" className="mt-2 text-xs text-red-700">
           {error}
         </p>
       )}
@@ -326,7 +354,7 @@ export function DomainActionsPanel({ entity, datasets, onChanged }: Props) {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder={t("console.entities.actions.namePlaceholder")}
-            className="w-40 rounded border border-slate-300 px-2 py-1 text-sm"
+            className="w-40 max-w-full rounded border border-slate-300 px-2 py-1 text-sm"
           />
           <select
             data-testid="domain-action-risk"
@@ -354,7 +382,7 @@ export function DomainActionsPanel({ entity, datasets, onChanged }: Props) {
                 setFields(next);
               }}
               placeholder={t("console.entities.actions.fieldName")}
-              className="w-32 rounded border border-slate-300 px-2 py-1 text-xs"
+              className="w-32 max-w-full rounded border border-slate-300 px-2 py-1 text-xs"
             />
             <select
               value={field.input}
@@ -391,7 +419,7 @@ export function DomainActionsPanel({ entity, datasets, onChanged }: Props) {
                   setFields(next);
                 }}
                 placeholder={t("console.entities.actions.optionsCsv")}
-                className="w-40 rounded border border-slate-300 px-2 py-1 text-xs"
+                className="w-40 max-w-full rounded border border-slate-300 px-2 py-1 text-xs"
               />
             )}
           </div>
@@ -427,7 +455,7 @@ export function DomainActionsPanel({ entity, datasets, onChanged }: Props) {
                 next[index] = { ...m, column: e.target.value };
                 setMappings(next);
               }}
-              className="w-36 rounded border border-slate-300 px-1.5 py-1 text-xs"
+              className="w-36 max-w-full rounded border border-slate-300 px-1.5 py-1 text-xs"
             >
               <option value="">{t("console.entities.actions.columnPlaceholder")}</option>
               {datasetColumns.map((column) => (
@@ -456,7 +484,7 @@ export function DomainActionsPanel({ entity, datasets, onChanged }: Props) {
                   next[index] = { ...m, field: e.target.value };
                   setMappings(next);
                 }}
-                className="w-32 rounded border border-slate-300 px-1.5 py-1 text-xs"
+                className="w-32 max-w-full rounded border border-slate-300 px-1.5 py-1 text-xs"
               >
                 <option value="">{t("console.entities.actions.fieldPlaceholder")}</option>
                 {fields
@@ -476,7 +504,7 @@ export function DomainActionsPanel({ entity, datasets, onChanged }: Props) {
                   setMappings(next);
                 }}
                 placeholder={t("console.entities.actions.literalPlaceholder")}
-                className="w-32 rounded border border-slate-300 px-2 py-1 text-xs"
+                className="w-32 max-w-full rounded border border-slate-300 px-2 py-1 text-xs"
               />
             )}
           </div>
@@ -499,7 +527,7 @@ export function DomainActionsPanel({ entity, datasets, onChanged }: Props) {
             data-testid="domain-action-create"
             disabled={busy}
             onClick={() => void submitType()}
-            className="rounded bg-slate-800 px-3 py-1 text-xs text-white disabled:opacity-50"
+            className="rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {t("console.entities.actions.declareSubmit")}
           </button>
@@ -527,7 +555,9 @@ export function DomainActionsPanel({ entity, datasets, onChanged }: Props) {
                   STATUS_STYLES[instance.status] ?? "bg-slate-100 text-slate-500"
                 }`}
               >
-                {instance.status}
+                {STATUS_I18N_KEYS[instance.status] != null
+                  ? t(STATUS_I18N_KEYS[instance.status])
+                  : instance.status}
               </span>
               <span className="text-[11px] text-slate-400">
                 {instance.proposer_sub} · {instance.channel}
@@ -552,7 +582,7 @@ export function DomainActionsPanel({ entity, datasets, onChanged }: Props) {
                     data-testid={`domain-action-approve-${instance.id}`}
                     disabled={busy}
                     onClick={() => void confirmInstance(instance, true)}
-                    className="rounded bg-emerald-600 px-2 py-0.5 text-[11px] text-white disabled:opacity-50"
+                    className="rounded bg-slate-900 px-2 py-0.5 text-[11px] text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {t("console.entities.actions.confirm")}
                   </button>
@@ -561,15 +591,25 @@ export function DomainActionsPanel({ entity, datasets, onChanged }: Props) {
                     data-testid={`domain-action-reject-${instance.id}`}
                     disabled={busy}
                     onClick={() => void confirmInstance(instance, false)}
-                    className="rounded border border-rose-300 px-2 py-0.5 text-[11px] text-rose-700 disabled:opacity-50"
+                    className="rounded border border-rose-300 px-2 py-0.5 text-[11px] text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {t("console.entities.actions.reject")}
                   </button>
                 </span>
               )}
             </div>
+            {/* 提案状态不误导：pending 行明示「待人工确认」语义——确认后才
+                生效（amber 待确认 token；绝不出现「已生效」措辞）。 */}
+            {instance.status === "awaiting_confirmation" && (
+              <p
+                data-testid="domain-action-pending-hint"
+                className="mt-0.5 text-[11px] text-amber-700"
+              >
+                {t("console.entities.actions.pendingHint")}
+              </p>
+            )}
             {instance.error && (
-              <p className="mt-0.5 text-[11px] text-rose-600">{instance.error}</p>
+              <p className="mt-0.5 text-[11px] text-red-600">{instance.error}</p>
             )}
           </div>
         ))}

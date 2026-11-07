@@ -296,6 +296,14 @@ describe("EntitiesPage 三区渲染（实体卡 + 关系行 + SVG 图谱）", ()
     render(<EntitiesPage />);
 
     expect(await screen.findByTestId("entities-empty")).toBeTruthy();
+    // 两条起步引导 + 创建入口（polish-wire-ontology-console 空态引导）。
+    expect(screen.getByText("路径一：手动声明实体")).toBeTruthy();
+    expect(screen.getByText("路径二：本体建设舰队提案")).toBeTruthy();
+    expect(
+      screen.getByText(/集群 agent 经动作闸提交 entity-declare/),
+    ).toBeTruthy();
+    const emptyCreate = screen.getByTestId("entities-empty-create");
+    expect(emptyCreate.textContent).toContain("声明实体");
     expect(screen.getByTestId("entity-graph-empty").textContent).toContain(
       "图谱为空",
     );
@@ -686,6 +694,48 @@ describe("EntitiesPage 关系物化（wire-entity-link：双 cell 闸 + 成功/�
     ).toBe("11");
   });
 
+  it("两步确认：先出后果摘要卡（连接键/命名规则），取消不执行（零 POST）", async () => {
+    const backend = installConsoleBackend([], {
+      datasets: [cellCustomersDataset, cellOrdersDataset],
+      entities: seedEntities(),
+      entityRelationships: seedRelationships(),
+    });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<EntitiesPage />);
+    await screen.findAllByTestId("entity-card");
+
+    fireEvent.click(elementOf("entity-toggle-relationships", 2));
+    fireEvent.click(
+      await screen.findByTestId("entity-relationship-materialize"),
+    );
+
+    // 摘要卡：连接键（订单.customer_id →(n:1) 客户.id）+ 缺省命名规则。
+    const summary = await screen.findByTestId(
+      "entity-relationship-materialize-summary",
+    );
+    expect(summary.textContent).toContain("确认物化连接");
+    expect(summary.textContent).toContain("连接键");
+    expect(summary.textContent).toContain("订单.customer_id");
+    expect(summary.textContent).toContain("客户.id");
+    expect(summary.textContent).toContain("订单×客户 连接");
+
+    // 取消：摘要卡收起、零请求（动作闸——不确认不执行）。
+    fireEvent.click(
+      screen.getByTestId("entity-relationship-materialize-cancel"),
+    );
+    expect(
+      screen.queryByTestId("entity-relationship-materialize-summary"),
+    ).toBeNull();
+    expect(
+      backend.calls.some(
+        (c) =>
+          c.url.pathname ===
+            "/api/v1/entities/2/relationships/11/materialize" &&
+          c.method === "POST",
+      ),
+    ).toBe(false);
+  });
+
   it("m:n 成功流：doneBridge 文案带展开对数与孤儿桥计数（wire-entity-mn-materialize）", async () => {
     const junctionDataset = makeDataset({
       id: "ds-3",
@@ -723,6 +773,16 @@ describe("EntitiesPage 关系物化（wire-entity-link：双 cell 闸 + 成功/�
     fireEvent.click(elementOf("entity-toggle-relationships", 2));
     fireEvent.click(
       await screen.findByTestId("entity-relationship-materialize"),
+    );
+    // 两步确认（动作闸）：先展开后果摘要卡——连接键 + m:n junction 说明。
+    const summary = await screen.findByTestId(
+      "entity-relationship-materialize-summary",
+    );
+    expect(summary.textContent).toContain("确认物化连接");
+    expect(summary.textContent).toContain("连接键");
+    expect(summary.textContent).toContain("订单客户桥");
+    fireEvent.click(
+      await screen.findByTestId("entity-relationship-materialize-confirm"),
     );
     const done = await screen.findByTestId(
       "entity-relationship-materialize-done",
@@ -766,6 +826,10 @@ describe("EntitiesPage 关系物化（wire-entity-link：双 cell 闸 + 成功/�
     fireEvent.click(elementOf("entity-toggle-relationships", 2));
     fireEvent.click(
       await screen.findByTestId("entity-relationship-materialize"),
+    );
+    // 两步确认（动作闸）：摘要卡确认后才 POST。
+    fireEvent.click(
+      await screen.findByTestId("entity-relationship-materialize-confirm"),
     );
 
     // 载荷冻结契约：POST 空体 {}（name 仅非空携带，v1 面板无名字输入）。
@@ -824,6 +888,10 @@ describe("EntitiesPage 关系物化（wire-entity-link：双 cell 闸 + 成功/�
     fireEvent.click(
       await screen.findByTestId("entity-relationship-materialize"),
     );
+    // 两步确认（动作闸）：摘要卡确认后才 POST。
+    fireEvent.click(
+      await screen.findByTestId("entity-relationship-materialize-confirm"),
+    );
 
     const errors = await screen.findByTestId(
       "entity-relationship-materialize-errors",
@@ -858,12 +926,23 @@ describe("EntitiesPage 关系物化（wire-entity-link：双 cell 闸 + 成功/�
     fireEvent.click(
       await screen.findByTestId("entity-relationship-materialize"),
     );
+    // 两步确认（动作闸）：摘要卡确认后才 POST。
+    fireEvent.click(
+      await screen.findByTestId("entity-relationship-materialize-confirm"),
+    );
 
     const errors = await screen.findByTestId(
       "entity-relationship-materialize-errors",
     );
     expect([...errors.querySelectorAll("li")]).toHaveLength(1);
     expect(errors.textContent).toContain("PLAN_TIER_REQUIRED");
+    // 403 分型卡：PLAN_TIER_REQUIRED → 档位闸（报因 + 升档下一步 + detail 原文）。
+    const aclWrap = screen.getByTestId("entity-relationship-materialize-acl");
+    const acl = within(aclWrap).getByTestId("acl-notice");
+    expect(acl.getAttribute("data-kind")).toBe("tier-gate");
+    expect(acl.textContent).toContain("该动作需要 cell 物化层");
+    expect(acl.textContent).toContain("下一步");
+    expect(acl.textContent).toContain("后端返回：");
   });
 });
 
@@ -1380,5 +1459,9 @@ describe("DomainActionsPanel 内置声明动作与台账结果引用", () => {
     );
     // 客户声明类型的待确认实例仍有唯一确认面（approve/reject）。
     expect(screen.getByTestId("domain-action-approve-102")).toBeTruthy();
+    // pending 行明示「待人工确认」语义（提案 ≠ 已生效；状态徽标同口径）。
+    const pendingHint = screen.getByTestId("domain-action-pending-hint");
+    expect(pendingHint.textContent).toContain("待人工确认");
+    expect(pendingHint.textContent).toContain("确认后才生效");
   });
 });

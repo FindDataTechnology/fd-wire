@@ -38,6 +38,101 @@ import {
   type EntityRelationshipKind,
 } from "./api";
 
+// ── ACL 403 分型（呈现层映射，不重判）───────────────────────────────────
+// 边界铁律：判序（404→档位闸→ACL）由 API 层权威——这里只按 API 已返回的
+// detail 形态做映射渲染，不重发请求、不自行推断：403 + 对象 detail 含
+// PLAN_TIER_REQUIRED 码 → 档位闸；403 + 字符串 detail 含「受限数据集」→
+// 受限 ACL（按权限词细分：编辑=写闸 / 查看=读闸；无权限词按写闸兜底——
+// 受限端点写面 NEED_WRITE 是实体页物化路径主形态）；403 + 字符串携带
+// PLAN_TIER_REQUIRED 码（包装形态）→ 档位闸；其余 403 → unknown 如实
+// 透传原文，不猜型、不显示裸 HTTP 403。
+export type AclErrorKind = "tier-gate" | "need-write" | "read-denied" | "unknown";
+
+export interface AclErrorView {
+  kind: AclErrorKind;
+  /** API 返回的 detail 原文（卡内 mono 如实呈现；取不到为 null）。 */
+  rawDetail: string | null;
+}
+
+export function classifyAclError(err: unknown): AclErrorView | null {
+  if (!(err instanceof ConsoleApiError) || err.status !== 403) return null;
+  let rawDetail: string | null = null;
+  if (typeof err.detail === "string" && err.detail) {
+    rawDetail = err.detail;
+  } else if (err.detail && typeof err.detail === "object") {
+    const message = (err.detail as { message?: unknown }).message;
+    rawDetail =
+      typeof message === "string" && message
+        ? message
+        : JSON.stringify(err.detail);
+  } else if (err.detailItems && err.detailItems.length > 0) {
+    rawDetail = err.detailItems
+      .map((item, i) => item.msg ?? `${item.type ?? "invalid"} #${i + 1}`)
+      .join("；");
+  }
+  if (err.detail && typeof err.detail === "object") {
+    const code = (err.detail as { code?: unknown }).code;
+    if (
+      typeof code === "string" &&
+      code.toUpperCase() === "PLAN_TIER_REQUIRED"
+    ) {
+      return { kind: "tier-gate", rawDetail };
+    }
+  }
+  if (typeof err.detail === "string") {
+    if (err.detail.includes("受限数据集")) {
+      if (err.detail.includes("编辑")) return { kind: "need-write", rawDetail };
+      if (err.detail.includes("查看")) return { kind: "read-denied", rawDetail };
+      return { kind: "need-write", rawDetail };
+    }
+    if (err.detail.includes("PLAN_TIER_REQUIRED")) {
+      return { kind: "tier-gate", rawDetail };
+    }
+  }
+  return { kind: "unknown", rawDetail };
+}
+
+/** ACL/档位 403 分型呈现卡（red-50 错误卡家族）：报因 + 下一步 + detail
+ *  原文（mono）。unknown 型只如实透传，不编造型别文案。 */
+function AclNoticeCard({ view }: { view: AclErrorView }) {
+  const { t } = useTranslation();
+  const lines: { headline: string; next?: string } =
+    view.kind === "tier-gate"
+      ? {
+          headline: t("console.acl.tierGateTitle"),
+          next: t("console.acl.tierGateNext"),
+        }
+      : view.kind === "need-write"
+        ? {
+            headline: t("console.acl.needWriteTitle"),
+            next: t("console.acl.needWriteNext"),
+          }
+        : view.kind === "read-denied"
+          ? {
+              headline: t("console.acl.readDeniedTitle"),
+              next: t("console.acl.readDeniedNext"),
+            }
+          : { headline: t("console.acl.unknownTitle") };
+  return (
+    <div
+      data-testid="acl-notice"
+      data-kind={view.kind}
+      className="rounded-md border border-red-200 bg-red-50 px-3 py-2"
+    >
+      <p className="text-xs font-medium text-red-700">{lines.headline}</p>
+      {lines.next && (
+        <p className="mt-1 text-[11px] text-red-700">{lines.next}</p>
+      )}
+      {view.rawDetail && (
+        <p className="mt-1 break-all font-mono text-[11px] text-red-500">
+          {t("console.acl.detailLabel")}
+          {view.rawDetail}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** 错误文案行（如实逐条）：422 detailItems 数组逐条取 msg、string detail
  *  单行、其余兜底文案——绝不静默吞掉后端口径。 */
 export function entityErrorLines(err: unknown, fallback: string): string[] {
@@ -170,20 +265,50 @@ export function EntitiesPage() {
       )}
 
       {entities == null && !loadError && (
-        <p className="mt-6 text-xs text-slate-400" data-testid="entities-loading">
-          {t("console.entities.loading")}
-        </p>
+        // loading 占位：min-height 固定容器承住内容将现之处——加载完成
+        // 切换到空态卡/实体列表时布局不闪跳（不建 skeleton 组件）。
+        <div className="mt-6 min-h-[160px]" data-testid="entities-loading">
+          <p className="text-xs text-slate-400">
+            {t("console.entities.loading")}
+          </p>
+        </div>
       )}
 
       {entities != null && entities.length === 0 && !loadError && (
+        // 0 实体 = 内容面现状（真空态即引导，不摆拍示例实体）：主句如实 +
+        // 两条起步引导——① 手动声明（锚定「声明实体」入口）② 本体建设
+        // 舰队提案流程说明（agent 提议 → owner 在「动作」面板确认）。
         <div
           data-testid="entities-empty"
           className="mt-6 rounded-lg border border-dashed border-slate-300 p-8 text-center"
         >
           <p className="text-sm text-slate-600">{t("console.entities.empty")}</p>
-          <p className="mt-1 text-xs text-slate-400">
-            {t("console.entities.emptyHint")}
-          </p>
+          <div className="mx-auto mt-4 grid max-w-2xl gap-3 text-left md:grid-cols-2">
+            <div className="rounded-md border border-slate-200 bg-slate-50/60 p-3">
+              <p className="text-xs font-semibold text-slate-700">
+                {t("console.entities.emptyManualTitle")}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                {t("console.entities.emptyHint")}
+              </p>
+              <button
+                type="button"
+                data-testid="entities-empty-create"
+                onClick={() => setCreateOpen(true)}
+                className="mt-2 rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700"
+              >
+                {t("console.entities.createOpen")}
+              </button>
+            </div>
+            <div className="rounded-md border border-slate-200 bg-slate-50/60 p-3">
+              <p className="text-xs font-semibold text-slate-700">
+                {t("console.entities.emptyFleetTitle")}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                {t("console.entities.emptyFleetHint")}
+              </p>
+            </div>
+          </div>
         </div>
       )}
 
@@ -352,9 +477,12 @@ export function EntitiesPage() {
           {t("console.entities.graph.subtitle")}
         </p>
         {graph == null ? (
-          <p className="mt-3 text-xs text-slate-400" data-testid="entity-graph-loading">
-            {t("console.entities.loading")}
-          </p>
+          // loading 占位（min-height）：图内容将现之处不闪跳。
+          <div className="mt-3 min-h-[200px]" data-testid="entity-graph-loading">
+            <p className="text-xs text-slate-400">
+              {t("console.entities.loading")}
+            </p>
+          </div>
         ) : (
           <EntityMiniGraph graph={graph} onOpenNode={scrollToEntity} />
         )}
@@ -477,7 +605,7 @@ function CreateEntityForm({
             setPkColumns(new Set());
             setErrors(null);
           }}
-          className="mt-1 w-72 rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+          className="mt-1 w-72 max-w-full rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
         >
           <option value="">
             {datasets.length === 0
@@ -547,7 +675,7 @@ function CreateEntityForm({
               setErrors(null);
             }}
             placeholder={t("console.entities.create.namePlaceholder")}
-            className="mt-1 w-64 rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+            className="mt-1 w-64 max-w-full rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
           />
         </div>
         <div>
@@ -567,7 +695,7 @@ function CreateEntityForm({
               setErrors(null);
             }}
             placeholder={t("console.entities.create.descPlaceholder")}
-            className="mt-1 w-72 rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+            className="mt-1 w-72 max-w-full rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
           />
         </div>
       </div>
@@ -590,7 +718,7 @@ function CreateEntityForm({
               setDisplayColumn(e.target.value);
               setErrors(null);
             }}
-            className="mt-1 w-56 rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+            className="mt-1 w-56 max-w-full rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
           >
             <option value="">
               {t("console.entities.create.displayPlaceholder")}
@@ -619,7 +747,7 @@ function CreateEntityForm({
               setErrors(null);
             }}
             placeholder={t("console.entities.create.notesPlaceholder")}
-            className="mt-1 w-72 rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+            className="mt-1 w-72 max-w-full rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
           />
         </div>
       </div>
@@ -801,6 +929,17 @@ function RelationshipPanel({
   const [materializingRelId, setMaterializingRelId] = useState<number | null>(
     null,
   );
+  // 物化确认面（本轮打磨）：点击「物化连接」先展开后果摘要卡，owner 确认
+  // 后才执行——执行前可见连接键 / junction 展开后果 / 衍生数据集命名规则。
+  const [pendingMaterializeRelId, setPendingMaterializeRelId] = useState<
+    number | null
+  >(null);
+  // ACL 403 分型（呈现映射）：物化失败若为 403，按 API 已返回类别渲染
+  // 分型卡（档位闸升档指引 / 受限数据集找 owner 授权），detail 原文仍
+  // 在错误行如实保留。
+  const [materializeAcl, setMaterializeAcl] = useState<AclErrorView | null>(
+    null,
+  );
   const [materializeDone, setMaterializeDone] = useState<{
     name: string;
     /** m:n 桥展开诚实计数（wire-entity-mn-materialize；n:1/1:1 无此字段）。 */
@@ -823,6 +962,8 @@ function RelationshipPanel({
     setMaterializingRelId(relId);
     setMaterializeErrors(null);
     setMaterializeDone(null);
+    setMaterializeAcl(null);
+    setPendingMaterializeRelId(null);
     try {
       const dataset = await materializeEntityRelationship(entity.id, relId);
       setMaterializeDone({
@@ -832,6 +973,7 @@ function RelationshipPanel({
       // 成功后重载：新连接数据集入「我的数据」（实体/图谱态刷新）。
       onChanged();
     } catch (err) {
+      setMaterializeAcl(classifyAclError(err));
       setMaterializeErrors(
         entityErrorLines(err, t("console.entities.materialize.failed")),
       );
@@ -937,7 +1079,8 @@ function RelationshipPanel({
               )}
               <div className="ml-auto flex flex-wrap gap-1.5">
                 {/* 物化连接（wire-entity-link）：双 cell 档才渲染——LEFT JOIN
-                    语义一键生成连接数据集，成功内联提示 + 跳「我的数据」。 */}
+                    语义一键生成连接数据集。动作闸确认面：点击先展开后果
+                    摘要卡（连接键/junction/命名规则），确认后才执行。 */}
                 {canMaterialize(rel) && (
                   <button
                     type="button"
@@ -945,12 +1088,10 @@ function RelationshipPanel({
                     data-rel-id={rel.id}
                     disabled={materializingRelId != null}
                     title={t("console.entities.materialize.hint")}
-                    onClick={() => void materialize(rel.id)}
+                    onClick={() => setPendingMaterializeRelId(rel.id)}
                     className="rounded border border-indigo-300 bg-white px-1.5 py-0.5 text-[11px] text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {materializingRelId === rel.id
-                      ? t("console.entities.materialize.working")
-                      : t("console.entities.materialize.action")}
+                    {t("console.entities.materialize.action")}
                   </button>
                 )}
                 <button
@@ -966,6 +1107,96 @@ function RelationshipPanel({
             </li>
           ))}
         </ul>
+      )}
+
+      {/* 物化确认面（动作闸）：执行前后果摘要卡——连接键（mono）、junction
+          展开说明（仅 m:n）、衍生数据集缺省命名规则（{左}×{右} 连接、冲突
+          追加 _2/_3、成功名以 API 回传为准）。摘要数据全部来自组件既有
+          state，不新增 API 调用；确认钮 slate-900 主钮 + 取消次钮。 */}
+      {pendingMaterializeRelId != null &&
+        (() => {
+          const rel = rels.find((r) => r.id === pendingMaterializeRelId);
+          if (!rel) return null;
+          const fromName =
+            nameById.get(rel.from_entity_id) ?? `#${rel.from_entity_id}`;
+          const toName =
+            nameById.get(rel.to_entity_id) ?? `#${rel.to_entity_id}`;
+          const junctionName = rel.junction_dataset_id
+            ? datasets.find((d) => d.id === rel.junction_dataset_id)?.name ??
+              rel.junction_dataset_id
+            : null;
+          return (
+            <div
+              data-testid="entity-relationship-materialize-summary"
+              className="mt-2 rounded-md border border-slate-200 bg-white p-3"
+            >
+              <p className="text-xs font-semibold text-slate-700">
+                {t("console.entities.materialize.summaryTitle")}
+              </p>
+              <div className="mt-2 space-y-1">
+                <p className="text-[11px] text-slate-500">
+                  {t("console.entities.materialize.summaryKeyLabel")}
+                  <span className="ml-1 font-mono text-slate-700">
+                    {`${fromName}.${rel.from_column} →(${rel.kind}) ${toName}.${rel.to_column}`}
+                  </span>
+                </p>
+                {rel.kind === "m:n" && junctionName && (
+                  <p className="font-mono text-[11px] text-slate-500">
+                    {t("console.entities.materialize.summaryJunctionLabel", {
+                      name: junctionName,
+                      source: rel.junction_source_column ?? "—",
+                      target: rel.junction_target_column ?? "—",
+                    })}
+                  </p>
+                )}
+                {rel.kind === "m:n" && (
+                  <p className="text-[11px] text-slate-500">
+                    {t("console.entities.materialize.summaryJunctionNote")}
+                  </p>
+                )}
+                <p className="text-[11px] text-slate-500">
+                  {t("console.entities.materialize.summaryNamingNote", {
+                    left: fromName,
+                    right: toName,
+                  })}
+                </p>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-testid="entity-relationship-materialize-confirm"
+                  data-rel-id={rel.id}
+                  disabled={materializingRelId != null}
+                  onClick={() => void materialize(rel.id)}
+                  className="rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {materializingRelId === rel.id
+                    ? t("console.entities.materialize.working")
+                    : t("console.entities.materialize.confirm")}
+                </button>
+                <button
+                  type="button"
+                  data-testid="entity-relationship-materialize-cancel"
+                  disabled={materializingRelId != null}
+                  onClick={() => setPendingMaterializeRelId(null)}
+                  className="rounded border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {t("console.entities.materialize.cancel")}
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+
+      {/* 物化失败 ACL 403 分型卡（按 API 已返回类别渲染——档位闸升档指引 /
+          受限数据集找 owner 授权 / unknown 如实透传；不裸 403、不重判）。 */}
+      {materializeAcl && (
+        <div
+          className="mt-2"
+          data-testid="entity-relationship-materialize-acl"
+        >
+          <AclNoticeCard view={materializeAcl} />
+        </div>
       )}
 
       {/* 物化成功：新数据集名 + 「查看」跳我的数据（数据集列表已含连接子集）。 */}
@@ -1045,7 +1276,7 @@ function RelationshipPanel({
                 setToColumn("");
                 setErrors(null);
               }}
-              className="mt-1 w-44 rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+              className="mt-1 w-44 max-w-full rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
             >
               <option value="">
                 {t("console.entities.relationships.targetPlaceholder")}
@@ -1128,7 +1359,7 @@ function RelationshipPanel({
               onChange={(e) =>
                 setKind(e.target.value as EntityRelationshipKind)
               }
-              className="mt-1 w-36 rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+              className="mt-1 w-36 max-w-full rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
             >
               {ENTITY_RELATIONSHIP_KINDS.map((value) => (
                 <option key={value} value={value}>
@@ -1152,7 +1383,7 @@ function RelationshipPanel({
                   value={junctionDatasetId}
                   disabled={adding}
                   onChange={(e) => setJunctionDatasetId(e.target.value)}
-                  className="mt-1 w-48 rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+                  className="mt-1 w-48 max-w-full rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
                 >
                   <option value="">
                     {t("console.entities.relationships.junctionPlaceholder")}
@@ -1172,7 +1403,7 @@ function RelationshipPanel({
                 placeholder={t(
                   "console.entities.relationships.junctionSource",
                 )}
-                className="w-36 rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+                className="w-36 max-w-full rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
               />
               <input
                 data-testid="entity-relationship-junction-target"
@@ -1182,7 +1413,7 @@ function RelationshipPanel({
                 placeholder={t(
                   "console.entities.relationships.junctionTarget",
                 )}
-                className="w-36 rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+                className="w-36 max-w-full rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
               />
             </div>
           )}
@@ -1203,7 +1434,7 @@ function RelationshipPanel({
                 setErrors(null);
               }}
               placeholder={t("console.entities.relationships.labelPlaceholder")}
-              className="mt-1 w-40 rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
+              className="mt-1 w-40 max-w-full rounded-md border border-slate-300 px-2 py-1 text-sm disabled:opacity-50"
             />
           </div>
           <button

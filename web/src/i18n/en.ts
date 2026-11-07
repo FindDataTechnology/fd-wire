@@ -2793,6 +2793,13 @@ const en: Translation = {
       empty: "No entities declared yet",
       emptyHint:
         "Start with “Declare entity”: pick a dataset, check primary-key columns, give it a business name.",
+      // Two starting paths for the empty state (polish-wire-ontology-console
+      // merge): manual declaration / ontology-building fleet proposals — a
+      // proposal stays "awaiting manual confirmation" until the owner approves.
+      emptyManualTitle: "Path 1: Declare entities manually",
+      emptyFleetTitle: "Path 2: Ontology-building fleet proposals",
+      emptyFleetHint:
+        "Fleet agents submit entity-declare / entity-relation-declare drafts through the action gate; a proposal stays “awaiting manual confirmation” until the owner approves it in an entity's Actions panel.",
       createOpen: "Declare entity",
       create: {
         title: "Declare entity",
@@ -2827,6 +2834,7 @@ const en: Translation = {
         disableFailed: "Failed to disable. Please retry.",
         confirmFailed: "Failed to confirm. Please retry.",
         disabled: "Disabled",
+        disable: "Disable",
         noTypes: "No action types on this entity yet — declare one below (e.g. \"Approve\", \"Flag\").",
         builtinTitle: "Built-in declaration actions",
         builtinBadge: "Built-in",
@@ -2852,6 +2860,20 @@ const en: Translation = {
         confirm: "Confirm",
         reject: "Reject",
         noInstances: "No instances yet.",
+        // Proposal status must not mislead (polish-wire-ontology-console
+        // merge): the pending row says plainly "awaiting manual confirmation"
+        // — it takes effect only after approval, never "executed" wording;
+        // terminal states are honest; unknown statuses bypass t() and pass the
+        // API value through verbatim.
+        pendingHint:
+          "This proposal awaits manual confirmation — it takes effect only after the owner approves it (a proposal is not an executed effect).",
+        status: {
+          awaiting_confirmation: "Awaiting manual confirmation",
+          executed: "Executed",
+          rejected: "Rejected",
+          failed: "Failed",
+          disabled: "Disabled",
+        },
       },
       objects: {
         toggle: "Objects",
@@ -2864,6 +2886,32 @@ const en: Translation = {
         relationEdge: "Entity #{{id}}",
         loading: "Loading…",
         loadFailed: "Failed to load objects. Please retry.",
+        // Empty / filtered-empty states (polish-wire-ontology-console merge):
+        // the true empty state explains where object rows come from; a
+        // fruitless search offers a "clear search" reset CTA.
+        emptyTitle:
+          "No object rows in the dataset of entity “{{name}}” yet",
+        emptyHint:
+          "Object rows come from the entity's backing dataset; search and browse here once data is written.",
+        filteredEmpty:
+          "No matches. Try another keyword, or clear the search to see all objects.",
+        filteredEmptyReset: "Clear search",
+        relationEmpty: "No related object rows for this relationship yet.",
+        relationEmptyHint:
+          "Once both sides' datasets contain data, related objects will appear here for traversal.",
+        // ACL 403 typed copy (presentation mapping, no re-adjudication): tier
+        // gate / read gate / unknown fallback — never a bare HTTP 403, no
+        // gate-ordering leaks.
+        aclTierGateMessage:
+          "This action requires the cell materialization tier (Base plan or above).",
+        aclTierGateNext:
+          "Available after upgrading to the Base plan or above (see Plans & Pricing in the console).",
+        aclReadDeniedMessage:
+          "This dataset is restricted and you don't have view access.",
+        aclReadDeniedNext:
+          "Ask the dataset owner to grant you view access.",
+        aclUnknownNext:
+          "If you need access, ask the dataset owner or an administrator to confirm the grant.",
       },
       card: {
         delete: "Delete",
@@ -2920,6 +2968,22 @@ const en: Translation = {
         view: "View",
         failed: "Failed to materialize the link — try again shortly.",
         hint: "Join the two datasets per this relationship into a new derived dataset (n:1/1:1 is a LEFT JOIN: all left rows kept, unmatched right columns NULL; colliding right columns get a right_ prefix. m:n expands via the junction dataset: one bridge row → one result row, orphan bridges counted honestly).",
+        // Action-gate confirmation surface (polish-wire-ontology-console
+        // merge): clicking "Materialize link" first opens a consequences
+        // summary card; execution waits for the owner's confirmation — join
+        // key / junction expansion / default naming rules are all visible
+        // before it runs.
+        summaryTitle:
+          "Confirm materialization — review the consequences first",
+        summaryKeyLabel: "Join key",
+        summaryJunctionLabel:
+          "via junction dataset {{name}} ({{source}} × {{target}})",
+        summaryJunctionNote:
+          "m:n expansion: relationship pairs are expanded via the junction dataset — one bridge row per result row; unbridged rows are excluded, and orphan bridges are dropped with an honest count.",
+        summaryNamingNote:
+          "Default name “{{left}} × {{right}} link”, registered as a derived dataset under “My data”; key conflicts get a _2 / _3 suffix; the actual name is whatever the API returns.",
+        confirm: "Materialize now",
+        cancel: "Cancel",
       },
       graph: {
         title: "Entity graph",
@@ -2941,6 +3005,10 @@ const en: Translation = {
         retry: "Retry",
         empty:
           "No version snapshots yet — they appear after the first daily snapshot or a manual release.",
+        // Empty-state guidance (polish-wire-ontology-console merge): honest
+        // main line + a pointing sub-line.
+        emptyHint:
+          "Use “Publish version” above to create the first version now; daily snapshots are taken automatically.",
         unpublishedBadge: "{{count}} unpublished change(s)",
         unpublishedSince: "since v{{version}}",
         publish: "Take a release",
@@ -2980,6 +3048,11 @@ const en: Translation = {
         rollbackPlanFailed: "Failed to build the rollback plan",
         rollbackPlanEmpty:
           "The current ontology already matches v{{version}} — nothing to roll back.",
+        // Rollback danger note (polish-wire-ontology-console merge): spell out
+        // the rewrite consequence and the append-only history semantics
+        // before execution.
+        rollbackWarning:
+          "Danger: confirming rewrites the current ontology to the state of v{{version}} per this plan. History is append-only — the rollback itself is recorded as rollback events.",
         rollbackEntities:
           "Entities: create {{create}} / update {{update}} / delete {{delete}}",
         rollbackRelationships: "Relationships: create {{create}} / delete {{delete}}",
@@ -3004,6 +3077,28 @@ const en: Translation = {
         baselineSnapshot: "earliest snapshot",
         baselineEmpty: "empty baseline",
       },
+    },
+    // ACL/tier 403 typed card (polish-wire-ontology-console merge):
+    // presentation mapping for the entity page materialize path — cause +
+    // next step + raw backend detail (mono). Gate ordering (404 → tier gate →
+    // ACL) is authoritative at the API layer; this card only renders the
+    // returned category. The unknown kind passes the detail through honestly —
+    // never a bare HTTP 403, no invented typing copy.
+    acl: {
+      tierGateTitle:
+        "This action requires the cell materialization tier (Basic plan or above)",
+      tierGateNext:
+        "Next: available after upgrading to Basic plan or above (Console → Plans & pricing)",
+      needWriteTitle:
+        "The target dataset is restricted: you lack edit access, so write operations are denied",
+      needWriteNext:
+        "Next: ask the dataset owner to grant you edit access",
+      readDeniedTitle:
+        "The target dataset is restricted: you lack view access, so reading is denied",
+      readDeniedNext:
+        "Next: ask the dataset owner to grant you view access",
+      unknownTitle: "The operation was denied",
+      detailLabel: "Backend detail: ",
     },
     // Dataset market (wire-dataset-marketplace): signed-in customers can
     // browse datasets others opened, subscribe (or request approval), and
