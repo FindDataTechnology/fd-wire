@@ -44,7 +44,7 @@ spec:
           # 不可变标签纪律（mcp-service-deploy spec：禁 latest/浮动标签）。
           # 出片 tag=testaction001 build-pool 快照 sha=24994bc（真 84468f8：会话上下文二车道——壹座岗位车道 conversation_id 可缺省落 NULL，add-esignature-selfaction-gate 设计偏差修正；测试 +2=15 过）。
           # 出片 tag=testaction001 build-pool 快照 sha=1807a2e（真 44d29cd：ActionOut.conversation_id 可空——岗位车道 NULL 行读态 500 收尾；二车道全链 53 测过；叠加并发 bench_pull beae0a）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-1807a2e
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-e76fd47
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
