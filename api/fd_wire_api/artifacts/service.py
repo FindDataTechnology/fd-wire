@@ -549,7 +549,10 @@ def publish_artifact(
     ``info_store``/``gate_mode`` 供测试注入；缺省走 env 装配
     （``FD_INFO_URL`` / ``EVIDENCE_GATE_MODE``）。
     """
-    mode = gate_mode or get_evidence_gate_settings().mode
+    # 生效模式按 kind 分流：纯数据观测类看板可在配置里降级为 warn（见
+    # EvidenceGateSettings.kind_overrides 的理由）。显式传入的 gate_mode 优先级最高，
+    # 测试注入行为不变。
+    mode = gate_mode or get_evidence_gate_settings().mode_for(artifact.kind)
     if mode != GATE_OFF:
         spec = current_spec(db, artifact)
         failures = verify_evidence(

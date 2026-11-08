@@ -62,6 +62,13 @@ spec:
             # enforce = 信息类强断言缺证据发布 422；回滚改 warn（或 off 全跳过）。
             - name: EVIDENCE_GATE_MODE
               value: "enforce"
+            # 按产物 kind 分流（2026-11-08，用户裁决选项①）：纯数据观测类看板
+            # （dashboard）的可追溯性在 data_plane 的 source/concept/entity locator 里，
+            # 与 info-stream 是两条等价溯源路径；要求它出 info-stream 证据等于要求
+            # 它证明一个自己不依赖的来源。故 dashboard 降为 warn（仍记结构化告警日志），
+            # 叙述类产物（doc 等）继续 enforce。默认空=行为不变，这里显式开。
+            - name: EVIDENCE_GATE_KIND_OVERRIDES
+              value: '{"dashboard": "warn"}'
             # 指标落成数据集拉数（wire-indicator-to-dataset）：上游 business-mcp
             # 的 indicator_series_read 工具。business-mcp 部署在 zihan 集群
             # fd-mcp ns（NodePort 30803，公网安全组未放行），cheap pod 出站走

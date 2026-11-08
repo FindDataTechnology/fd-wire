@@ -606,3 +606,38 @@ def test_publish_off_skips_claim_check(db_session, gate):
     gate(GATE_OFF)
     published = service.publish_artifact(db_session, artifact, customer_id="cust-001")
     assert published.status == "published"
+
+
+# ── 按 kind 分流（2026-11-08 花卉线上产时新增） ──────────────────────────
+
+def test_kind_overrides_default_to_empty():
+    """默认不覆盖 → 行为与变更前完全一致（零回归的前提）。"""
+    # 该字段走 validation_alias，必须按 env 名传（mode= 会被 extra=ignore 静默丢弃）
+    settings = EvidenceGateSettings(EVIDENCE_GATE_MODE="enforce")
+    assert settings.kind_overrides == {}
+    assert settings.mode_for("dashboard") == "enforce"
+    assert settings.mode_for(None) == "enforce"
+
+
+def test_kind_overrides_lower_only_the_named_kind():
+    """只有显式配置的 kind 降级；其余 kind 仍按全局 mode（不能一降全降）。"""
+    settings = EvidenceGateSettings(
+        EVIDENCE_GATE_MODE="enforce",
+        EVIDENCE_GATE_KIND_OVERRIDES='{"dashboard": "warn"}',
+    )
+    assert settings.mode_for("dashboard") == "warn"
+    assert settings.mode_for("doc") == "enforce"
+    assert settings.mode_for(None) == "enforce"
+
+
+def test_kind_overrides_ignore_malformed_values():
+    """坏 JSON / 非法模式：忽略（记告警），不让服务起不来。"""
+    assert EvidenceGateSettings(
+        EVIDENCE_GATE_MODE="warn", EVIDENCE_GATE_KIND_OVERRIDES="not-json"
+    ).kind_overrides == {}
+    settings = EvidenceGateSettings(
+        EVIDENCE_GATE_MODE="enforce",
+        EVIDENCE_GATE_KIND_OVERRIDES='{"dashboard": "block"}',
+    )
+    assert settings.kind_overrides == {}
+    assert settings.mode_for("dashboard") == "enforce"

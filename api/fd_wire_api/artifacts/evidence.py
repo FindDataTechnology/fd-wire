@@ -367,6 +367,57 @@ class EvidenceGateSettings(BaseSettings):
         validation_alias="EVIDENCE_GATE_MODE",
     )
 
+    #: 按产物 kind 覆盖门禁模式（JSON，如 ``{"dashboard": "warn"}``）。
+    #:
+    #: 为什么需要：``enforce`` 拦的是「无 evidence 块的金额/比例断言」，而**纯数据
+    #: 观测类看板**（图表 + 数值面板）的可追溯性在另一套体系里——每张图都带
+    #: ``data_plane`` 的 source/concept/entity locator，与 info-stream 是等价的两条
+    #: 溯源路径。对这类板要求 info-stream 证据，等于要求它证明一个它不依赖的来源。
+    #:
+    #: 默认空 = 行为完全不变（既有产物零影响）；只有显式配置的 kind 才降级。
+    #: 非法 JSON / 非法模式一律忽略该键并记告警（不炸启动）。
+    kind_overrides: dict[str, str] = Field(
+        default_factory=dict,
+        validation_alias="EVIDENCE_GATE_KIND_OVERRIDES",
+    )
+
+    @field_validator("kind_overrides", mode="before")
+    @classmethod
+    def _parse_overrides(cls, value):
+        """接受 JSON 字符串或已是 dict 的映射；坏值忽略（回空，不阻断启动）。"""
+        if value is None or value == "":
+            return {}
+        if isinstance(value, dict):
+            raw = value
+        else:
+            try:
+                raw = json.loads(str(value))
+            except json.JSONDecodeError:
+                logger.warning("EVIDENCE_GATE_KIND_OVERRIDES 不是合法 JSON，忽略")
+                return {}
+        if not isinstance(raw, dict):
+            logger.warning("EVIDENCE_GATE_KIND_OVERRIDES 必须是对象，忽略")
+            return {}
+        clean: dict[str, str] = {}
+        for kind, mode in raw.items():
+            text = str(mode or "").strip().lower()
+            if text in GATE_MODES:
+                clean[str(kind).strip()] = text
+            else:
+                logger.warning(
+                    "EVIDENCE_GATE_KIND_OVERRIDES[%r]=%r 非法（合法值 %s），忽略该键",
+                    kind, mode, "|".join(GATE_MODES),
+                )
+        return clean
+
+    def mode_for(self, kind: str | None) -> str:
+        """该 kind 实际生效的模式：kind 覆盖 > 全局 mode。"""
+        if kind:
+            override = self.kind_overrides.get(str(kind).strip())
+            if override:
+                return override
+        return self.mode
+
     @field_validator("mode")
     @classmethod
     def _known_mode(cls, value: str) -> str:
