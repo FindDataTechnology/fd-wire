@@ -5,7 +5,8 @@
 # 一仓双镜像（matrix，结构照抄 fd-wanxing images.yml）：
 #   ccr.ccs.tencentyun.com/fd-wire/api   ← api/Dockerfile（context api）
 #   ccr.ccs.tencentyun.com/fd-wire/web   ← web/Dockerfile（context web）
-# tag = sha-${GITHUB_SHA::7}（与 Jenkins 惯例逐字节一致）+ 滚动 main。
+# tag = 滚动 main；sha-${GITHUB_SHA::7} 只在内容（digest）真变了才追加
+# （内容闸门：同内容多 tag 结构上不可能，保住 TCR 每仓 100 tag 配额）。
 # k8s 清单（deploy/k8s/）只引用不可变 sha- tag。
 #
 # 通道说明（上线时主代理确认，见 deploy/README.md 步骤 3）：tcr-image-pipeline
@@ -69,10 +70,6 @@ jobs:
           ref: internal-main
           path: daas-src
 
-      - name: Compute tag
-        id: tag
-        run: echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -81,11 +78,23 @@ jobs:
           username: ${{ secrets.TCR_USERNAME }}
           password: ${{ secrets.TCR_PASSWORD }}
 
-      - uses: docker/build-push-action@v6
+      # 内容基线：读 main 当前 digest（未认证/不存在都容忍，空 = 首次构建）
+      - id: prev
+        name: 读 main 当前 digest（内容基线）
+        run: |
+          img="$REGISTRY/$NAMESPACE/${{ matrix.image }}"
+          cur=$(docker buildx imagetools inspect "$img:main" \
+                --format '{{.Manifest.Digest}}' 2>/dev/null || true)
+          echo "digest=$cur" >> "$GITHUB_OUTPUT"
+          echo "${{ matrix.image }} main 当前 digest: ${cur:-<不存在，本次为首次构建>}"
+
+      - id: build
+        uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           platforms: linux/amd64
           push: true
+          # 硬约束：开了 attestation，同内容两次构建 digest 必然不同，闸门永久失效。
           provenance: false
           # named context for the cell image's `COPY --from=daas`; api/web
           # Dockerfiles never reference it and buildx resolves contexts lazily,
@@ -96,10 +105,44 @@ jobs:
           # 14065ac 为扁平根布局——2026-10-10 internal-main 已对齐 main）
           build-contexts: daas=${{ github.workspace }}/daas-src/fd-daas-mcp
           tags: |
-            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.image }}:${{ steps.tag.outputs.tag }}
             ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.image }}:main
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,scope=${{ matrix.image }},mode=max
+
+      # 内容闸门：digest 变了才铸 sha-<commit>，让「同内容多 tag」结构上不可能。
+      - name: 内容变了才铸不可变 tag
+        env:
+          NEW: ${{ steps.build.outputs.digest }}
+          OLD: ${{ steps.prev.outputs.digest }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          img="$REGISTRY/$NAMESPACE/${{ matrix.image }}"
+          [ -n "$NEW" ] || { echo "::error::构建未产出 digest"; exit 1; }
+          if [ "$NEW" = "$OLD" ]; then
+            echo "内容未变（${NEW}）：不铸新 tag"
+            {
+              echo "### 内容未变，未产出新 tag"
+              echo ""
+              echo "本次构建与 \`main\` 当前指向完全一致。"
+              echo ""
+              echo "- 可直接 pin：\`$img@$NEW\`"
+              echo "- 滚动引用：\`$img:main\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          tag="sha-${GITHUB_SHA::7}"
+          docker buildx imagetools create -t "$img:$tag" "$img@$NEW"
+          echo "已铸 $tag → $NEW"
+          {
+            echo "### 内容有变化，已铸不可变 tag"
+            echo ""
+            echo "| 字段 | 值 |"
+            echo "|---|---|"
+            echo "| tag | \`$tag\` |"
+            echo "| digest | \`$NEW\` |"
+            echo "| 上一内容 digest | \`${OLD:-<无>}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # 连接器（wire-local-connector）：单二进制出站连接器，不只产镜像——
   # 客户内网直接下载对应平台可执行文件运行（deploy/README.md「连接器」段）。
