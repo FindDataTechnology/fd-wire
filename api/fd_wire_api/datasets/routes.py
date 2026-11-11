@@ -40,6 +40,7 @@ from fastapi import (
     Header,
     HTTPException,
     Query,
+    Request,
     UploadFile,
     status,
 )
@@ -104,6 +105,8 @@ from ..console.auth import (
     require_console_owner,
 )
 from ..console.models import CustomerMember
+from ..data_plane.auth import require_data_plane_principal
+from ..data_plane.service import KEY_PREFIX as DATA_PLANE_KEY_PREFIX
 from ..provenance.ledger import append_event
 
 router = APIRouter(tags=["datasets"])
@@ -118,12 +121,17 @@ class DatasetActor:
 
     身份只来自服务端 token 校验（require_console_customer_actor 同门禁），
     数据集级授权判定只认这里的 ``customer.logto_sub`` / ``sub``。
+
+    ``allowlist``（add-data-key-dataset-list）只对 ``data-key`` 轨道有值：
+    数据面 key 是客户级凭据、不承载成员身份（D6），可读范围由 key 的
+    allowlist 收窄；console 轨道恒空元组（成员维度授权照旧走 acl）。
     """
 
     customer: Customer
     customer_id: str
     sub: str
     role: str
+    allowlist: tuple[str, ...] = ()
 
 
 def require_dataset_actor(
@@ -133,6 +141,53 @@ def require_dataset_actor(
     return DatasetActor(
         customer=customer, customer_id=str(customer.name), sub=sub, role=role
     )
+
+
+#: 数据面 key 轨道在 actor 里的 role 标记（非成员角色；用于列表分流）。
+DATA_KEY_ROLE = "data-key"
+
+
+def require_dataset_actor_dual(
+    request: Request,
+    db: Session = Depends(get_db),
+    platform_db: Session = Depends(get_platform_db),
+) -> DatasetActor:
+    """列表面双轨身份（add-data-key-dataset-list）：wdk- key 或 console 会话。
+
+    只有带 ``wdk-`` 前缀的 Bearer 走 key 轨道——验签/吊销/限流全部复用
+    ``require_data_plane_principal``（不复制一份验签逻辑，双份必漂）；
+    其余一律交回 console 轨道原依赖，行为零漂移。key 的客户行按
+    ``customer_id`` 取，取不到即 401（不静默降级为空列表）。
+    """
+    token = _bearer_token(request)
+    if token and token.startswith(DATA_PLANE_KEY_PREFIX):
+        principal = require_data_plane_principal(request, db, platform_db)
+        customer = platform_db.execute(
+            select(Customer).where(Customer.name == principal.customer_id)
+        ).scalar_one_or_none()
+        if customer is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"数据面 key 归属客户不存在：{principal.customer_id}",
+            )
+        return DatasetActor(
+            customer=customer,
+            customer_id=str(customer.name),
+            sub=principal.actor_id,
+            role=DATA_KEY_ROLE,
+            allowlist=tuple(principal.allowlist),
+        )
+    customer, sub, role = require_console_customer_actor(request, platform_db)
+    return DatasetActor(
+        customer=customer, customer_id=str(customer.name), sub=sub, role=role
+    )
+
+
+def _bearer_token(request: Request) -> str | None:
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[len("Bearer ") :].strip() or None
+    return None
 
 
 def _require_dataset_access(
@@ -941,13 +996,17 @@ def _create_from_upload_local(
 
 @router.get("/api/v1/datasets", response_model=list[DatasetOut])
 def list_datasets(
-    actor: DatasetActor = Depends(require_dataset_actor),
+    actor: DatasetActor = Depends(require_dataset_actor_dual),
     db: Session = Depends(get_db),
 ) -> list[DatasetOut]:
     """本企业数据集列表（卡片；api 层与 cell 层同列呈现，tier 徽标区分）。
 
     wire-dataset-acl D3：过滤掉无 view 授权的 restricted 行（不 403 整页）；
     ``team`` 模式数据集照旧全量呈现（存量语义零变化）。
+
+    add-data-key-dataset-list：``data-key`` 轨道不套成员维度 ACL（key 无成员
+    身份可判，与数据面授权边界 D6 一致），改按 key 的 allowlist 收窄；console
+    轨道逐字沿用原判定。
     """
     datasets = (
         db.execute(
@@ -958,6 +1017,12 @@ def list_datasets(
         .scalars()
         .all()
     )
+    if actor.role == DATA_KEY_ROLE:
+        return [
+            DatasetOut.from_dataset(d)
+            for d in datasets
+            if not actor.allowlist or str(d.id) in actor.allowlist
+        ]
     return [
         DatasetOut.from_dataset(d)
         for d in datasets
