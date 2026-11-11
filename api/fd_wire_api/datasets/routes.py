@@ -204,6 +204,22 @@ def _require_dataset_access(
     )
 
 
+def _require_key_allows(actor: DatasetActor, dataset: Dataset) -> None:
+    """key 轨道的 allowlist 闸：与数据面 ``ensure_dataset_allowed`` 同语义同文案。
+
+    ``data-key`` 轨道不承载成员身份（D6），所以不套 ``acl.can_access``；越界
+    只可能是 key 的允许清单未列入——403 如实说明（不静默 404、不假空）。
+    """
+    if actor.allowlist and str(dataset.id) not in actor.allowlist:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"该 key 的数据集允许清单不含 {dataset.id}"
+                "（铸造时未列入；如需访问请在控制台调整允许清单或换用全量 key）"
+            ),
+        )
+
+
 _DEFAULT_INTERNAL_TOKEN = "wire-internal-dev"
 
 
@@ -1138,14 +1154,22 @@ def preview_rows(
     dataset_id: str,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
-    actor: DatasetActor = Depends(require_dataset_actor),
+    actor: DatasetActor = Depends(require_dataset_actor_dual),
     db: Session = Depends(get_db),
     engine_factory: EngineClientFactory = Depends(get_engine_client_factory),
 ) -> dict:
     """行预览：cell 层透传引擎 ``preview``（含修正后的有效视图 +
-    ``__row_id``）；api 层本地执行（``__row_id``=建集行序）。"""
+    ``__row_id``）；api 层本地执行（``__row_id``=建集行序）。
+
+    add-data-key-dataset-list（行读面）：``data-key`` 轨道按 key 的
+    allowlist 收窄，不套成员维度 ACL（key 不承载成员身份，与数据面
+    授权边界 D6 一致）；console 轨道逐字沿用原判定。
+    """
     dataset = _dataset_or_404(db, dataset_id, actor.customer_id)
-    _require_dataset_access(db, actor, dataset)
+    if actor.role == DATA_KEY_ROLE:
+        _require_key_allows(actor, dataset)
+    else:
+        _require_dataset_access(db, actor, dataset)
     if getattr(dataset, "storage_tier", service.TIER_CELL) == service.TIER_API:
         result = api_store.preview_rows(
             db, dataset_id=dataset.id, page=page, page_size=page_size

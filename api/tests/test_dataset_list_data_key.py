@@ -248,3 +248,63 @@ def test_no_credential_is_401_not_empty(env):
     client = env["client"]
     resp = client.get("/api/v1/datasets")
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------- 行读面（rows）
+
+
+def rows_resp(client, dataset_id, headers):
+    return client.get(f"/api/v1/datasets/{dataset_id}/rows", headers=headers)
+
+
+def test_key_reads_rows_of_own_dataset(env):
+    """key 轨道能读本客户数据集的行（盘账取样的必经面）。"""
+    client, db = env["client"], env["db"]
+    ds = seed_dataset(db, key="rows-ok")
+    key = mint_key(db, dataset_ids=[ds.id])
+
+    resp = rows_resp(client, ds.id, key_headers(key))
+    assert resp.status_code == 200, resp.text
+    assert "rows" in resp.json()
+
+
+def test_key_allowlist_blocks_rows_outside(env):
+    """allowlist 未列入 → 403 如实说明（不是 404、不是空行集）。"""
+    client, db = env["client"], env["db"]
+    allowed = seed_dataset(db, key="rows-allowed")
+    other = seed_dataset(db, key="rows-other")
+    key = mint_key(db, dataset_ids=[allowed.id])
+
+    ok = rows_resp(client, allowed.id, key_headers(key))
+    assert ok.status_code == 200, ok.text
+
+    denied = rows_resp(client, other.id, key_headers(key))
+    assert denied.status_code == 403, denied.text
+    assert "允许清单" in denied.json()["detail"]
+
+
+def test_key_full_rows_without_allowlist(env):
+    """空 allowlist = 全量 key：本客户数据集都可读行。"""
+    client, db = env["client"], env["db"]
+    ds = seed_dataset(db, key="rows-full")
+    key = mint_key(db)
+
+    resp = rows_resp(client, ds.id, key_headers(key))
+    assert resp.status_code == 200, resp.text
+
+
+def test_console_rows_unaffected(env):
+    """console 轨道零漂移：owner 照旧可读行。"""
+    client, db = env["client"], env["db"]
+    ds = seed_dataset(db, key="rows-console")
+
+    resp = rows_resp(client, ds.id, OWNER)
+    assert resp.status_code == 200, resp.text
+
+
+def test_rows_no_credential_401(env):
+    client, db = env["client"], env["db"]
+    ds = seed_dataset(db, key="rows-anon")
+
+    resp = rows_resp(client, ds.id, {})
+    assert resp.status_code == 401

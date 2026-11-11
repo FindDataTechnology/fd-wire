@@ -33,3 +33,23 @@ key 的 `allowlist_json` 非空时，列表 SHALL 只返回其列出的数据集
 #### Scenario: 空列表不等于无凭据
 - **WHEN** 请求未带任何 Bearer
 - **THEN** 返回 401，而非 200 空数组
+
+### Requirement: 行读面接受双轨凭据
+
+`GET /api/v1/datasets/{id}/rows` SHALL 与列表面同源接受两种凭据：console 会话与数据面 key（`Authorization: Bearer wdk-…`）。key 轨道的验签、吊销与限流 SHALL 复用 `require_data_plane_principal`（经 `require_dataset_actor_dual`），SHALL NOT 另写一份验签逻辑。既有只读面（query/aggregate）本就只挂数据面 principal，行读面补齐后三个只读端点口径一致。
+
+#### Scenario: key 轨道读本客户数据集的行
+- **WHEN** 以某客户 active 数据面 key 读取本客户某数据集的行
+- **THEN** 返回该数据集的行页（`rows` 字段），不触达引擎的成员维度判定
+
+#### Scenario: key 轨道越出允许清单
+- **WHEN** key 的 `allowlist_json` 非空且不含目标数据集
+- **THEN** 返回 403 并指明「允许清单不含 <id>」，SHALL NOT 返回 404 或空行集
+
+#### Scenario: console 轨道零漂移
+- **WHEN** 以 console 会话读取行
+- **THEN** 行为与改动前完全一致（restricted 数据集仍按成员授权判定）
+
+#### Scenario: 无凭据
+- **WHEN** 请求未带任何凭据
+- **THEN** 返回 401，SHALL NOT 返回空行集

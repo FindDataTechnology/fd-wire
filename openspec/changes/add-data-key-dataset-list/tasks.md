@@ -20,3 +20,10 @@
 - [x] 3.2 单测全绿（本 change 相关文件）
 - [ ] 3.3 出片 fd-wire-api 新 sha → 回填 tag → 线上实测：`wdk-` 打 `GET /api/v1/datasets` 返回本客户数据集
 - [ ] 3.4 端到端：本体舰队盘账岗回合 `datasets_profiled` 从 0 抬起
+
+## 4. 行读面补双轨（rows）
+
+- [x] 4.1 `preview_rows` 改挂 `require_dataset_actor_dual`；key 轨道按 allowlist 收窄（`_require_key_allows`），console 轨道零漂移
+- [x] 4.2 单测：key 读本客户行 200 / allowlist 越界 403（文案含「允许清单」）/ 空 allowlist 全量 / console 零漂移 / 无凭据 401（5 条，`tests/test_dataset_list_data_key.py`）
+- [ ] 4.3 出片 fd-wire-api 新 sha → 线上实测：`wdk-` 打 `GET /api/v1/datasets/{id}/rows` 200，`wire_dataset_rows` 不再 401
+- [ ] 4.4 端到端：盘账岗下一回合真取到列快照与逐列证据（`datasets_profiled` > 0）
