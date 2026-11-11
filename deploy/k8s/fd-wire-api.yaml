@@ -47,7 +47,7 @@ spec:
           # 出片 tag=scs001/fd-wire-images 快照 sha=59b0c2b（真 bc7eb8e：add-data-key-dataset-list
           # ——GET /api/v1/datasets 接受 wdk- 数据面 key，机器身份能列本客户数据集；
           # console 轨道零漂移；全量 1895 passed / 12 skipped）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-59b0c2b
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-2fd9725
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
