@@ -1,5 +1,6 @@
 """FastAPI 入口：`uvicorn fd_wire_api.app:app`。"""
 
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -20,6 +21,7 @@ from .catalog import init_db as init_catalog_db
 from .catalog import register_catalog
 from .catalog import shutdown_catalog, startup_catalog
 from .config import settings
+from .db_policy import boot_total, module_timer
 from .console import init_db as init_console_db
 from .console import router as console_router
 # 团队空间（wire-team-spaces）：邀请兑换入队走 session（routes.py）；此处
@@ -89,7 +91,7 @@ from .provenance import init_provenance_db
 from .provenance.forwarder import start_forwarder_loop, stop_forwarder_loop
 from .provenance.sealing import start_sealer_loop, stop_sealer_loop
 from .provenance.selfcheck import start_selfcheck_loop, stop_selfcheck_loop
-from .metering.db import ensure_schema
+from .metering.db import init_schema as init_metering_schema
 from .metering.driver import start_metering_driver, stop_metering_driver
 from .metering.settings import get_settings
 from .metering.routes import router as metering_router
@@ -133,35 +135,41 @@ from .cell_provision import init_db as init_cell_provision_db
 from .cell_provision import router as cell_provision_router
 
 
+def _boot_step(module: str, step) -> None:
+    """启动期一个步骤的计时（字段固定，便于 grep）；异常照常抛出。"""
+    with module_timer(module):
+        step()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """启动钩子：计量表幂等建表（可经 METERING_AUTO_CREATE_TABLES 关闭，生产走 Alembic）。"""
-    if get_settings().metering_auto_create_tables:
-        ensure_schema()
+    """启动钩子：逐模块 schema 处置（开关与缺表校验统一走 db_policy）。"""
+    _boot_started = time.perf_counter()
+    _boot_step("metering", init_metering_schema)
     # 需求单表建表：迁移链落地前 create_all 兜底（幂等，checkfirst）。
-    init_demands_db()
+    _boot_step("demands", init_demands_db)
     # 指标目录镜像（任务 6.1）：幂等建表 + 每日同步调度（显式 lifespan 下
     # register_catalog 挂的 add_event_handler 不会触发，故在此显式调）。
-    init_catalog_db()
-    startup_catalog()
+    _boot_step("catalog", init_catalog_db)
+    _boot_step("catalog", startup_catalog)
     # 计费（任务 4.2）：billing_* 三表 + 档位 seed（幂等；公开三档 + 旧三档
     # 禁用，见 billing/plans.py）。
     from .billing import init_billing
 
-    init_billing()
+    _boot_step("billing", init_billing)
     # 控制台域（wire-self-serve-launch 4.3）：console_onboardings 断点簿记表
     # 幂等建表兜底（生产走 alembic 0015）。
-    init_console_db()
+    _boot_step("console", init_console_db)
     # 内部后台（任务 7.1）：审核意见表幂等建表兜底（生产走 0007）。
     from .admin import init_db as init_admin_db
 
-    init_admin_db()
+    _boot_step("admin", init_admin_db)
     # AI 对话构建循环（任务 5.4）：对话/消息/产物暂存三表幂等建表兜底
     # （生产走 Alembic 迁移链 0005_ai）。
-    init_ai_db()
+    _boot_step("ai", init_ai_db)
     # 产物物化计量（任务 5.6）：转正登记表幂等建表兜底（生产走 0009）+
     # cron 调度循环（MATERIALIZATION_INTERVAL 扫描，硬停前置在 runner 内）。
-    init_materialization_db()
+    _boot_step("materialization", init_materialization_db)
     start_materialization_scheduler()
     # 计量入账驱动（sub2api 入账管道）：周期「registry 审计摄取 → 当月结算」。
     # REGISTRY_MONGO_URI / SUB2API_ADMIN_KEY 未配置时对应段自动跳过。
@@ -172,7 +180,7 @@ async def lifespan(_: FastAPI):
     # 统一刷新调度器（wire-refresh-scheduler）：refresh_schedules 幂等建表
     # 兜底（生产走 alembic 0023）+ tick 循环（due 调度串行执行；
     # FD_WIRE_REFRESH_SCHEDULER_ENABLED=false 可关）。
-    init_schedules_db()
+    _boot_step("schedules", init_schedules_db)
     start_refresh_scheduler()
     # 动作闸过期扫描（wire-copilot-action-gate）：15min 心跳，读路径惰性过期兜底。
     from .ai.actions import start_expiry_sweeper
@@ -180,24 +188,24 @@ async def lifespan(_: FastAPI):
     # 告警评估引擎（wire-alert-evaluation）：alert_states/alert_events 幂等
     # 建表兜底（生产走 alembic 0028）+ tick 循环（published alert_rule 逐条
     # 评估，缺省 30s；FD_WIRE_ALERTS_ENABLED=false 可关）。
-    init_alerts_db()
+    _boot_step("alerts", init_alerts_db)
     start_alert_evaluator()
     # 客户数据集（wire-customer-local-data 任务组 2）：登记/同步/修正/上传
     # 表幂等建表兜底（生产走 Alembic 0011）。
-    init_datasets_db()
+    _boot_step("datasets", init_datasets_db)
     # 溯源账本（wire-provenance-ledger）：账本表兜底（生产走 Alembic 0012；
     # 含触发器安装）+ 三个后台任务——WAL 转发（引擎事件入账）、epoch 封存
     # （backend=none 时空转）、夜间完整性自检（只读）。
-    init_provenance_db()
+    _boot_step("provenance", init_provenance_db)
     start_forwarder_loop()
     start_sealer_loop()
     start_selfcheck_loop()
     # 源包订阅（wire-source-packs）：pack_subscriptions 幂等建表兜底
     # （生产走 alembic 0022；指标切片实时查目录镜像，无自身快照表）。
-    init_packs_db()
+    _boot_step("packs", init_packs_db)
     # 实体语义层（wire-entity-layer）：entities / entity_relationships
     # 幂等建表兜底（生产走 alembic 0026；零引擎调用——纯元数据声明层）。
-    init_entities_db()
+    _boot_step("entities", init_entities_db)
     # 本体版本日快照（wire-ontology-versioning 3.2）：每日 03:30 UTC（与既有
     # pg_dump 同刻）为客户打一份本体快照；零变更与无本体客户静默跳过。
     # ONTOLOGY_SNAPSHOT_ENABLED=false 可关。
@@ -210,22 +218,24 @@ async def lifespan(_: FastAPI):
     # 星研内容供给（xingyan-content-supply）：快照三表幂等建表兜底
     # （生产走 alembic 0046）+ 每日摄取循环（同指纹短路；上游故障保留旧版
     # 并暴露陈旧标记。XINGYAN_SYNC_ENABLED=false 可关）。
-    init_xingyan_db()
+    _boot_step("xingyan", init_xingyan_db)
     start_xingyan_sync()
     # 商留通道（add-contact-intake）：contact_messages 幂等建表兜底
     # （生产走 alembic 0051；公开提交面无后台循环——通知按提交即发）。
-    init_contact_db()
+    _boot_step("contact", init_contact_db)
     # 知验台本体拉取（add-bench-ontology-pull-client）：快照两表幂等建表
     # 兜底（生产走 alembic 0052）+ 可选定时拉取循环（BENCH_PULL_ENABLED
     # 缺省 false——未配置知验台凭据的部署零行为变化）。
-    init_bench_pull_db()
+    _boot_step("bench_pull", init_bench_pull_db)
     start_bench_pull_scheduler()
     # cell 开通自助化（add-self-serve-cell-provision）：配给队列与端点注册
     # 表幂等建表兜底（生产走 alembic 0053；无后台循环——runner 侧轮询消费）。
-    init_cell_provision_db()
+    _boot_step("cell_provision", init_cell_provision_db)
     # 变换管线租约队列 worker（wire-dag-executor D3）：领取 queued run 执行，
     # 心跳/死租约重领取/断点恢复全在 queue 内（PIPELINE_WORKER_ENABLED 可关）。
     start_pipeline_worker()
+    # 启动期 schema 处置总耗时（一行；不含任何连接串）。
+    boot_total(_boot_started)
     try:
         yield
     finally:

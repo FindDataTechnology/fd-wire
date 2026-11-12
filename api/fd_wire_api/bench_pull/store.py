@@ -31,6 +31,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
 
 from ..config import canonical_metadata_database_url, normalize_database_url
+from ..db_policy import boot_auto_create_enabled, verify_schema
 
 _DEFAULT_PLATFORM_DB = "sqlite:///./fd_wire_dev.db"
 
@@ -151,18 +152,17 @@ _initialized = False
 
 
 def _auto_create_enabled() -> bool:
-    return os.getenv("FD_WIRE_BENCH_PULL_AUTO_CREATE_TABLES", "1").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }
+    """逐模块开关优先于启动总开关；见 db_policy 的三级解析。"""
+    return boot_auto_create_enabled("bench_pull", legacy_env="FD_WIRE_BENCH_PULL_AUTO_CREATE_TABLES")
 
 
 def init_db() -> None:
     """幂等建快照两表（开发兜底；生产走 alembic 0052）。"""
     global _initialized
-    if _initialized or not _auto_create_enabled():
+    if _initialized:
+        return
+    if not _auto_create_enabled():
+        verify_schema("bench_pull", BenchPullBase.metadata.tables, get_engine())
         return
     with _init_lock:
         if _initialized:

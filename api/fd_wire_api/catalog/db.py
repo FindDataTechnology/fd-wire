@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .models import Base
 from .settings import settings
+from ..db_policy import boot_auto_create_enabled, verify_schema
 
 
 class MirrorWriteBlocked(Exception):
@@ -183,5 +184,13 @@ def readonly_session() -> Iterator[Session]:
 
 
 def init_db() -> None:
-    """建表（无 alembic 链：模型 + create_all；幂等）。"""
-    Base.metadata.create_all(get_rw_engine())
+    """幂等建镜像两表（开发兜底；生产由 alembic 0002 建表）。
+
+    早前注释写"无 alembic 链"是过时的：``indicator_snapshots`` /
+    ``catalog_sync_state`` 由 ``20261004_0002_add_catalog_mirror_tables``
+    建表，后续 0010 等只做加列。所以生产可以关掉这里的 create_all。
+    """
+    if boot_auto_create_enabled("catalog", legacy_env="FD_WIRE_CATALOG_AUTO_CREATE_TABLES"):
+        Base.metadata.create_all(get_rw_engine())
+    else:
+        verify_schema("catalog", Base.metadata.tables, get_rw_engine())

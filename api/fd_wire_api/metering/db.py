@@ -62,6 +62,22 @@ def ensure_schema() -> None:
     MeteringBase.metadata.create_all(bind=get_engine())
 
 
+def init_schema() -> None:
+    """启动期 schema 处置：走统一策略（总开关/逐模块开关/缺表校验）。"""
+    from ..db_policy import boot_auto_create_enabled, verify_schema
+
+    if boot_auto_create_enabled(
+        "metering",
+        legacy_env="METERING_AUTO_CREATE_TABLES",
+        legacy_value=get_settings().metering_auto_create_tables,
+    ):
+        ensure_schema()
+        return
+    from . import models  # noqa: F401 —— 注册映射后再校验
+
+    verify_schema("metering", MeteringBase.metadata.tables, get_engine())
+
+
 def reset_metering_runtime() -> None:
     """清空惰性缓存（引擎/会话工厂/配置）——测试切换 DATABASE_URL 用。"""
     get_engine.cache_clear()

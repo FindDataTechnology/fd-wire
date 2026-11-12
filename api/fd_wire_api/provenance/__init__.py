@@ -27,6 +27,7 @@ from ..datasets.settings import get_settings as _get_datasets_settings
 from .models import LedgerEvent
 from .routes import router
 from .settings import get_settings
+from ..db_policy import boot_auto_create_enabled, verify_schema
 
 __all__ = [
     "LedgerEvent",
@@ -88,7 +89,18 @@ def init_provenance_db() -> None:
     生产关闭 create_all、完全走迁移链，触发器随 0012 建）。
     """
     global _bootstrap_done
-    if not _get_datasets_settings().datasets_auto_create_tables or _bootstrap_done:
+    if _bootstrap_done:
+        return
+    if not boot_auto_create_enabled(
+        "provenance",
+        legacy_env="FD_WIRE_DATASETS_AUTO_CREATE_TABLES",
+        legacy_value=_get_datasets_settings().datasets_auto_create_tables,
+    ):
+        verify_schema(
+            "provenance",
+            [LedgerEvent.__table__.name],
+            get_engine(),
+        )
         return
     with _bootstrap_lock:
         if _bootstrap_done:
