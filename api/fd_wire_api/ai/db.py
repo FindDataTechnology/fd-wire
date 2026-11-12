@@ -21,6 +21,7 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from .settings import get_settings
+from ..db_policy import boot_auto_create_enabled, verify_schema
 
 
 class AiBase(DeclarativeBase):
@@ -66,13 +67,22 @@ _initialized = False
 
 
 def _auto_create_enabled() -> bool:
-    return get_settings().ai_auto_create_tables
+    """逐模块开关优先于启动总开关；见 db_policy 的三级解析。"""
+    return boot_auto_create_enabled(
+        "ai",
+        legacy_env="AI_AUTO_CREATE_TABLES",
+        legacy_value=get_settings().ai_auto_create_tables,
+    )
 
 
 def init_db() -> None:
     """幂等建表（迁移链落地后的开发兜底；AI_AUTO_CREATE_TABLES=0 关闭）。"""
     global _initialized
-    if _initialized or not _auto_create_enabled():
+    if _initialized:
+        return
+    if not _auto_create_enabled():
+        from . import models  # noqa: F401 —— 注册映射后再校验
+        verify_schema("ai", AiBase.metadata.tables, get_engine())
         return
     with _init_lock:
         if _initialized:

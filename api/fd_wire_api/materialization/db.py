@@ -29,6 +29,7 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from .settings import get_settings
+from ..db_policy import boot_auto_create_enabled, verify_schema
 
 
 def utc_now_naive() -> datetime:
@@ -82,13 +83,22 @@ _initialized = False
 
 
 def _auto_create_enabled() -> bool:
-    return get_settings().materialization_auto_create_tables
+    """逐模块开关优先于启动总开关；见 db_policy 的三级解析。"""
+    return boot_auto_create_enabled(
+        "materialization",
+        legacy_env="MATERIALIZATION_AUTO_CREATE_TABLES",
+        legacy_value=get_settings().materialization_auto_create_tables,
+    )
 
 
 def init_db() -> None:
     """幂等建物化自有表（开发兜底；生产走 alembic 0009）。"""
     global _initialized
-    if _initialized or not _auto_create_enabled():
+    if _initialized:
+        return
+    if not _auto_create_enabled():
+        from . import models  # noqa: F401 —— 注册映射后再校验
+        verify_schema("materialization", MatBase.metadata.tables, get_engine())
         return
     with _init_lock:
         if _initialized:

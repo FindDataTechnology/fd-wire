@@ -18,6 +18,7 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from .settings import get_settings
+from ..db_policy import boot_auto_create_enabled, verify_schema
 
 
 class SchedulesBase(DeclarativeBase):
@@ -67,13 +68,22 @@ _initialized = False
 
 
 def _auto_create_enabled() -> bool:
-    return get_settings().schedules_auto_create_tables
+    """逐模块开关优先于启动总开关；见 db_policy 的三级解析。"""
+    return boot_auto_create_enabled(
+        "schedules",
+        legacy_env="FD_WIRE_SCHEDULES_AUTO_CREATE_TABLES",
+        legacy_value=get_settings().schedules_auto_create_tables,
+    )
 
 
 def init_db() -> None:
     """幂等建调度表（开发兜底；生产走 alembic 0023）。"""
     global _initialized
-    if _initialized or not _auto_create_enabled():
+    if _initialized:
+        return
+    if not _auto_create_enabled():
+        from . import models  # noqa: F401 —— 注册映射后再校验
+        verify_schema("schedules", SchedulesBase.metadata.tables, get_engine())
         return
     with _init_lock:
         if _initialized:

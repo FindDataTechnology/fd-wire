@@ -13,6 +13,7 @@ import threading
 
 from ..ai.db import get_engine
 from .settings import get_settings
+from ..db_policy import boot_auto_create_enabled, verify_schema
 
 _init_lock = threading.Lock()
 _initialized = False
@@ -25,7 +26,19 @@ def init_db() -> None:
     切片的 init 覆盖，避免重复职责。
     """
     global _initialized
-    if _initialized or not get_settings().alerts_auto_create_tables:
+    if _initialized:
+        return
+    if not boot_auto_create_enabled(
+        "alerts",
+        legacy_env="FD_WIRE_ALERTS_AUTO_CREATE_TABLES",
+        legacy_value=get_settings().alerts_auto_create_tables,
+    ):
+        from . import models  # noqa: F401 —— 注册映射后再校验
+        verify_schema(
+            "alerts",
+            [models.AlertState.__table__.name, models.AlertEvent.__table__.name],
+            get_engine(),
+        )
         return
     with _init_lock:
         if _initialized:

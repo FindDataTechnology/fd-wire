@@ -12,6 +12,7 @@ from __future__ import annotations
 import threading
 
 from ..admin.db import get_engine, reset_admin_runtime
+from ..db_policy import boot_auto_create_enabled, verify_schema
 
 
 def reset_console_runtime() -> None:
@@ -29,6 +30,13 @@ def init_db() -> None:
     """幂等建 console_* 表（开发兜底；生产走 alembic 0015）。"""
     global _initialized
     if _initialized:
+        return
+    if not boot_auto_create_enabled("console", legacy_env="FD_WIRE_CONSOLE_AUTO_CREATE_TABLES"):
+        from . import models  # noqa: F401 —— 注册映射后再校验
+
+        from .models import ConsoleBase
+
+        verify_schema("console", ConsoleBase.metadata.tables, get_engine())
         return
     with _init_lock:
         if _initialized:

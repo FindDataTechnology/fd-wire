@@ -65,6 +65,22 @@ spec:
             # enforce = 信息类强断言缺证据发布 422；回滚改 warn（或 off 全跳过）。
             - name: EVIDENCE_GATE_MODE
               value: "enforce"
+            # 启动期 schema 处置（gate-boot-schema-creation）：生产不建表、只校验。
+            # optional: true——Secret 里还没写这两个键时按缺省走（建表开 + warn），
+            # 不让"键没建"变成 Pod 起不来。同名 env 只在这里声明一次
+            # （本仓踩过"字面量覆盖 secretKeyRef、Argo 仍报 Synced"）。
+            - name: FD_WIRE_BOOT_AUTO_CREATE_TABLES
+              valueFrom:
+                secretKeyRef:
+                  name: fd-wire-env
+                  key: boot_auto_create_tables
+                  optional: true
+            - name: FD_WIRE_BOOT_SCHEMA_CHECK
+              valueFrom:
+                secretKeyRef:
+                  name: fd-wire-env
+                  key: boot_schema_check
+                  optional: true
             # 按产物 kind 分流（2026-11-08，用户裁决选项①）：纯数据观测类看板
             # （dashboard）的可追溯性在 data_plane 的 source/concept/entity locator 里，
             # 与 info-stream 是两条等价溯源路径；要求它出 info-stream 证据等于要求
@@ -296,16 +312,6 @@ spec:
             - name: CELL_REGISTRY_TOKEN
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: cell_registry_token }
-          # 2026-11-12 实测：lifespan 要跑完 ~25 个 init_*（每个都 create_all），
-          # 启动耗时 60–75s；而 liveness 只有 10s+3x10s 的预算，于是在启动完成前
-          # 就被杀（exit 137，日志停在 "Waiting for application startup"）。
-          # 加 startupProbe 给启动一条独立预算：它没成功前 liveness/readiness 都不计。
-          # 180s 仍不够说明启动真挂了，照样重启，不掩盖问题。
-          startupProbe:
-            httpGet: { path: /health, port: http }
-            periodSeconds: 10
-            timeoutSeconds: 3
-            failureThreshold: 18
           readinessProbe:
             httpGet: { path: /health, port: http }
             initialDelaySeconds: 3

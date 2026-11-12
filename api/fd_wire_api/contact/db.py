@@ -24,6 +24,7 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from ..config import canonical_metadata_database_url, normalize_database_url
+from ..db_policy import boot_auto_create_enabled, verify_schema
 
 _DEFAULT_PLATFORM_DB = "sqlite:///./fd_wire_dev.db"
 
@@ -70,18 +71,18 @@ _initialized = False
 
 
 def _auto_create_enabled() -> bool:
-    return os.getenv("FD_WIRE_CONTACT_AUTO_CREATE_TABLES", "1").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }
+    """逐模块开关优先于启动总开关；见 db_policy 的三级解析。"""
+    return boot_auto_create_enabled("contact", legacy_env="FD_WIRE_CONTACT_AUTO_CREATE_TABLES")
 
 
 def init_db() -> None:
     """幂等建 contact_messages（开发兜底；生产走 alembic 0051）。"""
     global _initialized
-    if _initialized or not _auto_create_enabled():
+    if _initialized:
+        return
+    if not _auto_create_enabled():
+        from . import models  # noqa: F401 —— 注册映射后再校验
+        verify_schema("contact", ContactBase.metadata.tables, get_engine())
         return
     with _init_lock:
         if _initialized:
