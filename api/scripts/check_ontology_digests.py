@@ -25,6 +25,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import sys
 from pathlib import Path
@@ -33,6 +35,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
+
+
+def classify(manifest, stored: str, recomputed: str) -> str:
+    """``ok`` / ``legacy`` / ``mismatch``——三态，别把前两种混成一种。
+
+    ``legacy``：这行的 digest 是**补键规则之前**铸造的。0050 给实体/关系加了
+    ``tier``/``sensitivity``，归一器从此按「缺键 → null」补齐（design D5），于是
+    对 0050 之前的快照，「先归一再哈希」必然复现不出当年那个值。判据是**原始
+    payload 直接哈希**是否等于库中值：等于就说明当年正是按原始 payload 铸的。
+
+    这类行在换底前后**都**对不上（旧 ``normalize_entity`` 同样补这两个键），所以
+    它既不是回归、也改代码救不了；更**不能**改库里的 digest——消费方已按它校验过
+    导出物。只能单独报出来，由人决定处置（见 ``--allow-legacy``）。
+
+    ``mismatch``：原始 payload 也对不上。这才是真问题：配方被改过，或这一行被改写过。
+    """
+    if recomputed == stored:
+        return "ok"
+    raw = hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        .encode("utf-8")
+    ).hexdigest()
+    return "legacy" if raw == stored else "mismatch"
 
 
 def _engine(database: str | None):
@@ -60,6 +85,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="database URL (default: DATABASE_URL / FD_WIRE_DATABASE_URL)")
     parser.add_argument("--limit", type=int, default=0,
                         help="stop after N rows (0 = all)")
+    parser.add_argument(
+        "--allow-legacy",
+        action="store_true",
+        help="把「补键规则之前铸造的 digest」记为已知遗留、不因此判失败（仍逐行打印）",
+    )
     args = parser.parse_args(argv)
 
     engine = _engine(args.database)
@@ -80,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
 
     checked = 0
     mismatches: list[tuple[str, int, str, str]] = []
+    legacy: list[tuple[str, int, str, str]] = []
     try:
         with Session(engine) as session:
             stmt = select(OntologySnapshot).order_by(
@@ -91,10 +122,12 @@ def main(argv: list[str] | None = None) -> int:
                 manifest = snapshot.manifest_json or {}
                 recomputed = versioning.manifest_digest(manifest)
                 checked += 1
-                if recomputed != snapshot.digest:
-                    mismatches.append(
-                        (snapshot.customer_id, snapshot.version, snapshot.digest, recomputed)
-                    )
+                verdict = classify(manifest, snapshot.digest, recomputed)
+                row = (snapshot.customer_id, snapshot.version, snapshot.digest, recomputed)
+                if verdict == "legacy":
+                    legacy.append(row)
+                elif verdict == "mismatch":
+                    mismatches.append(row)
     except Exception as exc:  # noqa: BLE001
         print(
             f"快照核对 · 连接/查询 · {type(exc).__name__}: {exc} · "
@@ -102,6 +135,12 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+
+    for customer, version, stored, recomputed in legacy:
+        print(
+            f"{customer} · v{version} · LEGACY · 库中 digest={stored} 重算={recomputed} · "
+            f"该行 digest 由「缺键补 null」规则之前的版本铸造（原始 payload 哈希才等于库中值）"
+        )
 
     for customer, version, stored, recomputed in mismatches:
         print(
@@ -111,8 +150,20 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if mismatches:
-        print(f"\nFAILED: {len(mismatches)}/{checked} 份快照 digest 不一致")
+        print(f"\nFAILED: {len(mismatches)}/{checked} 份快照 digest 不一致"
+              + (f"（另有 {len(legacy)} 份遗留行）" if legacy else ""))
         return 1
+
+    if legacy and not args.allow_legacy:
+        # 遗留行不是「验过」——不传 --allow-legacy 就仍然算没通过，别让沉默变成通过。
+        print(
+            f"\nLEGACY: {len(legacy)}/{checked} 份快照的 digest 由补键规则之前铸造，当前规则下不可复现；"
+            f"确认后加 --allow-legacy 才算通过"
+        )
+        return 1
+
+    if legacy:
+        print(f"（其中 {len(legacy)} 份为已知遗留，已由 --allow-legacy 放行）")
 
     if checked == 0:
         # 「没有样本」不等于「验证通过」——这两种结果必须长得不一样。
@@ -121,7 +172,6 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"PASS: {checked} 份快照 digest 全部与重算值相等")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
