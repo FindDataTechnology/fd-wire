@@ -312,6 +312,17 @@ spec:
             - name: CELL_REGISTRY_TOKEN
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: cell_registry_token }
+          # 2026-11-12 实测：启动期要跑完 ~25 个 init_*（每个都 create_all），
+          # 启动耗时 30–75s；而 liveness 只有 10s+3x10s 的预算，于是在启动完成前
+          # 就被杀（日志停在 "Application startup complete" 后 0.2s 即 Shutting down）。
+          # 加 startupProbe 给启动一条独立预算：它没成功前 liveness/readiness 都不计。
+          # 180s 仍不够说明启动真挂了，照样重启，不掩盖问题。
+          # （本块 2026-11-12 01:26 首加，同日 09:57 的 2d46257 误删，此处恢复。）
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 18
           readinessProbe:
             httpGet: { path: /health, port: http }
             initialDelaySeconds: 3
