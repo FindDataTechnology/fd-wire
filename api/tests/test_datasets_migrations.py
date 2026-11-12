@@ -212,7 +212,7 @@ def test_chain_head_is_provenance_foundation(migrated_sqlite) -> None:
         ).scalar()
     # 链头断言随最新迁移前进（0052_bench_ontology_snapshots：知验台快照两表，
     # add-bench-ontology-pull-client——单链线性追加）
-    assert version == "0053_cell_provision"
+    assert version == "0055_ontology_kernel_attrs"
     engine.dispose()
 
 

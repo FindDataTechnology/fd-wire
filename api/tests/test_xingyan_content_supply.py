@@ -415,8 +415,9 @@ def test_migration_upgrade_is_rerunnable_and_reversible(tmp_path, monkeypatch):
     names = set(inspect(engine).get_table_names())
     assert {"xingyan_items", "xingyan_claims", "xingyan_sync_state"} <= names
     with engine.connect() as conn:
+        # 链头随最新迁移推进（0054 事件语义键 / 0055 内核附加袋）
         assert conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar() == (
-            "0053_cell_provision"
+            "0055_ontology_kernel_attrs"
         )
     engine.dispose()
 

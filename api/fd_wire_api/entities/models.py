@@ -71,6 +71,10 @@ class Entity(EntitiesBase):
     display_column: Mapped[str | None] = mapped_column(String(200), nullable=True)
     #: 列注记 {column: 注记}（单位/格式纯描述文本，≤50 字/列；service 校验）
     column_notes: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # ------------------------------------------------ 内核附加袋（0055）
+    #: 内核 Unit 投影的附加属性（folding 的原写法 ``aliases``、``folded_by`` 等）。
+    #: **只放投影附加物，不放业务字段**——业务字段有自己的列且被 service 校验。
+    kernel_attrs: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # ------------------------------------------------ 知识档位（0050）
     #: 升格档位（add-entity-bench-contract）：raw/bronze/silver/gold 或 null
     #: （null=未入升格流水线；词表 service 层单点校验）
@@ -131,6 +135,9 @@ class EntityRelationship(EntitiesBase):
     junction_target_column: Mapped[str | None] = mapped_column(
         String(200), nullable=True
     )
+    # ------------------------------------------------ 内核附加袋（0055）
+    #: 内核 Unit 投影的附加属性（同 ``Entity.kernel_attrs`` 的边界）
+    kernel_attrs: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # ------------------------------------------------ 知识档位（0050）
     #: 升格档位（add-entity-bench-contract）：raw/bronze/silver/gold 或 null
     tier: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -175,6 +182,11 @@ class OntologyEvent(EntitiesBase):
     #: entity | relationship
     target_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     target_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: 语义键（0054；跨环境可移植的身份）——实体=实体名，关系=
+    #: ``{from_entity_name}->{kind}:{to_entity_name}``。换底前的历史行为 null
+    #: 且不回填（当时的名字无从得知，反解出来的只会是今天的名字）；读侧由
+    #: 适配器从 ``target_id`` 反解。写入路径见 ``versioning.record_event``。
+    target_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
     #: 变更前全量（create 为 null）
     before_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     #: 变更后全量（delete 为 null）

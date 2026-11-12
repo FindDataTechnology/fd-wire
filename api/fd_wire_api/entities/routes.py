@@ -1152,6 +1152,8 @@ class OntologyVersionOut(BaseModel):
     """时间线条目（规模计数来自快照 manifest——列表不返回全量 manifest）。"""
 
     version: int
+    #: 内核 manifest 形状版本（establish-ontology-kernel 6.5）；形状 1 = id 寻址
+    manifest_schema_version: int = 1
     digest: str
     trigger: str
     label: str | None = None

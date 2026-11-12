@@ -50,7 +50,7 @@ def test_chain_head_follows_catalog_source_db(migrated_sqlite) -> None:
         version = conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar()
     # 链头断言随最新迁移推进（0052_bench_ontology_snapshots：知验台快照两表，
     # add-bench-ontology-pull-client——单链线性追加）
-    assert version == "0053_cell_provision"
+    assert version == "0055_ontology_kernel_attrs"
     engine.dispose()
 
 

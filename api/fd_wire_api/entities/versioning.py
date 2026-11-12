@@ -25,11 +25,10 @@ digest = sha256(规范 manifest 的 UTF-8 JSON)，对外作为导出物完整性
 
 from __future__ import annotations
 
-import hashlib
-import json
 from datetime import date, datetime
 from typing import Any, Iterable, Mapping, Sequence
 
+from fd_ontology_kernel import manifest as kernel_manifest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -105,44 +104,9 @@ def _iso(value: date | datetime) -> str:
     return value.isoformat()
 
 
-def _json_default(value: Any) -> Any:
-    """json 序列化兜底：日期（秒精度）/集合→排序列表/其余如实抛错。"""
-    if isinstance(value, (date, datetime)):
-        return _iso(value)
-    if isinstance(value, (set, frozenset)):
-        return sorted(str(item) for item in value)
-    raise TypeError(f"manifest 含不可序列化类型: {type(value).__name__}")
-
-
-def _as_text(value: Any) -> str | None:
-    if value is None:
-        return None
-    return value if isinstance(value, str) else str(value)
-
-
-def _as_int(value: Any) -> int | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _as_text_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value] if value else []
-    return [str(item) for item in value]
-
-
-def _as_notes(value: Any) -> dict[str, str] | None:
-    if value is None:
-        return None
-    if not isinstance(value, Mapping):
-        return {str(item): "" for item in value}
-    return {str(key): str(note) for key, note in value.items()}
+#: 条目归一（``_as_text`` / ``_as_int`` / ``_as_text_list`` / ``_as_notes``
+#: 这组私有助手）已整体交给内核的 ``normalize_entity_v1`` /
+#: ``normalize_relationship_v1``（establish-ontology-kernel 6.2）。
 
 
 def entity_payload(entity: Entity) -> dict[str, Any]:
@@ -184,40 +148,17 @@ def normalize_entity(raw: Mapping[str, Any] | None) -> dict[str, Any]:
 
     跨键集边界（0050 前快照无 tier/sensitivity 键）按缺失→null 归一
     （design D5）——diff/回滚 plan 在新旧快照间不因键缺席产生假差异。
+
+    归一规则由内核对形状 v1 持有（establish-ontology-kernel 6.2）：本函数
+    保留签名，实现交给内核，避免两个实现悄悄分叉。
     """
-    data = dict(raw or {})
-    return {
-        "id": _as_int(data.get("id")),
-        "name": _as_text(data.get("name")) or "",
-        "dataset_id": _as_text(data.get("dataset_id")) or "",
-        "pk_columns": _as_text_list(data.get("pk_columns")),
-        "description": _as_text(data.get("description")) or None,
-        "display_column": _as_text(data.get("display_column")) or None,
-        "column_notes": _as_notes(data.get("column_notes")),
-        "tier": _as_text(data.get("tier")) or None,
-        "sensitivity": _as_text(data.get("sensitivity")) or None,
-    }
+    return kernel_manifest.normalize_entity_v1(raw)
 
 
 def normalize_relationship(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     """任意关系条 → 规范关系条（已知键恒出现、类型归一；跨键集边界缺失键
-    按 null 归一——同 normalize_entity 注记）。"""
-    data = dict(raw or {})
-    return {
-        "id": _as_int(data.get("id")),
-        "from_entity_id": _as_int(data.get("from_entity_id")),
-        "from_column": _as_text(data.get("from_column")) or "",
-        "to_entity_id": _as_int(data.get("to_entity_id")),
-        "to_column": _as_text(data.get("to_column")) or "",
-        "kind": _as_text(data.get("kind")) or "",
-        "declared_kind": _as_text(data.get("declared_kind")),
-        "label": _as_text(data.get("label")) or None,
-        "junction_dataset_id": _as_text(data.get("junction_dataset_id")),
-        "junction_source_column": _as_text(data.get("junction_source_column")),
-        "junction_target_column": _as_text(data.get("junction_target_column")),
-        "tier": _as_text(data.get("tier")) or None,
-        "sensitivity": _as_text(data.get("sensitivity")) or None,
-    }
+    按 null 归一——同 normalize_entity 注记；归一规则同由内核持有）。"""
+    return kernel_manifest.normalize_relationship_v1(raw)
 
 
 def _entity_sort_key(item: Mapping[str, Any]) -> tuple:
@@ -244,18 +185,15 @@ def canonical_manifest(
     entities: Iterable[Mapping[str, Any]],
     relationships: Iterable[Mapping[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
-    """两组条目 → 规范 manifest（排序 + 归一；幂等）。"""
-    normalized_entities = sorted(
-        (normalize_entity(item) for item in entities), key=_entity_sort_key
+    """两组条目 → 规范 manifest（排序 + 归一；幂等）。
+
+    形状 v1 的归一与排序键由内核持有（establish-ontology-kernel 6.2）；
+    本函数是它在 fd-wire 这一侧的名字。
+    """
+    return kernel_manifest.canonical_payload(
+        shape=kernel_manifest.SHAPE_ID_ADDRESSED,
+        payload={"entities": list(entities), "relationships": list(relationships)},
     )
-    normalized_relationships = sorted(
-        (normalize_relationship(item) for item in relationships),
-        key=_relationship_sort_key,
-    )
-    return {
-        "entities": normalized_entities,
-        "relationships": normalized_relationships,
-    }
 
 
 def empty_manifest() -> dict[str, list[dict[str, Any]]]:
@@ -279,27 +217,21 @@ def manifest_is_empty(manifest: Mapping[str, Any]) -> bool:
 
 
 def canonical_json(manifest: Mapping[str, Any]) -> str:
-    """规范 JSON 文本（键序与条序固定；digest 与稳定性测试的共同真源）。"""
-    return json.dumps(
-        manifest,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        default=_json_default,
-    )
+    """规范 JSON 文本（键序与条序固定；digest 与稳定性测试的共同真源）。
+
+    配方（``sort_keys`` + 紧凑分隔符 + ``ensure_ascii=False``）由内核持有：
+    改配方会作废已发布的每一个 digest，所以只允许有一处定义。
+    """
+    return kernel_manifest.canonical_json(manifest)
 
 
 def manifest_digest(manifest: Mapping[str, Any]) -> str:
     """manifest → sha256（十六进制）。空 manifest 也有稳定 digest。
 
-    入参先经 :func:`canonical_manifest` 归一——条序/键序/类型形态不影响
-    digest（同一内容恒同 digest，design D4）。
+    入参先归一再取 hash（内核 ``digest_for`` 的唯一顺序）——条序/键序/类型
+    形态不影响 digest（同一内容恒同 digest，design D4）。
     """
-    normalized = canonical_manifest(
-        (manifest or {}).get("entities") or [],
-        (manifest or {}).get("relationships") or [],
-    )
-    return hashlib.sha256(canonical_json(normalized).encode("utf-8")).hexdigest()
+    return kernel_manifest.digest_for(shape=kernel_manifest.SHAPE_ID_ADDRESSED, payload=manifest or {})
 
 
 # ------------------------------------------------------------------ 当前态
@@ -337,6 +269,57 @@ def next_event_seq(db: Session, *, customer_id: str) -> int:
     return int(current or 0) + 1
 
 
+def _entity_names(
+    db: Session, *, customer_id: str, ids: Iterable[int]
+) -> dict[int, str]:
+    """id → 实体名（一批取回；缺失的 id 不出现在结果里）。"""
+    wanted = {int(i) for i in ids if i is not None}
+    if not wanted:
+        return {}
+    rows = db.execute(
+        select(Entity.id, Entity.name).where(
+            Entity.customer_id == customer_id, Entity.id.in_(wanted)
+        )
+    ).all()
+    return {int(row[0]): str(row[1]) for row in rows}
+
+
+def target_key_for(
+    db: Session,
+    *,
+    customer_id: str,
+    target_kind: str,
+    payload: Mapping[str, Any] | None,
+) -> str | None:
+    """事件信封的语义键（establish-ontology-kernel 6.3 / design D6）。
+
+    - 实体条：``<实体名>``——客户内唯一（``uq_entities_customer_name``），
+      所以它就是「这个实体」的可移植身份；
+    - 关系条：``<from_entity_name>-><kind>:<to_entity_name>``——按**存储方向**
+      写（声明方向在 ``declared_kind`` 里，不是身份的一部分）。
+
+    拿不到名字（实体行已在同一次 flush 里删掉、或 id 缺失）时返回 ``None``：
+    宁可留空，也不写一个反解不出来、看起来却像身份的字符串。
+    """
+    data = dict(payload or {})
+    if target_kind == KIND_ENTITY:
+        name = data.get("name")
+        return str(name) if name else None
+    if target_kind == KIND_RELATIONSHIP:
+        from_id = data.get("from_entity_id")
+        to_id = data.get("to_entity_id")
+        kind = data.get("kind")
+        if from_id is None or to_id is None or not kind:
+            return None
+        names = _entity_names(db, customer_id=customer_id, ids=(from_id, to_id))
+        from_name = names.get(int(from_id))
+        to_name = names.get(int(to_id))
+        if not from_name or not to_name:
+            return None
+        return f"{from_name}->{kind}:{to_name}"
+    return None
+
+
 def record_event(
     db: Session,
     *,
@@ -356,6 +339,9 @@ def record_event(
     与本体写入同会话同事务（design D1）：本函数 flush 失败会让整个事务
     失败——调用方（``entities.service``）不吞异常，故不存在「本体变了但
     没有事件」的窗口。
+
+    ``target_key``（0054）在这里就地推导：语义键必须写当时的名字，事后反解
+    只能得到今天的名字（establish-ontology-kernel 6.3）。
     """
     if op not in OPS:  # pragma: no cover - 内部调用点全是常量
         raise ValueError(f"未知事件 op: {op!r}")
@@ -363,12 +349,19 @@ def record_event(
         raise ValueError(f"未知事件 target_kind: {target_kind!r}")
     if via not in VIAS:  # pragma: no cover
         raise ValueError(f"未知事件 via: {via!r}")
+    target_key = target_key_for(
+        db,
+        customer_id=customer_id,
+        target_kind=target_kind,
+        payload=after if after is not None else before,
+    )
     event = OntologyEvent(
         customer_id=customer_id,
         seq=next_event_seq(db, customer_id=customer_id),
         op=op,
         target_kind=target_kind,
         target_id=int(target_id),
+        target_key=target_key,
         before_json=dict(before) if before is not None else None,
         after_json=dict(after) if after is not None else None,
         actor=actor[:200] if isinstance(actor, str) and actor else None,
@@ -487,6 +480,8 @@ def snapshot_summary(snapshot: OntologySnapshot) -> dict[str, Any]:
     manifest = snapshot_manifest(snapshot)
     return {
         "version": snapshot.version,
+        # 同上：manifest 形状版本进时间线条目，消费方不必先下全量导出
+        "manifest_schema_version": kernel_manifest.SHAPE_ID_ADDRESSED,
         "digest": snapshot.digest,
         "trigger": snapshot.trigger,
         "label": snapshot.label,
@@ -1135,6 +1130,10 @@ def build_export_document(
         relationships.append(entry)
     return {
         "schema_version": SCHEMA_VERSION,
+        # 内核 manifest 形状版本（establish-ontology-kernel 6.5）：与
+        # ``schema_version``（导出文档自身版本）是两个轴，消费方按这个字段决定
+        # 怎么解释 entities/relationships。老消费者忽略未知键即照旧解析。
+        "manifest_schema_version": kernel_manifest.SHAPE_ID_ADDRESSED,
         "exported_at": _iso(exported_at or utc_now_naive()),
         "customer_id": customer_id,
         "version": version,

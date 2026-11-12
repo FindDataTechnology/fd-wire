@@ -433,8 +433,9 @@ def delete_entity(
     if removed != len(cascade):  # pragma: no cover - 事务内行集合不会漂移
         cascade = cascade[:removed]
     entity_before = versioning.entity_payload(entity)
-    db.delete(entity)
-    db.flush()
+    # 先写关系删除事件、再删实体行：事件的语义键（`{from}->{kind}:{to}`）要按
+    # 当时的实体名算，实体行一删就反解不出名字了（establish-ontology-kernel 6.3）。
+    # 事件与本体同事务，顺序调整不影响最终态。
     for rel in cascade:
         versioning.record_event(
             db,
@@ -449,6 +450,8 @@ def delete_entity(
             source_ref=source_ref,
             source_instance_id=source_instance_id,
         )
+    db.delete(entity)
+    db.flush()
     versioning.record_event(
         db,
         customer_id=entity.customer_id,

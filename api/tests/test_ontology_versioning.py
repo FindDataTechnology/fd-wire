@@ -233,6 +233,83 @@ def _rewrite_event_times(db_session, moment: datetime) -> None:
     db_session.commit()
 
 
+# ------------------------------------------------------- 6.3 事件语义键
+
+
+def test_events_carry_a_semantic_key_that_matches_the_rows(client, db_session) -> None:
+    """基础设施换底 6.3：事件写当时的语义键，且能从 ``target_id`` 反解一致。
+
+    ``target_key`` 是跨环境身份（自增 id 只在本库有意义）；写进去的必须是
+    **当时**的名字——事后反解只能得到今天的名字，那就成了会撒谎的台账。
+    """
+    order, customer, rel = seed_graph(client, db_session)
+    db_session.expire_all()
+
+    creates = [e for e in events(db_session) if e.op == versioning.OP_CREATE]
+    # seed_graph 建了两个实体一条关系：按 target_id 取，别用 (kind, op) 当键
+    # ——那会把「订单」和「客户」两条 create 事件压成一条。
+    entity_event = [
+        e for e in creates
+        if e.target_kind == versioning.KIND_ENTITY and e.target_id == order["id"]
+    ][0]
+    rel_event = [
+        e for e in creates if e.target_kind == versioning.KIND_RELATIONSHIP
+    ][0]
+
+    # 实体：语义键 = 实体名，且与 target_id 指向的行一致
+    assert entity_event.target_key == "订单"
+    assert entity_event.target_id == order["id"]
+
+    # 关系：`{from}->{kind}:{to}`（存储方向），两端名字都对得上
+    assert rel_event.target_key == "订单->n:1:客户"
+    stored = db_session.get(EntityRelationship, rel_event.target_id)
+    names = versioning._entity_names(
+        db_session,
+        customer_id=stored.customer_id,
+        ids=(stored.from_entity_id, stored.to_entity_id),
+    )
+    assert rel_event.target_key == (
+        f"{names[stored.from_entity_id]}->{stored.kind}:{names[stored.to_entity_id]}"
+    )
+
+
+def test_a_rename_keeps_old_keys_and_writes_the_new_one(client, db_session) -> None:
+    """改名不改历史：旧事件留着旧名字，新事件写新名字（两条都在，各说各的当时）。"""
+    order, _customer, _rel = seed_graph(client, db_session)
+    response = client.put(
+        f"/api/v1/entities/{order['id']}",
+        json={
+            "name": "订单主表",
+            "dataset_id": order["dataset_id"],
+            "pk_columns": order["pk_columns"],
+        },
+        headers=CUST,
+    )
+    assert response.status_code == 200, response.text
+    db_session.expire_all()
+
+    entity_events = [
+        e for e in events(db_session)
+        if e.target_kind == versioning.KIND_ENTITY and e.target_id == order["id"]
+    ]
+    assert [e.op for e in entity_events] == [versioning.OP_CREATE, versioning.OP_UPDATE]
+    assert entity_events[0].target_key == "订单"
+    assert entity_events[1].target_key == "订单主表"
+
+
+def test_cascade_deleted_relationship_events_still_get_a_key(client, db_session) -> None:
+    """删实体的级联删关系：关系事件也必须拿到语义键（实体行还没删时就写好）。"""
+    order, _customer, _rel = seed_graph(client, db_session)
+    response = client.delete(f"/api/v1/entities/{order['id']}", headers=CUST)
+    assert response.status_code == 200, response.text
+    db_session.expire_all()
+
+    deletes = [e for e in events(db_session) if e.op == versioning.OP_DELETE]
+    assert deletes, "级联删必须留事件"
+    rel_delete = [e for e in deletes if e.target_kind == versioning.KIND_RELATIONSHIP][0]
+    assert rel_delete.target_key == "订单->n:1:客户"
+
+
 # ---------------------------------------------------------------- 1.3 迁移
 
 
@@ -256,6 +333,8 @@ def _assert_migration_shape(db_url: str) -> None:
         "op",
         "target_kind",
         "target_id",
+        # 0054（establish-ontology-kernel 6.3）：事件信封的语义键
+        "target_key",
         "before_json",
         "after_json",
         "actor",
@@ -757,6 +836,71 @@ def test_digest_is_canonical_and_stable(client, db_session) -> None:
     assert versioning.manifest_digest({}) != digest
 
 
+def test_digest_matches_the_golden_values_from_before_the_kernel_swap() -> None:
+    """尽力保住已发布的每一个 digest（establish-ontology-kernel 6.2）。
+
+    下面六个数是**换底之前**由本模块原实现算出来的（2026-11-12 捕获）。换底把
+    ``canonical_json``/``manifest_digest``/``normalize_*`` 交给内核后，这些值
+    必须逐字节不变——digest 进了 ``ontology_snapshots`` 与导出物，改一个字节
+    就等于作废所有已发布版本，且历史快照的 ``digest`` 与重算值会对不上。
+    """
+    from datetime import date, datetime
+
+    cases = {
+        "empty": ({}, "e1bb444bbbd2ebe89a032be6b851a7b5125285ed146915fb65568a10ab2a89a5"),
+        "entity_full": (
+            {"entities": [{
+                "id": 7, "name": "orders", "dataset_id": "ds-1", "pk_columns": ["order_id"],
+                "description": "订单", "display_column": "order_id",
+                "column_notes": {"order_id": "主键", "amount": "元"},
+                "tier": "gold", "sensitivity": "internal",
+            }], "relationships": []},
+            "18ee236c173d3830af1437bd65559be8958303015247cdf294a615b13b3d0f5e",
+        ),
+        "entity_minimal_pre_0050": (
+            {"entities": [
+                {"id": 3, "name": "customers", "dataset_id": "ds-2", "pk_columns": [],
+                 "description": None, "display_column": None, "column_notes": None}
+            ], "relationships": []},
+            "61fcd15edb85f70d330ed4489a0c493aa41fdf540b36732938c1bb77fb55718f",
+        ),
+        "relationship_full": (
+            {"entities": [{"id": 1, "name": "orders"}, {"id": 2, "name": "customers"}],
+             "relationships": [{
+                 "id": 11, "from_entity_id": 1, "from_column": "customer_id",
+                 "to_entity_id": 2, "to_column": "id", "kind": "many_to_one",
+                 "declared_kind": "belongs_to", "label": "所属客户",
+                 "junction_dataset_id": None, "junction_source_column": None,
+                 "junction_target_column": None, "tier": None, "sensitivity": None,
+             }]},
+            "5a4a3b5777842a6ef6a223dd4066a73e9cea95518faf060fc5d80987d72ba765",
+        ),
+        "type_coercion": (
+            {"entities": [
+                {"id": "5", "name": "t", "dataset_id": "d", "pk_columns": "a",
+                 "column_notes": ["x"], "tier": None, "sensitivity": None}
+            ], "relationships": []},
+            "22b5d189483857d9aff97d88f703c604aff1eb767c9aabdd43848ea4e6e99da4",
+        ),
+        "datetime_default": (
+            {"entities": [
+                {"id": 9, "name": "t", "dataset_id": "d", "pk_columns": [],
+                 "extra_day": date(2026, 11, 12),
+                 "extra_ts": datetime(2026, 11, 12, 1, 2, 3, 4000)}
+            ], "relationships": []},
+            "b85c7e06fcd96e51e43cb37a504b3f47f86c5948871a265f403aa007c9193bd3",
+        ),
+    }
+    for name, (manifest, want) in cases.items():
+        assert versioning.manifest_digest(manifest) == want, name
+
+
+def test_canonical_json_is_byte_identical_after_the_kernel_swap() -> None:
+    """规范 JSON 文本本身也不许变（导出物与签名面按它对齐）。"""
+    text = versioning.canonical_json({"b": 1, "a": "中文", "c": [2, {"z": None}]})
+    assert text == '{"a":"中文","b":1,"c":[2,{"z":null}]}'
+
+
 # ---------------------------------------------------------------- 4.1 diff
 
 
@@ -893,6 +1037,8 @@ def test_versions_list_and_unpublished_count(client, db_session) -> None:
     assert body["versions"][0]["entity_count"] == 2
     assert body["versions"][0]["relationship_count"] == 1
     assert body["versions"][0]["trigger"] == "manual"
+    # 时间线条目也带 manifest 形状版本（老消费者按未知键忽略）
+    assert body["versions"][0]["manifest_schema_version"] == 1
 
     # 空本体客户：200 + 空时间线（不是 404）
     empty = client.get("/api/v1/ontology/versions", headers=OTHER)
@@ -951,6 +1097,8 @@ def test_export_json_yaml_and_provenance(client, db_session) -> None:
     assert current.status_code == 200, current.text
     document = json.loads(current.text)
     assert document["schema_version"] == 2  # 0050：manifest 增档位两键
+    # establish-ontology-kernel 6.5：manifest 形状版本（与 schema_version 不同轴）
+    assert document["manifest_schema_version"] == 1
     assert document["customer_id"] == "cust-onto"
     assert document["version"] == "current"
     assert document["digest"] == versioning.manifest_digest(
