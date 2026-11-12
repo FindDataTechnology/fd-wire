@@ -312,6 +312,15 @@ spec:
             - name: CELL_REGISTRY_TOKEN
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: cell_registry_token }
+            # 星研供给面手动同步凭据（POST /internal/xingyan/sync?force=true 的
+            # X-Internal-Token）。自动摄取走进程内 24h tick，不依赖它；不配时
+            # 端点 fail-closed 403。optional: true——Secret 键未建时 Pod 照常起。
+            - name: XINGYAN_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: fd-wire-env
+                  key: xingyan_internal_token
+                  optional: true
           # 2026-11-12 实测：启动期要跑完 ~25 个 init_*（每个都 create_all），
           # 启动耗时 30–75s；而 liveness 只有 10s+3x10s 的预算，于是在启动完成前
           # 就被杀（日志停在 "Application startup complete" 后 0.2s 即 Shutting down）。
