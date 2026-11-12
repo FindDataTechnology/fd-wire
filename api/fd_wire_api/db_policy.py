@@ -25,7 +25,10 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
-_LOG = logging.getLogger(__name__)
+# 走 uvicorn 已配置的 logger：本模块是库，不自建 handler；而 ``__name__`` 那个
+# logger 在 uvicorn 下没有 handler（INFO 会被 lastResort 丢掉，只剩 WARNING 能露头），
+# 结果就是"计时在跑但日志里一行都没有"。uvicorn.error 默认 INFO + StreamHandler。
+_LOG = logging.getLogger("uvicorn.error")
 
 BOOT_AUTO_CREATE_ENV = "FD_WIRE_BOOT_AUTO_CREATE_TABLES"
 BOOT_SCHEMA_CHECK_ENV = "FD_WIRE_BOOT_SCHEMA_CHECK"
