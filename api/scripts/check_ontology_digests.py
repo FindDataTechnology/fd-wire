@@ -37,8 +37,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 
-def classify(manifest, stored: str, recomputed: str) -> str:
-    """``ok`` / ``legacy`` / ``mismatch``——三态，别把前两种混成一种。
+def classify(manifest, stored: str, recomputed: str, *, pinned: str | None = None) -> str:
+    """``ok`` / ``legacy-known`` / ``legacy`` / ``mismatch``——四态，别把它们混成两种。
 
     ``legacy``：这行的 digest 是**补键规则之前**铸造的。0050 给实体/关系加了
     ``tier``/``sensitivity``，归一器从此按「缺键 → null」补齐（design D5），于是
@@ -47,7 +47,12 @@ def classify(manifest, stored: str, recomputed: str) -> str:
 
     这类行在换底前后**都**对不上（旧 ``normalize_entity`` 同样补这两个键），所以
     它既不是回归、也改代码救不了；更**不能**改库里的 digest——消费方已按它校验过
-    导出物。只能单独报出来，由人决定处置（见 ``--allow-legacy``）。
+    导出物。
+
+    ``legacy-known`` 与 ``legacy`` 是**两种结果**：只有出现在仓里的遗留名单
+    （``legacy_ontology_digests.txt``，逐行钉 customer/version/当时的 digest）的那一行
+    才算「已知、可放行」。没钉过的遗留行仍然是失败——否则一个全局开关会顺带放过
+    将来任何新出现的遗留行，那就又变成「沉默即通过」了。
 
     ``mismatch``：原始 payload 也对不上。这才是真问题：配方被改过，或这一行被改写过。
     """
@@ -57,7 +62,28 @@ def classify(manifest, stored: str, recomputed: str) -> str:
         json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         .encode("utf-8")
     ).hexdigest()
-    return "legacy" if raw == stored else "mismatch"
+    if raw != stored:
+        return "mismatch"
+    # 钉住的必须是**同一个 digest**：同一个 (customer, version) 若被改写过，
+    # 库里的值变了，钉的那条就对不上，仍然算未解释的遗留。
+    return "legacy-known" if pinned == stored else "legacy"
+
+
+def load_pins(path: Path | None) -> dict[tuple[str, int], str]:
+    """读遗留名单：``customer<TAB>version<TAB>digest<TAB>原因``（``#`` 开头为注释）。"""
+    if path is None or not path.exists():
+        return {}
+    pins: dict[tuple[str, int], str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = raw.split("\t")
+        if len(parts) < 3:
+            continue
+        customer, version, digest = parts[0].strip(), parts[1].strip(), parts[2].strip()
+        pins[(customer, int(version))] = digest
+    return pins
 
 
 def _engine(database: str | None):
@@ -86,9 +112,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=0,
                         help="stop after N rows (0 = all)")
     parser.add_argument(
+        "--legacy-pins",
+        default=str(Path(__file__).with_name("legacy_ontology_digests.txt")),
+        help="遗留 digest 名单（逐行钉 customer/version/digest）；默认取脚本同目录那份",
+    )
+    parser.add_argument(
         "--allow-legacy",
         action="store_true",
-        help="把「补键规则之前铸造的 digest」记为已知遗留、不因此判失败（仍逐行打印）",
+        help="把**未钉进名单**的遗留行也放行（应急开关；正常应改名单而不是开它）",
     )
     args = parser.parse_args(argv)
 
@@ -111,6 +142,8 @@ def main(argv: list[str] | None = None) -> int:
     checked = 0
     mismatches: list[tuple[str, int, str, str]] = []
     legacy: list[tuple[str, int, str, str]] = []
+    known: list[tuple[str, int, str, str]] = []
+    pins = load_pins(Path(args.legacy_pins) if args.legacy_pins else None)
     try:
         with Session(engine) as session:
             stmt = select(OntologySnapshot).order_by(
@@ -122,9 +155,16 @@ def main(argv: list[str] | None = None) -> int:
                 manifest = snapshot.manifest_json or {}
                 recomputed = versioning.manifest_digest(manifest)
                 checked += 1
-                verdict = classify(manifest, snapshot.digest, recomputed)
+                verdict = classify(
+                    manifest,
+                    snapshot.digest,
+                    recomputed,
+                    pinned=pins.get((snapshot.customer_id, snapshot.version)),
+                )
                 row = (snapshot.customer_id, snapshot.version, snapshot.digest, recomputed)
-                if verdict == "legacy":
+                if verdict == "legacy-known":
+                    known.append(row)
+                elif verdict == "legacy":
                     legacy.append(row)
                 elif verdict == "mismatch":
                     mismatches.append(row)
@@ -136,10 +176,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    for customer, version, stored, recomputed in known:
+        print(
+            f"{customer} · v{version} · LEGACY(已知) · 库中 digest={stored} 重算={recomputed} · "
+            f"已钉进 legacy_ontology_digests.txt，按遗留处理"
+        )
+
     for customer, version, stored, recomputed in legacy:
         print(
-            f"{customer} · v{version} · LEGACY · 库中 digest={stored} 重算={recomputed} · "
-            f"该行 digest 由「缺键补 null」规则之前的版本铸造（原始 payload 哈希才等于库中值）"
+            f"{customer} · v{version} · LEGACY(未钉) · 库中 digest={stored} 重算={recomputed} · "
+            f"该行 digest 由「缺键补 null」规则之前的版本铸造（原始 payload 哈希才等于库中值）；"
+            f"确认无误后把它钉进 legacy_ontology_digests.txt（带原因），别开 --allow-legacy"
         )
 
     for customer, version, stored, recomputed in mismatches:
@@ -151,19 +198,20 @@ def main(argv: list[str] | None = None) -> int:
 
     if mismatches:
         print(f"\nFAILED: {len(mismatches)}/{checked} 份快照 digest 不一致"
-              + (f"（另有 {len(legacy)} 份遗留行）" if legacy else ""))
+              + (f"（另有 {len(known)} 份已知遗留、{len(legacy)} 份未钉遗留）" if known or legacy else ""))
         return 1
 
     if legacy and not args.allow_legacy:
-        # 遗留行不是「验过」——不传 --allow-legacy 就仍然算没通过，别让沉默变成通过。
+        # 未钉的遗留行不是「验过」——不处理掉就仍然算没通过，别让沉默变成通过。
         print(
-            f"\nLEGACY: {len(legacy)}/{checked} 份快照的 digest 由补键规则之前铸造，当前规则下不可复现；"
-            f"确认后加 --allow-legacy 才算通过"
+            f"\nLEGACY: {len(legacy)}/{checked} 份快照的 digest 由补键规则之前铸造且未钉进名单；"
+            f"确认后写进 legacy_ontology_digests.txt 再跑"
         )
         return 1
 
-    if legacy:
-        print(f"（其中 {len(legacy)} 份为已知遗留，已由 --allow-legacy 放行）")
+    if known or legacy:
+        explained = len(known) + (len(legacy) if args.allow_legacy else 0)
+        print(f"（其中 {explained} 份为遗留 digest，已按名单/应急开关放行）")
 
     if checked == 0:
         # 「没有样本」不等于「验证通过」——这两种结果必须长得不一样。

@@ -1,13 +1,15 @@
-"""check_ontology_digests 的三态分类（establish-ontology-kernel 6.2 收尾）。
+"""check_ontology_digests 的四态分类与遗留名单（establish-ontology-kernel 6.2 收尾）。
 
-这个核对脚本的价值全在「不让沉默变成通过」：库里可能同时存在
+这个核对脚本的价值全在「不让沉默变成通过」。库里可能同时存在：
 
-- 能复现的（当前配方算得出的）；
-- 遗留行——digest 由「缺键补 null」规则之前的版本铸造，**换底前后都**复现不出；
+- 能复现的；
+- 已知遗留——digest 由「缺键补 null」规则之前的版本铸造，**换底前后都**复现不出，
+  但已经被逐行钉进 ``legacy_ontology_digests.txt``；
+- 未钉的遗留——同样不可复现，但没人确认过，仍然算失败；
 - 真不一致——配方被改过，或这一行被改写过。
 
-前两种混成一种就会得出错误结论：把遗留行当失败，等于永远红灯；把失败当遗留，
-等于把回归放过。所以这三条必须各有一条断言，且两条「不通过」的分支要能各自红。
+四种里只有前两种可以算通过，而第二种之所以能通过，是因为**有人逐行确认过**。
+一个全局开关会顺带放过将来任何新出现的遗留行，所以那份名单是本文件要钉的东西。
 """
 
 from __future__ import annotations
@@ -46,23 +48,7 @@ PRE_0050 = {
     "relationships": [],
 }
 
-#: 同一内容，按当前规则补齐（归一器会补 null）。
-POST_0050 = {
-    "entities": [
-        {
-            "id": 7,
-            "name": "冒烟日期",
-            "dataset_id": "d1",
-            "pk_columns": ["date"],
-            "description": None,
-            "display_column": None,
-            "column_notes": None,
-            "tier": None,
-            "sensitivity": None,
-        }
-    ],
-    "relationships": [],
-}
+PADDED_DIGEST = "b" * 64
 
 
 def test_ok_when_recomputed_matches(checker):
@@ -70,18 +56,42 @@ def test_ok_when_recomputed_matches(checker):
     assert checker.classify(PRE_0050, stored, stored) == "ok"
 
 
-def test_legacy_when_raw_payload_hash_is_what_was_stored(checker):
-    """遗留行：库中值 == 原始 payload 哈希，而当前规则算的是补键后的哈希。"""
-    padded = "b" * 64
-    assert checker.classify(PRE_0050, _raw(PRE_0050), padded) == "legacy"
+def test_pinned_legacy_row_is_known_not_failing(checker):
+    stored = _raw(PRE_0050)
+    assert checker.classify(PRE_0050, stored, PADDED_DIGEST, pinned=stored) == "legacy-known"
+
+
+def test_unpinned_legacy_row_is_still_a_failure(checker):
+    stored = _raw(PRE_0050)
+    assert checker.classify(PRE_0050, stored, PADDED_DIGEST) == "legacy"
+
+
+def test_a_pin_does_not_vouch_for_a_rewritten_row(checker):
+    """同 (customer, version) 被改写后库中值变了——名单里的旧 digest 不该替它背书。"""
+    rewritten = "c" * 64
+    assert checker.classify(
+        PRE_0050, rewritten, PADDED_DIGEST, pinned=_raw(PRE_0050)
+    ) == "mismatch"
 
 
 def test_mismatch_when_neither_formula_matches(checker):
-    """真不一致：两种算法都对不上——这时候才该说配方/行被改了。"""
-    assert checker.classify(PRE_0050, "c" * 64, "b" * 64) == "mismatch"
+    assert checker.classify(PRE_0050, "c" * 64, PADDED_DIGEST) == "mismatch"
 
 
-def test_a_padded_payload_is_not_called_legacy(checker):
-    """补过键的行不该借「遗留」逃过核对：它的原始哈希与当前哈希是同一个。"""
-    assert _raw(POST_0050) == _raw(POST_0050)
-    assert checker.classify(POST_0050, _raw(PRE_0050), "b" * 64) == "mismatch"
+def test_load_pins_skips_comments_and_reads_the_shipped_list(checker):
+    pins = checker.load_pins(SCRIPT.with_name("legacy_ontology_digests.txt"))
+    assert ("drillcust001", 1) in pins
+    assert len(pins[("drillcust001", 1)]) == 64
+
+
+def test_load_pins_ignores_malformed_lines(checker, tmp_path):
+    path = tmp_path / "pins.txt"
+    path.write_text(
+        "# 注释\n\nbad-line-without-tabs\nc1\t2\tdeadbeef\treason\n", encoding="utf-8"
+    )
+    pins = checker.load_pins(path)
+    assert pins == {("c1", 2): "deadbeef"}
+
+
+def test_missing_pin_file_means_no_pins(checker, tmp_path):
+    assert checker.load_pins(tmp_path / "nope.txt") == {}
