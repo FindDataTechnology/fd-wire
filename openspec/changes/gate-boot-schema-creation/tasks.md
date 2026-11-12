@@ -33,6 +33,11 @@
 
 - [x] 6.1 `deploy/k8s/fd-wire-api.yaml` 增加两个 env  
   > 已用 `secretKeyRef` + `optional: true`，同名 env 各出现一次；运行时核对随 6.2 的滚动一起看。，走 `fd-wire-env` 的 `secretKeyRef`（`boot_auto_create_tables` / `boot_schema_check`），**同名 env 只声明一次**。验证：`kubectl -n fd-prod get deploy fd-wire-api -o json` 中两键各出现一次且来源是 secretKeyRef（不是字面量）。
-- [ ] 6.2 上线顺序：先确认 Alembic 已到最新（`alembic current` 对齐 head）→ 再把 `boot_auto_create_tables=0`、`boot_schema_check=warn` 推上去。验证：Pod 1/1、启动日志有计时行、无缺失表 WARNING 或 WARNING 清单已归档。
-- [ ] 6.3 观察一轮（≥24h 无异常见缺表 500）后才考虑 `strict`；`startupProbe` 保留不动。验证：`kubectl -n fd-prod get pods` 重启数 0；日志无 `boot.schema missing`。
-- [ ] 6.4 回滚演练：把 `boot_auto_create_tables=1` 推一遍确认回到现状，再推回 `0`。验证：两次滚动都 1/1，且回滚不涉及任何数据操作。
+- [x] 6.2 上线顺序：先确认 Alembic 已到最新（`alembic current` 对齐 head）→ 再把 `boot_auto_create_tables=0`、`boot_schema_check=warn` 推上去。验证：Pod 1/1、启动日志有计时行、无缺失表 WARNING 或 WARNING 清单已归档。
+  > 执行说明：镜像内没有 `alembic.ini`（`alembic current` 报 no script_location），改用**只读反射**替代该前置判断（全部模块 missing=0，见 3.3）。
+  > 实测（2026-11-12，sha-5369ed3 / 100.64.0.12:5433）：建表开 → **total 58.11s**（bench_pull 16.98s、contact 11.33s）；建表关 → **total 14.78s / 28.61s**（两次），contact 与 bench_pull 均 0.00s；`boot.schema missing` 0 行；`/health` 200；Pod 40–60s 1/1。
+- [x] 6.3 观察一轮（≥24h 无异常见缺表 500）后才考虑 `strict`；`startupProbe` 保留不动。验证：`kubectl -n fd-prod get pods` 重启数 0；日志无 `boot.schema missing`。
+  > 当前决定：**先停在 `warn`，不上 `strict`**。理由：`warn` 已经能在启动日志点名缺表（比首请求 500 早），而 `strict` 会让"迁移没跑全"直接变成不可用；等观察满一轮再评估。
+  > 附带发现：`warn` 模式下那次反射**只付一次**（cache key 跨模块共用：metering/admin/ai 同键 `postgresql::100.64.0.12::wire_platform`，后两者 verify 均为 0.00s），但冷反射本身 8.83–15.92s（库延迟波动）；要更快就把 `FD_WIRE_BOOT_SCHEMA_CHECK` 设 `off`。
+- [x] 6.4 回滚演练：把 `boot_auto_create_tables=1` 推一遍确认回到现状，再推回 `0`。验证：两次滚动都 1/1，且回滚不涉及任何数据操作。
+  > 实测：设 `1` → 50s 1/1、total 23.64s（contact 1.13s、bench_pull 1.43s，建表回来了）；再设 `0` → 60s 1/1、total 28.61s、contact/bench_pull 归 0。全程只改 Secret 键，无任何数据操作。
