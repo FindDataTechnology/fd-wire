@@ -112,6 +112,31 @@ REPORT_SPEC = {
 
 
 @pytest.fixture()
+def ds_engine():
+    """datasets 库的引擎——单测里给「每次新建 Session」的工厂用。
+
+    必须单独暴露：生产 `datasets.db.get_session()` 的契约是
+    `_session_factory()()`，**每次调用新建一个 Session 并由调用方 close()**。
+    早先这里把 `_session_factory` 换成一个恒返回同一个 Session 对象的 lambda，
+    于是产品代码（`market/artifact_service._sensitivity_of` 的
+    `finally: session.close()`）把测试自己持有的那个 Session 关掉了。
+    SQLAlchemy 2.1.3 容忍"关了再用"，2.1.8 起抛
+    `ResourceClosedError: This transaction is closed`——CI（装 2.1.8，与生产同版）
+    就是这样红的，而本地 uv.lock 钉 2.1.3 一直是绿的。
+    """
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    DatasetsBase.metadata.create_all(bind=engine)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture()
 def ai_session():
     engine = create_engine(
         "sqlite://",
@@ -128,13 +153,8 @@ def ai_session():
 
 
 @pytest.fixture()
-def ds_session():
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    DatasetsBase.metadata.create_all(bind=engine)
+def ds_session(ds_engine):
+    engine = ds_engine
     TestingSession = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     session = TestingSession()
     try:
@@ -144,7 +164,7 @@ def ds_session():
 
 
 @pytest.fixture()
-def client(monkeypatch, tmp_path, ai_session, ds_session):
+def client(monkeypatch, tmp_path, ai_session, ds_session, ds_engine):
     """覆写双库依赖 + 四角色种子；``get_session``（敏感度/读权判定直连）
     同样指向测试 datasets 引擎。"""
 
@@ -164,8 +184,13 @@ def client(monkeypatch, tmp_path, ai_session, ds_session):
     # 测试内把会话工厂换成 ds_session 同引擎（同生产语义：直连数据集库）
     from fd_wire_api.datasets import db as ds_db
 
+    # 与生产同语义：`get_session()` = `_session_factory()()`，每次一个新 Session、
+    # 由调用方 close()。绝不要把**测试自己持有的那个对象**当工厂返回——产品代码
+    # 会把它关掉（见 `ds_engine` 的 docstring）。
     monkeypatch.setattr(
-        ds_db, "_session_factory", lambda: (lambda: ds_session)  # noqa: ARG005
+        ds_db, "_session_factory",
+        lambda: sessionmaker(bind=ds_engine, autoflush=False, expire_on_commit=False,
+                             future=True),
     )
 
     reset_ai_runtime()

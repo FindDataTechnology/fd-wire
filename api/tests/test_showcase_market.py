@@ -88,14 +88,28 @@ def ai_session():
 
 
 @pytest.fixture()
-def ds_session():
+def ds_engine():
+    """datasets 引擎：给「每次新建 Session」的工厂用（见 test_artifact_marketplace 同款说明）。
+
+    生产 `get_session()` = `_session_factory()()`，每次一个新 Session 且由调用方
+    close()。把**同一个 Session 对象**当工厂返回，产品代码会把它关掉；
+    SQLAlchemy 2.1.8 起关了再用直接 ResourceClosedError（CI 装的是 2.1.8，与生产同版）。
+    """
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
     DatasetsBase.metadata.create_all(bind=engine)
-    Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture()
+def ds_session(ds_engine):
+    Session = sessionmaker(bind=ds_engine, autoflush=False, expire_on_commit=False)
     session = Session()
     try:
         yield session
@@ -104,7 +118,7 @@ def ds_session():
 
 
 @pytest.fixture()
-def client(monkeypatch, tmp_path, ai_session, ds_session):
+def client(monkeypatch, tmp_path, ai_session, ds_session, ds_engine):
     def override_ai():
         yield ai_session
 
@@ -113,7 +127,12 @@ def client(monkeypatch, tmp_path, ai_session, ds_session):
 
     from fd_wire_api.datasets import db as ds_db
 
-    monkeypatch.setattr(ds_db, "_session_factory", lambda: (lambda: ds_session))
+    # 与生产同语义：每次一个新 Session（不要把测试持有的对象当工厂返回）。
+    monkeypatch.setattr(
+        ds_db, "_session_factory",
+        lambda: sessionmaker(bind=ds_engine, autoflush=False, expire_on_commit=False,
+                             future=True),
+    )
 
     reset_ai_runtime()
     reset_showcase_cache()
@@ -314,7 +333,7 @@ def test_draft_platform_artifact_not_listed(client, ai_session) -> None:
 # ------------------------------------------------------------------ 安全降级
 
 
-def test_missing_platform_tenant_yields_empty_list(monkeypatch, tmp_path, ai_session, ds_session):
+def test_missing_platform_tenant_yields_empty_list(monkeypatch, tmp_path, ai_session, ds_session, ds_engine):
     """平台租户缺失：返回空列表而非 500（安全方向）。"""
 
     def override_ai():
@@ -325,7 +344,12 @@ def test_missing_platform_tenant_yields_empty_list(monkeypatch, tmp_path, ai_ses
 
     from fd_wire_api.datasets import db as ds_db
 
-    monkeypatch.setattr(ds_db, "_session_factory", lambda: (lambda: ds_session))
+    # 与生产同语义：每次一个新 Session（不要把测试持有的对象当工厂返回）。
+    monkeypatch.setattr(
+        ds_db, "_session_factory",
+        lambda: sessionmaker(bind=ds_engine, autoflush=False, expire_on_commit=False,
+                             future=True),
+    )
     reset_ai_runtime()
     reset_showcase_cache()
     app.dependency_overrides[get_db] = override_ai
