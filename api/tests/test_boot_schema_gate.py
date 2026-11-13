@@ -71,3 +71,63 @@ def test_strict_mode_refuses_to_start(isolated_db, monkeypatch):
         isolated_db.init_db()
     assert TABLE in str(excinfo.value)
     assert not _has_table(isolated_db)
+
+
+# ── entities 切片：与其余十片同规（2026-11-13 补）───────────────────────────
+#
+# 这一片此前自己读 FD_WIRE_ENTITIES_AUTO_CREATE_TABLES 且默认开：既压过全局
+# 开关（生产设为 0），关表时也不做缺表校验。下面四条把"与 contact 同规"钉住，
+# 判据仍是「发不发 DDL」，不看决策函数。
+
+from fd_wire_api.entities import db as entities_db  # noqa: E402
+
+ENTITIES_TABLE = "entities"
+
+
+@pytest.fixture
+def isolated_entities_db(tmp_path, monkeypatch):
+    monkeypatch.delenv("FD_WIRE_DATABASE_URL", raising=False)  # 收敛口会压过下面这条
+    monkeypatch.setenv("FD_WIRE_ENTITIES_DATABASE_URL", f"sqlite:///{tmp_path}/entities.db")
+    monkeypatch.delenv(db_policy.BOOT_AUTO_CREATE_ENV, raising=False)
+    monkeypatch.delenv("FD_WIRE_ENTITIES_AUTO_CREATE_TABLES", raising=False)
+    monkeypatch.setenv(db_policy.BOOT_SCHEMA_CHECK_ENV, "off")
+    db_policy.reset_schema_cache()
+    entities_db.reset_entities_runtime()
+    yield entities_db
+    entities_db.reset_entities_runtime()
+    db_policy.reset_schema_cache()
+
+
+def _entities_has_table(mod) -> bool:
+    engine = mod.get_engine()
+    try:
+        return ENTITIES_TABLE in inspect(engine).get_table_names()
+    finally:
+        engine.dispose()
+
+
+def test_entities_boot_switch_off_issues_no_ddl(isolated_entities_db, monkeypatch):
+    monkeypatch.setenv(db_policy.BOOT_AUTO_CREATE_ENV, "0")
+    isolated_entities_db.init_db()
+    assert not _entities_has_table(isolated_entities_db)
+
+
+def test_entities_default_still_creates(isolated_entities_db):
+    isolated_entities_db.init_db()
+    assert _entities_has_table(isolated_entities_db)
+
+
+def test_entities_module_switch_wins_over_boot_switch(isolated_entities_db, monkeypatch):
+    monkeypatch.setenv(db_policy.BOOT_AUTO_CREATE_ENV, "0")
+    monkeypatch.setenv("FD_WIRE_ENTITIES_AUTO_CREATE_TABLES", "1")
+    isolated_entities_db.init_db()
+    assert _entities_has_table(isolated_entities_db)
+
+
+def test_entities_strict_mode_refuses_to_start(isolated_entities_db, monkeypatch):
+    monkeypatch.setenv(db_policy.BOOT_AUTO_CREATE_ENV, "0")
+    monkeypatch.setenv(db_policy.BOOT_SCHEMA_CHECK_ENV, "strict")
+    with pytest.raises(RuntimeError) as excinfo:
+        isolated_entities_db.init_db()
+    assert ENTITIES_TABLE in str(excinfo.value)
+    assert not _entities_has_table(isolated_entities_db)

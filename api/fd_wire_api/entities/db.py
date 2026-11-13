@@ -26,6 +26,7 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from ..config import canonical_metadata_database_url, normalize_database_url
+from ..db_policy import boot_auto_create_enabled, verify_schema
 
 _DEFAULT_ENTITIES_DB = "sqlite:///./fd_wire_entities.db"
 
@@ -87,18 +88,32 @@ _initialized = False
 
 
 def _auto_create_enabled() -> bool:
-    return os.getenv("FD_WIRE_ENTITIES_AUTO_CREATE_TABLES", "1").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }
+    """逐模块开关优先于启动总开关；见 db_policy 的三级解析。
+
+    本模块此前自己读 ``FD_WIRE_ENTITIES_AUTO_CREATE_TABLES`` 且**默认开**，
+    既压过全局开关（``FD_WIRE_BOOT_AUTO_CREATE_TABLES``，生产设为 0），
+    也在关表时**不做**缺表校验——gate-boot-schema-creation 那一轮的十个模块
+    都接上了策略，只有这里漏了。2026-11-13 发现：这意味着生产上实体两表
+    仍会走启动建表，而"缺列"两类（0054/0055）它照样看不见。
+    """
+    return boot_auto_create_enabled(
+        "entities", legacy_env="FD_WIRE_ENTITIES_AUTO_CREATE_TABLES"
+    )
 
 
 def init_db() -> None:
-    """幂等建实体两表（开发兜底；生产走 alembic 0026）。"""
+    """幂等建实体两表（开发兜底；生产走 alembic 0026）。
+
+    与其余切片同规：建表关闭时改为校验缺表（``warn`` 记日志 / ``strict`` 拒绝
+    启动），而不是静默跳过——静默跳过会让"缺表"变成首个请求 500。
+    """
     global _initialized
-    if _initialized or not _auto_create_enabled():
+    if _initialized:
+        return
+    if not _auto_create_enabled():
+        from . import models  # noqa: F401 —— 注册映射后再校验
+
+        verify_schema("entities", EntitiesBase.metadata.tables, get_engine())
         return
     with _init_lock:
         if _initialized:
