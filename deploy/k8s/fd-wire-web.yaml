@@ -34,7 +34,11 @@ spec:
           # 200 text/html，`<script src>` 收到 HTML 即静默死；/assets/ 那条是同一缺陷的另一面，
           # 早已修过。本机 nginx 沙箱红证：加规则前 200→加规则后 404，而 / 与 /console/ 的
           # SPA 回落、/assets/ 真实产物零漂移）。
-          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-f3feb66
+          # 出片 tag=testaction001 build-pool 快照 sha=be985e7（真 baf1d03：根上的脚本路径不再回
+          # 200 的 index.html——补按扩展名的 404 正则，扩展名不含 json/txt 以免抢 /internal/ 反代；
+          # 因正则优先于普通前缀 location，同时给 ^~ /console 与 ^~ /internal/ 加保护。
+          # 此前线上 /copilot.js = 200 text/html 417B（index.html 指纹），六台主机并排只有 wire 这样）。
+          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-be985e7
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
