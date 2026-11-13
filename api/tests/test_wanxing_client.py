@@ -261,10 +261,31 @@ def test_blank_key_returns_none(monkeypatch):
     assert get_wanxing_client() is None  # 空白键等同未配置
 
 
+def test_key_without_slug_returns_none(monkeypatch):
+    """有调用键但没有目标 agent = 未配置（不是投递失败）。
+
+    2026-11-13 起 slug 无缺省：曾经的 ``packs-…-spider-heal`` 缺省指向一个
+    生产门面上不存在的 agent，留着它的后果是拿一个必 404 的目标去投，再把
+    404 归到 forbidden/protocol——排查方向整个错。所以这里必须回 None（503
+    口径），而不是构造一个 slug 为空的客户端去发请求。
+    """
+    monkeypatch.setenv(WANXING_CALLER_KEY_ENV, FAKE_KEY)
+    monkeypatch.delenv(WANXING_AGENT_SLUG_ENV, raising=False)
+    assert get_wanxing_client() is None
+
+
+def test_blank_slug_returns_none(monkeypatch):
+    monkeypatch.setenv(WANXING_CALLER_KEY_ENV, FAKE_KEY)
+    monkeypatch.setenv(WANXING_AGENT_SLUG_ENV, "   ")
+    assert get_wanxing_client() is None  # 空白 slug 等同未配置
+
+
 def test_configured_env_builds_http_client(monkeypatch):
     monkeypatch.setenv(WANXING_CALLER_KEY_ENV, FAKE_KEY)
+    monkeypatch.setenv(WANXING_AGENT_SLUG_ENV, SLUG)
     client = get_wanxing_client()
     assert isinstance(client, HttpWanxingClient)
+    assert client._slug == SLUG
     client.close()
 
 
@@ -276,6 +297,7 @@ def test_factory_inject_and_reset(monkeypatch):
     fake = FakeClient()
     set_wanxing_client_factory(lambda: fake)
     monkeypatch.setenv(WANXING_CALLER_KEY_ENV, FAKE_KEY)
+    monkeypatch.setenv(WANXING_AGENT_SLUG_ENV, SLUG)
     assert get_wanxing_client() is fake  # 注入优先于 env
 
     reset_wanxing_client_factory()

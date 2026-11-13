@@ -36,8 +36,13 @@ WANXING_A2A_TIMEOUT_ENV = "WANXING_A2A_TIMEOUT"
 
 #: 新域缺省（design D1 env 表；deploy 明文注入同值，env 只做兜底）。
 WANXING_A2A_BASE_DEFAULT = "https://wanxing.finddatatech.cloud"
-#: spider-heal agent slug 缺省（允泣清单已加该 caller，2026-10-12 实证）。
-WANXING_AGENT_SLUG_DEFAULT = "packs-kkcie7nlrhluo4likpnn0w-spider-heal"
+#: 曾经的 spider-heal 缺省 slug——**2026-11-13 删除**。
+#:
+#: 它指向 ``packs-kkcie7nlrhluo4likpnn0w-spider-heal``，而萬星门面当前部署的 18 个
+#: public agent 里没有这个 slug（2026-11-13 实测 ``GET /api/wanxing/v1/agents``）。
+#: 留着它的后果不是报错，是"看起来配好了"：调用键一给上，快车道就拿一个不存在的
+#: agent 去投，拿到 404/agent_not_found 之后被归到 ``forbidden``/``protocol``，
+#: 排查方向整个错。缺省值不该替使用者猜一个当前不存在的目标——slug 现在是必填。
 #: 超时缺省（秒）：message/send 同步回执、flash 模型秒级常返，120s 留余量。
 WANXING_TIMEOUT_DEFAULT = 120.0
 
@@ -95,11 +100,12 @@ class HttpWanxingClient:
             if base_url is not None
             else os.environ.get(WANXING_A2A_BASE_ENV, WANXING_A2A_BASE_DEFAULT)
         ).rstrip("/")
+        # 没有缺省：不指名就没有可投的 agent（见上方 WANXING_AGENT_SLUG_ENV 的说明）。
         self._slug = (
             agent_slug
             if agent_slug is not None
-            else os.environ.get(WANXING_AGENT_SLUG_ENV, WANXING_AGENT_SLUG_DEFAULT)
-        )
+            else os.environ.get(WANXING_AGENT_SLUG_ENV, "")
+        ).strip()
         self._key = (
             caller_key
             if caller_key is not None
@@ -277,5 +283,9 @@ def get_wanxing_client() -> WanxingClient | None:
     if _WANXING_CLIENT_FACTORY is not None:
         return _WANXING_CLIENT_FACTORY()
     if not os.environ.get(WANXING_CALLER_KEY_ENV, "").strip():
+        return None
+    # 有调用键但没有目标 agent：同样是"未配置"，不是投递失败。同一个 None 让
+    # service 层用同一句话回绝（并指名缺的是哪一项），而不是发一个注定 404 的请求。
+    if not os.environ.get(WANXING_AGENT_SLUG_ENV, "").strip():
         return None
     return HttpWanxingClient()
