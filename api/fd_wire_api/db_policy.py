@@ -135,33 +135,90 @@ def reset_schema_cache() -> None:
     _reflected_tables.clear()
 
 
-def verify_schema(module: str, table_names: Iterable[str], engine: Any) -> None:
-    """比对``声明表``与库内实有表（一次反射，按库缓存）。
+def _reflect_columns(engine: Any, table: str) -> set[str]:
+    """某表实有列（不缓存：列变化只发生在迁移之后，而迁移后进程会重启）。"""
+    from sqlalchemy import inspect as sa_inspect
 
-    ``off`` 直接返回；``warn`` 逐表 WARNING；``strict`` 抛 ``RuntimeError``
-    （消息含缺失表名，进程非零退出——**不静默降级**，否则缺表会变成首请求 500）。
+    return {c["name"] for c in sa_inspect(engine).get_columns(table)}
+
+
+def verify_schema(module: str, table_names: Any, engine: Any) -> None:
+    """比对``声明表/列``与库内实有（一次反射，按库缓存表名）。
+
+    ``off`` 直接返回；``warn`` 逐表/逐列 WARNING；``strict`` 抛 ``RuntimeError``
+    （消息含缺失的表名与列名，进程非零退出——**不静默降级**，否则缺表/缺列会变成
+    首请求 500）。
+
+    **为什么要查列**：只比表名时，一个"加列"迁移（0054 ``ontology_events.target_key``、
+    0055 ``kernel_attrs``）在库里**完全隐形**——表都在，启动全绿，直到首个读写命中
+    不存在的列才 500。2026-11-13 实测生产就是这个状态（三列 MISSING、head 落后两版）。
+
+    参数兼容两种写法：``Base.metadata.tables``（名字→Table，能拿到列）或单纯的名字
+    集合（只有表名，不做列校验）。
     """
+    from collections.abc import Mapping as _Mapping
+
     mode = schema_check_mode()
     if mode == "off":
         return
-    declared = {name for name in table_names if name}
+
+    declared: dict[str, set[str] | None] = {}
+    if isinstance(table_names, _Mapping):
+        for name, table in table_names.items():
+            columns = getattr(table, "columns", None)
+            declared[str(name)] = {c.name for c in columns} if columns is not None else None
+    else:
+        for name in table_names or ():
+            if name:
+                declared[str(name)] = None
+    declared = {name: cols for name, cols in declared.items() if name}
     if not declared:
         return
+
     try:
         existing = _reflect_table_names(engine)
     except Exception as exc:  # 反射失败不能装成"没缺表"
         _LOG.warning("boot.schema module=%s verify skipped (reflection failed: %s)", module, exc)
         return
-    missing = sorted(declared - existing)
-    if not missing:
+
+    missing_tables = sorted(set(declared) - existing)
+
+    # 列只在表真的存在时才比：表缺了，"缺列"是同一件事的另一种说法，不重复报。
+    missing_columns: dict[str, list[str]] = {}
+    for name, cols in declared.items():
+        if cols is None or name in missing_tables:
+            continue
+        try:
+            actual = _reflect_columns(engine, name)
+        except Exception as exc:
+            _LOG.warning(
+                "boot.schema module=%s column check skipped for %s (reflection failed: %s)",
+                module, name, exc,
+            )
+            continue
+        gap = sorted(cols - actual)
+        if gap:
+            missing_columns[name] = gap
+
+    if not missing_tables and not missing_columns:
         return
+
     if mode == "strict":
+        parts = []
+        if missing_tables:
+            parts.append(f"missing tables {missing_tables}")
+        if missing_columns:
+            rendered = ", ".join(f"{t}.{c}" for t, cols in missing_columns.items() for c in cols)
+            parts.append(f"missing columns [{rendered}]")
         raise RuntimeError(
-            f"boot schema check failed for module={module}: missing tables {missing}. "
+            f"boot schema check failed for module={module}: {'; '.join(parts)}. "
             "Run alembic upgrade head (or set the module's *_AUTO_CREATE_TABLES=1) before starting."
         )
-    for name in missing:
+    for name in missing_tables:
         _LOG.warning("boot.schema missing table=%s module=%s", name, module)
+    for name, cols in missing_columns.items():
+        for col in cols:
+            _LOG.warning("boot.schema missing column=%s.%s module=%s", name, col, module)
 
 
 @contextmanager
