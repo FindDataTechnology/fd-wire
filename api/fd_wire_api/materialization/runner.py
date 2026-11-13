@@ -41,10 +41,18 @@ from .db import utc_now_naive
 from .models import MaterializedArtifact
 from .quota import QuotaGuard, SqlQuotaGuard
 
-#: 引擎客户端工厂（模块级可注入：调度链不走 FastAPI DI；测试换假件）
-from ..datasets.ingest import (  # noqa: E402
-    get_engine_client_factory as _default_engine_factory,
-)
+def _default_engine_factory():
+    """引擎客户端工厂的默认实现——**调用期**取，不在模块顶层取。
+
+    顶层取这个名字会把导入链闭成环：``datasets.ingest`` 自己会经 ``ai.routes →
+    materialization`` 绕回本模块，于是"先导入本模块"的路径（``import
+    fd_wire_api.entities.db``、单模块脚本、任何冷启动顺序）直接 ImportError。
+    2026-11-13 在线上 pod 与 base/main 两棵树都复现过。调用期取就没有这个窗口：
+    走到这里时 ``datasets.ingest`` 早已加载完。
+    """
+    from ..datasets.ingest import get_engine_client_factory
+
+    return get_engine_client_factory()
 from .settings import get_settings
 from .specs import ReadItem, SpecReadListError, extract_read_list
 
@@ -281,7 +289,7 @@ class MaterializationRunner:
         # artifact 实例可能挂在调用方会话（scheduler tick 加载）——merge 进本
         # runner 会话后再改写，``_record`` 的 commit 才真正落库
         artifact = self._db.merge(artifact)
-        engine_factory = globals().get("_engine_factory_override") or _default_engine_factory
+        engine_factory = globals().get("_engine_factory_override") or _default_engine_factory()
         session = get_datasets_session()
         try:
             pipeline = session.execute(
@@ -352,7 +360,7 @@ class MaterializationRunner:
 
         from ..datasets.db import get_session as get_datasets_session
 
-        engine_factory = globals().get("_engine_factory_override") or _default_engine_factory
+        engine_factory = globals().get("_engine_factory_override") or _default_engine_factory()
 
         session = get_datasets_session()
         try:

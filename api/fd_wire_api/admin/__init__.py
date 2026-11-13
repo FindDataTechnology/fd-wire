@@ -13,18 +13,35 @@ fail-closed 403）：
 
 from __future__ import annotations
 
-from .auth import require_admin_token
-from .db import AdminBase, get_db, get_session, init_db, reset_admin_runtime
-from .models import CatalogReviewNote
-from .routes import router
+import importlib
+from typing import Any
 
-__all__ = [
-    "AdminBase",
-    "CatalogReviewNote",
-    "get_db",
-    "get_session",
-    "init_db",
-    "require_admin_token",
-    "reset_admin_runtime",
-    "router",
-]
+#: 名字 → 拥有它的子模块。**惰性导出**（PEP 562）：本包被 ``console.auth`` 间接拖进来，
+#: 急切 ``from .routes import router`` 会把 ``admin.auth → console.auth`` 绕成环，
+#: "先导入 ``ai.routes`` / ``billing.routes``"的冷启动直接 ImportError
+#: （2026-11-13 由 ``tests/test_cold_imports.py`` 逐条抓出）。
+_EXPORTS: dict[str, str] = {
+    "AdminBase": ".db",
+    "CatalogReviewNote": ".models",
+    "get_db": ".db",
+    "get_session": ".db",
+    "init_db": ".db",
+    "require_admin_token": ".auth",
+    "reset_admin_runtime": ".db",
+    "router": ".routes",
+}
+
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(importlib.import_module(module_name, __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_EXPORTS))
