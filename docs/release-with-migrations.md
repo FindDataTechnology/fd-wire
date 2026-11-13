@@ -79,13 +79,32 @@ python -m alembic current        # 复核：0055_ontology_kernel_attrs
 
 ## 3. 滚片
 
+### 3.1 先定走哪条出片线——**main 不能走公开线**
+
+| 要出的树 | 走哪条 | 为什么 |
+| --- | --- | --- |
+| 不含内核 wheel（≤ `7b2dfc3` 那类） | 公开快照仓 `scs001/fd-wire-images`（免费无限） | 公开面无源码风险 |
+| **`main`（含 `api/vendor/fd_ontology_kernel-*.whl`）** | **私有构建池**，如 `testaction001/build-pool` | 公开仓会把内核源码推成永久公开 |
+
+判据不看推测看事实：`main` 的 `pyproject.toml` 钉着 `fd-ontology-kernel`、
+`Dockerfile` 用 `--find-links ./vendor` ⇒ 镜像离不开那个 wheel。
+
 ```bash
-# 3.1 出片：源 main → 公开快照仓 → 镜像（tag = 快照 commit 短 sha）
-#     注意：本仓私有 Actions 因账单起不来，正路是公开快照仓 scs001/fd-wire-images
-# 3.2 改 fd-infra-deploy 的 fd-wire-api 清单 image 行（tag 用镜像仓 sha，不是源码 sha）
-#     并与线上实况核对，避免把别人的新片回退成自己的旧片
+# 私有池出片（pd-build-snapshot 会用 git archive 只导已提交树，不含未跟踪文件）
+fd-build-snapshot ~/finddata/fd-wire -R testaction001/build-pool \
+  --namespace fd-wire --image api --dockerfile api/Dockerfile --context api
+# 四个变量必须给齐：池是共享的，别的会话一推就会把 DF/CONTEXT 盖成他们的子目录
+# 出片 tag = 快照仓 commit 短 sha（不是源码 sha）；本仓历史上就这么出过片
+# （清单注释里的 `testaction001 build-pool 快照 sha=24994bc / 1807a2e`）
+```
+
+### 3.2 改清单并核对线上实况
+
+```bash
+# tag 用镜像仓 sha；先看线上实况，避免把别人的新片回退成自己的旧片
 kubectl --context cheap -n fd-prod get deploy fd-wire-api \
   -o jsonpath='{.spec.template.spec.containers[0].image}'
+```
 
 # 3.3 提交后 Argo hard refresh（应用 all-services-prod，盯 gitee main）
 kubectl --context cheap -n argocd annotate app all-services-prod \
