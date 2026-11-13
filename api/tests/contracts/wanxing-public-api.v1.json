@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://wanxing.finddatatech.cloud/contracts/wanxing-public-api.v1.json",
   "title": "Wanxing public read surfaces — consumer contract",
-  "x-contract-rev": "2",
+  "x-contract-rev": "3",
   "description": "The response shapes that sibling lines rely on. Only consumed fields are constrained; anything else may be added freely (additive changes do not bump the revision). Bumping x-contract-rev is required for any rename, removal, or semantic change of a field named here. Consumers: paas/facet/supply-catalog.js (spine), paas/server/routes/fleets.js (owner cross-line), paas/services/ops-console (fleet board), fd-lex (copilot loader — not covered here, see copilot.js contract), fd-wire (A2A receipt — covered by /turn below), wanxing-ops-mcp (catalog + card), fd-industry-data (A2A work-order dispatch).",
   "$defs": {
     "agentsResponse": {
@@ -940,6 +940,45 @@
           }
         }
       }
+    },
+    "prefsResponse": {
+      "type": "object",
+      "description": "GET /api/wanxing/v1/prefs/{slug} 与 PUT 同一路由的响应（调用键即凭证）。消费者：谦面 `facet prefs` 子命令（paas facet/cli/facet.js）——它读 prefs.callbackUrl / callbackSecretSet / reapMinutes。密钥只报存在，永不回显值。",
+      "required": [
+        "prefs"
+      ],
+      "properties": {
+        "prefs": {
+          "type": "object",
+          "required": [
+            "callbackUrl",
+            "callbackSecretSet",
+            "reapMinutes"
+          ],
+          "properties": {
+            "callbackUrl": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "回合完成回调地址；未设即 null。"
+            },
+            "callbackSecretSet": {
+              "type": "boolean",
+              "description": "签名密钥是否已设——只报存在，不回显值。"
+            },
+            "reapMinutes": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "description": "外部上下文收割窗（分钟）；未设为 null（回落平台默认）。"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   }
 }
