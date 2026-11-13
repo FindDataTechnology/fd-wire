@@ -18,7 +18,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
-from ..demands.routes import _require_internal
+# 闸从叶子模块取，不走 ``..demands.routes``：后者初始化链经 console→admin 又回到
+# 本模块，构成 demands↔cell_provision 的导入环（2026-11-13 实测：干净检出上
+# ``pytest tests/test_wanxing_client.py`` 单独收集即 ImportError）。语义未变。
+from ..internal_auth import require_internal as _require_internal
 from . import service
 from .db import get_db
 from .schemas import ClaimOut, ResultIn, ResultOut

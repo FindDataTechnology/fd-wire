@@ -39,9 +39,8 @@ pipeline_routes.py：流水线事实 / gate 结果 / 交付 / 授权转公开端
 from __future__ import annotations
 
 import os
-import secrets
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -56,6 +55,7 @@ from .orchestration import (
     WorkorderNotFound,
 )
 from ..console.auth import require_console_customer_id
+from ..internal_auth import require_internal as _require_internal
 from ..delivery.scope_client import ScopeClient, scope_client_dep
 from .schemas import (
     DemandCreate,
@@ -69,20 +69,6 @@ from .schemas import (
 from .statemachine import DemandStatus, TransitionError
 
 router = APIRouter(tags=["demands"])
-
-_DEFAULT_INTERNAL_TOKEN = "wire-internal-dev"
-
-
-def _require_internal(
-    x_internal_token: str | None = Header(default=None, alias="X-Internal-Token"),
-) -> None:
-    """内部调用鉴权：与 FD_WIRE_INTERNAL_TOKEN 常量时间比对。"""
-    expected = os.getenv("FD_WIRE_INTERNAL_TOKEN", _DEFAULT_INTERNAL_TOKEN)
-    if not x_internal_token or not secrets.compare_digest(x_internal_token, expected):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="内部端点需要有效的 X-Internal-Token",
-        )
 
 
 def _demand_or_404(db: Session, demand_id: int):
