@@ -167,7 +167,7 @@ cd api && python -m pytest tests/test_cold_imports.py -q
 
 ---
 
-## 5. 本次发布特有的两件事
+## 5. 本次发布特有的三件事
 
 1. **导入环**：`datasets/ingest → ai → entities → data_plane → datasets.ingest` 等三条
    在**旧片（7b2dfc3）里仍活着**。修在 `70eaeaf`，随本次上片生效。在此之前的旧片里跑
@@ -175,3 +175,9 @@ cd api && python -m pytest tests/test_cold_imports.py -q
 2. **`entities` 已接进 `db_policy`**（`b60eae6`）：生产 `boot_auto_create_tables=0` 现在对这个
    切片也生效（此前它自己默认开）。这意味着上片后实体两表**不再**有启动建表兜底——
    迁移必须先跑完（第 2 步），这是本 runbook 顺序不可交换的第二个理由。
+3. **镜像开始带本体内核 wheel**（`3907882`）：`fd_ontology_kernel` 此前**不在镜像里**
+   （wheel 一直躺在 `api/vendor/`，没人装），而 `entities/versioning.py` 在模块顶层
+   import 它 ⇒ 这一次的出片是**第一次真正能起来**的片。Dockerfile 里新加了一条构建期
+   入口闸（`python -c "import fd_wire_api.app"`），内核没装上时**构建直接失败**——
+   所以出片报红先看这条，不要怀疑网络或 base 镜像。
+
