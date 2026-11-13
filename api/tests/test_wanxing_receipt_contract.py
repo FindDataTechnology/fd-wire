@@ -48,18 +48,43 @@ RECEIPT_READS: tuple[tuple[str, str], ...] = (
 )
 
 
+#: 仓内 vendored 副本（`cp` 自 fd-wanxing/contracts，逐字节相同）。
+#:
+#: 为什么必须有这一份：测试读兄弟仓路径在**单仓检出**里不成立——CI（公开快照仓、
+#: 任何只 clone 本仓的人）里 `../fd-wanxing` 不存在，判据要么报错要么被写成 skip，
+#: 而 skip 等于判据在 CI 里消失（跨仓判据最典型的死法）。有了副本就永远可跑；
+#: 兄弟仓可达时再断言两份**逐字节**相等，谁持了陈旧副本会立刻红。
+VENDORED_CONTRACT = Path(__file__).resolve().parent / "contracts" / CONTRACT_FILENAME
+
+
+def _sibling_candidates() -> list[Path]:
+    """兄弟仓里的契约（工作区里可达时才有），用于与 vendored 副本对账。
+
+    向上有界搜索而不是写死两级：本仓常被 checkout 成 worktree
+    （`<root>/.worktrees/fd-wire-xxx`、`/tmp/fd-wire-xxx`），写死
+    `parent`/`parent.parent` 时兄弟仓恰好不在那两级上，对账就会**静默跳过**——
+    我第一次做红证就是因为这个假绿（注入陈旧副本，测试照样 2 passed）。
+    """
+    found: list[Path] = []
+    here = Path(__file__).resolve().parent
+    for _ in range(4):  # api/tests → api → 仓根 → 上一级 → 上两级 → 上三级
+        here = here.parent
+        candidate = here / "fd-wanxing" / "contracts" / CONTRACT_FILENAME
+        if candidate not in found:
+            found.append(candidate)
+    return found
+
+
 def _contract_candidates() -> list[Path]:
-    """契约路径候选，按优先级：env → 兄弟仓 → finddata 根下的兄弟仓。"""
+    """契约路径候选，按优先级：env → 仓内 vendored 副本 → 兄弟仓。"""
     candidates: list[Path] = []
     env = os.environ.get("WANXING_CONTRACTS_DIR", "").strip()
     if env:
         raw = Path(env).expanduser()
         # env 给目录（档名固定）或直接给文件，两种都认。
         candidates.append(raw if raw.suffix == ".json" else raw / CONTRACT_FILENAME)
-    candidates.append(REPO_ROOT.parent / "fd-wanxing" / "contracts" / CONTRACT_FILENAME)
-    candidates.append(
-        REPO_ROOT.parent.parent / "finddata" / "fd-wanxing" / "contracts" / CONTRACT_FILENAME
-    )
+    candidates.append(VENDORED_CONTRACT)
+    candidates.extend(_sibling_candidates())
     return candidates
 
 
@@ -97,6 +122,23 @@ def _module_source() -> str:
     if not WANXING_MODULE.is_file():  # 仓结构变了：说明书级失败，不静默
         pytest.fail(f"找不到柏讯 A2A 客户端实现：{WANXING_MODULE}")
     return WANXING_MODULE.read_text(encoding="utf-8")
+
+
+def test_the_vendored_contract_matches_the_owner_when_the_sibling_is_reachable() -> None:
+    """兄弟仓可达时，仓内副本必须与 owner **逐字节**相同。
+
+    形状比对会容忍正好会出事的改动（数组元素里改名、枚举值变化）；字节比对不会。
+    单仓检出（CI、外部 clone）时兄弟仓不在，这条自动跳过——但上面那条判据仍然跑，
+    所以"跳过"只是少了漂移检测，不是少了判据。
+    """
+    sibling = next((p for p in _sibling_candidates() if p.is_file()), None)
+    if sibling is None or not VENDORED_CONTRACT.is_file():
+        return
+    assert VENDORED_CONTRACT.read_bytes() == sibling.read_bytes(), (
+        f"仓内副本与 owner 不一致：{VENDORED_CONTRACT} vs {sibling}\n"
+        "刷新：cp <fd-wanxing>/contracts/wanxing-public-api.v1.json "
+        "api/tests/contracts/ 然后复查 x-contract-rev 是否升号。"
+    )
 
 
 def test_every_receipt_field_fd_wire_reads_is_declared_in_turn_receipt() -> None:
