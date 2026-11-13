@@ -41,10 +41,21 @@ python -m alembic history -r 0053_cell_provision:head   # 期望恰好 0053→00
 
 # 1.3 侧写：确认两处迁移都是可空加列（不是表重建）
 grep -n "nullable=True\|add_column" alembic/versions/20261112_0054_*.py alembic/versions/20261112_0055_*.py
+
+# 1.4 依赖同线：本机 uv.lock 的 sqlalchemy 不得低于镜像实际装的那版
+kubectl --context cheap -n fd-prod exec deploy/fd-wire-api -- \
+  python -c "import sqlalchemy;print(sqlalchemy.__version__)"   # 期望 2.1.8
+cd api && uv lock --check   # 期望静默通过；报 "lockfile needs to be updated" 就是本地锁落后
 ```
 
 判据：**1.1 的头必须等于 1.2 里 `history` 的起点**。不等就说明有别的发布插过队，
 按实际头重算范围，别硬跑 `upgrade head`。
+
+1.4 为什么要看：镜像是 `pip install '.[mongo]'` 现解范围（拿最新 2.1.x），
+本地 `uv sync` 只认 `uv.lock`。两边不同线时，本地全绿的套件在线上语义下会红
+——2026-11-13 实测：锁 2.1.3 允许「close 后再用同一个 Session」，线上 2.1.8 抛
+`ResourceClosedError`，于是夹具把同一个 Session 当工厂的 bug 在本地一直是绿的
+（见 `tests/test_artifact_marketplace.py` 的 `ds_engine`）。下限已钉到 `>=2.1.8,<3`。
 
 ---
 
