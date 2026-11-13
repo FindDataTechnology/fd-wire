@@ -15,12 +15,22 @@ WORKDIR /build
 COPY pyproject.toml ./
 COPY fd_wire_api ./fd_wire_api
 COPY fd_mcp_client ./fd_mcp_client
+# 本体内核走**仓内 vendored wheel**（api/vendor/，不进 PyPI）：pyproject 里声明了
+# `fd-ontology-kernel>=0.1.0`，`--find-links vendor` 让它就地找到那份 .whl。
+# 漏这步的后果不是"少一个特性"：entities/versioning.py 在模块顶层 import 它，
+# 而 app.py 启动即 import entities ⇒ 容器在 import 期就崩，k8s 只看到
+# CrashLoopBackOff——而构建成功、本地单测（自己塞了内核路径）也全绿。
+COPY vendor ./vendor
 # 依赖闭包全为纯/pydantic-core 轮子，无需编译工具链（fd-proxy-service 同判）。
 # [mongo] extra：计量入账驱动 registry Mongo 直读的 pymongo（驱动惰性导入，
 # 缺了 poll 段静默重试——add-customer-onboarding-automation 5.4 实锤后进镜像）。
 RUN python -m venv /opt/venv \
  && /opt/venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
- && /opt/venv/bin/pip install --no-cache-dir '.[mongo]'
+ && /opt/venv/bin/pip install --no-cache-dir --find-links vendor '.[mongo]'
+
+# 起不来的镜像不算出片成功：import 一次真正的 ASGI 入口（不是 `import fd_wire_api`，
+# 那个不会走到 entities 链）。构建期就红，比上线后 CrashLoop 便宜得多。
+RUN /opt/venv/bin/python -c "import fd_wire_api.app as m; assert m.app is not None"
 
 FROM ${BASE_IMAGE}
 # 非 root 运行（任务要求；fd-find-data-business-mcp 的 appuser 同法）。

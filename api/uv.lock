@@ -277,6 +277,14 @@ wheels = [
 ]
 
 [[package]]
+name = "fd-ontology-kernel"
+version = "0.1.0"
+source = { path = "vendor/fd_ontology_kernel-0.1.0-py3-none-any.whl" }
+wheels = [
+    { filename = "fd_ontology_kernel-0.1.0-py3-none-any.whl", hash = "sha256:08174c28f5b8fc896de0f4ba3ecb93a3581fd76b252acf4fa145c8158f4f1704" },
+]
+
+[[package]]
 name = "fd-wire-api"
 version = "0.1.0"
 source = { editable = "." }
@@ -284,6 +292,7 @@ dependencies = [
     { name = "alembic" },
     { name = "cryptography" },
     { name = "fastapi" },
+    { name = "fd-ontology-kernel" },
     { name = "httpx" },
     { name = "openpyxl" },
     { name = "opentimestamps" },
@@ -311,6 +320,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "cryptography", specifier = ">=50.0.2" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "fd-ontology-kernel", path = "vendor/fd_ontology_kernel-0.1.0-py3-none-any.whl" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "openpyxl", specifier = ">=3.1" },

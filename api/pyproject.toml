@@ -31,7 +31,19 @@ dependencies = [
     # 专用 PG 后端（wire-dedicated-postgres）：psycopg3 驱钉版——SQLAlchemy 2.x
     # 下 psycopg2 已知断（舰队教训），PG URL 统一 postgresql+psycopg:// 形态。
     "psycopg[binary]==3.3.6",
+    # 本体内核（adopt-ontology-kernel-envelope）：**仓内 vendored wheel**，
+    # 不走 PyPI。entities/versioning.py 与 kernel_ports.py 在**模块顶层**导入它，
+    # 而 app.py 启动即 import entities ⇒ 装上它是"能不能起得来"的前提，不是可选。
+    # 两个解析器各走一条：uv 看下面的 [tool.uv.sources]，pip（镜像构建）看
+    # Dockerfile 里的 `--find-links vendor`。2026-11-13 实测线上镜像没有它，
+    # 而 wheel 一直躺在 api/vendor/ 里没人装——下一片滚上去就是 import 期崩。
+    "fd-ontology-kernel>=0.1.0",
 ]
+
+[tool.uv.sources]
+# 只对 uv 生效：vendored wheel 的精确文件。pip 不认本表，故 Dockerfile 里
+# 用 `--find-links vendor` 让同一份文件名被找到（两处别只改一处）。
+fd-ontology-kernel = { path = "vendor/fd_ontology_kernel-0.1.0-py3-none-any.whl" }
 
 [project.optional-dependencies]
 dev = [
