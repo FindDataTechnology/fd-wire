@@ -222,3 +222,39 @@ def test_declared_columns_all_present_stays_quiet(contact_with_tables, monkeypat
     monkeypatch.setenv(db_policy.BOOT_SCHEMA_CHECK_ENV, "strict")
     declared = {COLUMN_CASE_TABLE: _StubTable(*TABLE_COLUMNS)}
     db_policy.verify_schema("contact", declared, contact_with_tables.get_engine())
+
+
+# ── 高保真复现：用**真实模型**造出生产现状（表在、三列缺）──────────────────────
+#
+# 上面的 stub 用例证明"缺列会报"，这一条证明"报的正是 2026-11-13 生产上缺的那三列"。
+# 做法不是造夹具，而是拿 EntitiesBase 真建一遍库、再把 0054/0055 加的三列 DROP 掉
+# —— 等价于「代码已是新版、库还停在 0053」，也就是那次发布如果顺序做反的状态。
+
+
+def test_real_models_report_exactly_the_missing_0054_0055_columns(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine, text
+
+    from fd_wire_api.entities.db import EntitiesBase
+
+    engine = create_engine(f"sqlite:///{tmp_path}/prod-like.db")
+    try:
+        EntitiesBase.metadata.create_all(bind=engine)  # 新版模型 = 全列
+        with engine.begin() as conn:
+            # 退回 0053 的形状：删掉两处迁移新增的列（sqlite ≥3.35 支持 DROP COLUMN）
+            conn.execute(text("ALTER TABLE ontology_events DROP COLUMN target_key"))
+            conn.execute(text("ALTER TABLE entities DROP COLUMN kernel_attrs"))
+            conn.execute(text("ALTER TABLE entity_relationships DROP COLUMN kernel_attrs"))
+
+        monkeypatch.setenv(db_policy.BOOT_SCHEMA_CHECK_ENV, "strict")
+        with pytest.raises(RuntimeError) as excinfo:
+            db_policy.verify_schema("entities", EntitiesBase.metadata.tables, engine)
+
+        message = str(excinfo.value)
+        for expected in (
+            "ontology_events.target_key",
+            "entities.kernel_attrs",
+            "entity_relationships.kernel_attrs",
+        ):
+            assert expected in message, f"{expected} not named in: {message}"
+    finally:
+        engine.dispose()
