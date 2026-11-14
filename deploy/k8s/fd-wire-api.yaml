@@ -53,7 +53,7 @@ spec:
           # 且新增构建期入口闸 `import fd_wire_api.app` 把这类缺陷变成构建期红；
           # 同片带：列级 schema 校验（0054/0055 的 target_key / kernel_attrs）、冷导入闸、
           # sqlalchemy 下限对齐线上 2.1.8、SPA 回退修正；全量 1940 passed / 13 skipped）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-90da9a4
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-e259ba1
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -307,6 +307,19 @@ spec:
             - name: FD_WIRE_LOGTO_CLIENT_ID
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: fd_wire_logto_client_id, optional: true }
+            # 词元客户轨（converge-line-identity-and-keys 8.1）：门 K 换发令牌的
+            # 线侧离线验签材料。公钥走独立 Secret（公钥不密，但换钥时只动一处，
+            # 且不必碰 fd-wire-env 那张 50 多键的表——单键 patch 会整体替换）。
+            # `FD_WIRE_LINE_TOKEN_ISSUER` 必须与网关签发时的 iss **逐字相同**
+            # （`gateway/line-token-exchange.js` 缺省 https://mcp.finddatatech.cloud）；
+            # 写错的表现是「票看着没问题但一律 401」，验签码是 wrong_issuer。
+            - name: FD_WIRE_LINE_TOKEN_ISSUER
+              value: https://mcp.finddatatech.cloud
+            - name: FD_WIRE_LINE_TOKEN_LINE
+              value: wire
+            - name: FD_WIRE_LINE_TOKEN_PUBLIC_KEY_PEM
+              valueFrom:
+                secretKeyRef: { name: fd-wire-line-token, key: public_key_pem, optional: true }
             # admin 双闸（5.1）：Bearer 角色闸开关与角色名（非密，字面值；
             # X-Admin-Token 第二道闸见上 FD_WIRE_ADMIN_TOKEN）
             - name: FD_WIRE_ADMIN_ROLE
