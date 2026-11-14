@@ -14,29 +14,48 @@ from test_metering_support import auth_headers, db_row_count, make_event, meteri
 
 
 class FakeCollection:
-    """pymongo collection 的最小假实现：find(filter, sort=, limit=)。"""
+    """pymongo collection 的最小假实现：find(filter, sort=, limit=)。
+
+    支持 ``{"$gt": ...}``、``{"$or": [...]}`` 与多键排序——复合游标
+    （``timestamp`` + ``_id``）靠它们才测得出来。
+    """
 
     def __init__(self, docs: list[dict[str, Any]]) -> None:
         self.docs = docs
 
     def find(self, filter: dict[str, Any], sort: list[tuple[str, int]], limit: int) -> list[dict]:
         matched = [d for d in self.docs if self._matches(d, filter)]
-        key, direction = sort[0]
-        matched.sort(key=lambda d: d[key], reverse=direction < 0)
+        for key, direction in reversed(sort):  # 稳定排序：从末键往前排
+            # 缺键（老夹具没有 `_id`）排到末尾，不参与类型比较
+            matched.sort(
+                key=lambda d: (1,) if d.get(key) is None else (0, d.get(key)),
+                reverse=direction < 0,
+            )
         return matched[:limit]
 
-    @staticmethod
-    def _matches(doc: dict[str, Any], filter: dict[str, Any]) -> bool:
+    @classmethod
+    def _matches(cls, doc: dict[str, Any], filter: dict[str, Any]) -> bool:
         from datetime import datetime
 
+        def _norm(value: Any) -> Any:
+            if isinstance(value, str):
+                try:
+                    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+                except ValueError:
+                    return value
+            return value
+
         for field, condition in filter.items():
-            value = doc.get(field)
-            if isinstance(condition, dict) and "$gt" in condition:
-                if isinstance(value, str):  # ISO 串 → datetime 才能与边界比较
-                    value = datetime.fromisoformat(value.replace("Z", "+00:00"))
-                if value is None or value <= condition["$gt"]:
+            if field == "$or":
+                if not any(cls._matches(doc, sub) for sub in condition):
                     return False
-            elif value != condition:
+                continue
+            value = _norm(doc.get(field))
+            if isinstance(condition, dict) and "$gt" in condition:
+                bound = _norm(condition["$gt"])
+                if value is None or value <= bound:
+                    return False
+            elif value != _norm(condition):
                 return False
         return True
 
@@ -91,7 +110,8 @@ def test_poll_picks_up_new_events_after_watermark(metering_client: TestClient) -
     assert db_row_count("metering_records") == 3
 
 
-def test_poll_respects_batch_limit(metering_client: TestClient, monkeypatch) -> None:
+def test_poll_pages_until_caught_up(metering_client: TestClient, monkeypatch) -> None:
+    """批上限只限**页大小**，不再限一轮总量：4 条 / 每页 2 条 ⇒ 一轮取完。"""
     monkeypatch.setenv("METERING_POLL_LIMIT", "2")
     from fd_wire_api.metering.db import reset_metering_runtime
 
@@ -101,8 +121,81 @@ def test_poll_respects_batch_limit(metering_client: TestClient, monkeypatch) -> 
         for i in range(1, 5)
     ]
     result = _run_poll(docs)
-    assert result["fetched"] == 2
-    assert result["accepted"] == 2
+    assert result["fetched"] == 4  # 两页
+    assert result["accepted"] == 4
+
+
+def test_poll_max_pages_bounds_single_tick(metering_client: TestClient, monkeypatch) -> None:
+    """页数上限能圈住单轮工作量（防一次 tick 无限拉）。"""
+    monkeypatch.setenv("METERING_POLL_LIMIT", "2")
+    from fd_wire_api.metering.db import get_session, reset_metering_runtime
+    from fd_wire_api.metering.registry_poller import poll_registry_once
+
+    reset_metering_runtime()
+    docs = [
+        make_event(request_id=f"m-{i}", rows=i, ts=f"2026-10-01T10:00:0{i}+00:00")
+        for i in range(1, 7)
+    ]
+    with get_session() as session:
+        result = poll_registry_once(
+            session, collection=FakeCollection(docs), max_pages=2
+        )
+        session.commit()
+    assert result.fetched == 4  # 2 页 × 2 条
+    assert result.ingest.accepted == 4
+
+
+def _bulk(prefix: str, count: int, ts: str, start_id: int = 1) -> list[dict[str, Any]]:
+    return [
+        {**make_event(request_id=f"{prefix}-{i}", rows=1, ts=ts), "_id": start_id + i}
+        for i in range(count)
+    ]
+
+
+def test_poll_advances_when_overlap_window_is_full(metering_client: TestClient, monkeypatch) -> None:
+    """回归：重叠窗被「已入库的旧事件」填满时，一轮必须翻页前进。
+
+    2026-11-15 生产实历：窗口内恰好 500 条、批上限也是 500，旧实现每轮都
+    重读同一页（`fetched=500 / accepted=0 / duplicates=500`），水位永不前进，
+    此后 7 天 64,532 条事件全部进不来，而驱动一直在跑。
+    """
+    monkeypatch.setenv("METERING_POLL_LIMIT", "3")
+    from fd_wire_api.metering.db import reset_metering_runtime
+
+    reset_metering_runtime()
+
+    # 先灌水：3 条同一时刻的旧事件成为水位（10:00:00）
+    old = _bulk("old", 3, "2026-10-01T10:00:00+00:00")
+    first = _run_poll(old)
+    assert first["accepted"] == 3
+
+    # 满窗：再塞 3 条落在水位前 5 分钟窗内（模拟「窗口里全是已入库的」）
+    window_fillers = _bulk("fill", 3, "2026-10-01T09:59:00+00:00")
+    docs_after_fill = old + window_fillers
+    _run_poll(docs_after_fill)
+    # 这一轮会把 3 条 filler 也吃进来（它们是新事件）
+    assert db_row_count("metering_records") == 6
+
+    # 现在窗口(09:59:00..10:00:00] 内共 6 条、全部已入库，页大小 3
+    # 若只取一页就会永远停在「3 条重复」。带新事件再来一轮：
+    fresh = _bulk("new", 3, "2026-10-01T10:05:00+00:00", start_id=100)
+    result = _run_poll(docs_after_fill + fresh)
+    assert result["accepted"] == 3, result
+    assert result["duplicates"] >= 3  # 重叠窗确实被重读了
+    assert db_row_count("metering_records") == 9
+
+
+def test_poll_composite_cursor_splits_same_timestamp(metering_client: TestClient, monkeypatch) -> None:
+    """同一时间戳的事件超过一页时，靠 `_id` 游标也要能翻过去（只按 ts 会死循环）。"""
+    monkeypatch.setenv("METERING_POLL_LIMIT", "2")
+    from fd_wire_api.metering.db import reset_metering_runtime
+
+    reset_metering_runtime()
+    same_ts = _bulk("same", 5, "2026-10-01T10:00:00+00:00")
+    result = _run_poll(same_ts)
+    assert result["fetched"] == 5
+    assert result["accepted"] == 5
+    assert db_row_count("metering_records") == 5
 
 
 def test_poll_endpoint_conflict_when_mongo_unconfigured(metering_client: TestClient) -> None:

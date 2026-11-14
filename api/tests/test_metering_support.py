@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from itertools import count
 from typing import Any, Iterator
 
 import pytest
@@ -23,6 +24,9 @@ PLATFORM_IDENTITIES = "svc-analysis,svc-vaas"
 #: 来源映射：精确 + 前缀通配
 SOURCE_MAP = "business-mcp=yizuo,wanxing-*=wanxing"
 
+#: 假事件的 ``_id`` 发生器：真 Mongo 文档必带 ``_id``，翻页游标靠它切同毫秒事件。
+_OBJECT_ID = count(1)
+
 
 def make_event(
     request_id: str = "req-1",
@@ -34,6 +38,7 @@ def make_event(
     rows_location: str = "response",
     log_type: str = "mcp_server_access",
     response_status: str = "success",
+    object_id: Any | None = None,
 ) -> dict[str, Any]:
     """构造一条 MCPServerAccessRecord 形状的审计事件。
 
@@ -41,8 +46,12 @@ def make_event(
     ``response``（mcp_response.rows_returned）/ ``top``（事件顶层）/
     ``meta``（mcp_response.meta）/ ``result``（mcp_response.result）/
     ``missing``（不带戳 → 异常路径）。
+
+    ``_id`` 默认由递增计数器给出（真 Mongo 文档必带），翻页游标的第二段就靠它；
+    需要固定值时传 ``object_id``。
     """
     event: dict[str, Any] = {
+        "_id": next(_OBJECT_ID) if object_id is None else object_id,
         "timestamp": ts,
         "log_type": log_type,
         "version": "1.0",

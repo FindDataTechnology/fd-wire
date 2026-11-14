@@ -106,6 +106,10 @@ class MeteringSettings(BaseSettings):
     registry_mongo_db: str | None = None
     registry_mongo_collection: str = "audit_events"
     metering_poll_limit: int = 500
+    #: 单轮 poll 最多翻几页（页大小 = ``metering_poll_limit``）。1 = 旧行为：
+    #: 遇「重叠窗内事件数 ≥ 批上限」时每页都被已入库旧事件填满、水位不动，
+    #: 计量永久停摆（2026-11-15 生产实历：窗口内恰好 500 条、上限也是 500）。
+    metering_poll_max_pages: int = 20
     metering_driver_enabled: bool = True
     metering_driver_interval_seconds: int = 300
     metering_auto_create_tables: bool = True
@@ -162,6 +166,7 @@ def describe() -> dict[str, Any]:
         "registry_mongo_configured": bool(s.registry_mongo_uri and s.registry_mongo_db),
         "registry_mongo_collection": s.registry_mongo_collection,
         "poll_limit": s.metering_poll_limit,
+        "poll_max_pages": s.metering_poll_max_pages,
         "driver_enabled": s.metering_driver_enabled,
         "driver_interval_seconds": s.metering_driver_interval_seconds,
     }
