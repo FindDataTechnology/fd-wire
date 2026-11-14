@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from ..billing.models import Customer
 from ..console.auth import (
     get_platform_db,
-    require_console_customer_actor,
+    resolve_actor,
 )
 from ..datasets.db import get_db
 from . import service as key_service
@@ -80,20 +80,20 @@ def require_data_plane_principal(
             actor_label=row.label,
             allowlist=tuple(row.allowlist_json or []),
         )
-    # 无 wdk- 凭据 → console 轨道（Logto ID token 验签 + sub→Customer，
-    # 失败语义沿用 console-auth：401/503 如实）。member_sub 供数据集级授权
-    # 判定（wire-dataset-acl D2）；同一依赖的门禁（viewer 方法级只读、
-    # 密钥物面 owner-only）原样生效。
-    customer, member_sub, role = require_console_customer_actor(
-        request, platform_db
-    )
+    # 无 wdk- 凭据 → 控制台家族轨道：Logto ID token 或门 K 换发令牌
+    # （词元客户轨，converge-line-identity-and-keys 8.1）。两者由 `resolve_actor`
+    # 一处判定，门禁（viewer 方法级只读、密钥物面 owner-only）原样生效。
+    actor = resolve_actor(request, platform_db)
     return DataPlanePrincipal(
-        customer_id=str(customer.name),
-        channel="console",
-        actor_id=str(customer.name),
-        member_sub=member_sub,
-        console_customer=customer,
-        role=role,
+        customer_id=str(actor.customer.name),
+        # channel 分给 datasets/acl.py 用（design D6）：词元轨是**客户级**凭据、
+        # 不承载成员身份，按非 console 轨道不做成员级判定——与 wdk- 同口径。
+        # 若沿用 "console"，空 member_sub 会被读成"这个成员什么都看不了"。
+        channel="line-token" if actor.is_line else "console",
+        actor_id=str(actor.customer.name),
+        member_sub=actor.sub,
+        console_customer=actor.customer,
+        role=actor.role,
     )
 
 

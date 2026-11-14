@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from ..admin.db import get_db as get_platform_db
 from ..billing.models import Customer
+from ..line_token import LineTokenRejected, LineTokenSettings, verify_line_token
 from .models import CustomerMember, MemberActiveTeam
 
 ALGORITHMS = ["ES384", "RS256", "ES256"]
@@ -49,6 +50,17 @@ KEY_SURFACE_PREFIXES = (
     "/api/v1/data-plane-keys",
     "/api/v1/connectors/pairing-tokens",
 )
+
+#: 词元客户轨（change converge-line-identity-and-keys 8.1）：门 K 换发令牌换成
+#: 的客户级身份，在 ``ResolvedActor.claims`` 里的标记键。
+LINE_CALLER_CLAIM = "line_token"
+
+#: 词元令牌的写 scope（manifest ``scopes`` 枚举：``line:read`` / ``line:write``）。
+#: 没有它 ⇒ 按 viewer 解析，变更类方法一律 403（与成员 viewer 同一条门禁）。
+LINE_WRITE_SCOPE = "line:write"
+
+#: 词元令牌验过但解析不到本线客户时的稳定原因码（403，不建行）。
+REASON_UNKNOWN_IDENTITY = "unknown_identity"
 
 
 @dataclass(frozen=True)
@@ -155,6 +167,13 @@ def bearer_token(request: Request) -> str:
     return token
 
 
+def _bearer_or_empty(request: Request) -> str:
+    """不抛异常的 Bearer 取值（门 K 轨要用：没有凭据时直接回原来的 Logto 401）。"""
+    authorization = request.headers.get("authorization") or ""
+    scheme, _, token = authorization.partition(" ")
+    return token.strip() if scheme.lower() == "bearer" else ""
+
+
 def verify_id_token(token: str) -> ConsoleIdentity:
     """校验并解析 ID token → ConsoleIdentity（无组织门禁，design D2）。"""
     claims = _decode_id_token(token)
@@ -179,6 +198,167 @@ def resolve_customer(db: Session, sub: str) -> Customer | None:
     return db.execute(
         select(Customer).where(Customer.logto_sub == sub)
     ).scalar_one_or_none()
+
+
+# ---- 词元客户轨（converge-line-identity-and-keys 8.1） ----------------------
+#
+# 三条轨道说清楚各自的边界，别混：
+#
+#   ① Logto ID token（控制台人登录）  → 成员身份（owner/editor/viewer）
+#   ② wdk- 数据面 key               → 客户级，**不承载成员身份**，带 allowlist/限流
+#   ③ 门 K 换发令牌（本段新增）        → 客户级，**不承载成员身份**，无 allowlist
+#
+# ③ 的语义是"这个客户，凭自己的词元钥匙，这一小段时间内可以打这条线"，
+# 由 paas 网关用客户的 `sk-` 换得（离线验签见 `..line_token`）。它是把
+# 「客户只用一把词元钥匙就能用各条子线」这件事落到 wire 的唯一入口。
+#
+# 三条刻意的边界：
+#
+#   a. **未配置 = 这条路不存在**。`FD_WIRE_LINE_TOKEN_*` 不全时
+#      `resolve_actor()` 对坏凭据抛的仍是原来那条 Logto 401（同码同文案），
+#      既有 Logto 与 wdk- 两条路一个字节不变。
+#   b. **不做成员级动作**。门 K 票表达客户，不表达"团队里哪个人"；所以
+#      `member_sub` 恒 None（`datasets/acl.py` 对 None 的既有语义＝不拦），
+#      密钥物面（owner-only）因 role != "owner" 一律 403——**短命票不能铸长命钥匙**。
+#   c. **身份永不自动创建**。票验过但 `billing_customers.sub2api_user_id`
+#      无此行 → 403 `unknown_identity`，不建客户（与 `authorize_delegation`
+#      同一条铁律）。
+#
+# 有意不做的一件事：**不校验 `customer.status`**。`wdk-` 轨道同样只判 key 自身
+# 状态、不判客户状态（`data_plane/service.verify`），两条客户级轨道口径一致；
+# 要加就两条一起加，别让同一层级的两把钥匙给出相反答案。
+
+
+#: 词元客户轨在 `role` 上的取值——刻意复用成员角色词表（editor/viewer），
+#: 因为下游门禁（viewer 只读、非 owner 不许碰密钥物面）就是按这三个词判的。
+_LINE_ROLE_EDITOR = "editor"
+_LINE_ROLE_VIEWER = "viewer"
+
+
+def line_token_settings() -> LineTokenSettings:
+    """环境变量 → 验签参数。未配置齐全时 ``configured`` 为假（这条路自动关闭）。
+
+    env 名与家族一致（`FD_WIRE_` 前缀 + `LINE_TOKEN_`）：
+    `FD_WIRE_LINE_TOKEN_ISSUER` / `FD_WIRE_LINE_TOKEN_LINE`（缺省 wire）/
+    `FD_WIRE_LINE_TOKEN_PUBLIC_KEY_PEM` / `FD_WIRE_LINE_TOKEN_JWKS_URI` /
+    `FD_WIRE_LINE_TOKEN_MAX_TTL_SECONDS`（缺省 600）。
+    """
+    raw_ttl = os.getenv("FD_WIRE_LINE_TOKEN_MAX_TTL_SECONDS", "").strip()
+    try:
+        max_ttl = int(raw_ttl) if raw_ttl else 600
+    except ValueError:
+        max_ttl = 600  # 写错值不放大窗口，回落缺省
+    return LineTokenSettings(
+        issuer=os.getenv("FD_WIRE_LINE_TOKEN_ISSUER", "").strip().rstrip("/"),
+        line=os.getenv("FD_WIRE_LINE_TOKEN_LINE", "").strip() or "wire",
+        public_key_pem=os.getenv("FD_WIRE_LINE_TOKEN_PUBLIC_KEY_PEM", ""),
+        jwks_uri=os.getenv("FD_WIRE_LINE_TOKEN_JWKS_URI", "").strip(),
+        max_ttl_seconds=max_ttl,
+    )
+
+
+def resolve_line_customer(db: Session, subject: str) -> Customer | None:
+    """计费侧主体（sub2api 用户 id）→ Customer（``sub2api_user_id`` 唯一映射）。
+
+    与 ``resolve_customer``（按 ``logto_sub``）是**两把不同的键**：门 K 票里带的是
+    计费侧主体，拿它查 Logto 列永远查不到——这是本轨最容易踩的一处。
+    """
+    if not subject:
+        return None
+    return db.execute(
+        select(Customer).where(Customer.sub2api_user_id == subject)
+    ).scalar_one_or_none()
+
+
+@dataclass(frozen=True)
+class ResolvedActor:
+    """一次请求解析出的调用者（三条轨道归一到这里，门禁只判一次）。
+
+    ``sub`` 只在 Logto 轨道非 None：门 K 票与 wdk- key 都是**客户级**凭据，
+    不承载成员身份（`datasets/acl.py` 对 ``member_sub is None`` 的语义是"不拦"）。
+    """
+
+    customer: Customer
+    sub: str | None
+    role: str
+    is_line: bool = False
+    claims: dict[str, Any] = field(default_factory=dict)
+
+
+def resolve_actor(
+    request: Request,
+    db: Session,
+    *,
+    viewer_gate: bool = True,
+    key_surface_gate: bool = True,
+) -> ResolvedActor:
+    """请求 → 调用者（先 Logto，再门 K），并把两道角色门禁一次判完。
+
+    两条都失败时抛 **Logto 那条原始 401**：开关未配置/票不合法时，调用方看到的
+    必须与改动前逐字节相同——否则"多了一条新轨"会以错误文案的形状漏给所有老客户端。
+
+    ``viewer_gate`` / ``key_surface_gate`` 供 `require_console_actor`（动作闸）
+    关掉：那条面自己按提议逐条裁决并给逐条文案，依赖层不替它一刀切。
+    """
+    try:        identity = verify_id_token(bearer_token(request))
+    except HTTPException as logto_error:
+        settings = line_token_settings()
+        if not settings.configured:
+            raise
+        token = _bearer_or_empty(request)
+        try:
+            line = verify_line_token(token, settings=settings) if token else None
+        except (LineTokenRejected, HTTPException):
+            line = None
+        if line is None:
+            raise logto_error from None
+        customer = resolve_line_customer(db, line.subject)
+        if customer is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "reason": REASON_UNKNOWN_IDENTITY,
+                    "detail": "this line token resolves to no customer on the wire line",
+                },
+            ) from None
+        scope = set(line.scope)
+        actor = ResolvedActor(
+            customer=customer,
+            sub=None,
+            role=_LINE_ROLE_EDITOR if LINE_WRITE_SCOPE in scope else _LINE_ROLE_VIEWER,
+            is_line=True,
+            claims={
+                LINE_CALLER_CLAIM: True,
+                "scope": " ".join(line.scope),
+                "source": line.source,
+                "platform_subject": line.subject,
+                "customer_id": customer.id,
+                "expires_at": line.expires_at,
+                "jti": line.jti,
+            },
+        )
+    else:
+        resolved = resolve_member_role(db, identity.sub)
+        if resolved is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="登录身份尚未映射到客户（请先完成首次登录开户）",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        customer, role = resolved
+        actor = ResolvedActor(customer=customer, sub=identity.sub, role=role)
+
+    if viewer_gate and actor.role == "viewer" and request.method in VIEWER_DENIED_METHODS:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="团队成员权限不足（viewer 只读）",
+        )
+    if key_surface_gate and actor.role != "owner" and _hits_key_surface(request.url.path):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="团队成员权限不足（密钥管理仅 owner）",
+        )
+    return actor
 
 
 def resolve_member_role(db: Session, sub: str) -> tuple[Customer, str] | None:
@@ -253,34 +433,19 @@ def _hits_key_surface(path: str) -> bool:
 
 def require_console_customer_actor(
     request: Request, db: Session = Depends(get_platform_db)
-) -> tuple[Customer, str, str]:
+) -> tuple[Customer, str | None, str]:
     """控制台端点鉴权依赖（含成员 sub/角色）：同 ``require_console_customer``
     的全部门禁（viewer 方法级只读、密钥物面 owner-only），额外返回已校验的
     成员 sub 与解析角色——供数据集级授权（wire-dataset-acl）等需要「谁在调」
     的面使用（身份只来自服务端 token，不信请求头）。
 
-    返回 ``(Customer, sub, role)``。
+    返回 ``(Customer, sub, role)``；**``sub`` 可能为 None**——词元客户轨
+    （`converge-line-identity-and-keys` 8.1）与 `wdk-` 数据面 key 同为客户级
+    凭据，不承载成员身份，`datasets/acl.py` 对 ``member_sub is None`` 的既有
+    语义是"不做成员级判定"。判定本身只有一份：委托 ``resolve_actor``。
     """
-    identity = verify_id_token(bearer_token(request))
-    resolved = resolve_member_role(db, identity.sub)
-    if resolved is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="登录身份尚未映射到客户（请先完成首次登录开户）",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    customer, role = resolved
-    if role == "viewer" and request.method in VIEWER_DENIED_METHODS:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="团队成员权限不足（viewer 只读）",
-        )
-    if role != "owner" and _hits_key_surface(request.url.path):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="团队成员权限不足（密钥管理仅 owner）",
-        )
-    return customer, identity.sub, role
+    actor = resolve_actor(request, db)
+    return actor.customer, actor.sub, actor.role
 
 
 def require_console_customer(
@@ -369,16 +534,11 @@ def require_console_actor(
     「viewer 写操作被拒」）。密钥物面 owner-only 门禁同样不在本依赖（动作
     面 v1 不含密钥类动作）。
     """
-    identity = verify_id_token(bearer_token(request))
-    resolved = resolve_member_role(db, identity.sub)
-    if resolved is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="登录身份尚未映射到客户（请先完成首次登录开户）",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    customer, role = resolved
-    return customer, identity.sub, role
+    # 两道具名门禁关掉（见 docstring）；身份解析与词元客户轨仍走同一份
+    # `resolve_actor`——动作闸也要接受词元钥匙，否则「只拿一把词元钥匙
+    # 用 wire 的动作面」这条路不通，8.1 的验收就不成立。
+    actor = resolve_actor(request, db, viewer_gate=False, key_surface_gate=False)
+    return actor.customer, actor.sub, actor.role
 
 
 def require_console_customer_id(
@@ -411,7 +571,14 @@ __all__ = [
     "require_console_customer_id",
     "require_console_member_identity",
     "require_console_owner",
+    "LINE_CALLER_CLAIM",
+    "LINE_WRITE_SCOPE",
+    "REASON_UNKNOWN_IDENTITY",
+    "ResolvedActor",
+    "line_token_settings",
+    "resolve_actor",
     "resolve_customer",
+    "resolve_line_customer",
     "resolve_member_role",
     "verify_id_token",
 ]
