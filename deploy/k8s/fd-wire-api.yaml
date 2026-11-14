@@ -47,7 +47,13 @@ spec:
           # 出片 tag=scs001/fd-wire-images 快照 sha=59b0c2b（真 bc7eb8e：add-data-key-dataset-list
           # ——GET /api/v1/datasets 接受 wdk- 数据面 key，机器身份能列本客户数据集；
           # console 轨道零漂移；全量 1895 passed / 12 skipped）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-5369ed3
+          # 出片 tag=testaction001 build-pool 快照 sha=90da9a4（真 b650cb8：本体内核 wheel
+          # 真正装进镜像——此前它在 api/vendor/ 里但 pyproject 没声明、Dockerfile 没 COPY/--find-links，
+          # 而 entities/versioning.py 模块顶层 import 它 ⇒ 这一片是第一个能 import 起来的片，
+          # 且新增构建期入口闸 `import fd_wire_api.app` 把这类缺陷变成构建期红；
+          # 同片带：列级 schema 校验（0054/0055 的 target_key / kernel_attrs）、冷导入闸、
+          # sqlalchemy 下限对齐线上 2.1.8、SPA 回退修正；全量 1940 passed / 13 skipped）。
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-90da9a4
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
