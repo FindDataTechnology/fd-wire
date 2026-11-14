@@ -43,6 +43,15 @@ COPY --chown=appuser:appuser fd_wire_api ./fd_wire_api
 COPY --chown=appuser:appuser fd_mcp_client ./fd_mcp_client
 # 运维脚本随镜像（对账/自检类只读脚本；k8s 不挂卷，现场要能直接跑）
 COPY --chown=appuser:appuser scripts ./scripts
+# `/app` 目录本身必须归 appuser：`COPY --chown` 只改**文件**，`WORKDIR /app` 建出的
+# 目录仍是 root 所有 ⇒ 非 root 进程建不了新文件，而本包有 8 个 CWD 相对的 sqlite
+# 默认值（`sqlite:///./fd_wire_dev.db`、…/fd_wire_demands.db、…/fd_wire_datasets.db、
+# …/fd_wire_schedules.db、…/fd_wire_packs.db、…/fd_wire_entities.db、…/fd_wire_ai.db、
+# …/billing.db），任一模块在启动期 ensure_schema 就会 `sqlite3.OperationalError:
+# unable to open database file`。生产连 PG 所以从没暴露——但「默认配置起不来」的
+# 镜像在 DR / 新环境 / 现场 `docker run` 调试时全都表现为 CrashLoop，看起来像镜像
+# 坏了（2026-11-15 出片池的通用 boot 探针连红两次就是这么来的）。
+RUN chown appuser:appuser /app
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
