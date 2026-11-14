@@ -234,6 +234,11 @@ def channel_status() -> dict[str, Any]:
     只读：直读是否配置、驱动最近一轮 tick 时刻与两段结果、后台驱动是否
     存活。运维据此证实「生产走直读还是推送、最近一轮是否活着」——不再
     靠静默默认。鉴权与 ingest 面同令牌（fail-closed 同口径）。
+
+    ``poll_max_pages`` 一并暴露：它是「重叠窗满了会不会翻页」的唯一可观测
+    口径（2026-11-15 分页饿死的现场判据就缺这一项——线上只能看到
+    ``fetched=500/accepted=0``，看不出跑的是每轮一页还是每轮二十页，也就
+    答不了「这个镜像里到底有没有那条修法」）。
     """
     from . import driver as driver_mod
 
@@ -244,6 +249,7 @@ def channel_status() -> dict[str, Any]:
                 settings.registry_mongo_uri and settings.registry_mongo_db
             ),
             "last_tick": driver_mod.last_tick_snapshot(),
+            "poll_max_pages": settings.metering_poll_max_pages,
         },
         "driver": {"running": driver_mod.driver_running()},
     }

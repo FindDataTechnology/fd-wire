@@ -113,6 +113,9 @@ def test_channel_status_endpoint_auth_and_shape(metering_client: TestClient) -> 
     assert resp.status_code == 200
     body = resp.json()
     assert set(body.keys()) == {"poll", "driver"}
-    assert set(body["poll"].keys()) == {"configured", "last_tick"}
+    assert set(body["poll"].keys()) == {"configured", "last_tick", "poll_max_pages"}
     assert set(body["driver"].keys()) == {"running"}
     assert isinstance(body["driver"]["running"], bool)
+    # 分页上限是「镜像里有没有那条修法」的唯一可观测口径（2026-11-15）：
+    # 缺省 20；1 表示退回每轮一页（重叠窗一满就永久停滞）。
+    assert body["poll"]["poll_max_pages"] == 20

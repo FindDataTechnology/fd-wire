@@ -28,3 +28,10 @@
 - [ ] 4.2 合并分支 `fix/metering-poll-pagination`（gitee/main 上一笔是 `625942e`）
 - [ ] 4.3 出片 `fd-wire-api` 并更新部署 image tag（**注意**：`fd-wire` 主工作树在途的本体工作与本修复无关，出片取自 git ref 不取工作树）
 - [ ] 4.4 上线后跑 3.5，并把 `channel-status` 前后读数记进本文件
+
+## 5. 出片闸（2026-11-15 实历后补）
+
+- [x] 5.1 定因：池 run `43643236199` 的 `Smoke gate` 起容器即 `sqlite3.OperationalError: unable to open database file`（镜像 `WORKDIR /app` 属 root、进程跑 appuser(10001)，默认 `DATABASE_URL=sqlite:///./fd_wire_dev.db` 是相对 CWD）⇒ `Push image` 被 skip，一个镜像都没出
+- [x] 5.2 走池认的 repo 自带闸（优先级高于池共享的 `SMOKE_MODE`，后者是所有会话共用变量，不该为一条线改）：新增仓根 `scripts/ci-smoke.sh`
+- [x] 5.3 该闸断言三件：`/health` 200／`channel-status` 带令牌 200（计量子系统真挂上）／`poll.poll_max_pages >= 2`（**镜像里有没有 11-15 那条修法**）
+- [x] 5.4 为此把 `poll_max_pages` 加进 `channel-status` 响应——它是唯一能分辨「每轮一页」与「每轮二十页」的可观测口径；红路已有实测数据：线上老镜像的响应只有 `configured`/`last_tick` ⇒ 判 `absent` ⇒ 红
