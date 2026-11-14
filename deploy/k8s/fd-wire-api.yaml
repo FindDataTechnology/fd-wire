@@ -53,7 +53,7 @@ spec:
           # 且新增构建期入口闸 `import fd_wire_api.app` 把这类缺陷变成构建期红；
           # 同片带：列级 schema 校验（0054/0055 的 target_key / kernel_attrs）、冷导入闸、
           # sqlalchemy 下限对齐线上 2.1.8、SPA 回退修正；全量 1940 passed / 13 skipped）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-e259ba1
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-91cabb6
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
