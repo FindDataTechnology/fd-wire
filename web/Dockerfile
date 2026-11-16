@@ -39,4 +39,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -q --spider http://127.0.0.1:8080/ || exit 1
 # 启动即渲染模板再起 nginx（exec 前台）；渲染失败=配置不可用，容器快速失败。
-CMD ["/bin/sh", "-c", "envsubst '$FD_WIRE_ADMIN_TOKEN' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf && exec nginx -g 'daemon off;'"]
+CMD ["/bin/sh", "-c", "FD_WIRE_API_UPSTREAM=${FD_WIRE_API_UPSTREAM:-fd-wire-api.fd-prod.svc.cluster.local:8000} envsubst '$FD_WIRE_ADMIN_TOKEN $FD_WIRE_API_UPSTREAM' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf && exec nginx -g 'daemon off;'"]
