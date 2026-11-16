@@ -38,7 +38,7 @@ spec:
           # 200 的 index.html——补按扩展名的 404 正则，扩展名不含 json/txt 以免抢 /internal/ 反代；
           # 因正则优先于普通前缀 location，同时给 ^~ /console 与 ^~ /internal/ 加保护。
           # 此前线上 /copilot.js = 200 text/html 417B（index.html 指纹），六台主机并排只有 wire 这样）。
-          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-61d7d93 # 2026-11-16｜柏讯接入跨线副驾 loader（spread-line-copilot 3.5）：web/index.html 挂一行 copilot.js（data-line="wire"），宿主零 postMessage 协议；萬星侧绑定 wire→柏讯专家、匿名开、白名单 wire.finddatatech.cloud。同片带三个 nginx/构建真修复：①镜像补 apk add gettext（此前根本没有 envsubst，CMD 依赖它 ⇒ 容器启动即死）②X-Admin-Token 空值加引号 ③上游与 resolver 改变量式/IP 形式（启动期不解析集群 DNS）。源 fd-wire 9721507（run testaction002/build-pool 43810430441 绿，ccr digest sha256:92223f54）；回滚=sha-be985e7
+          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-4792f67 #｜2026-11-17 sha-4792f67：副驾宿主钩子（harden-copilot-ask-and-intent 4.2/4.3）——context() 递 location.hash（本 app 是 hash 路由）+ hashchange 时 pushContext；navigate 白名单用 parseHash 反查，拒绝回落成 home 的未知路由与站外 URL。注：柏讯专家的 persona 是产品线客服角色，未含 intent 协议，所以这些钩子当前不会被调用（先装好，等 persona 补齐后即可生效）。源 4ae67e2+…（run 43900714381 绿）；回滚=sha-61d7d93
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
