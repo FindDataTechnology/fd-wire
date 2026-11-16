@@ -34,6 +34,43 @@ if [ -z "$IMG" ]; then
   exit 2
 fi
 
+# web 镜像是 nginx 静态壳（监听 8080，没有 /health），本脚本其余部分全是 api 探针。
+# 按镜像名分派，否则 web 必然被 :8000/health 误判（2026-11-16 实况：fd-wire/web
+# 连红三轮，每次都是端口错，镜像本身早已正常）。
+case "$IMG" in
+  */web:*|*/web)
+    echo "smoke: image=$IMG (web shell → http://127.0.0.1:8080/)"
+    WNAME="ci-smoke-web-$$"
+    trap 'docker rm -f "$WNAME" >/dev/null 2>&1 || true' EXIT
+    docker rm -f "$WNAME" >/dev/null 2>&1 || true
+    if ! docker run -d --name "$WNAME" "$IMG" >/dev/null; then
+      echo "SMOKE FAILED - web container refused to start"
+      docker logs "$WNAME" 2>&1 | tail -40
+      exit 1
+    fi
+    wok=0
+    for _ in $(seq 1 12); do
+      sleep 5
+      # nginx:alpine 带 busybox wget：探首页，要求 200 且是 SPA 壳
+      if docker exec "$WNAME" wget -q -O - http://127.0.0.1:8080/ 2>/dev/null | grep -q 'id="root"'; then
+        wok=1
+        echo "smoke: web shell serves index.html"
+        break
+      fi
+      if [ "$(docker inspect -f '{{.State.Running}}' "$WNAME" 2>/dev/null)" != "true" ]; then
+        echo "smoke: web container exited"
+        break
+      fi
+    done
+    if [ "$wok" != "1" ]; then
+      echo "SMOKE FAILED - web shell did not serve index.html"
+      docker logs "$WNAME" 2>&1 | tail -40
+      exit 1
+    fi
+    exit 0
+    ;;
+esac
+
 NAME="ci-smoke-$$"
 TOKEN="smoke-$(date +%s)-$$"
 BOOT_WAIT="${CI_SMOKE_BOOT_WAIT:-60}"
