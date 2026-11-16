@@ -8,8 +8,41 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <!-- 跨线副驾（spread-line-copilot 3.5）：一行 loader，宿主不写 postMessage 协议。
-         绑定与来源白名单在萬星侧（line=wire → 柏讯专家）；未绑定/已暂停时 loader 不注入。 -->
+    <!-- 跨线副驾（spread-line-copilot 3.5 + harden-copilot-ask-and-intent 4.2）：
+         一行 loader，宿主不写 postMessage 协议。绑定与来源白名单在萬星侧
+         （line=wire → 柏讯专家）；未绑定/已暂停时 loader 不注入。
+
+         本 app 是 hash 路由（无 router 依赖，见 App.tsx 头注），所以 context()
+         直接读 location.hash；pushContext 在 hashchange 时推一次，让助手跟上
+         访客当前所在的页面（目录/详情/控制台）。 -->
+    <script>
+      (function () {
+        var api = (window.WanxingCopilot = window.WanxingCopilot || {});
+        api.context = function () {
+          return { line: "柏讯", page: location.hash || "#/" };
+        };
+        // navigate 只接受本 app 认识的路由（harden-copilot-ask-and-intent 4.3）：
+        // 白名单不是"看起来像路径就行"——parseHash 会把任何未知 hash 回落成 home，
+        // 那样"跳转成功"就是假的。这里用同一套解析器校验，未知路由直接拒绝，
+        // 宿主回 ok:false，agent 因此知道该动作没执行。
+        api.intents = {
+          navigate: function (arg) {
+            // 真正判定在 src/copilotIntents.ts（可单测）；这里只调用。
+            var f = window.__wireResolveNav;
+            var hash = f ? f(String(arg == null ? "" : arg)) : null;
+            if (!hash) throw new Error("navigate 只接受本站已知路由");
+            location.hash = hash;
+            return { message: "已导航到 " + hash };
+          },
+        };
+        // SPA hash 变化不触发 popstate；有 loader 时才推（未挂载时 pushContext 不存在）。
+        window.addEventListener("hashchange", function () {
+          try {
+            api.pushContext && api.pushContext();
+          } catch (_) {}
+        });
+      })();
+    </script>
     <script src="https://wanxing.finddatatech.cloud/copilot.js" data-line="wire" defer></script>
   </body>
 </html>
