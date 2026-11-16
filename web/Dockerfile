@@ -18,6 +18,10 @@ COPY src ./src
 RUN npm run build
 
 FROM ${NGINX_IMAGE}
+# envsubst 来自 gettext 包，标准 nginx 镜像不带它——CMD 依赖它渲染模板，
+# 缺了就会 "envsubst: not found" 让整条 && 链短路、容器立刻退出
+# （构建池 smoke 表现为 "image exited within 45s"，且看不到 nginx 日志）。
+RUN apk add --no-cache gettext
 # server 块模板（8080、SPA fallback、/internal 反代 + X-Admin-Token 注入）。
 # envsubst 管道（wire-self-serve-launch 5.2 附带）：nginx.conf 为模板，启动时
 # CMD 以白名单 '$FD_WIRE_ADMIN_TOKEN' 渲染到 conf.d/default.conf——只替换该
@@ -39,4 +43,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -q --spider http://127.0.0.1:8080/ || exit 1
 # 启动即渲染模板再起 nginx（exec 前台）；渲染失败=配置不可用，容器快速失败。
-CMD ["/bin/sh", "-c", "FD_WIRE_API_UPSTREAM=${FD_WIRE_API_UPSTREAM:-fd-wire-api.fd-prod.svc.cluster.local:8000} envsubst '$FD_WIRE_ADMIN_TOKEN $FD_WIRE_API_UPSTREAM' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf && exec nginx -g 'daemon off;'"]
+CMD ["/bin/sh", "-c", "set -e; FD_WIRE_API_UPSTREAM=${FD_WIRE_API_UPSTREAM:-fd-wire-api.fd-prod.svc.cluster.local:8000}; command -v envsubst >/dev/null || { echo \"FATAL: envsubst missing (need gettext)\" >&2; exit 1; }; envsubst '$FD_WIRE_ADMIN_TOKEN $FD_WIRE_API_UPSTREAM' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf && exec nginx -g 'daemon off;'"]
