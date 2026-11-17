@@ -33,7 +33,7 @@
 - [x] 2.2 `web/src/App.test.tsx` 或新增 `web/src/copilotGate.test.ts`：把闸的判定抽成
       可测纯函数（路由 → 是否显示跨线副驾），断言五类路由的判定，含未知 hash 回落。
       验证：`npx vitest run` 全绿。
-- [ ] 2.3 e2e 断言：控制台页不存在可见的跨线副驾、公开页存在。验证：在现有
+- [x] 2.3 e2e 断言：控制台页不存在可见的跨线副驾、公开页存在。验证：在现有
       Playwright 用例中补两条（若仓内无 e2e，先落地 2.1/2.2 并在 tasks 里记下缺口）。
 
 ## 3. 前端：浮层缩放
@@ -69,9 +69,9 @@
 
 ## 6. 上产与实证
 
-- [ ] 6.1 后端先上；用 `curl -N` 从公网打一次流式端点，记录帧时序（是否被边缘代理
+- [x] 6.1 后端先上；用 `curl -N` 从公网打一次流式端点，记录帧时序（是否被边缘代理
       缓冲）。验证：输出保存到 change 目录的 `evidence/`，帧间隔远小于整轮耗时即为通过。
-- [ ] 6.2 前端上产；浏览器实测三条：公开页只见跨线副驾、控制台只见原生助手且可缩放、
+- [x] 6.2 前端上产；浏览器实测三条：公开页只见跨线副驾、控制台只见原生助手且可缩放、
       首轮发送即时回声 + 秒数递增 + 增量文本出现。验证：三条各自截图或录屏留存。
-- [ ] 6.3 `openspec validate unify-wire-copilot-surface --strict` 通过，`openspec sync`
+- [x] 6.3 `openspec validate unify-wire-copilot-surface --strict` 通过，`openspec sync`
       更新 `assistant-panel` 与新增 `assistant-streaming`。
