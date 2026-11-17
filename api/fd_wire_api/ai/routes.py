@@ -19,7 +19,13 @@
 
 from __future__ import annotations
 
+import json
+import queue
+import threading
+from functools import lru_cache
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from . import service
@@ -72,9 +78,24 @@ from .settings import get_settings
 router = APIRouter(tags=["ai"])
 
 
+@lru_cache(maxsize=1)
+def _shared_llm_client() -> TokenGatewayLlmClient:
+    """进程级共享的 LLM 客户端（assistant-streaming D8）。
+
+    现状是每请求 new 一个、响应后立刻 close——每轮都重做一次到 token 网关的
+    TCP+TLS 握手，而首轮等待时间正是这次变更要治的东西。httpx.Client 在
+    本场景（同步调用、连接池）线程安全，复用一个实例即可。
+
+    共享实例的 `close()` 被置为 no-op 语义的事实是：`_release()` 只作用于
+    请求级依赖；本函数返回的实例不在 `_release()` 的管辖范围内（见
+    `get_llm_client` 的 owns_http 用法）。
+    """
+    return TokenGatewayLlmClient()
+
+
 def get_llm_client() -> LlmClient:
     """LLM 出口依赖：token 网关 OpenAI 兼容面（测试覆写注入 mock）。"""
-    return TokenGatewayLlmClient()
+    return _shared_llm_client()
 
 
 def get_tool_executor(customer_id: str = Depends(require_console_customer_id)) -> ToolExecutor:
@@ -86,6 +107,10 @@ def get_tool_executor(customer_id: str = Depends(require_console_customer_id)) -
 
 
 def _release(client: object) -> None:
+    """释放请求级依赖。共享 LLM 客户端是**例外**：它被进程级复用，关闭会把
+    所有在途请求的连接池一起断掉（assistant-streaming D8）。"""
+    if isinstance(client, TokenGatewayLlmClient):
+        return
     if hasattr(client, "close"):
         client.close()
 
@@ -294,6 +319,106 @@ def append_and_run(
     _release(llm)
     _release(tool_executor)
     return [MessageOut.model_validate(m) for m in appended]
+
+
+#: SSE 帧之间最长静默（秒）——超过就发一条注释行保活，防止边缘代理掐空闲连接。
+SSE_KEEPALIVE_SECS = 15.0
+
+
+def _sse(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@router.post("/api/v1/ai/conversations/{conversation_id}/messages/stream")
+def append_and_run_stream(
+    conversation_id: int,
+    payload: ChatIn,
+    actor: ActorContext = Depends(_actor_context),
+    db: Session = Depends(get_db),
+    entities_db: Session = Depends(get_entities_db),
+    datasets_db: Session = Depends(get_datasets_db),
+    llm: LlmClient = Depends(get_llm_client),
+    tool_executor: ToolExecutor = Depends(get_tool_executor),
+    read_executor: ReadToolExecutor = Depends(get_read_executor),
+    gate_sessions: GateSessions = Depends(get_gate_sessions),
+):
+    """流式版本的一轮对话（assistant-streaming）。
+
+    帧契约见 design D5：``message`` / ``delta`` / ``done`` / ``error``，
+    静默超过 ``SSE_KEEPALIVE_SECS`` 发一条 ``: keepalive`` 注释行。
+
+    为什么用线程 + 队列：循环是同步的（LLM 与 MCP 客户端都是同步 httpx），
+    而 HTTP 响应要边跑边吐。循环在**一个**工作线程里独占这个 DB 会话，
+    请求线程只从队列取帧——同一时刻只有一个线程碰会话，不存在并发访问。
+    """
+    customer_id = actor.customer_id
+    conversation = _conversation_or_404(db, conversation_id, customer_id)
+    settings = get_settings()
+    set_conversation_id(conversation.id)
+    system_extra = _compose_system_extra(
+        db, entities_db, datasets_db,
+        customer_id=customer_id, context=payload.context,
+    )
+    events: queue.Queue = queue.Queue()
+    outcome: dict = {}
+
+    def put(event: dict) -> None:
+        if event.get("type") == "error":
+            outcome["error"] = event.get("message") or "本轮以错误告终"
+        events.put(event)
+
+    def run() -> None:
+        try:
+            appended = service.chat(
+                db,
+                conversation,
+                content=payload.content,
+                llm=llm,
+                tool_executor=tool_executor,
+                settings=settings,
+                system_extra=system_extra,
+                read_executor=read_executor,
+                actor=actor,
+                gate_sessions=gate_sessions,
+                on_event=put,
+            )
+            outcome["messages"] = [
+                MessageOut.model_validate(m).model_dump(mode="json")
+                for m in appended
+            ]
+        except Exception as exc:  # noqa: BLE001 - 失败如实：发 error 帧收场
+            outcome["error"] = str(exc)
+        finally:
+            events.put(None)  # 哨兵：本轮结束
+            _release(tool_executor)
+
+    worker = threading.Thread(target=run, name="ai-stream", daemon=True)
+    worker.start()
+
+    def frames():
+        while True:
+            try:
+                item = events.get(timeout=SSE_KEEPALIVE_SECS)
+            except queue.Empty:
+                yield ": keepalive\n\n"
+                continue
+            if item is None:
+                break
+            yield _sse(item["type"], item)
+        worker.join(timeout=1.0)
+        if "error" in outcome:
+            yield _sse("error", {"message": outcome["error"]})
+            return
+        yield _sse(
+            "done",
+            {"conversation_id": conversation.id, "messages": outcome.get("messages", [])},
+        )
+
+    return StreamingResponse(
+        frames(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get(

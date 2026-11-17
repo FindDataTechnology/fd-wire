@@ -133,6 +133,7 @@ def chat(
     read_executor=None,
     actor=None,
     gate_sessions=None,
+    on_event=None,
 ) -> list[AIMessage]:
     """一条用户消息驱动一轮副驾循环（用户消息 + 循环产出全部落库）。
 
@@ -140,10 +141,21 @@ def chat(
     system prompt 与固定文案逐字一致（零漂移）。
     ``read_executor`` / ``actor`` / ``gate_sessions``：读工具与提议通道的
     依赖束（wire-copilot-action-gate）；缺席时对应能力如实降级，对话继续。
+    ``on_event``：流式观察者（assistant-streaming）——缺省 None 时零开销，
+    用户消息落库后同样推给观察者（客户自己的消息也要即时可见）。
     """
     user_message = append_message(
         db, conversation_id=conversation.id, role=MessageRole.user, content=content
     )
+    if on_event is not None:
+        on_event(
+            {
+                "type": "message",
+                "id": user_message.id,
+                "role": user_message.role,
+                "content": user_message.content,
+            }
+        )
     loop_messages = run_copilot_loop(
         db,
         conversation,
@@ -154,6 +166,7 @@ def chat(
         read_executor=read_executor,
         actor=actor,
         gate_sessions=gate_sessions,
+        on_event=on_event,
     )
     return [user_message, *loop_messages]
 

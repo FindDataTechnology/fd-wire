@@ -380,3 +380,212 @@ describe("AssistantPanel（壹座深链）", () => {
     expect(container.querySelector("iframe")).toBeNull();
   });
 });
+
+// ── unify-wire-copilot-surface 4.x/5.x：本地回声、秒表、流式与降级 ──────────
+
+/** 流式假后端：首帧前先「静默」，再逐帧吐。`buffered` 模拟边缘代理把 SSE
+ *  整个缓冲住——响应头立即到、body 一直不吐帧，直到客户端 abort。 */
+function installStreamBackend(
+  options: { buffered?: boolean; messages?: Array<Record<string, unknown>> } = {},
+): { calls: Recorded[]; fetchImpl: typeof fetch } {
+  const calls: Recorded[] = [];
+  const frames = options.messages ?? [
+    { type: "message", id: 101, role: "user", content: "问一句" },
+    { type: "delta", text: "回答" },
+    { type: "delta", text: "回答完整" },
+    {
+      type: "message",
+      id: 102,
+      role: "assistant",
+      content: "回答完整",
+    },
+  ];
+  const sse = frames
+    .map((f) => {
+      const type = String(f.type);
+      return `event: ${type}\ndata: ${JSON.stringify(f)}\n\n`;
+    })
+    .join("");
+  const done = `event: done\ndata: ${JSON.stringify({
+    conversation_id: 42,
+    messages: [
+      { id: 101, conversation_id: 42, role: "user", content: "问一句", created_at: "t" },
+      { id: 102, conversation_id: 42, role: "assistant", content: "回答完整", created_at: "t" },
+    ],
+  })}\n\n`;
+
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = (init?.method ?? "GET").toUpperCase();
+    calls.push({
+      url,
+      method,
+      body: init?.body ? JSON.parse(String(init.body)) : null,
+    });
+    const json = (data: unknown, status = 200) =>
+      new Response(JSON.stringify(data), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      });
+    if (url.includes("/v1/ai/conversations") && method === "POST" && !/\/\d+\/messages/.test(url)) {
+      return json({ id: 42, customer_id: "c", title: "t", created_at: "t", messages: [] }, 201);
+    }
+    if (/\/messages\/stream$/.test(url)) {
+      if (options.buffered) {
+        // 头到了、帧永远不来：正是代理缓冲住 SSE 的样子，靠客户端首帧超时放弃。
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              init?.signal?.addEventListener("abort", () => {
+                try {
+                  controller.close();
+                } catch {
+                  /* 已关闭 */
+                }
+              });
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "text/event-stream" } },
+        );
+      }
+      await Promise.resolve();
+      return new Response(sse + done, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    }
+    if (/\/messages$/.test(url) && method === "POST") {
+      return json([
+        { id: 101, conversation_id: 42, role: "user", content: "问一句", created_at: "t" },
+        { id: 102, conversation_id: 42, role: "assistant", content: "阻塞回答", created_at: "t" },
+      ]);
+    }
+    if (url.includes("/messages?after_id=") && method === "GET") return json([]);
+    if (url.includes("/artifacts") && method === "GET") return json([]);
+    if (url.includes("/v1/ai/actions?conversation_id=") && method === "GET") return json([]);
+    return json([]);
+  }) as typeof fetch;
+  return { calls, fetchImpl };
+}
+
+async function openPanel() {
+  render(<AssistantPanel tab="datasets" planCode="basic" />);
+  fireEvent.click(screen.getByTestId("assistant-launcher"));
+  fireEvent.change(screen.getByTestId("assistant-input"), {
+    target: { value: "问一句" },
+  });
+  fireEvent.click(screen.getByTestId("assistant-send"));
+}
+
+describe("AssistantPanel（本地回声与秒表）", () => {
+  it("发送后客户消息立刻出现，不等服务端回执", async () => {
+    const backend = installStreamBackend();
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    await openPanel();
+    // 同步断言：此刻请求还没回来
+    const echo = screen.getAllByTestId("assistant-entry-user");
+    expect(echo.at(-1)?.textContent).toBe("问一句");
+  });
+
+  it("等待期显示秒数", async () => {
+    const backend = installStreamBackend({ buffered: true });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    await openPanel();
+    await waitFor(() =>
+      expect(screen.getByTestId("assistant-progress")).toBeTruthy(),
+    );
+    expect(screen.getByTestId("assistant-progress-elapsed").textContent).toMatch(
+      /\d+s/,
+    );
+  });
+});
+
+describe("AssistantPanel（流式消费与降级）", () => {
+  it("走流式：增量文本渲染，最终收敛为服务端权威行", async () => {
+    const backend = installStreamBackend();
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    await openPanel();
+
+    await waitFor(() =>
+      expect(
+        screen.getAllByTestId("assistant-entry-assistant").at(-1)?.textContent,
+      ).toBe("回答完整"),
+    );
+    // 只留一条 assistant（增量临时行已收敛）
+    expect(screen.getAllByTestId("assistant-entry-assistant")).toHaveLength(1);
+    // 回声被服务端那条 user 行取代，仍只有一条
+    expect(screen.getAllByTestId("assistant-entry-user")).toHaveLength(1);
+    // 走到流端点，且没有回退到阻塞端点
+    expect(backend.calls.some((c) => /\/messages\/stream$/.test(c.url))).toBe(true);
+    expect(
+      backend.calls.some((c) => /\/messages$/.test(c.url) && c.method === "POST"),
+    ).toBe(false);
+  });
+
+  it("流不可用（首帧超时）时悄悄退回阻塞端点，不显示错误", async () => {
+    const backend = installStreamBackend({ buffered: true });
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    await openPanel();
+
+    await waitFor(
+      () =>
+        expect(
+          screen
+            .getAllByTestId("assistant-entry-assistant")
+            .at(-1)?.textContent,
+        ).toBe("阻塞回答"),
+      { timeout: 8000 },
+    );
+    expect(screen.queryByTestId("assistant-error")).toBeNull();
+    // 降级确实打到了阻塞端点
+    expect(
+      backend.calls.some((c) => /\/messages$/.test(c.url) && c.method === "POST"),
+    ).toBe(true);
+  }, 12000);
+
+  it("旧后端没有流端点（404）→ 同样降级", async () => {
+    const backend = installStreamBackend();
+    const withNotFound = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (/\/messages\/stream$/.test(String(input))) {
+        return new Response("not found", { status: 404 });
+      }
+      return backend.fetchImpl(input as RequestInfo, init);
+    }) as typeof fetch;
+    vi.stubGlobal("fetch", withNotFound);
+    await openPanel();
+
+    await waitFor(() =>
+      expect(
+        screen.getAllByTestId("assistant-entry-assistant").at(-1)?.textContent,
+      ).toBe("阻塞回答"),
+    );
+    expect(screen.queryByTestId("assistant-error")).toBeNull();
+  });
+});
+
+describe("AssistantPanel（缩放）", () => {
+  it("放大/还原切换不重置会话", async () => {
+    const backend = installBackend();
+    vi.stubGlobal("fetch", backend.fetchImpl);
+    render(<AssistantPanel tab="datasets" planCode="basic" />);
+    fireEvent.click(screen.getByTestId("assistant-launcher"));
+    const panel = screen.getByTestId("assistant-panel");
+    expect(panel.getAttribute("data-maximized")).toBe("off");
+
+    // 默认：记忆的 rem 尺寸 + 原生缩放把手
+    expect(panel.style.resize).toBe("both");
+    expect(panel.style.width).toBe("24rem");
+
+    fireEvent.click(screen.getByTestId("assistant-maximize"));
+    const maximized = screen.getByTestId("assistant-panel");
+    expect(maximized.getAttribute("data-maximized")).toBe("on");
+    expect(maximized.style.width).toBe("60vw");
+    expect(maximized.style.height).toBe("85vh");
+    expect(screen.getByTestId("assistant-input")).toBeTruthy(); // 同一实例，会话未重建
+
+    fireEvent.click(screen.getByTestId("assistant-maximize"));
+    const restored = screen.getByTestId("assistant-panel");
+    expect(restored.getAttribute("data-maximized")).toBe("off");
+    expect(restored.style.width).toBe("24rem");
+  });
+});

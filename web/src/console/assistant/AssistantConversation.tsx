@@ -29,6 +29,8 @@ import {
   fetchMessagesAfter,
   postMessage,
   proposeAction,
+  postMessageStream,
+  StreamUnavailable,
   type AssistantContext,
   type ChatMessage,
   type DraftArtifact,
@@ -43,6 +45,10 @@ const POLL_FAST_MS = 900;
 const POLL_SLOW_MS = 2500;
 /** 连续多少次无新增后转慢速。 */
 const POLL_BACKOFF_AFTER = 3;
+/** 等待阶段的刷新周期：秒数要「在动」，否则与卡死无法区分。 */
+const ELAPSED_TICK_MS = 500;
+/** 流式增量那条实时 assistant 行的固定临时 id（与服务端 id、回声 id 不相交）。 */
+const DELTA_ROW_ID = -1_000_000;
 
 export interface AssistantConversationProps {
   /** 当前页签（作为上下文注入，让指路答案落在客户所在页）。 */
@@ -214,7 +220,12 @@ export function AssistantConversation(props: AssistantConversationProps) {
   const [conversationId, setConversationId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState<string | null>(null);
+  // 等待阶段的说明 + 起始时刻（unify-wire-copilot-surface 4.2）：秒数要「在动」，
+  // 否则 5–15 秒的模型思考与卡死在界面上一模一样。
+  const [progress, setProgress] = useState<{ phase: string; since: number } | null>(
+    null,
+  );
+  const [, setTick] = useState(0);
   const [drafts, setDrafts] = useState<DraftArtifact[]>([]);
   const [promotingId, setPromotingId] = useState<number | null>(null);
   const [promoteError, setPromoteError] = useState<string | null>(null);
@@ -229,6 +240,10 @@ export function AssistantConversation(props: AssistantConversationProps) {
   // 已读到的最新消息 id（增量轮询基线）。用 ref 而非 state：轮询回调需要读
   // 最新值，不能吃闭包里的旧快照。
   const latestIdRef = useRef(0);
+  // 本地回声的临时 id 计数器（负数，与服务端自增 id 不相交）。
+  const latestEchoRef = useRef(1);
+  // 本轮等待阶段的起始时刻：阶段文案会变，秒数要接着算，不能重头。
+  const progressSinceRef = useRef(0);
 
   const resetConversation = useCallback(() => {
     setConversationId(null);
@@ -250,6 +265,13 @@ export function AssistantConversation(props: AssistantConversationProps) {
       .catch(() => setDrafts([]));
   }, []);
 
+  // 等待期秒数每 ELAPSED_TICK_MS 重渲染一次（进度行在「动」）。
+  useEffect(() => {
+    if (progress == null) return;
+    const timer = setInterval(() => setTick((n) => n + 1), ELAPSED_TICK_MS);
+    return () => clearInterval(timer);
+  }, [progress]);
+
   // 会话切换：拉草稿 + 拉提议列表（回放终态）。alive 防卸载后 setState。
   useEffect(() => {
     if (conversationId == null) return;
@@ -269,12 +291,25 @@ export function AssistantConversation(props: AssistantConversationProps) {
     };
   }, [conversationId, refreshDrafts]);
 
-  /** 统一发送：同步请求 + 期间按 after_id 轮询增量消息（design D1）。 */
+  /** 统一发送（unify-wire-copilot-surface 4.x/5.x）。
+   *
+   *  ① 客户消息**立刻本地回声**（负 id 临时行），不等服务端回执或轮询把它捞回；
+   *  ② 优先走流式端点，逐条消息即时呈现 + 模型文本增量；
+   *  ③ 流不可用（端点缺失/非事件流/首帧超时）→ 悄悄退回阻塞端点 + 既有轮询，
+   *     对客户只表现为「慢一点」，不是错误。
+   */
   const send = useCallback(
     async (content: string) => {
       setBusy(true);
       setError(null);
-      setProgress(t("console.assistant.progressStarting"));
+      setProgress({ phase: t("console.assistant.progressStarting"), since: Date.now() });
+      progressSinceRef.current = Date.now();
+      // 本地回声：负数 id 排在服务端行前面，服务端首条 user 行到达后替换。
+      const echoId = -(latestEchoRef.current++);
+      setEntries((current) => [
+        ...current,
+        { id: echoId, role: "user", content },
+      ]);
       let active = true;
       let lastId = latestIdRef.current;
 
@@ -313,12 +348,58 @@ export function AssistantConversation(props: AssistantConversationProps) {
           targetId = detail.id;
           setConversationId(targetId);
         }
-        const polling = poll(targetId);
-        const appended = await postMessage(targetId, content, context);
+
+        let appended: ChatMessage[];
+        try {
+          appended = await postMessageStream(targetId, content, context, {
+            onMessage: (message) => {
+              setProgress({
+                phase:
+                  message.role === "tool_trace"
+                    ? t("console.assistant.progressGeneric")
+                    : t("console.assistant.progressWaiting"),
+                since: progressSinceRef.current,
+              });
+              if (message.role === "user") {
+                // 服务端那条客户消息取代本地回声（同一条话，有真 id 了）
+                setEntries((current) =>
+                  mergeEntries(
+                    current.filter((entry) => entry.id !== echoId),
+                    toEntries([message], t),
+                  ),
+                );
+                return;
+              }
+              setEntries((current) => mergeEntries(current, toEntries([message], t)));
+            },
+            onDelta: (text) => {
+              // 增量是累加全文：直接以一条临时 assistant 行承载，最终行到了收敛。
+              setEntries((current) => {
+                const withoutLive = current.filter((entry) => entry.id !== DELTA_ROW_ID);
+                return [
+                  ...withoutLive,
+                  { id: DELTA_ROW_ID, role: "assistant", content: text },
+                ];
+              });
+            },
+          });
+        } catch (err) {
+          if (!(err instanceof StreamUnavailable)) throw err;
+          // 降级：阻塞端点 + 轮询（既有路径，原样保留）
+          const polling = poll(targetId);
+          appended = await postMessage(targetId, content, context);
+          active = false;
+          await polling;
+        }
         active = false;
-        await polling;
-        setEntries((current) => mergeEntries(current, toEntries(appended, t)));
-        // 主响应是权威集合：基线推到最大 id，避免下一轮重复拉取。
+        // 权威集合收尾：临时行（回声 + 增量行）退场。
+        setEntries((current) => {
+          const cleaned = current.filter(
+            (entry) =>
+              entry.id !== echoId && entry.id !== DELTA_ROW_ID && entry.id > 0,
+          );
+          return mergeEntries(cleaned, toEntries(appended, t));
+        });
         latestIdRef.current = appended.reduce(
           (max, item) => Math.max(max, item.id),
           latestIdRef.current,
@@ -328,6 +409,8 @@ export function AssistantConversation(props: AssistantConversationProps) {
         refreshDrafts(targetId);
       } catch (err) {
         active = false;
+        // 失败时也清掉本地回声：否则「失败」与「已发送」会同时显示。
+        setEntries((current) => current.filter((entry) => entry.id !== echoId));
         setError(err instanceof Error ? err.message : String(err));
         setProgress(null);
         throw err;
@@ -335,7 +418,7 @@ export function AssistantConversation(props: AssistantConversationProps) {
         setBusy(false);
       }
     },
-    [conversationId, refreshDrafts, t],
+    [conversationId, refreshDrafts, t, context],
   );
 
   const submit = useCallback(async () => {
@@ -539,7 +622,12 @@ export function AssistantConversation(props: AssistantConversationProps) {
             data-testid="assistant-progress"
             className="text-[11px] italic text-slate-400"
           >
-            {progress}
+            {progress.phase}
+            <span data-testid="assistant-progress-elapsed" className="ml-1 not-italic">
+              {t("console.assistant.progressElapsed", {
+                seconds: Math.max(0, Math.round((Date.now() - progress.since) / 1000)),
+              })}
+            </span>
           </div>
         )}
         {error != null && (

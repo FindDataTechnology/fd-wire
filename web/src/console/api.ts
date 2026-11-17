@@ -312,6 +312,131 @@ export function postMessage(
   ) as Promise<ChatMessage[]>;
 }
 
+/** 流式一轮对话的观察者（assistant-streaming）。 */
+export interface StreamHandlers {
+  /** 循环每落库一条消息（含客户自己那条）。 */
+  onMessage: (message: ChatMessage) => void;
+  /** 模型文本增量：载荷是**累加后的全文**，不是片段。 */
+  onDelta: (text: string) => void;
+}
+
+/** 流式不可用的信号（端点缺失 / 非事件流 / 首帧超时）——调用方据此降级。 */
+export class StreamUnavailable extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "StreamUnavailable";
+  }
+}
+
+/** 首帧等待上限：边缘代理若把 SSE 整个缓冲住，这里必须能放弃并退回阻塞端点。 */
+const STREAM_FIRST_FRAME_MS = 3000;
+
+/**
+ * 流式跑一轮对话（assistant-streaming D5/D7）。
+ *
+ * 成功时返回本轮权威消息集合（与 `postMessage` 同形）；流不可用时抛
+ * `StreamUnavailable`，调用方退回 `postMessage` + 既有轮询——降级对客户只
+ * 表现为「慢一点」，不是错误。
+ */
+export async function postMessageStream(
+  conversationId: number,
+  content: string,
+  context: AssistantContext | undefined,
+  handlers: StreamHandlers,
+  signal?: AbortSignal,
+): Promise<ChatMessage[]> {
+  const abort = new AbortController();
+  const onOuterAbort = () => abort.abort();
+  signal?.addEventListener("abort", onOuterAbort);
+  const firstFrame = setTimeout(() => abort.abort(), STREAM_FIRST_FRAME_MS);
+
+  let sawAnyFrame = false;
+  let settled: ChatMessage[] | null = null;
+  let failure: string | null = null;
+
+  try {
+    const response = await fetch(
+      `${API_BASE}/v1/ai/conversations/${conversationId}/messages/stream`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "text/event-stream",
+          "Content-Type": "application/json",
+          ...bearerHeaders(),
+        },
+        body: JSON.stringify(context ? { content, context } : { content }),
+        signal: abort.signal,
+      },
+    );
+    if (!response.ok || !response.body) {
+      throw new StreamUnavailable(`stream endpoint returned ${response.status}`);
+    }
+    const ctype = response.headers.get("content-type") ?? "";
+    if (!ctype.includes("text/event-stream")) {
+      throw new StreamUnavailable("not an event stream");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        let event = "";
+        let data = "";
+        for (const line of block.split("\n")) {
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          else if (line.startsWith("data:")) data += line.slice(5).trim();
+        }
+        if (!event) continue; // keepalive 注释行
+        if (!sawAnyFrame) {
+          sawAnyFrame = true;
+          clearTimeout(firstFrame);
+        }
+        let payload: unknown;
+        try {
+          payload = JSON.parse(data);
+        } catch {
+          continue;
+        }
+        if (event === "message") {
+          handlers.onMessage(payload as ChatMessage);
+        } else if (event === "delta") {
+          const text = (payload as { text?: unknown }).text;
+          if (typeof text === "string") handlers.onDelta(text);
+        } else if (event === "done") {
+          settled = (payload as { messages?: ChatMessage[] }).messages ?? [];
+        } else if (event === "error") {
+          failure = (payload as { message?: string }).message ?? "本轮以错误告终";
+        }
+      }
+    }
+  } catch (err) {
+    if (!sawAnyFrame) {
+      throw new StreamUnavailable(
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    // 已经收到过帧：这不是「流不可用」，是本轮中途断了——如实报错，不降级
+    // （降级会重跑一遍，重复落一条客户消息）。
+    throw err instanceof ConsoleApiError
+      ? err
+      : new ConsoleApiError(`stream interrupted: ${(err as Error).message}`);
+  } finally {
+    clearTimeout(firstFrame);
+    signal?.removeEventListener("abort", onOuterAbort);
+  }
+
+  if (failure != null) throw new ConsoleApiError(failure, 502);
+  if (settled == null) throw new StreamUnavailable("stream ended without done");
+  return settled;
+}
+
 /** 单个会话的产物草稿列表。 */
 export function fetchArtifacts(
   conversationId: number,

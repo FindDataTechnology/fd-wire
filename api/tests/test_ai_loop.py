@@ -554,3 +554,101 @@ def test_run_copilot_loop_plain_round(db) -> None:
     )
     assert [m.role for m in appended] == [MessageRole.assistant.value]
     assert appended[0].content == "done"
+
+
+# --------------------------------------------------------- 流式观察者（assistant-streaming）
+
+
+def test_on_event_messages_match_appended_rows(db) -> None:
+    """on_event 收到的消息与落库行一一对应（id / role / content 同源）。"""
+    conversation = _conversation(db)
+    seen: list[dict] = []
+    llm = FakeLlm([assistant_reply("done")])
+    appended = run_copilot_loop(
+        db,
+        conversation,
+        llm=llm,
+        tool_executor=FakeExecutor(),
+        max_turns=8,
+        on_event=seen.append,
+    )
+    messages = [e for e in seen if e["type"] == "message"]
+    assert [e["id"] for e in messages] == [m.id for m in appended]
+    assert [e["role"] for e in messages] == [m.role for m in appended]
+    assert [e["content"] for e in messages] == [m.content for m in appended]
+
+
+def test_no_on_event_keeps_wire_payload_identical(db) -> None:
+    """缺省 on_event 时行为零漂移：同一脚本两条路径的落库与 LLM 输入逐字节一致。"""
+    def run(with_event: bool):
+        conversation = _conversation(db)
+        append_message(
+            db, conversation_id=conversation.id, role=MessageRole.user, content="hi"
+        )
+        llm = FakeLlm([assistant_tool(tool_call("dataset_list", {})), assistant_reply("ok")])
+        seen: list[dict] = []
+        appended = run_copilot_loop(
+            db,
+            conversation,
+            llm=llm,
+            tool_executor=FakeExecutor(),
+            max_turns=8,
+            on_event=seen.append if with_event else None,
+        )
+        return [m.role for m in appended], [m.content for m in appended], llm.calls
+
+    plain = run(False)
+    observed = run(True)
+    assert plain == observed  # 落库形状与 LLM 输入完全一致
+
+
+def test_on_event_receives_error_for_llm_failure(db) -> None:
+    """模型失败：观察者收到 error 事件，阻塞路径仍只有那条 assistant 消息。"""
+    conversation = _conversation(db)
+    seen: list[dict] = []
+    llm = FakeLlm([RuntimeError("网关炸了")])
+    appended = run_copilot_loop(
+        db,
+        conversation,
+        llm=llm,
+        tool_executor=FakeExecutor(),
+        max_turns=8,
+        on_event=seen.append,
+    )
+    errors = [e for e in seen if e["type"] == "error"]
+    assert len(errors) == 1
+    assert "网关炸了" in errors[0]["message"]
+    assert [m.role for m in appended] == [MessageRole.assistant.value]
+
+
+def test_tool_schema_discovery_cached_per_customer(db, monkeypatch) -> None:
+    """cell 工具面按客户缓存：同一客户两轮只发现一次，不同客户各一次。"""
+    from fd_wire_api.ai import loop as loop_mod
+
+    loop_mod._CELL_TOOL_CACHE.clear()
+
+    class DiscoveringExecutor(FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.discoveries = 0
+
+        def list_tool_schemas(self):
+            self.discoveries += 1
+            return [{"type": "function", "function": {"name": "explore"}}]
+
+    monkeypatch.setattr(
+        "fd_wire_api.datasets.service.storage_tier_for", lambda **_: "cell"
+    )
+    monkeypatch.setenv(
+        "AI_CELL_ENDPOINT_MAP",
+        "cust-001=http://cell-001/mcp,cust-002=http://cell-002/mcp",
+    )
+    reset_ai_runtime()
+    executor = DiscoveringExecutor()
+    first = loop_mod.copilot_tool_schemas(executor, customer_id="cust-001")
+    second = loop_mod.copilot_tool_schemas(executor, customer_id="cust-001")
+    other = loop_mod.copilot_tool_schemas(executor, customer_id="cust-002")
+    assert executor.discoveries == 2  # cust-001 缓存命中一次，cust-002 首次
+    assert first == second == other
+    assert any(s["function"]["name"] == "explore" for s in first)
+    loop_mod._CELL_TOOL_CACHE.clear()

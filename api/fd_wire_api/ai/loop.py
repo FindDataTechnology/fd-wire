@@ -19,7 +19,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+import time
+from typing import Any, Callable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -272,6 +273,27 @@ def _engine_available(customer_id: str) -> bool:
     return datasets_service.storage_tier_for(customer_id=customer_id) != datasets_service.TIER_API
 
 
+#: 每个客户最近一次发现到的 cell 工具面 + 取到它的时刻（assistant-streaming D8）。
+#: 工具面在分钟级是稳定的，但 `list_tool_schemas` 是一次 MCP 网络握手——付费档
+#: 每轮都重做一次，首轮等待里能占掉可观的一块。
+_CELL_TOOL_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_CELL_TOOL_TTL_SECS = 60.0
+
+
+def _cached_cell_tools(tool_executor: ToolExecutor, customer_id: str) -> list[dict]:
+    """按客户缓存 MCP 工具面；发现失败不缓存（下一轮重试）。"""
+    now = time.monotonic()
+    hit = _CELL_TOOL_CACHE.get(customer_id)
+    if hit is not None and now - hit[0] < _CELL_TOOL_TTL_SECS:
+        return hit[1]
+    discover = getattr(tool_executor, "list_tool_schemas", None)
+    if not callable(discover):
+        return []
+    schemas = list(discover() or [])
+    _CELL_TOOL_CACHE[customer_id] = (now, schemas)
+    return schemas
+
+
 def copilot_tool_schemas(tool_executor: ToolExecutor, *, customer_id: str) -> list[dict]:
     """组装本轮工具面：读工具 + propose_action + cell 工具（引擎可用时）。
 
@@ -280,9 +302,7 @@ def copilot_tool_schemas(tool_executor: ToolExecutor, *, customer_id: str) -> li
     """
     schemas = [*READ_TOOL_SCHEMAS, PROPOSE_ACTION_TOOL_SCHEMA]
     if _engine_available(customer_id):
-        discover = getattr(tool_executor, "list_tool_schemas", None)
-        if callable(discover):
-            schemas.extend(discover())
+        schemas.extend(_cached_cell_tools(tool_executor, customer_id))
     return schemas
 
 
@@ -297,6 +317,7 @@ def run_copilot_loop(
     read_executor: ReadToolExecutor | None = None,
     actor: ActorContext | None = None,
     gate_sessions: GateSessions | None = None,
+    on_event: Callable[[dict], None] | None = None,
 ) -> list[AIMessage]:
     """跑一轮副驾循环，返回本次追加的全部消息（含首条 user）。
 
@@ -304,6 +325,10 @@ def run_copilot_loop(
     ``_wire_history``（图谱块注入；缺省 None = 固定文案零漂移）。
     ``actor`` / ``gate_sessions`` / ``read_executor`` 缺席时提议与读工具
     如实降级（不可用回灌），对话本身继续——兼容无这些依赖的旧调用方。
+
+    ``on_event``（assistant-streaming D5）：流式观察者，缺省 None 时**零开销**、
+    行为与改动前逐字节一致。回调只在两处触发——消息落库后
+    ``{"type": "message", ...}``，模型文本增量 ``{"type": "delta", "text": 累计全文}``。
     """
     appended: list[AIMessage] = []
 
@@ -312,15 +337,42 @@ def run_copilot_loop(
             db, conversation_id=conversation.id, role=role, content=content
         )
         appended.append(message)
+        if on_event is not None:
+            on_event(
+                {
+                    "type": "message",
+                    "id": message.id,
+                    "role": role.value,
+                    "content": content,
+                }
+            )
         return message
 
     wire = _wire_history(db, conversation.id, system_extra)
     schemas = copilot_tool_schemas(tool_executor, customer_id=conversation.customer_id)
+
+    # 流式补全是**可选**能力（assistant-streaming D6）：mock 与旧实现只有
+    # complete()，缺 complete_stream 时退回阻塞调用，一轮照常完成、只是没有增量帧。
+    stream = getattr(llm, "complete_stream", None)
+    if on_event is not None and callable(stream):
+        _complete = lambda: stream(wire, schemas, on_delta)  # noqa: E731
+    else:
+        _complete = lambda: llm.complete(wire, schemas)  # noqa: E731
+
+    def on_delta(text: str) -> None:
+        if on_event is not None:
+            on_event({"type": "delta", "text": text})
+
     for _ in range(max_turns):
         try:
-            assistant = llm.complete(wire, schemas)
+            assistant = _complete()
         except Exception as exc:
             # 失败如实：assistant 消息报错并安全中止（无终答、无半成品）。
+            if on_event is not None:
+                # 流式观察者额外收到一条 error 事件（assistant-streaming）：
+                # 阻塞端点只需要那条 assistant 消息，流式客户端需要知道
+                # 「本轮以错误告终」，而不是把失败当成正常收尾。
+                on_event({"type": "error", "message": _llm_failure_message(exc)})
             emit(MessageRole.assistant, _llm_failure_message(exc))
             return appended
 

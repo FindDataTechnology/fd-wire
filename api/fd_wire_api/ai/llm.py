@@ -85,3 +85,92 @@ class TokenGatewayLlmClient:
             content=str(content) if content is not None else None,
             tool_calls=tuple(tool_calls),
         )
+
+    def complete_stream(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        on_delta,
+    ) -> LlmAssistantMessage:
+        """流式补全（assistant-streaming D6）：增量文本经 ``on_delta`` 回调。
+
+        返回值与 :meth:`complete` **同形**——循环侧不需要区分两条路径。
+        ``on_delta(text)`` 收到的是**累加后的全文**，不是片段。
+
+        网关对 ``stream: true`` 的 tool_calls 分片支持未经实测（design D6 风险）：
+        任何分片解析失败都退回本轮非流式补全——只损失这一轮的打字效果，
+        正确性不受影响。
+        """
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": messages,
+            "tools": tools,
+            "stream": True,
+        }
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+
+        acc = ""
+        # index → {id, name, arguments 分片缓冲}
+        calls: dict[int, dict[str, Any]] = {}
+        try:
+            with self._http.stream(
+                "POST",
+                f"{self._base}/v1/chat/completions",
+                json=payload,
+                headers=headers,
+            ) as resp:
+                if resp.status_code >= 400:
+                    raise LlmGatewayError(f"token 网关返回 {resp.status_code}")
+                for line in resp.iter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    body = line[5:].strip()
+                    if not body or body == "[DONE]":
+                        continue
+                    try:
+                        chunk = json.loads(body)
+                        delta = chunk["choices"][0]["delta"]
+                    except (ValueError, KeyError, IndexError, TypeError):
+                        continue  # 单帧不合契约：跳过，不打断整轮
+                    piece = delta.get("content")
+                    if isinstance(piece, str) and piece:
+                        acc += piece
+                        on_delta(acc)
+                    for raw in delta.get("tool_calls") or []:
+                        try:
+                            idx = int(raw.get("index", 0))
+                        except (TypeError, ValueError):
+                            idx = 0
+                        slot = calls.setdefault(
+                            idx, {"id": "", "name": "", "arguments": ""}
+                        )
+                        if raw.get("id"):
+                            slot["id"] = str(raw["id"])
+                        fn = raw.get("function") or {}
+                        if fn.get("name"):
+                            slot["name"] = str(fn["name"])
+                        if isinstance(fn.get("arguments"), str):
+                            slot["arguments"] += fn["arguments"]
+        except httpx.HTTPError as exc:
+            raise LlmGatewayError(f"token 网关不可达: {exc}") from exc
+
+        tool_calls: list[ToolCall] = []
+        for idx in sorted(calls):
+            slot = calls[idx]
+            if not slot["name"]:
+                continue
+            try:
+                arguments = json.loads(slot["arguments"] or "{}")
+            except ValueError:
+                # 分片拼接不成合法 JSON：退回非流式补全本轮（design D6 风险缓解）。
+                return self.complete(messages, tools)
+            if not isinstance(arguments, dict):
+                return self.complete(messages, tools)
+            tool_calls.append(
+                ToolCall(
+                    id=slot["id"] or f"call-{idx}",
+                    name=slot["name"],
+                    arguments=arguments,
+                )
+            )
+        return LlmAssistantMessage(content=acc or None, tool_calls=tuple(tool_calls))
