@@ -38,7 +38,7 @@ spec:
           # 200 的 index.html——补按扩展名的 404 正则，扩展名不含 json/txt 以免抢 /internal/ 反代；
           # 因正则优先于普通前缀 location，同时给 ^~ /console 与 ^~ /internal/ 加保护。
           # 此前线上 /copilot.js = 200 text/html 417B（index.html 指纹），六台主机并排只有 wire 这样）。
-          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-4792f67 #｜2026-11-17 sha-4792f67：副驾宿主钩子（harden-copilot-ask-and-intent 4.2/4.3）——context() 递 location.hash（本 app 是 hash 路由）+ hashchange 时 pushContext；navigate 白名单用 parseHash 反查，拒绝回落成 home 的未知路由与站外 URL。注：柏讯专家的 persona 是产品线客服角色，未含 intent 协议，所以这些钩子当前不会被调用（先装好，等 persona 补齐后即可生效）。源 4ae67e2+…（run 43900714381 绿）；回滚=sha-61d7d93
+          image: ccr.ccs.tencentyun.com/fd-wire/web:sha-34474bc #｜2026-11-18 sha-34474bc：副驾去重（路由闸）+ 浮层可缩放+本轮回声+秒表+SSE 流式；index.html 路由闸把 #/console* #/admin* #/share/* #/showcase* #/login 上的萬星 iframe 设 display:none（MutationObserver 兜 loader 晚挂载）；AssistantPanel 原生 resize + 放大/还原 （尺寸进 localStorage）；delta 帧是累加全文、3s 无首帧即退阻塞端点。源 85726a1（run 44144620008 绿）；回滚=sha-4792f67
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

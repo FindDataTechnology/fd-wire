@@ -53,7 +53,12 @@ spec:
           # 且新增构建期入口闸 `import fd_wire_api.app` 把这类缺陷变成构建期红；
           # 同片带：列级 schema 校验（0054/0055 的 target_key / kernel_attrs）、冷导入闸、
           # sqlalchemy 下限对齐线上 2.1.8、SPA 回退修正；全量 1940 passed / 13 skipped）。
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-91cabb6
+          # 出片 tag=testaction005 build-pool 快照 sha=7510054（真 85726a1：副驾去重——
+          # 萬星外向副驾在控制台/管理/分享/橱窗/登录路由上退场，只留原生助手；首轮本地回声 +
+          # 阶段秒数；新 SSE 端点 /messages/stream 逐条推消息与模型增量，流不可用自动退回
+          # 阻塞端点+轮询；LLM 客户端进程级复用 + MCP 工具面 60s TTL 缓存。digest sha256:dbed0bc2…）。
+          # 回滚=sha-91cabb6
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-7510054
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
