@@ -42,6 +42,81 @@ env:
   NAMESPACE: fd-wire
 
 jobs:
+  # ── api 测试闸（2026-11-18 从公开快照仓 scs001/fd-wire-images 合回）──────────
+  # 这一段原本只存在于公开快照仓（那边才有 runner）。镜像闸 R5 要求副本与真源
+  # 同形，且 R5 没有豁免通道 ⇒ 合回真源是唯一不制造分叉的处置。
+  # 与快照仓那份的差异只有装法：真源 api 依赖 vendored 内核 wheel，须先
+  # `pip install vendor/*.whl` 再装包（快照树里没有 vendor/）。
+  #
+  # 这里**不跑全量**：全量在 CI 上有一条时长敏感用例会闪
+  # （`test_sensitivity_closure_render_recheck_after_ancestor_change`，本地 15/15 绿、
+  # 同一棵树同一版本在 CI 红）。把它做成阻塞闸只会训练人忽略红灯。全量另设一个
+  # 提示性作业（`api-full-advisory`），红了看得见、不挡出片。
+  api-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        working-directory: api
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install vendor/*.whl
+          pip install -e '.[dev]'
+
+      # 判据一：**收集即判据**。导入环、缺依赖、循环引用都会在这里红，且完全不依赖
+      # 时钟或执行顺序。收集数下限防"收集 0 条也算绿"。
+      - name: Collect (import-cycle gate)
+        working-directory: api
+        run: |
+          set -euo pipefail
+          python -m pytest tests --collect-only -q > /tmp/collect.log 2>&1 || {
+            echo "::error::收集失败——导入环/缺依赖/循环引用（这一类别正是本闸要拦的）"
+            grep -E "ImportError|ModuleNotFound" /tmp/collect.log | head -5
+            exit 1
+          }
+          n=$(grep -cE "^tests/.*::" /tmp/collect.log || true)
+          echo "collected tests=$n"
+          test "$n" -ge 1500 || { echo "::error::只收集到 $n 条（<1500），判据不能算过"; exit 1; }
+
+      # 判据二：那条曾被导入环整文件吞掉的用例，真跑一次。
+      - name: Run the file the import cycle used to swallow
+        working-directory: api
+        run: python -m pytest tests/test_wanxing_client.py -q
+
+  # 提示性作业：全量跑，红了看得见但不挡出片（原因见上）。
+  api-full-advisory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        working-directory: api
+        run: |
+          python -m pip install --upgrade pip
+          pip install vendor/*.whl
+          pip install -e '.[dev]'
+      - name: Full suite (advisory)
+        working-directory: api
+        run: |
+          set -euo pipefail
+          python -m pytest tests -q || {
+            echo "::warning::全量有失败——已知 CI 专属闪现场景见本作业上方的注释；请对照本地复跑"
+            exit 1
+          }
+
   build-push:
     runs-on: ubuntu-latest
     timeout-minutes: 60
