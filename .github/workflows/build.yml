@@ -359,7 +359,7 @@ jobs:
           docker tag  "$REGISTRY/$NAMESPACE/downloads:$tag" "$REGISTRY/$NAMESPACE/downloads:current"
           docker push "$REGISTRY/$NAMESPACE/downloads:$tag"
           docker push "$REGISTRY/$NAMESPACE/downloads:current"
-          echo "### 连接器产物已入 OCI 中继：downloads:$tag + :current（cheap-6 cron 自动落盘）" >> "$GITHUB_STEP_SUMMARY"
+          echo "### 连接器产物已入 OCI 中继：downloads:$tag + :current（集群节点 cron 自动落盘）" >> "$GITHUB_STEP_SUMMARY"
 
       # ── 可选通道：runner 直推 rsync（默认关；网络环境允许时经 repo 变量开启）
       - name: Promote artifacts to downloads dir (rsync, optional)
