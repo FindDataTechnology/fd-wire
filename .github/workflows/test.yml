@@ -1,0 +1,63 @@
+name: test
+
+# build.yml 里的 api-gate 只由 workflow_dispatch 触发，所以在 push 上它从不运行。
+# 一个从不执行的闸与不存在的闸在输出上完全同形：都看不到红，也都证明不了绿。
+# 这个 workflow 只做测试，不推镜像、不需要 TCR secrets，因此可以安全地在每次 push 上跑。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          if [ -d vendor ]; then pip install vendor/*.whl; fi
+          pip install -e '.[dev]'
+
+      # 收集即判据：导入环、缺依赖、循环引用都会在这里红，且不依赖时钟或执行顺序。
+      # 下限防「收集 0 条也算绿」。
+      - name: Collect (import-cycle gate)
+        run: |
+          set -euo pipefail
+          python -m pytest tests --collect-only -q > /tmp/collect.log 2>&1 || {
+            echo "::error::收集失败——导入环/缺依赖/循环引用（这一类别正是本闸要拦的）"
+            grep -E "ImportError|ModuleNotFound" /tmp/collect.log | head -5
+            exit 1
+          }
+          n=$(grep -cE "^tests/.*::" /tmp/collect.log || true)
+          echo "collected tests=$n"
+          test "$n" -ge 1500 || { echo "::error::只收集到 $n 条（<1500），判据不能算过"; exit 1; }
+
+      # 鉴权路径的用例。2026-11-19 删掉 FD_WIRE_INTERNAL_TOKEN 的硬编码缺省值时，
+      # 影响面正是这几个文件——它们要么显式 setenv，要么依赖 conftest 的测试值。
+      - name: Auth-path tests
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_admin_api.py \
+            tests/test_console_api.py \
+            tests/test_demands_workorder.py \
+            tests/test_bench_ontology_pull.py \
+            tests/test_demands_notifications.py \
+            tests/test_datasets_common.py
