@@ -22,15 +22,29 @@ import secrets
 
 from fastapi import Header, HTTPException, status
 
-#: 未配 ``FD_WIRE_INTERNAL_TOKEN`` 时的开发缺省（生产由部署面注入，见 deploy/k8s）。
-DEFAULT_INTERNAL_TOKEN = "wire-internal-dev"
+#: 环境变量名。**这里刻意没有缺省值。**
+#:
+#: 曾经有 ``DEFAULT_INTERNAL_TOKEN = "wire-internal-dev"``。生产一直由 deploy/k8s 的
+#: Secret 注入真值，所以缺省值在线上从没生效过——但这正是它危险的地方：
+#: 任何一次漏配 Secret 的部署都会**静默地**用一个写在源码里的口令跑起来，
+#: 而这份源码是公开的，等于把口令公开。漏配必须炸，不能降级。
+_ENV = "FD_WIRE_INTERNAL_TOKEN"
 
 
 def require_internal(
     x_internal_token: str | None = Header(default=None, alias="X-Internal-Token"),
 ) -> None:
-    """与 ``FD_WIRE_INTERNAL_TOKEN`` 常量时间比对；缺失/空白一律 401。"""
-    expected = os.getenv("FD_WIRE_INTERNAL_TOKEN", DEFAULT_INTERNAL_TOKEN)
+    """与 ``FD_WIRE_INTERNAL_TOKEN`` 常量时间比对；缺失/空白一律 401。
+
+    未配置该环境变量时返回 503（配置错误），不是 401——两者的处置不同：
+    401 说明调用方没带对令牌，503 说明这个部署本身没配好。
+    """
+    expected = os.getenv(_ENV)
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"内部端点未配置：{_ENV} 必须由部署面 Secret 注入",
+        )
     if not x_internal_token or not secrets.compare_digest(x_internal_token, expected):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

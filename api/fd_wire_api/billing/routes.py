@@ -20,7 +20,6 @@ billing/metering/console 表同库）。
 from __future__ import annotations
 
 import os
-import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -41,19 +40,15 @@ router = APIRouter(tags=["billing"])
 # 鉴权（内部面）
 # ---------------------------------------------------------------------------
 
-_DEFAULT_INTERNAL_TOKEN = "wire-internal-dev"
 
 
 def require_internal_token(
     x_internal_token: str | None = Header(default=None, alias="X-Internal-Token"),
 ) -> None:
     """内部调用鉴权：与 FD_WIRE_INTERNAL_TOKEN 常量时间比对（抄 demands）。"""
-    expected = os.getenv("FD_WIRE_INTERNAL_TOKEN", _DEFAULT_INTERNAL_TOKEN)
-    if not x_internal_token or not secrets.compare_digest(x_internal_token, expected):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="内部端点需要有效的 X-Internal-Token",
-        )
+    # 单一真源在 internal_auth：未配置环境变量时它返回 503，而不是用缺省口令。
+    from ..internal_auth import require_internal as _impl
+    _impl(x_internal_token)
 
 
 # ---------------------------------------------------------------------------

@@ -25,7 +25,6 @@ detail）；``PullConfigError`` → 503（detail 指明缺哪个 env）。任何
 from __future__ import annotations
 
 import os
-import secrets
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -40,7 +39,6 @@ from .client import (
 )
 from .store import get_db, pull_and_store
 
-_DEFAULT_INTERNAL_TOKEN = "wire-internal-dev"
 
 
 def _require_internal(
@@ -51,12 +49,9 @@ def _require_internal(
     本地自持而不 ``from ..demands.routes import``：demands.routes 初始化链
     较重，bench_pull 在 app.py 的导入顺序先于 demands 时会构成循环导入。
     """
-    expected = os.getenv("FD_WIRE_INTERNAL_TOKEN", _DEFAULT_INTERNAL_TOKEN)
-    if not x_internal_token or not secrets.compare_digest(x_internal_token, expected):
-        raise HTTPException(
-            status_code=401,
-            detail="内部端点需要有效的 X-Internal-Token",
-        )
+    # 单一真源在 internal_auth：未配置环境变量时它返回 503，而不是用缺省口令。
+    from ..internal_auth import require_internal as _impl
+    _impl(x_internal_token)
 
 router = APIRouter(
     prefix="/api/v1/internal/bench-ontology",
