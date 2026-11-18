@@ -126,10 +126,15 @@ def test_real_dashboard_files_convert(tmp_path) -> None:
         source = load_source(path)
         envelope = build_showcase_spec(source, slugify(path.name))
         assert envelope["spec"]["panels"], f"{path.name} 转换后面板为空"
-        # 每张图都有 raw_option，且与源 option 全等
+        # option 源的图 → raw_option 面板；table 源 → snapshot 面板
+        # （fix-showcase-table-panel：源形状是封闭集合，两条转换路径都要有产物）
         charts = source["charts"]
         raw_panels = [p for p in envelope["spec"]["panels"] if "raw_option" in p]
-        assert len(raw_panels) == len(charts)
+        table_panels = [p for p in envelope["spec"]["panels"] if p.get("type") == "table"]
+        assert len(raw_panels) == sum(
+            1 for c in charts if isinstance(c.get("option"), dict)
+        )
+        assert len(table_panels) == sum(1 for c in charts if c.get("table") is not None)
 
 
 # ------------------------------------------------------------------ 导入执行

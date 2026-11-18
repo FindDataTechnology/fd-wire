@@ -138,19 +138,15 @@ def _kpi_to_panel(index: int, kpi: dict[str, Any]) -> dict[str, Any]:
     return panel
 
 
-def _chart_to_panel(index: int, chart: dict[str, Any]) -> dict[str, Any]:
-    """源看板的一张图 → v2 面板（完整 echarts option 进 raw_option）。
+def _panel_base(index: int, chart: dict[str, Any]) -> dict[str, Any]:
+    """两个形状分支共用的面板骨架（id/title/source/height）。
 
-    ``type`` 用 ``line``（基础档）——raw_option 面板的实际图形由配置决定，
-    type 只影响「基础档还是高级档」的编辑器呈现与无 raw 时的回退。
+    抽出来是因为这四项曾经在两处各写一遍就会漂移——同族事故：
+    ``cnreport`` 面板插「单位」列后 ``_asof_col`` 没跟着改。
     """
-    option = chart.get("option")
-    if not isinstance(option, dict):
-        raise ValueError(f"图表 {chart.get('id')!r} 缺少 option 对象")
     height = chart.get("height")
     return {
         "id": f"chart-{index + 1}",
-        "type": "line",
         "title": str(chart.get("title") or ""),
         "span": PANEL_SPAN,
         "source": str(chart.get("source") or ""),
@@ -159,9 +155,37 @@ def _chart_to_panel(index: int, chart: dict[str, Any]) -> dict[str, Any]:
             if isinstance(height, (int, float)) and height > 0
             else DEFAULT_HEIGHT
         ),
-        # 直通：完整配置原样进逃生舱（v2 契约已实测可无损承载）
-        "raw_option": copy.deepcopy(option),
     }
+
+
+def _chart_to_panel(index: int, chart: dict[str, Any]) -> dict[str, Any]:
+    """源看板的一张图表 → v2 面板。
+
+    源形状是**封闭集合**（spec ``showcase-import``）：``option``（echarts 配置，
+    进 ``raw_option`` 逃生舱）或 ``table``（``{columns, rows}``，进 ``snapshot``）。
+    两者皆无是「忘了给形状」，两者皆是是「同一条数据两种画法」——都抛错，
+    **不静默降级成空面板**：坏面板不报错，比失败导入贵得多。
+    """
+    chart_id, option, table = chart.get("id"), chart.get("option"), chart.get("table")
+    panel = _panel_base(index, chart)
+    if isinstance(option, dict) and table is not None:
+        raise ValueError(f"图表 {chart_id!r} 同时带 option 与 table，二者互斥")
+    if isinstance(option, dict):
+        # 直通：完整配置原样进逃生舱（v2 契约已实测可无损承载）
+        return {**panel, "type": "line", "raw_option": copy.deepcopy(option)}
+    if table is None:
+        raise ValueError(f"图表 {chart_id!r} 既无 option 也无 table")
+
+    columns = table.get("columns") if isinstance(table, dict) else None
+    rows = table.get("rows") if isinstance(table, dict) else None
+    if not isinstance(columns, list) or not columns:
+        raise ValueError(f"图表 {chart_id!r} 的 table.columns 必须是非空数组")
+    if not isinstance(rows, list):
+        raise ValueError(f"图表 {chart_id!r} 的 table.rows 必须是数组")
+    # table 不是 echarts 配置：只进 snapshot，绝不带 raw_option（带了会被当配置渲染成空板）
+    return {**panel, "type": "table",
+            "snapshot": {"columns": copy.deepcopy(columns),
+                         "rows": copy.deepcopy(rows)}}
 
 
 def build_showcase_spec(source: dict[str, Any], slug: str) -> dict[str, Any]:
