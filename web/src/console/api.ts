@@ -2988,8 +2988,10 @@ export interface BenchOntologySnapshotMeta {
   digest: string;
   entity_count: number;
   relationship_count: number;
-  /** ISO8601（秒精度）。 */
+  /** 最近一次**成功拉取**的时刻（含幂等命中，来自拉取日志）。 */
   pulled_at: string;
+  /** 这一版首次落库的时刻（快照不可变，故此值不随时间变化）。 */
+  version_pulled_at: string;
 }
 
 /** 快照概览信封（无快照域不出现——「还没拉过」由空数组表达）。 */
@@ -3228,6 +3230,7 @@ export async function fetchBenchOntologyOverview(): Promise<BenchOntologyOvervie
       relationship_count:
         typeof row.relationship_count === "number" ? row.relationship_count : 0,
       pulled_at: String(row.pulled_at ?? ""),
+      version_pulled_at: String(row.version_pulled_at ?? ""),
     }));
   return { domains };
 }
