@@ -417,10 +417,14 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 192Mi }
             limits: { memory: 512Mi }
-      # 显式钉 the node：datasets PVC 是 local-path（卷数据在该节点），下载
+      # 显式钉节点：datasets PVC 是 local-path（卷数据在该节点），下载
       # hostPath 也在该节点——双依赖同一节点，显式声明防未来漂移断挂载。
+      #
+      # 值必须是真的 `kubernetes.io/hostname` 标签；写成占位符（如 "the node"）
+      # 会让整个 Deployment apply 失败（label 值只允许 alphanumerics/-/_/.），
+      # 2026-11-19 实撞——公开化消毒把节点名全局替换成占位符，连这里也没放过。
       nodeSelector:
-        kubernetes.io/hostname: the node
+        kubernetes.io/hostname: cheap-6
       volumes:
         - name: provenance-key
           secret:
