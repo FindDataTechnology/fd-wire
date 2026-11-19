@@ -1,5 +1,7 @@
 # 柏讯（Wire）
 
+> **Part of the [Wire line (寻数·柏讯)](https://www.finddatatech.cloud/products/wire) of [FindData](https://www.finddatatech.cloud)** — the wire platform: indicator ledger, build analytics, data demands, and end-to-end metering, served as REST and MCP surfaces.
+
 寻数五线（壹座/识律/柏讯/谦面/萬星）中 **wire 线的平台仓**：B2B 数据平台——公开官网、
 客户控制台、内部后台三面。单域 `wire.finddatatech.cloud` 三入口：`/` 官网、
 `/console` 控制台、`/mcp` API 入口（反代 registry wire 入口）。
