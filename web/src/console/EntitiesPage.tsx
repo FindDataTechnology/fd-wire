@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { DomainActionsPanel } from "./DomainActionsPanel";
 import { EntityObjectBrowser } from "./EntityObjectBrowser";
+import { BenchOntologySection } from "./BenchOntologySection";
 import { OntologyVersionSection } from "./OntologyVersionSection";
 import {
   ConsoleApiError,
@@ -226,6 +227,11 @@ export function EntitiesPage() {
           </button>
         )}
       </div>
+
+      {/* 标准本体只读区（add-bench-wire-seam-contract 任务 2.3）：知验台
+          发布的共享层本体，本平台拉取的快照元数据。与下面的「版本」区刻意
+          分开——版本区管本地可编辑本体，本区是只读的共享层。 */}
+      <BenchOntologySection />
 
       {/* 本体版本区（add-ontology-versioning 任务 5.2）：独立拉自己的数据，
           实体页空态时照常显示（时间线/未发布数/导出/发布/完整性自检）。 */}

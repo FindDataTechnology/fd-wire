@@ -2975,6 +2975,28 @@ export interface OntologyVersions {
   unpublished: OntologyUnpublished;
 }
 
+/**
+ * 知验台标准本体快照的元数据（add-bench-wire-seam-contract 任务 2.3）。
+ *
+ * **只读元数据面**：拉到的快照正文不可见，这里回答的是「拉到哪一版、规模
+ * 多大、什么时候拉的」。正文等于把共享层发布物复制进浏览器，端点刻意不出。
+ */
+export interface BenchOntologySnapshotMeta {
+  domain_key: string;
+  version: number;
+  /** 内容寻址的 sha256（与平台发布记录的 digest 逐字相同）。 */
+  digest: string;
+  entity_count: number;
+  relationship_count: number;
+  /** ISO8601（秒精度）。 */
+  pulled_at: string;
+}
+
+/** 快照概览信封（无快照域不出现——「还没拉过」由空数组表达）。 */
+export interface BenchOntologyOverview {
+  domains: BenchOntologySnapshotMeta[];
+}
+
 /** 手动打发布版响应（unchanged=true 时 version 是已有那版，未新增）。 */
 export interface OntologyPublishResult {
   version: number;
@@ -3182,6 +3204,32 @@ export async function fetchOntologyVersions(): Promise<OntologyVersions> {
           : null,
     },
   };
+}
+
+/**
+ * 知验台标准本体快照概览（登录态只读；解 {domains} 信封）。
+ *
+ * 空数组 = 「还没拉过」，不是错误——调用方据此渲染空态。坏条目容忍为空串
+ * 而非抛错：这一区是旁证信息，不该因为它渲染不出来就让整页报错。
+ */
+export async function fetchBenchOntologyOverview(): Promise<BenchOntologyOverview> {
+  const body = await requestJson(`${API_BASE}/v1/console/bench-ontology`, {
+    method: "GET",
+  });
+  const record = (body ?? {}) as Record<string, unknown>;
+  const rows = Array.isArray(record.domains) ? record.domains : [];
+  const domains: BenchOntologySnapshotMeta[] = rows
+    .filter((row): row is Record<string, unknown> => typeof row === "object" && row !== null)
+    .map((row) => ({
+      domain_key: String(row.domain_key ?? ""),
+      version: typeof row.version === "number" ? row.version : 0,
+      digest: String(row.digest ?? ""),
+      entity_count: typeof row.entity_count === "number" ? row.entity_count : 0,
+      relationship_count:
+        typeof row.relationship_count === "number" ? row.relationship_count : 0,
+      pulled_at: String(row.pulled_at ?? ""),
+    }));
+  return { domains };
 }
 
 /** 手动打发布版（label 可选、≤80 字；空/空白 → null）。同日已有日版仍照打；

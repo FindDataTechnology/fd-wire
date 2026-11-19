@@ -2996,6 +2996,26 @@ const en: Translation = {
           "Nodes = entities, edges = relationships (with kind labels); click a node to jump to its card. This graph is the same source the AI builder's context draws from.",
         empty: "The graph is empty — declare entities to see them here.",
       },
+      // Standard ontology (add-bench-wire-seam-contract task 2.3): the shared
+      // layer published by bench, pulled here as snapshots. **Metadata only** —
+      // version / digest / size / pulled-at; the body never reaches the browser.
+      // The empty state means "never pulled", not an error.
+      benchOntology: {
+        title: "Standard ontology",
+        subtitle:
+          "Ontology snapshots published by bench (shared layer, platform-authoritative) and pulled by this platform. Only metadata is shown here: which version, how large, when it was pulled.",
+        loading: "Loading the standard ontology…",
+        loadFailed: "Could not load the standard ontology",
+        empty:
+          "No standard ontology pulled yet — the version and size appear here once a pull succeeds.",
+        versionLabel: "Version",
+        digestLabel: "digest",
+        entitiesLabel: "Entities",
+        relationshipsLabel: "Relationships",
+        pulledAtLabel: "Pulled at",
+        domainLabel: "Domain",
+        aclDenied: "This account may not view the standard ontology (403).",
+      },
       // Ontology versioning (add-ontology-versioning task 5): bumping a version
       // = taking a snapshot (daily = timeline, manual = release decision);
       // unpublished changes = event count since the latest snapshot. Raw-SQL

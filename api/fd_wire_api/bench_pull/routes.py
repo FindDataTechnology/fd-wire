@@ -39,6 +39,9 @@ from .client import (
 )
 from .store import get_db, pull_and_store
 
+#: 登录态读面的身份依赖（与 datasets/workbench 同源；不在内部面用）。
+from ..console.auth import require_console_customer_id
+
 
 
 def _require_internal(
@@ -57,6 +60,18 @@ router = APIRouter(
     prefix="/api/v1/internal/bench-ontology",
     tags=["bench-ontology"],
     dependencies=[Depends(_require_internal)],
+)
+
+#: 登录态只读读面（add-bench-wire-seam-contract 任务 2.2）：与上面的内部面
+#: **分属两套信任边界**，故是另一个 router 而不是同一 router 加一个「登录也
+#: 可以」的分支。内部面守 ``X-Internal-Token``，此面守 console 登录；合并
+#: 两者会把「平台级数据、仅运营面可读」的设计悄悄放宽。
+#:
+#: 只出元数据（版本/digest/条目计数/拉取时间），不返回快照正文——正文是大
+#: 块 JSONB 且等于把共享层内容复制进浏览器，前端展示它没有意义（design D3）。
+console_router = APIRouter(
+    prefix="/api/v1/console/bench-ontology",
+    tags=["bench-ontology-console"],
 )
 
 
@@ -92,6 +107,21 @@ def list_domain_entities(
         return projection.list_entities(db, domain_key=domain_key, version=version, kind=kind)
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@console_router.get("")
+def console_overview(
+    _customer: str = Depends(require_console_customer_id),
+    db: Session = Depends(get_db),
+) -> dict:
+    """标准本体快照概览（登录态只读）：每域一条元数据，无快照 → 空集。
+
+    快照是平台级数据（不挂客户租户），所以这里**不做客户域过滤**——但也因此
+    只出元数据。鉴权只要「已登录的 console 客户」，与 datasets/workbench
+    同一条身份依赖。无快照时返回空列表而不是 404：那是「还没拉过」，不是
+    「不存在」，前端据此渲染空态。
+    """
+    return {"domains": projection.snapshot_overview(db)}
 
 
 @router.get("/{domain_key}/relationships")
@@ -133,4 +163,4 @@ def pull_domain(
     return snapshot
 
 
-__all__ = ["PullIn", "router"]
+__all__ = ["PullIn", "console_router", "router"]

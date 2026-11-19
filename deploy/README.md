@@ -367,12 +367,33 @@ wire 消费 law-bench C3 分发面（`GET {base}/api/v1/distribution/{domain}/on
 
 | env | 取值 | 形态 / 归属 |
 |---|---|---|
-| `BENCH_PULL_URL` | 知验台分发面基址（如 `https://bench.finddatatech.cloud`） | 清单字面值（非密）；未配时拉取端点 503 指名该 env |
-| `BENCH_CONSUMER_TOKEN` | 消费者令牌（law-bench 分发面登记发放） | Secret `fd-wire-env`（需新增键 `bench_consumer_token` + 清单 secretKeyRef；启用前不注入即保持关闭） |
-| `BENCH_PULL_ENABLED` | `true` 才启定时循环 | 清单字面值，**缺省 false（零配置零行为变化）** |
-| `BENCH_PULL_DOMAINS` | 逗号分隔域清单（如 `photovoltaic,energy-storage`） | 清单字面值；定时循环拉这些域的最新发布 |
+| `BENCH_PULL_URL` | 知验台分发面基址 | 清单字面值 `https://lawbench.finddatatech.cloud`（非密） |
+| `BENCH_CONSUMER_TOKEN` | 消费者令牌（登记名 `fd-wire`，绑定域 `legal`） | Secret `fd-wire-env` 键 `bench_consumer_token`（`optional: true`；键未建时 pod 照常起，拉取报 503 指名该 env） |
+| `BENCH_PULL_ENABLED` | `true` 才启定时循环 | 清单字面值；**2026-11-19 已翻 true**（前置：手动拉取真跑成功，见下「上线记录」） |
+| `BENCH_PULL_DOMAINS` | 逗号分隔域清单 | 清单字面值 `legal` |
 | `BENCH_PULL_INTERVAL_SECONDS` | 定时循环间隔，缺省 `3600` | 清单字面值 |
 
 手动拉取不依赖定时循环：`POST /api/v1/internal/bench-ontology/{domain}/pull`
 （body 可选 `{"version": N}`）随时可触发；失败映射 404（对端无发布）/ 502（对端
 拒绝或网络/形状故障，语义保留）/ 503（凭据 env 未配，指名缺哪个）。
+
+### 上线记录（2026-11-19）
+
+**先验后开，配方照此复现**：
+
+1. 令牌轮换（旧明文已丢失，登记表只存 sha256）：`rotate_consumer_token` 换
+   `fd-wire` 登记摘要 → `kubectl patch secret fd-wire-env` 写 `bench_consumer_token`。
+   本轮实测旧令牌早已失效（`bench_pull_log` 有一条 `ok=False`「对端拒绝：令牌未登记」）。
+2. 手动拉取验证（开关仍 false）：pod 内 `pull_and_store(domain_key='legal')` →
+   `legal v2 / digest 5897354d` 落库，拉取日志新增 `ok=True`。
+3. 翻 `BENCH_PULL_ENABLED="true"` → ArgoCD 滚版 → 观察一轮 tick。
+
+**回滚**：把 `BENCH_PULL_ENABLED` 改回 `"false"`（代码缺省即 false，零行为变化）。
+快照两表 append-only，不删。
+
+### 登录态读面
+
+`GET /api/v1/console/bench-ontology`（console 登录，**不是** `X-Internal-Token`）：
+返回每域最新快照的**元数据**（version / digest / 实体与关系计数 / pulled_at），
+**不返回快照正文**。前端区在实体页顶部「标准本体」。两套信任边界刻意分开——
+内部面给运营脚本，本面给登录用户。

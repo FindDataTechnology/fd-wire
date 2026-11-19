@@ -2817,6 +2817,24 @@ const zh = {
           "节点 = 实体、边 = 关系（带 kind 标注）；点击节点定位到对应实体卡。此图谱与 AI 构建上下文同源。",
         empty: "图谱为空——声明实体后在此呈现。",
       },
+      // 标准本体（add-bench-wire-seam-contract 任务 2.3）：知验台发布的共享层
+      // 本体，wire 作为消费方拉取快照。**只读元数据**——版本 / digest / 规模 /
+      // 拉取时间；正文不进浏览器。空态 = 「还没拉过」，不是出错。
+      benchOntology: {
+        title: "标准本体",
+        subtitle:
+          "由知验台（共享层，权威在平台）发布、本平台拉取的标准本体快照。这里只显示元数据：拉到哪一版、规模多大、什么时候拉的。",
+        loading: "正在加载标准本体…",
+        loadFailed: "标准本体加载失败",
+        empty: "尚未拉取过标准本体——拉取成功后此处显示版本与规模。",
+        versionLabel: "版本",
+        digestLabel: "digest",
+        entitiesLabel: "实体",
+        relationshipsLabel: "关系",
+        pulledAtLabel: "拉取于",
+        domainLabel: "域",
+        aclDenied: "当前账号无权查看标准本体（403）。",
+      },
       // 本体版本（add-ontology-versioning 任务 5）：进版=打快照（日版=时间线、
       // 手动版=发布决策）；未发布变更=最近快照之后的事件条数。裸 SQL 直改
       // 不进事件流——完整性自检会红，故文案直说「与事件流不一致」。

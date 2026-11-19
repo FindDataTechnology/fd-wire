@@ -132,6 +132,48 @@ def list_domains_with_snapshots(conn: Session) -> list[dict]:
     return domains
 
 
+def _count_items(payload: dict | None, key: str) -> int:
+    """载荷里某个条目数组的长度；缺失/非数组一律 0（元数据面不因坏载荷 500）。"""
+    items = (payload or {}).get(key)
+    return len(items) if isinstance(items, list) else 0
+
+
+def snapshot_overview(conn: Session) -> list[dict]:
+    """登录态读面的载荷：每域最新版本的**元数据**，不含快照正文。
+
+    只读且只出元数据是刻意的（design D3）：快照正文整块含共享层内容，一旦
+    可读就等于把平台发布物免费复制进浏览器；而用户要回答的问题是「拉到哪
+    一版、拉的是什么规模、什么时候拉的」，这四项都在元数据里。
+    """
+    from .store import get_latest_snapshot
+
+    domain_keys = conn.scalars(
+        select(BenchOntologySnapshot.domain_key).distinct()
+    ).all()
+    overview: list[dict] = []
+    for domain_key in sorted(domain_keys):
+        latest = get_latest_snapshot(conn, domain_key=domain_key)
+        if latest is None:
+            continue
+        payload = latest["payload"] or {}
+        overview.append(
+            {
+                "domain_key": domain_key,
+                "version": latest["version"],
+                "digest": latest["digest"],
+                "entity_count": _count_items(payload, "entities"),
+                "relationship_count": _count_items(payload, "relationships"),
+                "pulled_at": _isoformat(latest["pulled_at"]),
+            }
+        )
+    return overview
+
+
+def _isoformat(value):
+    """时间字段统一成 ISO-8601 文本（驱动可能给 datetime，也可能给文本）。"""
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
 def list_versions(conn: Session, *, domain_key: str) -> list[dict]:
     """某域版本时间线：version + digest + pulled_at（version 倒序）。"""
     from .store import list_snapshots

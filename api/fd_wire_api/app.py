@@ -123,6 +123,7 @@ from .xingyan.runner import stop_sync_loop as stop_xingyan_sync
 # 内部闸；快照两表落元数据库，alembic 0052）+ 可选定时拉取循环
 # （BENCH_PULL_ENABLED 缺省 false——零配置部署零行为变化）。
 from .bench_pull import init_db as init_bench_pull_db
+from .bench_pull.routes import console_router as bench_pull_console_router
 from .bench_pull.routes import router as bench_pull_router
 from .bench_pull.scheduler import (
     start_bench_pull_scheduler,
@@ -389,6 +390,10 @@ app.include_router(xingyan_internal_router)
 # 只读投影面（域/版本/实体/关系——投影零写路径，不写 wire 自有 entities 表）
 # + POST pull 手动触发（X-Internal-Token 内部闸；快照平台级数据不挂客户租户）
 app.include_router(bench_pull_router)
+# 标准本体快照的登录态只读读面（add-bench-wire-seam-contract 任务 2.2）：
+# /api/v1/console/bench-ontology —— console 身份、只出元数据（版本/digest/
+# 条目计数/拉取时间），与上一行的内部面分属两套信任边界。
+app.include_router(bench_pull_console_router)
 # cell 开通自助化（add-self-serve-cell-provision）：/internal/cell-provision/*
 # 内部领任务与回写端点（X-Internal-Token 闸；cheap1 cell-manager runner 消费）
 app.include_router(cell_provision_router)

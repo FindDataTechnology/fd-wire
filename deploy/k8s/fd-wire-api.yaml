@@ -151,6 +151,32 @@ spec:
             - name: WANXING_CALLER_KEY
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: wanxing_caller_key }
+            # ── 知验台标准本体订阅（add-bench-wire-seam-contract 任务 3.2）──
+            # 语义见 `bench-wire-seam`：wire 是本地层（权威在客户），知验台发布
+            # 的域本体是共享层（权威在平台），两层之间只经 crosswalk 连接。
+            # 这里订阅的是**共享层的发布物**，拉到本地只读、不回写。
+            #
+            # **先验后开**：`BENCH_PULL_ENABLED="true"` 只在一次手动拉取真跑成功
+            # （bench_pull_log 留 ok=True 行）之后才允许进清单。令牌若已吊销，
+            # 打开后的表现是每轮 403 进拉取日志——失败可见，不是静默。
+            # 回滚 = 把 ENABLED 改回 "false"（代码里缺省即 false，零行为变化）。
+            #
+            # 消费者令牌走 Secret（登记名 `fd-wire`，域绑定 legal；明文只在
+            # 签发时展示一次），URL / 开关 / 域清单一律字面值（非凭据）。
+            - name: BENCH_PULL_URL
+              value: "https://lawbench.finddatatech.cloud"
+            - name: BENCH_PULL_ENABLED
+              value: "true"
+            - name: BENCH_PULL_DOMAINS
+              value: "legal"
+            - name: BENCH_PULL_INTERVAL_SECONDS
+              value: "3600"
+            - name: BENCH_CONSUMER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: fd-wire-env
+                  key: bench_consumer_token
+                  optional: true
             # wire 账本数据库（平台库，外部实例；非本 pod 卷）
             - name: DATABASE_URL
               valueFrom:
