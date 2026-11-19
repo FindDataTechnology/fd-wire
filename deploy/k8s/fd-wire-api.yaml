@@ -58,7 +58,7 @@ spec:
           # 阶段秒数；新 SSE 端点 /messages/stream 逐条推消息与模型增量，流不可用自动退回
           # 阻塞端点+轮询；LLM 客户端进程级复用 + MCP 工具面 60s TTL 缓存。digest sha256:dbed0bc2…）。
           # 回滚=sha-91cabb6
-          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-2d720f1
+          image: ccr.ccs.tencentyun.com/fd-wire/api:sha-74468b9
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
