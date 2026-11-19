@@ -27,4 +27,4 @@ registry 行数门（3.2，gate 默认 off 未灰度）上线前，免费客户 
 - **registry 审计写入 2026-10-09 16:10 起停摆**（audit_events_default 无新事件，含 facet 线；容器 healthy、服务面正常）→ 计量 records 因此暂空（anomalies 14,516 全 missing_rows_returned）。registry 专属 session 处置。上午 add-customer-onboarding-automation 已实证「事件→入账 7 秒」，链路本身无罪。
 - E2E key 已吊销（明文进过会话日志）；docstudio 为测试身份，新 key 由下次新用户首登或 admin 通道补铸。
 - registry patch-keys 真端点=`https://mcp.finddatatech.cloud`（127.0.0.1:8080 是别的面，DELETE 200 但不生效——本报告实操踩坑）。
-- tcr relay 新 tag 不自动同步：补单配方=cheap-1 `docker pull hkccr… && tag ccr… && push ccr…`（本窗用两次）。
+- tcr relay 新 tag 不自动同步：补单配方=the node `docker pull hkccr… && tag ccr… && push ccr…`（本窗用两次）。

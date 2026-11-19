@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 服务账号护栏巡检（change: add-fleet-service-accounts）
-# 在 xinru-master 上运行（cron 每日）；扫 Logto 审计里 svc-fleet 成员的登录事件。
+# 在 the db host-master 上运行（cron 每日）；扫 Logto 审计里 svc-fleet 成员的登录事件。
 # 分类：浏览器 UA（Mozilla*）= ALARM；其余（fd-svc-probe/mint-line/curl 等）= 记录不告警。
 set -euo pipefail
 HOURS="${1:-26}"

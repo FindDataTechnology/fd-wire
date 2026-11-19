@@ -32,15 +32,15 @@
   1. 目录（#/catalog）挑一条 **verified** 指标 → 详情页「落成数据集」→
      填实体/范围提交 → 跳数据集详情；
   2. 行数与上游对账：抽 3 行 date/value 对照（上游实调
-     `indicator_series_read`，生产 pod 内可打，zihan `fd-mcp` ns 部署）；
+     `indicator_series_read`，生产 pod 内可打，the node `fd-mcp` ns 部署）；
   3. 该数据集 derive 派生 → 看板绑数 → 溯源账本查 `dataset.indicator.registered`；
   4. 重复提交同指标 → 409 带既有 key；registered 指标 → 422 导流文案；
   5. 免费档超行数闸 → 429 整批拒绝、零残留。
 - ⚠️ **生产 `INDICATOR_FETCH_URL` 未配置**（本 change 新 env，未进
   `fd-wire-env` secret）。缺省值指向 `http://fd-find-data-business-mcp.fd-mcp.svc:8310`
-  ——但 business-mcp 部署在 **zihan 集群 fd-mcp ns**（cheap 的 fd-prod 无此
+  ——但 business-mcp 部署在 **the node 集群 fd-mcp ns**（cheap 的 fd-prod 无此
   svc），跨集群解析不了。冒烟前必须二选一：
-  - **推荐**：走 zihan NodePort 30803（svc `fd-find-data-business-mcp`
+  - **推荐**：走 the node NodePort 30803（svc `fd-find-data-business-mcp`
     ClusterIP 10.43.192.120:8310，NodePort 见其 manifest）配
     `INDICATOR_FETCH_URL=http://<cheap节点可达的zihan入口>:30803/mcp`；
     走网关则 `https://mcp.finddatatech.cloud/fd-find-data-business-mcp/mcp` +
@@ -48,7 +48,7 @@
     是服务间固定密钥轨，配在 fd-wire-env secret 加 `indicator_fetch_token` 键），
     再在 deploy/k8s/fd-wire-api.yaml env 块加两个 env 条目（照 SCOPE_API_BASE
     的注释风格）；
-  - 或在 cheap fd-prod 起一个 ExternalName/手写 svc 指向 zihan 入口。
+  - 或在 cheap fd-prod 起一个 ExternalName/手写 svc 指向 the node 入口。
   **fetch 模块带 `/mcp` 后缀自动补齐**（`mcp_url` property），URL 带不带都可。
 
 ### 2. 任务 3.1/3.4（轻）
@@ -94,7 +94,7 @@
 |---|---|
 | 本 change 目录 | fd-wire/openspec/changes/wire-indicator-to-dataset/ |
 | 上游 change | finddata/openspec/changes/business-mcp-indicator-series-read/（10/10 完成） |
-| 上游生产镜像 | zihan fd-mcp ns，`sha-1d4d61b` 之后滚的 sha-ac69046 |
+| 上游生产镜像 | the node fd-mcp ns，`sha-1d4d61b` 之后滚的 sha-ac69046 |
 | api/web 新 tag | ccr `fd-wire/api:sha-dd72128`、`fd-wire/web:sha-05c57cc` |
 | 滚版入口 | deploy/k8s/fd-wire-{api,web}.yaml（已改未提交）+ push gitee |
 | 测试 | api: `cd fd-wire/api && .venv/bin/python -m pytest tests/ -q`；web: `cd fd-wire/web && npx vitest run` |

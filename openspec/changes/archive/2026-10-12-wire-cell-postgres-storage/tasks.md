@@ -36,10 +36,10 @@
 
 ## 5. 试点（生产）
 
-- [x] 5.1 cheap-3 wire PG：`CREATE ROLE wire_cell_drillcust001` +
+- [x] 5.1 the node wire PG：`CREATE ROLE wire_cell_drillcust001` +
   `CREATE DATABASE wire_cell_drillcust001 OWNER …` + `REVOKE CONNECT FROM
   PUBLIC`；隔离验证（api 凭据连 cell 库→拒；属主越库→拒）
-- [x] 5.2 cheap-1 drill cell 重建：新 cell 镜像 + env 注入 PG URL（sqlite
+- [x] 5.2 the node drill cell 重建：新 cell 镜像 + env 注入 PG URL（sqlite
   卷不清不删）；启动后 184 工具面/健康检查正常
 - [x] 5.3 MCP 实弹（PG 根全行为面）：建集/上传/修正/回滚/派生/link
   （NULL 语义+right_ 前缀）/增量同步/删除清理；行数与口径断言

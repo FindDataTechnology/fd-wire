@@ -65,7 +65,7 @@ healthcheck。
 
 ## 4. 部署配方与试点
 
-- 配方文档 `docs/cell-postgres-storage.md`（cheap-3 wire PG 实例，
+- 配方文档 `docs/cell-postgres-storage.md`（the node wire PG 实例，
   与 wire_platform/wire_datasets 同实例不同库）：
   1. `CREATE ROLE wire_cell_<key> PASSWORD '…'`（nologin 场景不适用，
      cell 需登录；LOGIN + 仅本库属主）；
@@ -73,7 +73,7 @@ healthcheck。
   3. `REVOKE CONNECT ON DATABASE wire_cell_<key> FROM PUBLIC`；
      平台角色（wire）不授予；属主默认仅本库；
   4. 隔离验证 SQL（api 凭据连 cell 库→拒；属主越库→拒）；
-  5. cell env 注入 `DAAS_DATABASE_URL`（cheap-1 env-file 0600，与
+  5. cell env 注入 `DAAS_DATABASE_URL`（the node env-file 0600，与
      wgk- 同纪律）；
   6. 回退：移除 env 重建，sqlite 卷保留。
 - 试点=drillcust001（零客户价值租户）：比「新建 cell」更完整地演练

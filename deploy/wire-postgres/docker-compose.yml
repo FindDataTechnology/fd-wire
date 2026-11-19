@@ -8,8 +8,8 @@
 #   initdb/01-create-databases.sh 建——分库即备份节奏与爆炸半径边界。
 #
 # 凭据走 .env（模板 env.example，真实口令永不入 git；OpenBAO 接管为后续任务）。
-# 部署目标 cheap-3（2026-10-11 用户裁决：cheap-1 空间不足；Jenkins 退役释放）。
-# cheap-3 实况无 compose → 等价 docker run 部署（偏差表与实证见
+# 部署目标 the node（2026-10-11 用户裁决：the node 空间不足；Jenkins 退役释放）。
+# the node 实况无 compose → 等价 docker run 部署（偏差表与实证见
 # openspec/changes/wire-dedicated-postgres/reports/cheap3-deployment.md）。
 
 services:
@@ -28,7 +28,7 @@ services:
       WIRE_PG_BACKUP_RETENTION_DAYS: ${WIRE_PG_BACKUP_RETENTION_DAYS:-14}
       TZ: UTC
     ports:
-      # 只绑回环/内网由部署侧决定：cheap-1 上 api 经宿主网访问，
+      # 只绑回环/内网由部署侧决定：the node 上 api 经宿主网访问，
       # 不对公网暴露（默认 127.0.0.1，跨机时改绑内网 IP）
       - "${WIRE_PG_BIND:-127.0.0.1:5433}:5432"
     volumes:

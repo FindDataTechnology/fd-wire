@@ -33,7 +33,7 @@
 - [x] 4.1 门禁：api pytest 全绿 / web vitest+tsc 零错 / `openspec validate
   wire-entity-layer --strict` 零 error
 - [x] 4.2 发布：出片走 law-ai-official 快照仓通道（用户 10-11 既定；失败回退
-  cheap-3 手工构建桥）→ 镜像到位 → manifest 滚版 → ArgoCD → 迁移上生产 PG
+  the node 手工构建桥）→ 镜像到位 → manifest 滚版 → ArgoCD → 迁移上生产 PG
   核对（platform 库 alembic_version=0026）
 - [x] 4.3 公网冒烟：建实体（免费档）→建关系→图谱→AI 对话含图谱块→删除级联；
   归档 change，主 spec 合并核对

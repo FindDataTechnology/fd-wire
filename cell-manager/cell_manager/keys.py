@@ -1,10 +1,10 @@
 """客户长命 key 铸造/吊销：registry 自签 JWT 通道（add-customer-onboarding-automation 1.4）。
 
-机制（fd-wire docs/service-credentials.md §2.1，cheap-1 实测配方）：用 registry
+机制（fd-wire docs/service-credentials.md §2.1，the node 实测配方）：用 registry
 的 SECRET_KEY 签一把**短命**自签 JWT（``groups`` claims 即铸出 key 的组快照来源），
 Bearer 调 ``POST /api/patch-keys``——明文只在响应中出现一次。信任等级与现状相同：
 cell-manager 本就持 admin wgk- 且与 registry 栈同机；根信任材料不出主机
-（``CELL_REGISTRY_SECRET_KEY_FILE`` 只在 cheap-1 配置）。
+（``CELL_REGISTRY_SECRET_KEY_FILE`` 只在 the node 配置）。
 
 切片二（registry 代铸 API 落地）后本通道退役为备选——届时铸 key 走显式
 ``{username?, groups?}`` admin API（任务 4.1/4.3）。
@@ -260,7 +260,7 @@ class InternalScopeDeleter:
     与 HttpRegistryClient.delete_scope（/api/management 面，对合成组因 IdP
     同步删除而 502、且旧路径 405）不同，本通道带 delete_from_keycloak=false
     完全跳过 IdP——只删 Mongo scope 文档，正是合成组轨道要的语义。
-    鉴权：SECRET_KEY 现签短命 internal JWT（材料不出 cheap-1）。
+    鉴权：SECRET_KEY 现签短命 internal JWT（材料不出 the node）。
     """
 
     def __init__(self, base_url: str, secret: str, *, timeout: float = DEFAULT_TIMEOUT) -> None:

@@ -26,4 +26,4 @@
 ## 5. 收口
 
 - [x] 5.1 `openspec validate add-bench-ontology-pull-client --strict` 绿
-- [x] 5.2 对 law-bench 真环境联调一次（真凭据拉 v1 落库）记录证据；blueprint 台账更新（P1 判据收口）——**2026-11-06 实弹收口**：bench 生产滚 sha-53a9513（cheap-3 本地构建直推 ccr，GHA billing 卡点的替代通道）→ legal 域登记+冒烟内容 → 发布 v1 digest=3586552a01b0 → fd-wire 消费者登记 → wire 滚 sha-beae0a（修 bench_pull↔demands 循环导入：_require_internal 本地自持）→ 跨 ns 真拉落库 id=1、幂等二拉同 id、投影可查（clause/smoke-clause-001/raw）、坏 token 实弹失败纪律 ok=False 零新快照。证据=bench_pull_log 3 行（2 ok 1 fail）。
+- [x] 5.2 对 law-bench 真环境联调一次（真凭据拉 v1 落库）记录证据；blueprint 台账更新（P1 判据收口）——**2026-11-06 实弹收口**：bench 生产滚 sha-53a9513（the node 本地构建直推 ccr，GHA billing 卡点的替代通道）→ legal 域登记+冒烟内容 → 发布 v1 digest=3586552a01b0 → fd-wire 消费者登记 → wire 滚 sha-beae0a（修 bench_pull↔demands 循环导入：_require_internal 本地自持）→ 跨 ns 真拉落库 id=1、幂等二拉同 id、投影可查（clause/smoke-clause-001/raw）、坏 token 实弹失败纪律 ok=False 零新快照。证据=bench_pull_log 3 行（2 ok 1 fail）。

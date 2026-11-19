@@ -1,6 +1,6 @@
 """HttpRegistryClient：registry 借用契约的真实 HTTP 实现（stdlib urllib，零依赖）。
 
-对齐 mcp-gateway-registry fork（cheap-1 / https://mcp.finddatatech.cloud）控制台 API，
+对齐 mcp-gateway-registry fork（the node / https://mcp.finddatatech.cloud）控制台 API，
 源码 /Users/chengsishi/code/mcp-gateway-registry（行号以该仓为准）：
 
 - 注册  ``POST /api/servers/register``  registry/api/server_routes.py:4272
@@ -52,7 +52,7 @@
   registry 无用户名密码 REST 登录（登录只走 OAuth2 浏览器流，
   auth_server/oauth2_providers.yml），故 v1 会话由 env 直接喂 cookie+CSRF。
 
-注意：仓内有 patch-key 通道（registry/api/patch_key_routes.py）但 cheap-1 未部署，
+注意：仓内有 patch-key 通道（registry/api/patch_key_routes.py）但 the node 未部署，
 本客户端不假设其存在。
 
 错误处理（如实）：HTTP 非 ok 状态 → ``RegistryError``（带状态码与服务端 reason）；

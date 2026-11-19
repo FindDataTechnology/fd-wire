@@ -57,7 +57,7 @@ wire api 新增 console 端点：登录校验后查 sub 映射，无映射则以
 - [registry 行数门探针跨仓依赖] → 探针失败 fail-closed 拒绝并标注原因（与 PREFLIGHT_UNMAPPED=deny 同哲学）；上线顺序先 wire 端点后 registry 探针，灰度期行数门未生效前额度超限最多产生当月超额用量（无超额计费、结算按档含额），财务风险上限=一个月的免费/低档读取量。
 - [首登开户风暴/滥用] → 邮箱验证前置；免费档无 cell（容器成本=0）；每身份一户；suspend/key 吊销/退租幂等治理现成。若仍出现批量注册，后续加邀请码或速率限制（另立项，不阻塞）。
 - [T1/T2 静态令牌已进会话日志] → 上线窗口内轮换 `fd-wire-env`（admin/internal/metering 三令牌）并滚动 pod；属运维动作，列入任务。
-- [IdP 单点（xinru-master OOM 前科）] → 登录不可用时存量 wgk- key 调用不受影响（key 校验不经 Logto）；受影响面=新注册与控制台操作。挂账接客前硬前提。
+- [IdP 单点（the db host-master OOM 前科）] → 登录不可用时存量 wgk- key 调用不受影响（key 校验不经 Logto）；受影响面=新注册与控制台操作。挂账接客前硬前提。
 - [EN/ZH 双语文案与四卡布局改动面] → PricingView 测试同步重写；i18n 键删改跑既有 i18nKeys 测试门。
 
 ## Migration Plan

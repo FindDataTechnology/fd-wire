@@ -3,7 +3,7 @@
 PG 画像的客户库凭据（一 cell 一条目）落 ``<secrets_dir>/<path>.json``（逻辑
 路径 ``wire/cell-db/<customer_id>`` → 文件名 ``wire-cell-db-<customer_id>.json``），
 0600 权限，与 cell-manager 既有 secrets 文件轨道（wgk key 等）同款做法。
-OpenBAO（cheap-1 mcp-openbao，已退役）不再是生命周期编排的依赖：
+OpenBAO（the node mcp-openbao，已退役）不再是生命周期编排的依赖：
 provision / purge 全程不触任何外部凭据服务。
 
 纪律（对齐原 OpenbaoClient 契约）：

@@ -1,13 +1,13 @@
 # wire-postgres 运维手册（柏讯专用 PostgreSQL）
 
 > wire-dedicated-postgres：柏讯是独立产品条线，配专用 PG。生产部署目标
-> **cheap-1**（与 cells 同机，就近低延迟）。cell 引擎数据根迁 PG 不在本
+> **the node**（与 cells 同机，就近低延迟）。cell 引擎数据根迁 PG 不在本
 > 配方范围（独立后续 change）。
 
 拓扑（design D1）：
 
 ```
-cheap-1
+the node
 ┌─ wire-postgres（docker compose，pg16-trixie 钉版）
 │    ├ database: wire_platform   ← api 元数据（customers/plans/metering/…）
 │    └ database: wire_datasets   ← 数据集库（登记/同步/修正层 + api 层行存储）
@@ -236,7 +236,7 @@ AI_DATABASE_URL=postgresql+psycopg://wire:<口令>@<host>:5433/wire_platform   #
 生产现状 `/tmp` 共享 SQLite（已知脆弱点）搬迁完成后：
 
 ```bash
-# 1) 归档（挂载点与保留期按 cheap-1 盘况定，建议冷存储 ≥90 天）
+# 1) 归档（挂载点与保留期按 the node 盘况定，建议冷存储 ≥90 天）
 mkdir -p /var/archive/fd-wire-sqlite/$(date -u +%Y%m%d)
 mv /tmp/fd_wire.db* /var/archive/fd-wire-sqlite/<日期>/
 # 2) 留 README 一行：库名、搬迁日期、对应 PG 备份戳、保留期至

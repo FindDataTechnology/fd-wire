@@ -100,15 +100,20 @@ spec:
             - name: EVIDENCE_GATE_KIND_OVERRIDES
               value: '{"dashboard": "warn"}'
             # 指标落成数据集拉数（wire-indicator-to-dataset）：上游 business-mcp
-            # 的 indicator_series_read 工具。business-mcp 部署在 zihan 集群
+            # 的 indicator_series_read 工具。business-mcp 部署在另一集群
             # fd-mcp ns（NodePort 30803，公网安全组未放行），cheap pod 出站走
-            # tailscale mesh（zihan=100.64.0.4，lawbench-mcp 同款
+            # tailscale mesh（<node>=<node>，lawbench-mcp 同款
             # NodePort-over-mesh 先例，pod 内实探 initialize 200）。token 走
-            # business-mcp 内部服务轨（zihan fd-mcp-env/FDBIZ_INTERNAL_TOKEN
+            # business-mcp 内部服务轨（the node fd-mcp-env/FDBIZ_INTERNAL_TOKEN
             # 同值，存 fd-wire-env/indicator_fetch_token）。URL 不带 /mcp——
             # fetch 模块按 mcp_url property 自动补齐。
+            # 地址随部署环境不同，由 Secret 提供；不再写死在清单里。
             - name: INDICATOR_FETCH_URL
-              value: http://100.64.0.4:30803
+              valueFrom:
+                secretKeyRef:
+                  name: fd-wire-env
+                  key: indicator_fetch_url
+                  optional: true
             - name: INDICATOR_FETCH_TOKEN
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: indicator_fetch_token }
@@ -150,7 +155,7 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: { name: fd-wire-env, key: database_url }
-            # datasets 模块库：cheap-3 wire-postgres PG（2026-10-11 实迁；
+            # datasets 模块库：the node wire-postgres PG（2026-10-11 实迁；
             # 2026-10-12 密码轮换后入 secret——清单不再携带明文凭据，
             # 配方见 deploy/README「wire 库凭据轮换配方」）
             - name: FD_WIRE_DATASETS_DATABASE_URL
@@ -159,7 +164,7 @@ spec:
             # 上传原件暂存目录：同一 PVC（原件哈希登记后文件即证据，不在 /tmp）
             - name: FD_WIRE_DATASETS_UPLOAD_DIR
               value: /var/lib/fd-wire/uploads
-            # 连接器下载目录（wire-connector-distribution）：hostPath=cheap-6
+            # 连接器下载目录（wire-connector-distribution）：hostPath=the node
             # /var/lib/fd-wire/downloads（CI promote / 手动晋升的落盘处；manifest
             # 为唯一事实源）。未配置时下载端点 404 带原因（诚实降级）。
             - name: FD_WIRE_DOWNLOADS_DIR
@@ -386,10 +391,10 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 192Mi }
             limits: { memory: 512Mi }
-      # 显式钉 cheap-6：datasets PVC 是 local-path（卷数据在该节点），下载
+      # 显式钉 the node：datasets PVC 是 local-path（卷数据在该节点），下载
       # hostPath 也在该节点——双依赖同一节点，显式声明防未来漂移断挂载。
       nodeSelector:
-        kubernetes.io/hostname: cheap-6
+        kubernetes.io/hostname: the node
       volumes:
         - name: provenance-key
           secret:
@@ -433,7 +438,7 @@ metadata:
     app.kubernetes.io/name: fd-wire-api
     app.kubernetes.io/part-of: finddata
 spec:
-  # NodePort 31883：cheap-1 Caddy（非集群节点）反代 /api/ 用（wire 域同域
+  # NodePort 31883：the node Caddy（非集群节点）反代 /api/ 用（wire 域同域
   # 暴露控制台 API）；台账 PORTS.md 已登记。
   type: NodePort
   selector:

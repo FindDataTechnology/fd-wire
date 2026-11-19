@@ -77,7 +77,7 @@ paas 2b8cc9a9（17 文件，测试 25+e2e 537/0+validate 绿）
 
 ## 八、wire 侧查证结论（2026-10-25 凌晨回填，对应 §七「三件事」与交接单 §四）
 
-> 取证方式（全程只读，未触发任何登录/授权）：Logto 1.42.0（xinru-master docker `fd-logto`，DB `logto`）审计表 `logs`、`oidc_model_instances`、容器内部署版源码（`packages/core/src` + logto fork 的 node-oidc-provider）。
+> 取证方式（全程只读，未触发任何登录/授权）：Logto 1.42.0（the db host-master docker `fd-logto`，DB `logto`）审计表 `logs`、`oidc_model_instances`、容器内部署版源码（`packages/core/src` + logto fork 的 node-oidc-provider）。
 
 ### 8.1 机理定案：不是 revoke，是 SPA refresh token 的会话绑定失效
 
@@ -104,5 +104,5 @@ paas 2b8cc9a9（17 文件，测试 25+e2e 537/0+validate 绿）
 ### 8.4 附带发现
 
 1. **23:21:54 的「瞬态 invalid_grant」实为 `client mismatch`**：壹座 rotator 把 lex 的 RT 刷到了 wire 端点（张冠李戴），链无恙——建议壹座修 rotator 的账号×线配对。
-2. **交接单未记录的第五/六次铸币（python-requests，10-24 14:44–14:54、22:17–22:25、23:57 三批）**：来源=xinru 宿主机本地直打 Logto 3001（审计 `ip=::ffff:172.18.0.1`，绕过网关无 XFF），当天宿主机无 SSH/sudo/cron/tmux 任何执行痕迹，事后无法唯一指认执行通道（候选=当时存活、现已退出的 hostNetwork pod exec 或宿主代理向量）。**定性：非未授权方**——铸的就是 wire-tester2/platform-test 两条观测链本身，用正规测试账号口令，属舰队自家验证/铸币工具链。运营含义：宿主本地铸币在审计面完全不可归因，**后续所有铸币统一走 platform mint 回调通道**（`/api/lines/*/mint/callback`，审计可见 UA/来源），顺带消除同会话重铸杀链风险。
+2. **交接单未记录的第五/六次铸币（python-requests，10-24 14:44–14:54、22:17–22:25、23:57 三批）**：来源=the db host 宿主机本地直打 Logto 3001（审计 `ip=::ffff:172.18.0.1`，绕过网关无 XFF），当天宿主机无 SSH/sudo/cron/tmux 任何执行痕迹，事后无法唯一指认执行通道（候选=当时存活、现已退出的 hostNetwork pod exec 或宿主代理向量）。**定性：非未授权方**——铸的就是 wire-tester2/platform-test 两条观测链本身，用正规测试账号口令，属舰队自家验证/铸币工具链。运营含义：宿主本地铸币在审计面完全不可归因，**后续所有铸币统一走 platform mint 回调通道**（`/api/lines/*/mint/callback`，审计可见 UA/来源），顺带消除同会话重铸杀链风险。
 3. 22:58「贵侧重连 fleet 行」实为 `mint-line/1` UA（Mac 发起）——交接单把壹座铸币件记成了贵侧动作，不影响结论。

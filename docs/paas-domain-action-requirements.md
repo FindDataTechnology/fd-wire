@@ -148,7 +148,7 @@ SHALL 把「提议已提交」计为该步完成，不得轮询等待确认结�
 
 > **⚠️ 2026-10-30 更正（柏讯自复核）**：本节初版的「请壹座执行：重烘焙快照」
 > **前提已过时**——壹座已于 2026-10-29 完成，`/wire-ops-mcp` 条目**双名单都已就位**
-> （活栈 cheap-8 k8s 实查：`num_tools=19` / `tool_list` 19 / `metadata.surface.commercial_tools`
+> （活栈 the node k8s 实查：`num_tools=19` / `tool_list` 19 / `metadata.surface.commercial_tools`
 > 19，`updated_at=2026-10-29T11:33:32Z`；商业名单与仓内
 > `scripts/export_surface_commercial.py --server wire-ops-mcp` 推导结果**逐元素一致**）。
 > **pack 现在即可发布，不需要再动 registry。** 详见 §六补记。
@@ -255,7 +255,7 @@ python3 scripts/export_surface_commercial.py --server wire-ops-mcp
 ```
 
 **校验（发布前必做）**：拿活栈条目与推导结果做逐元素比对，必须 `IDENTICAL: true`。
-柏讯本次实测的取数口径（活栈 = cheap-8 k8s `ns mcp-registry`，**不是** cheap-1 那条已冻结的
+柏讯本次实测的取数口径（活栈 = the node k8s `ns mcp-registry`，**不是** the node 那条已冻结的
 compose 栈——两栈 Mongo 各自独立，查错栈会看到 10-15 的 13 工具陈迹）：
 
 ```bash

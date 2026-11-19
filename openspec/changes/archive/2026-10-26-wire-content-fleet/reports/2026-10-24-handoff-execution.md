@@ -56,8 +56,8 @@
 ## 四、复现命令增量（接 HANDOFF §3）
 
 ```bash
-# headless 铸 wire 控制台 Bearer（经 xinru-master 隧道绕边缘；Grant 需先在位）
-sshpass -p '***' ssh -f -N -L 13001:127.0.0.1:3001 ubuntu@134.175.46.69
+# headless 铸 wire 控制台 Bearer（经 the db host-master 隧道绕边缘；Grant 需先在位）
+sshpass -p '***' ssh -f -N -L 13001:127.0.0.1:3001 ubuntu@<db-host>
 python3 /tmp/wire_mint_token.py "<email>" "<password>" /tmp/out.txt
 
 # headless 铸 line 凭据（全链：平台 mint/start→Logto→callback 服务端换 token 落库）
@@ -75,7 +75,7 @@ curl -H "Authorization: Bearer $TOKEN_A" https://wire.finddatatech.cloud/api/v1/
 
 ## 六、解锁链（三道闸怎么开的）
 
-1. **引擎端点缺口（wire 侧，已治本上产）**：tester2 开 wire 专户 cell `wiretester2`（cheap-1 cell-manager：provision→grant→socat relay 100.64.0.11:18005→PATCH registry 条目 proxy_pass_url 触发边缘自动重渲染激活 location 块）→ `AI_CELL_ENDPOINT_MAP` 三条映射 GitOps 上产（fd-wire bcf57e3）→ **PMI 数据集落客户域成功**（1c660816，21 行，cell 层）。要点：email 型客户必须用短 slug 开 cell（容器名禁 @、PG 库名 ≤30 小写）；registry 条目的 proxy_pass_url 必须是集群可达地址（尾网 relay），docker 网络名会被渲染成注释块；PATCH 触发重渲染是激活的正道。
+1. **引擎端点缺口（wire 侧，已治本上产）**：tester2 开 wire 专户 cell `wiretester2`（the node cell-manager：provision→grant→socat relay <relay-host>:18005→PATCH registry 条目 proxy_pass_url 触发边缘自动重渲染激活 location 块）→ `AI_CELL_ENDPOINT_MAP` 三条映射 GitOps 上产（fd-wire bcf57e3）→ **PMI 数据集落客户域成功**（1c660816，21 行，cell 层）。要点：email 型客户必须用短 slug 开 cell（容器名禁 @、PG 库名 ≤30 小写）；registry 条目的 proxy_pass_url 必须是集群可达地址（尾网 relay），docker 网络名会被渲染成注释块；PATCH 触发重渲染是激活的正道。
 2. **pack 安装闸（paas 侧，数据级旁路）**：给 tester2 存占位 registry 凭据行（source=paste，exp 10-31）→ 安装闸 fall-through 放行 → wire-build-mcp installed。**paas 修复上产后必须撤掉该行**。
 3. **内容岗重跑**：巡线第 2 轮实读新数据集 → 派发 → 内容岗落 **artifact 38**（PMI 看板草稿 v2，4 面板，21/130 覆盖如实标注，禁补造）。
 

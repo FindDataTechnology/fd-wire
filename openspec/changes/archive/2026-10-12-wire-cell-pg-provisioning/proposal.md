@@ -5,7 +5,7 @@
 v1（2026-10-12 归档）交付了引擎可选 PG 数据根与手工配方（建库/属主/隔离验证/
 迁移/回退），并把 drillcust001 试点搬上 PG。但每开一个新 cell 仍要手工跑
 六步 SQL+传凭据+改 backup 清单——自动化欠账即 ROADMAP 方向 A 原文「cell-manager
-增加『建库+发凭据』步骤（凭据入 OpenBAO）」。生产 OpenBAO（cheap-1
+增加『建库+发凭据』步骤（凭据入 OpenBAO）」。生产 OpenBAO（the node
 mcp-openbao，registry 栈成员）已具备条件：本轮已解封（此前封印 5 小时致
 registry 密存降级）并为 cell-manager 铸好仅限 `secret/wire/cell-db/*` 的
 10 年期专用 token。
@@ -24,7 +24,7 @@ registry 密存降级）并为 cell-manager 铸好仅限 `secret/wire/cell-db/*`
    测试零改动全绿为门）。
 3. **backup.sh 动态发现**：`deploy/wire-postgres/backup.sh` 从硬编码清单改为
    动态发现 `wire_cell_%` 库（根治「新 cell 库不进备份」的设计债），并重部署
-   cheap-3。
+   the node。
 4. **配方文档**：`docs/cell-postgres-storage.md` 增「自动开通」节——env 配置、
    OpenBAO 依赖与解封运维（封印=密封态是特性，开通要求解封态，fail-closed
    如实报错）、专用 token 铸造配方、purge 语义。
@@ -49,5 +49,5 @@ registry 密存降级）并为 cell-manager 铸好仅限 `secret/wire/cell-db/*`
   OpenBAO 客户端（stdlib HTTP，无新硬依赖）；测试=既有套件零回归 + 新存储
   测试（单元 fake + 真 PG/真 OpenBAO 集成腿，env 门控）。
 - **fd-wire/deploy**：backup.sh 动态化。
-- **生产**：cheap-1 /opt/cell-manager 更新 + env.sh 增量；cheap-3 backup.sh
+- **生产**：the node /opt/cell-manager 更新 + env.sh 增量；the node backup.sh
   重部署；试点新 cell `pgauto001` 全自动开通 e2e 实证。

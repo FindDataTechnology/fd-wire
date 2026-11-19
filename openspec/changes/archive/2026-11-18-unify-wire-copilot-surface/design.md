@@ -13,7 +13,7 @@
   `run_copilot_loop` 全部跑完才返回，前端靠 `after_id` 增量轮询看中间过程。
 - `TokenGatewayLlmClient` 每个请求 new 一个 httpx client，`routes._release()` 在响应
   后 close。
-- `/api` 由边缘 Caddy（cheap-1）+ SafeLine 承接；`/internal/` 才有同域 nginx，
+- `/api` 由边缘 Caddy（the node）+ SafeLine 承接；`/internal/` 才有同域 nginx，
   读超时 320s。`/api` 的 SSE 是否被缓冲未验证。
 
 ## Goals / Non-Goals

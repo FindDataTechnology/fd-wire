@@ -13,8 +13,8 @@
 
 ## 3. 护栏巡检
 
-- [x] 3.1 巡检脚本 `scripts/service_account_guard.sh`（实现取 bash——直接装 xinru 机上 cron 运行，扫 Logto `logs` 表 svc-fleet 成员 `Interaction.SignIn.Submit`）：UA 浏览器类（Mozilla*）= ALARM、工具类（fd-svc-probe/mint-line/curl）= 记录不告警——验证 = 三条探针登录样本被正确归 ok(tool) 不误报；ALARM 分支由分类逻辑覆盖（browser 前缀即 ALARM，牺牲号退役后探针失败不再产生新样本）
-- [x] 3.2 每日巡检出口（已装机：xinru `/usr/local/bin/fd-svc-guard.sh` + root cron 08:50 → `/var/log/fd-svc-guard.log`，退出码=告警位）+ **护栏验证取构造测试 `selftest` 子命令（2026-10-29 用户裁决：不跑一周观察，无真实客户）**——临时号发号→工具 UA 探针→浏览器 UA 探针→guard 分类断言→即退役——验证 = selftest 7/7 ALL PASS（tool→ok(tool) / Mozilla→ALARM(browser) / 退役即停用），cron 出口装机在案
+- [x] 3.1 巡检脚本 `scripts/service_account_guard.sh`（实现取 bash——直接装 the db host 机上 cron 运行，扫 Logto `logs` 表 svc-fleet 成员 `Interaction.SignIn.Submit`）：UA 浏览器类（Mozilla*）= ALARM、工具类（fd-svc-probe/mint-line/curl）= 记录不告警——验证 = 三条探针登录样本被正确归 ok(tool) 不误报；ALARM 分支由分类逻辑覆盖（browser 前缀即 ALARM，牺牲号退役后探针失败不再产生新样本）
+- [x] 3.2 每日巡检出口（已装机：the db host `/usr/local/bin/fd-svc-guard.sh` + root cron 08:50 → `/var/log/fd-svc-guard.log`，退出码=告警位）+ **护栏验证取构造测试 `selftest` 子命令（2026-10-29 用户裁决：不跑一周观察，无真实客户）**——临时号发号→工具 UA 探针→浏览器 UA 探针→guard 分类断言→即退役——验证 = selftest 7/7 ALL PASS（tool→ok(tool) / Mozilla→ALARM(browser) / 退役即停用），cron 出口装机在案
 
 ## 4. 退役路径
 

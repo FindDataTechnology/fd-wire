@@ -7,7 +7,7 @@
 （fd-postgres：pg16-trixie、shm 512m、psycopg3、count FILTER、JSONB）。
 
 ```
-cheap-1
+the node
 ┌─ wire-postgres（docker compose，pg16-trixie 钉版）
 │    ├ database: wire_platform   ← api 元数据（customers/plans/metering/…）
 │    └ database: wire_datasets   ← 数据集库（登记/同步/修正层 + api 层行存储）

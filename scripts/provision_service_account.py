@@ -2,8 +2,8 @@
 """服务账号发号（change: add-fleet-service-accounts）。
 
 两库统一经 ssh + docker exec psql 操作，本机不落任何口令/DSN：
-- Logto 库：ssh $FD_SVC_XINRU（默认 ubuntu@100.64.0.3）→ docker exec fd-postgres
-- wire 平台库：ssh $FD_SVC_CHEAP3（默认 root@100.64.0.12）→ docker exec wire-postgres
+- Logto 库：ssh $FD_SVC_XINRU（默认 ubuntu@<db-host>）→ docker exec fd-postgres
+- wire 平台库：ssh $FD_SVC_CHEAP3（默认 root@<cheap3-host>）→ docker exec wire-postgres
 
 子命令：
   ensure-org              建/复用 svc-fleet 组织（幂等）
@@ -29,8 +29,8 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-XINRU = __import__("os").environ.get("FD_SVC_XINRU", "ubuntu@100.64.0.3")
-CHEAP3 = __import__("os").environ.get("FD_SVC_CHEAP3", "root@100.64.0.12")
+XINRU = __import__("os").environ.get("FD_SVC_XINRU", "ubuntu@<db-host>")
+CHEAP3 = __import__("os").environ.get("FD_SVC_CHEAP3", "root@<cheap3-host>")
 ORG_NAME = "svc-fleet"
 EMAIL_DOMAIN = "finddatatech.cloud"
 PLAN_FREE_ID = 4  # billing_plans.code='free'

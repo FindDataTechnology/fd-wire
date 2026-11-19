@@ -2,7 +2,7 @@
 #
 # 路由意图的 git 声明：host wire.finddatatech.cloud，/ 与 /console →
 # fd-wire-web。**当前 cheap 集群没有 ingress controller**：实际上线路径与
-# wanxing-web 同法——cheap-1 SafeLine→Caddy→tailscale → fd-wire-web
+# wanxing-web 同法——the node SafeLine→Caddy→tailscale → fd-wire-web
 # NodePort 31881（deploy/README.md 步骤 9-10，主代理执行），TLS 也在 Caddy
 # 终结。
 #

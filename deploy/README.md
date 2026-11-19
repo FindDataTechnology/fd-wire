@@ -46,7 +46,7 @@
 
 1. 【外发】**建仓**：gitee `FindDataTechnology/fd-wire`（主源，ArgoCD 读它）+ github 同名仓（GHA 构建跑 github）。加双 remote 推两侧（或开 gitee→github 镜像）。
 2. 【外发】**GitHub secrets**：`TCR_USERNAME` / `TCR_PASSWORD`（TCR 个人版 UIN `100035884308` 的凭据；org 级 secrets 对私有仓不生效，必须配在 repo 级——wanxing 注释同款纪律）。
-3. 【外发】**TCR 命名空间确认**：确认 `ccr.ccs.tencentyun.com` 下 `fd-wire` 命名空间（个人版通常推首镜像即建，若控制台需显式建则建之）。若改走 hkccr+relay 快腿：workflow `REGISTRY` 翻为 `hkccr.ccs.tencentyun.com`，并在 cheap-3 `/etc/tcr-relay/repos.conf` 登记 `fd-wire/api`、`fd-wire/web` 两行——k8s 清单引用 ccr 不变。
+3. 【外发】**TCR 命名空间确认**：确认 `ccr.ccs.tencentyun.com` 下 `fd-wire` 命名空间（个人版通常推首镜像即建，若控制台需显式建则建之）。若改走 hkccr+relay 快腿：workflow `REGISTRY` 翻为 `hkccr.ccs.tencentyun.com`，并在 the node `/etc/tcr-relay/repos.conf` 登记 `fd-wire/api`、`fd-wire/web` 两行——k8s 清单引用 ccr 不变。
 4. **首次构建**：push main → GHA `build` 出双镜像 `sha-<7>` tag（步骤 1-3 就绪后自然触发）。
 5. **回填 tag**：`deploy/k8s/fd-wire-{api,web}.yaml` 的 `sha-0000000` 占位改为实际 tag，提交 gitee main。
 6. 【外发】**集群 Secret**（15 键与上表逐键一致，缺一即 pod CreateContainerConfigError）：
@@ -54,8 +54,8 @@
    （敏感值从 `~/finddata/secrets` 台账取，命令行历史勿留明文；`platform_identities` 的取值口径与发放联动见 `docs/service-credentials.md`。）
 7. 【外发】**端口台账先行**：`fd-infra-deploy/PORTS.md` 第 1 节登记 `31881 fd-prod/fd-wire-web 8080 柏讯门面`（台账先行纪律；若 31881 已被占，改 `deploy/k8s/fd-wire-web.yaml` 的 nodePort 并同步台账）。
 8. 【外发】**ArgoCD app**：`kubectl --context cheap -n argocd apply -f deploy/argocd/application.yaml` → UI/CLI 观察 fd-prod 两 Deployment 滚起，`/health` 探活。
-9. 【外发】**DNS**：`wire.finddatatech.cloud` → cheap-1（与 wanxing.finddatatech.cloud 同记录形态）。
-10. 【外发】**Caddy（cheap-1）**：新站点块 `wire.finddatatech.cloud`：`/`、`/console` → 反代 tailscale 侧 `fd-wire-web` NodePort 31881；`/mcp` → 反代 registry wire 入口（鉴权/逐调用审计在 registry 侧；此路径不进集群）。TLS 由 Caddy 签结。
+9. 【外发】**DNS**：`wire.finddatatech.cloud` → the node（与 wanxing.finddatatech.cloud 同记录形态）。
+10. 【外发】**Caddy（the node）**：新站点块 `wire.finddatatech.cloud`：`/`、`/console` → 反代 tailscale 侧 `fd-wire-web` NodePort 31881；`/mcp` → 反代 registry wire 入口（鉴权/逐调用审计在 registry 侧；此路径不进集群）。TLS 由 Caddy 签结。
 
 **验收**（任务 3.4）：一次端到端——push 一次 main → GHA 双镜像 sha tag → 回填 tag 提交 → ArgoCD 自动滚动 → `https://wire.finddatatech.cloud/` 与 `/console` 出脸、`/health` 200。
 
@@ -63,7 +63,7 @@
 
 - **专用 PostgreSQL（wire-dedicated-postgres）**：柏讯配专用 PG 实例——
   配方与运维手册（部署/升级/监控/备份恢复/SQLite→PG 迁移与回退）见
-  [`deploy/wire-postgres/`](wire-postgres/README.md)，部署目标 cheap-1（与
+  [`deploy/wire-postgres/`](wire-postgres/README.md)，部署目标 the node（与
   cells 同机）。api 双 URL 语义：`FD_WIRE_DATABASE_URL`（元数据库
   wire_platform，全平台模块收敛开关——现值=与计量同库的 SQLite，迁 PG 只
   改这一个值）与 `FD_WIRE_DATASETS_DATABASE_URL`（数据集库
@@ -87,7 +87,7 @@
 `/usr/bin/`，原先「slim 镜像没有 tar」的判断已过时）。
 
 > ⚠️ **不要用 `kubectl exec -i … sh -c 'cat > /path' < localfile` 传文件。**
-> 2026-10-30 在 cheap-1 上清出三个自 10-15 起运行 15 天的僵死 `cat` 进程：
+> 2026-10-30 在 the node 上清出三个自 10-15 起运行 15 天的僵死 `cat` 进程：
 > `docker exec -i` 的 stdin 一旦没有正常关闭（客户端中断、管道异常、TTY 差异），
 > 容器里的 `cat` 就永远等不到 EOF，进程和管道都不释放，每个空烧约 40% CPU
 > 并把主机 load 顶到 60+，连带 `mcp-mongodb` 被判 unhealthy。这种写法没有超时、
@@ -324,7 +324,7 @@ sha256sum fd-wire-connector-linux-amd64   # 对照 manifest.json 的 platforms[]
     掐断，查 nginx/边缘代理超时，别怀疑后端。**
   - 验证向量两假（wire-postgres 轮换时同踩）：容器内 `psql -h 127.0.0.1`
     走 **trust 免密**（任何口令都过）；容器 → 宿主发布口
-    `100.64.0.12:5433` 是**断 hairpin**（任何口令都拒）。口令生死判别
+    `<cheap3-host>:5433` 是**断 hairpin**（任何口令都拒）。口令生死判别
     只能从 pod 侧（真 TCP+password 路径）做新旧对照。
 
   控制台按钮路径：DemandsPage（需求单）in_progress 单 →「转生成工单」区旁
@@ -342,7 +342,7 @@ sha256sum fd-wire-connector-linux-amd64   # 对照 manifest.json 的 platforms[]
 轮换使历史泄露失效；此后 datasets URL 与 platform URL 一致走 secret。
 
 - **消费者清单**（轮换前核对；2026-10-12 首次执行实弹教训）：仅
-  `fd-prod/fd-wire-api` pod 经 `100.64.0.12:5433` 以 wire 角色连库——但 pod 有
+  `fd-prod/fd-wire-api` pod 经 `<cheap3-host>:5433` 以 wire 角色连库——但 pod 有
   **四个 env 来源**（DATABASE_URL / AI_DATABASE_URL / FD_WIRE_DATABASE_URL /
   FD_WIRE_DATASETS_DATABASE_URL），后三者曾为清单字面值/异名 secret 键——
   轮换必须四路同批，漏一路即 crashloop（现四路均已 secretKeyRef 化）；

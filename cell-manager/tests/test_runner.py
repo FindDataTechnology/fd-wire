@@ -66,7 +66,7 @@ def runner_config(home: Path) -> CellManagerConfig:
             "CELL_REGISTRY_MODE": "fake",
             "FD_WIRE_INTERNAL_URL": "https://wire-api.example.test",
             "FD_WIRE_INTERNAL_TOKEN": "tok-123",
-            "FD_WIRE_RELAY_HOST": "100.64.0.11",
+            "FD_WIRE_RELAY_HOST": "<relay-host>",
             "FD_WIRE_RELAY_PORT_BASE": "18005",
             "CELL_CUSTOMER_IDENTITY_MAP": json.dumps(
                 {"acme": {"username": "acme-user", "sub2api_user_id": "701"}}
@@ -156,7 +156,7 @@ def test_full_chain_success(tmp_path):
     entry = registry.entry("fd-wire-cell-acme")
     assert entry is not None
     assert entry.target_url == config.relay_target_url("acme")
-    assert entry.target_url.startswith("http://100.64.0.11:")
+    assert entry.target_url.startswith("http://<relay-host>:")
     # 授权束：scope 文档已铸（grant 半边）
     assert ("upsert_scope", config.scope_name("acme")) in registry.calls
     # 审计进 cell-manager audit 面（任务 2.5）
@@ -304,7 +304,7 @@ def test_cli_runner_once_with_fakes(tmp_path, monkeypatch):
     monkeypatch.setenv("CELL_REGISTRY_MODE", "fake")
     monkeypatch.setenv("FD_WIRE_INTERNAL_URL", "https://wire-api.example.test")
     monkeypatch.setenv("FD_WIRE_INTERNAL_TOKEN", "tok-123")
-    monkeypatch.setenv("FD_WIRE_RELAY_HOST", "100.64.0.11")
+    monkeypatch.setenv("FD_WIRE_RELAY_HOST", "<relay-host>")
     config, registry, manager, grant_face, audit = build_runner(tmp_path / "home")
     client = FakeClient(tasks=[runner.ProvisionTask(id=21, customer_id="acme")])
     monkeypatch.setattr(cm_pkg, "default_manager", lambda: manager)

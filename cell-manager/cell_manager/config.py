@@ -32,7 +32,7 @@
                                   未配置则 grant/mint-key 明确报错（不静默降级）
     CELL_REGISTRY_SECRET_KEY_FILE registry 根信任材料位置（mint-key 用）：
                                   指向 registry .env（含 SECRET_KEY= 行，自动摘取）
-                                  或裸 secret 文件（0600）。仅在 cheap-1 本机配置；
+                                  或裸 secret 文件（0600）。仅在 the node 本机配置；
                                   未配置则 mint-key 不可用（铸 key 需手工通道）
     CELL_PREFLIGHT_MAP_PATH       registry 预检映射写入 API 路径（切片二 3.1 交付），
                                   如 /api/sub2api-caller-map；未配置则 grant 跳过
@@ -237,7 +237,7 @@ class CellManagerConfig:
     fd_wire_internal_url: str = ""
     #: fd-wire 内部令牌（FD_WIRE_INTERNAL_TOKEN；X-Internal-Token 头）。
     fd_wire_internal_token: str = ""
-    #: relay 对外地址（FD_WIRE_RELAY_HOST；尾网地址如 100.64.0.11——registry
+    #: relay 对外地址（FD_WIRE_RELAY_HOST；尾网地址如 <relay-host>——registry
     #: 条目 proxy_pass_url 必须是集群可达地址，docker 网络名会被渲染成注释块，
     #: 2026-10-24 handoff §三实证）。空 = relay 步不可用（fail-closed）。
     relay_host: str = ""

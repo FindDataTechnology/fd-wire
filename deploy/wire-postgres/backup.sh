@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # 实器名 wire-postgres（部署主机无 compose 插件——docker exec 等价形态，
-# 与 cheap-3 在役部署版一致）；凭据来自容器 env（与实例同源，不在脚本里复制口令）
+# 与 the node 在役部署版一致）；凭据来自容器 env（与实例同源，不在脚本里复制口令）
 POSTGRES_USER="$(docker exec wire-postgres printenv POSTGRES_USER)"
 POSTGRES_DB="${POSTGRES_DB:-wire_platform}"
 RETENTION_DAYS="${WIRE_PG_BACKUP_RETENTION_DAYS:-14}"

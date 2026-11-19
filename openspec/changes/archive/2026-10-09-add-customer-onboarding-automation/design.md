@@ -2,15 +2,15 @@
 
 ## Context
 
-registry 定版为 gitee/main @ dbf213e（cheap-1 `/opt/mcp-gateway-registry` compose 栈）。2026-10-08 对生产代码逐点实证的机制事实（全部带 dbf213e 行号核验）：
+registry 定版为 gitee/main @ dbf213e（the node `/opt/mcp-gateway-registry` compose 栈）。2026-10-08 对生产代码逐点实证的机制事实（全部带 dbf213e 行号核验）：
 
 1. **三层实时解析**：组→scope（`map_groups_to_scopes` → `get_group_mappings_bulk`，单条 `$in`）、scope→server_access（`get_server_scopes`）、目录可见列表（`accessible_servers`，auth/dependencies.py:454,608）全部每请求实时查 Mongo，无缓存、无 public 旁路。联动写的授权文档**下一请求即生效**；`/internal/reload-scopes` 只是兜底。
 2. **组冻结在 key、scope 实时**：patch key 的 groups 是铸造时快照（auth_server/server.py:2930 注释明示），scope 名每次按当前映射解析。`map_groups_to_scopes` 不校验组在任何 IdP 存在 → **合成组 `wire-cust-<cid>` 无需 Logto**。
-3. **铸造通道已支持指定组**：无浏览器铸造（自签短命 JWT）的 `groups` claims 即快照来源（fd-wire docs/service-credentials.md §2.1 配方，cheap-1 实测）。
+3. **铸造通道已支持指定组**：无浏览器铸造（自签短命 JWT）的 `groups` claims 即快照来源（fd-wire docs/service-credentials.md §2.1 配方，the node 实测）。
 4. **一处可用的一次性授权写入端点**：`POST /api/servers/groups/import`（admin 门 + Bearer 免 CSRF，`server_access`+`group_mappings` verbatim upsert）。注意坑：`POST /api/iam/groups` 会**忽略** client 的 `group_mappings`（强制 `[name]`）；import 端点 `create_in_idp` 默认 true 会尝试去 Logto 建组（非致命）——**必须传 `false`**。
 5. **吊销 owner 限定**：`DELETE /api/patch-keys/{id}` 跨用户一律 404（防探测），admin 无法代吊——退租自动化的阻断点。
 6. **目录隔离随 scope 自动达成**：listing 按 accessible_servers（scope 推导）严格过滤；`visibility=group-restricted` + `allowed_groups` 只额外覆盖 search/ans 类 surface（`user_can_access_server_from_doc`）。
-7. **wire api 运行环境**：cheap 集群 fd-prod（NodePort 31883 ← cheap-1 Caddy）；`REGISTRY_MONGO_URI/DB` Secret 槽位已预留（fd-wire-api.yaml:82-87，optional）。既有 tailscale 路径全是 cheap-1→集群入站方向，**pod→cheap-1 tailnet 出站无先例证据**（集群节点在 tailnet 上，大概率通，需活探针）。
+7. **wire api 运行环境**：cheap 集群 fd-prod（NodePort 31883 ← the node Caddy）；`REGISTRY_MONGO_URI/DB` Secret 槽位已预留（fd-wire-api.yaml:82-87，optional）。既有 tailscale 路径全是 the node→集群入站方向，**pod→the node tailnet 出站无先例证据**（集群节点在 tailnet 上，大概率通，需活探针）。
 8. cell-manager 是 **CLI**（argparse 单发）不是常驻服务，已持 admin wgk-、是唯一能建 cell 容器的角色。
 
 ## Goals / Non-Goals
@@ -51,13 +51,13 @@ cell-manager 新增开户/退租子命令，一跳完成：注册（带 visibili
 
 ### D4 铸造两步走
 
-- **第一步（切片一，零 registry 改动）**：cell-manager 在 cheap-1 本机自动化 §2.1 配方——自签短命 JWT（`sub=<客户 username>`、`groups=["wire-customers","wire-cust-<cid>"]`，10 分钟有效、用完即弃）→ `POST /api/patch-keys`。信任等级与现状相同（cell-manager 已持 admin wgk- 且同机）。
+- **第一步（切片一，零 registry 改动）**：cell-manager 在 the node 本机自动化 §2.1 配方——自签短命 JWT（`sub=<客户 username>`、`groups=["wire-customers","wire-cust-<cid>"]`，10 分钟有效、用完即弃）→ `POST /api/patch-keys`。信任等级与现状相同（cell-manager 已持 admin wgk- 且同机）。
 - **第二步（切片二，registry 小改）**：`POST /api/patch-keys` 增 admin-only 可选字段 `{username?, groups?}`——**两个字段必须成对设计**：只有 `groups` 的话，集群侧代铸的 key owner 会错记成 admin，吊销/列表归属全乱。同船：DELETE 加 admin 旁路（admin 可吊任意 key，`revoke_key` 的 username 校验对 admin 放行），修复 D-Context#5 的退租阻断点。
 
 ### D5 计量通道 = 直读 + 探针闸门 + 推送降级
 
-- 直读（正道）：cheap-1 mongo 只读账号（仅 `mcp_registry.audit_events_default` 读权限）→ compose 端口发布到 tailnet IP（单滚 `--no-deps --no-build`，预告短停）→ wire Secret 填 `REGISTRY_MONGO_URI/DB`。audit 7 天 TTL 窗口 = wire 停机兜底余量，300s 轮询安全。
-- 闸门：从 cheap 集群 pod 对 cheap-1 tailnet IP:27017 做一次**真实出站探针**（如 `kubectl run` 临时 pod + mongosh/nc），通过才填 Secret 开闸。
+- 直读（正道）：the node mongo 只读账号（仅 `mcp_registry.audit_events_default` 读权限）→ compose 端口发布到 tailnet IP（单滚 `--no-deps --no-build`，预告短停）→ wire Secret 填 `REGISTRY_MONGO_URI/DB`。audit 7 天 TTL 窗口 = wire 停机兜底余量，300s 轮询安全。
+- 闸门：从 cheap 集群 pod 对 the node tailnet IP:27017 做一次**真实出站探针**（如 `kubectl run` 临时 pod + mongosh/nc），通过才填 Secret 开闸。
 - 降级：探针失败 → 改推口径（registry 侧加 audit forwarder 推 wire 既有 `POST /internal/metering/events`），届时按事实单独立项，不在本 change 预建代码。
 
 ### D6 退租时序
@@ -77,7 +77,7 @@ cell-manager 新增开户/退租子命令，一跳完成：注册（带 visibili
 ## Migration Plan
 
 1. 切片一（fd-wire 仓 cell-manager + 既有 registry API，**无 registry 发版**）：实现 → drillcust001 重铸演练 → 验收判据全跑。
-2. 切片二 registry 部分（gitee 分支）：R2 端点+preflight 改造、R3② 字段+admin-revoke → 测试随迁 → 重建镜像（CN 镜像配方，dbf213e 已含）→ cheap-1 ff + `up -d --no-deps --no-build` → 探针/验收 → gitee main 合并。
+2. 切片二 registry 部分（gitee 分支）：R2 端点+preflight 改造、R3② 字段+admin-revoke → 测试随迁 → 重建镜像（CN 镜像配方，dbf213e 已含）→ the node ff + `up -d --no-deps --no-build` → 探针/验收 → gitee main 合并。
 3. 切片二 infra 部分：mongo 只读账号 + tailnet 发布 + pod 探针 → 通过则填 Secret 开闸直读；失败则挂起直读、推送口径另立 change。
 4. 回滚：R2/R3② 的 registry 改动按 gitee 单分支 revert + 重滚镜像；`PREFLIGHT_UNMAPPED` 回 pass 即回到现状语义；切片一 cell-manager 侧改动不影响 registry 现有行为（新字段/新文档均为增量）。
 

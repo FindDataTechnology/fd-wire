@@ -26,5 +26,5 @@
 
 ## 5. 验证
 
-- [x] 5.1 compose 本地演练：起实例→两库建好→备份脚本出文件→按恢复文档恢复成功（**本地 docker 环境不可用——compose/shell 语法与 YAML 结构已静态校验，实操演练待生产 cheap-1 执行**）
+- [x] 5.1 compose 本地演练：起实例→两库建好→备份脚本出文件→按恢复文档恢复成功（**本地 docker 环境不可用——compose/shell 语法与 YAML 结构已静态校验，实操演练待生产 the node 执行**）
 - [x] 5.2 api 全量测试绿（SQLite 路径）+ PG 方言冒烟绿；审计清单全项关闭（本批范围 559 passed + 11 skipped；datasets/data_plane 并行批次在改的测试文件见批次报告，集成时统一回归）

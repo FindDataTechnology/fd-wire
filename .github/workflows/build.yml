@@ -12,7 +12,7 @@
 # 通道说明（上线时主代理确认，见 deploy/README.md 步骤 3）：tcr-image-pipeline
 # D8 实测 US runner→ccr 跨洋推 ~0.14 MB/s——本仓两镜像均为小镜像（api 纯轮子
 # ~200MB、web 静态 ~50MB），直推 ccr 可接受（fd-proxy-service 同腿 13 分钟全绿）。
-# 若推速成患：REGISTRY 翻为 hkccr.ccs.tencentyun.com，并在 cheap-3
+# 若推速成患：REGISTRY 翻为 hkccr.ccs.tencentyun.com，并在 the node
 # /etc/tcr-relay/repos.conf 登记 fd-wire/api 与 fd-wire/web 两行（中继回灌 ccr，
 # k8s 清单引用不变）。
 #
@@ -35,9 +35,9 @@ permissions:
 
 env:
   # 标准中继通道（2026-10-08 定为正道）：runner 推 hkccr（港，跨洋快）→
-  # cheap-3 tcr-relay 每 5 分钟回灌 ccr（广州）→ 部署侧从 ccr 拉取。
+  # the node tcr-relay 每 5 分钟回灌 ccr（广州）→ 部署侧从 ccr 拉取。
   # 直推 ccr 的 US→广州 ~0.14MB/s 慢腿已废弃（api 镜像 20 分钟+）。
-  # 前置：cheap-3 /etc/tcr-relay/repos.conf 需登记 fd-wire/api、fd-wire/web。
+  # 前置：the node /etc/tcr-relay/repos.conf 需登记 fd-wire/api、fd-wire/web。
   REGISTRY: hkccr.ccs.tencentyun.com
   NAMESPACE: fd-wire
 
@@ -306,7 +306,7 @@ jobs:
     timeout-minutes: 15
     env:
       HAS_DOWNLOADS_CREDS: ${{ secrets.DOWNLOADS_SSH_HOST != '' && secrets.DOWNLOADS_SSH_USER != '' && secrets.DOWNLOADS_SSH_KEY != '' }}
-      # 生产落点=cheap-6 /var/lib/fd-wire/downloads（repo 变量覆盖，见 deploy/README）
+      # 生产落点=the node /var/lib/fd-wire/downloads（repo 变量覆盖，见 deploy/README）
       DOWNLOADS_REMOTE_DIR: ${{ vars.DOWNLOADS_REMOTE_DIR || 'fd-wire/downloads' }}
     steps:
       - name: Gather all platform artifacts
@@ -339,7 +339,7 @@ jobs:
       # 实测 US runner→国内 SSH 高端口的 TCP 被网络层静默断（auth.log 零记录、
       # keyscan stderr 被吞后 set -e 即死），runner 直推 rsync 不可用；国内节点
       # 反向拉 GitHub artifact 同样超时。唯一全链验证在役的通道 = TCR 中继：
-      # runner 推 hkccr（跨洋快）→ cheap-3 tcr-relay 回灌 ccr → cheap-6
+      # runner 推 hkccr（跨洋快）→ the node tcr-relay 回灌 ccr → the node
       # wire-downloads-sync cron 拉取原子换目录（脚本见 deploy/README.md）。
       - name: Login to TCR
         uses: docker/login-action@v3

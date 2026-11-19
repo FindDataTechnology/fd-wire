@@ -25,14 +25,14 @@
 ## 3. 配方与部署面
 
 - [x] 3.1 `deploy/wire-postgres/backup.sh` 动态发现 wire_cell_%；重部署
-  cheap-3 并验证备份产物含 wire_cell_drillcust001
+  the node 并验证备份产物含 wire_cell_drillcust001
 - [x] 3.2 `docs/cell-postgres-storage.md` 增「自动开通」节（env/psycopg
   extra/OpenBAO 解封运维与 token 铸造配方/purge 语义/试点记录锚点）
 - [x] 3.3 pyproject：`postgres` extra（psycopg[binary]>=3.1）
 
 ## 4. 试点（生产 e2e）
 
-- [x] 4.1 cheap-1 /opt/cell-manager 更新（rsync+psycopg 安装）+ env.sh 增量
+- [x] 4.1 the node /opt/cell-manager 更新（rsync+psycopg 安装）+ env.sh 增量
   （CELL_STORAGE=postgres、admin URL、OpenBAO addr/token 从
   /root/wire-cell-openbao.token）
 - [x] 4.2 全自动开通 `pgauto001`：库/角色/ACL/隔离四查/OpenBAO 条目/容器
@@ -47,4 +47,4 @@
 - [x] 5.1 `openspec validate wire-cell-pg-provisioning --strict` 过；全任务
   勾选后 archive
 - [x] 5.2 ROADMAP 方向 A 标注 v2；记忆更新（含 OpenBAO 解封事故与正确坐标
-  cheap-1:8200、token 铸造配方）
+  the node:8200、token 铸造配方）

@@ -15,7 +15,7 @@
 事件 WAL、审计、gateway upstream 行，全在这一个库里。
 
 - **现状**：每 cell 一个 SQLite 文件，躺在该 cell 自己的 `/data` 卷里
-  （cheap-1 上即 `/opt/cell-manager/volumes/<key>/daas.db`）。打个比方：
+  （the node 上即 `/opt/cell-manager/volumes/<key>/daas.db`）。打个比方：
   每家客户一台**自带保险柜**，摆在自家房间（容器卷）里——简单够用，
   但备份、并发、容量都只能靠文件系统硬扛。
 - **升级**：把保险柜搬进**银行的保管库**——同一个 PG 实例（一栋楼），每家
@@ -60,23 +60,23 @@ cell，这是本变更的第一不变量。
    0600 的 env-file，与 wgk- 客户凭据同纪律；台账（`~/finddata/secrets`）
    登记「在哪、谁发的、何时」，不登记明文。
 
-## 3. 建库配方（cheap-3 · wire-postgres 实例）
+## 3. 建库配方（the node · wire-postgres 实例）
 
 ### 3.1 实例信息
 
 | 项 | 值 |
 |---|---|
-| 所在机器 | cheap-3 |
+| 所在机器 | the node |
 | 容器 | `wire-postgres`（docker compose，pg16-trixie 钉版；容器内 PG 端口 5432，宿主映射 …:5433） |
 | 超管角色 | `wire`（即 `POSTGRES_USER`；api 双库目前也用它连接） |
 | 已有库 | `wire_platform`（api 元数据）、`wire_datasets`（数据集库） |
-| 集群内地址 | `100.64.0.12:5433`（cheap-1 上的 cell 引擎经此连入） |
+| 集群内地址 | `<cheap3-host>:5433`（the node 上的 cell 引擎经此连入） |
 | 每日备份 | 03:30 UTC `backup.sh`——**只备两个平台库，cell 库要自己加清单（见 3.6）** |
 
 ### 3.2 一次性基线：平台两库同样撤掉 PUBLIC CONNECT（首次执行本配方时做一次）
 
 ```bash
-# 在 cheap-3 宿主执行（cheap-3 部署目录即 /opt/wire-postgres 所在主机）
+# 在 the node 宿主执行（the node 部署目录即 /opt/wire-postgres 所在主机）
 docker exec wire-postgres psql -U wire -d postgres \
   -c 'REVOKE CONNECT ON DATABASE wire_platform, wire_datasets FROM PUBLIC;'
 ```
@@ -93,7 +93,7 @@ docker exec wire-postgres psql -U wire -d postgres \
 **无需转义**，这也是选 hex 的原因之一）：
 
 ```bash
-# 在 cheap-3 宿主执行
+# 在 the node 宿主执行
 KEY=drillcust001
 PW=$(openssl rand -hex 24)   # 管道用法：openssl 输出直接进 shell 变量——不回显、不落盘
 
@@ -105,7 +105,7 @@ CREATE DATABASE wire_cell_${KEY} OWNER wire_cell_${KEY};
 REVOKE CONNECT ON DATABASE wire_cell_${KEY} FROM PUBLIC;
 SQL
 # 成功输出三行：CREATE ROLE / CREATE DATABASE / REVOKE
-# 密码此后还要去 cheap-1 落 env-file（见 4.2）；传完再 unset PW
+# 密码此后还要去 the node 落 env-file（见 4.2）；传完再 unset PW
 ```
 
 三条命令各自的意义：
@@ -116,7 +116,7 @@ SQL
 | `CREATE DATABASE wire_cell_<key> OWNER …` | 专属库，属主就是上面的角色（有它才有整只保险柜） |
 | `REVOKE CONNECT … FROM PUBLIC` | 撤掉「任意登录角色默认可连」的 PG 默认（上锁，见 3.5） |
 
-台账登记：cell key、角色/库名、生成日期、密码存放位置（cheap-1 env-file
+台账登记：cell key、角色/库名、生成日期、密码存放位置（the node env-file
 路径）、责任人——**不登记密码明文**。
 
 ### 3.4 隔离验证（一等公民步骤，两查都过才算建好）
@@ -125,7 +125,7 @@ SQL
 用临时金丝雀角色实测，比看 ACL 字符串更硬）：
 
 ```bash
-# 在 cheap-3 宿主执行；KEY 变量沿用 3.3
+# 在 the node 宿主执行；KEY 变量沿用 3.3
 docker exec wire-postgres psql -U wire -d postgres \
   -c "CREATE ROLE probe_nogrant LOGIN;"
 
@@ -203,7 +203,7 @@ unset PGPASSWORD PW
 ### 3.7 引擎侧 URL 形态（cell 看到的最终样子）
 
 ```
-DAAS_DATABASE_URL=postgresql+psycopg://wire_cell_<key>:<密码>@100.64.0.12:5433/wire_cell_<key>
+DAAS_DATABASE_URL=postgresql+psycopg://wire_cell_<key>:<密码>@<cheap3-host>:5433/wire_cell_<key>
 ```
 
 - env 名 **`DAAS_DATABASE_URL`**：引擎数据根总开关。
@@ -213,7 +213,7 @@ DAAS_DATABASE_URL=postgresql+psycopg://wire_cell_<key>:<密码>@100.64.0.12:5433
   `psycopg[binary]>=3.1`）；不要写 psycopg2 形态。
 - 密码是 hex（无特殊字符），可直接进 URL，无需百分号转义。
 
-## 4. cell 侧接线与迁移（cheap-1 · docker 直跑形态）
+## 4. cell 侧接线与迁移（the node · docker 直跑形态）
 
 ### 4.1 现状盘点（drill cell）
 
@@ -232,7 +232,7 @@ DAAS_DATABASE_URL=postgresql+psycopg://wire_cell_<key>:<密码>@100.64.0.12:5433
 之后轮换/回退都只改文件重建）：
 
 ```bash
-# ---- 在 cheap-1 宿主执行 ----
+# ---- 在 the node 宿主执行 ----
 KEY=drillcust001
 CTR=fd-wire-cell-${KEY}
 ENVF=/opt/cell-manager/env-files/${KEY}.env    # 路径自定，一次落定
@@ -242,9 +242,9 @@ mkdir -p "$(dirname "$ENVF")"
 docker inspect "$CTR" --format '{{range .Config.Env}}{{println .}}{{end}}' > "$ENVF"
 chmod 600 "$ENVF"        # 与 wgk- 同纪律
 
-# 2) 追加 PG 数据根 URL（密码从 cheap-3 生成处带来；read -s 手输：不回显、不进 history）
+# 2) 追加 PG 数据根 URL（密码从 the node 生成处带来；read -s 手输：不回显、不进 history）
 read -rs -p "cell db password: " PW; echo
-printf 'DAAS_DATABASE_URL=postgresql+psycopg://wire_cell_%s:%s@100.64.0.12:5433/wire_cell_%s\n' \
+printf 'DAAS_DATABASE_URL=postgresql+psycopg://wire_cell_%s:%s@<cheap3-host>:5433/wire_cell_%s\n' \
   "$KEY" "$PW" "$KEY" >> "$ENVF"    # printf 是 shell 内建，口令不进 ps
 unset PW
 
@@ -264,7 +264,7 @@ docker run -d \
 
 - `docker inspect … .Config.Env` 会带出镜像自带的 `PATH` 等默认变量——
   同值覆盖无害；讲究的话可手工只留注入类 env。
-- 密码从 cheap-3（生成处）到 cheap-1（env-file）的传递走你信任的私密通道，
+- 密码从 the node（生成处）到 the node（env-file）的传递走你信任的私密通道，
   与 wgk- 凭据交付同纪律：不进聊天/工单/终端回显/命令行参数。
 - `docker rm -f` 到 `docker run` 之间容器下线（秒级）——低峰窗口做。
 - 回退或日常轮换不需要重复步骤 1–2，只改 env-file 再跑步骤 3。
@@ -308,7 +308,7 @@ docker run -d \
 触发条件（对齐 api 侧手册）：冒烟/验证清单的问题 **1 小时内修不好**。
 
 ```bash
-# ---- 在 cheap-1 宿主执行 ----
+# ---- 在 the node 宿主执行 ----
 ENVF=/opt/cell-manager/env-files/drillcust001.env
 cp "$ENVF" "${ENVF}.bak-$(date -u +%Y%m%dT%H%M)"      # 回退也留一手
 grep -v '^DAAS_DATABASE_URL=' "$ENVF" > "${ENVF}.new" && mv "${ENVF}.new" "$ENVF"
@@ -347,14 +347,14 @@ v1 的 §3 手工六步已并入 cell-manager provision 流程：`CELL_STORAGE=p
 注入），幂等重入，失败零半写。**§3 从此只是原理参考与人肉兜底**，日常开通
 走本节。
 
-### 7.1 配置（cheap-1 /opt/cell-manager/env.sh 增量）
+### 7.1 配置（the node /opt/cell-manager/env.sh 增量）
 
 ```sh
 CELL_STORAGE=postgres                                   # 缺省 sqlite=行为不变
-CELL_PG_ADMIN_URL='postgresql+psycopg://<超管>:<密码>@100.64.0.12:5433/wire_platform'
-CELL_PG_URL_HOST=100.64.0.12                            # cell 容器视角地址
+CELL_PG_ADMIN_URL='postgresql+psycopg://<超管>:<密码>@<cheap3-host>:5433/wire_platform'
+CELL_PG_URL_HOST=<cheap3-host>                            # cell 容器视角地址
 CELL_PG_URL_PORT=5433
-CELL_OPENBAO_ADDR=http://100.64.0.11:8200               # cheap-1 mcp-openbao
+CELL_OPENBAO_ADDR=http://<relay-host>:8200               # the node mcp-openbao
 CELL_OPENBAO_TOKEN=<见 /root/wire-cell-openbao.token>   # 0600，勿入 git/会话
 ```
 
@@ -363,7 +363,7 @@ sqlite 画像零变化）。
 
 ### 7.2 OpenBAO 运维前提（重要）
 
-- 实例=cheap-1 `mcp-openbao`（registry 栈成员，file backend）。**封印是
+- 实例=the node `mcp-openbao`（registry 栈成员，file backend）。**封印是
   密封态特性**：重启后保持封印，需人工解封（钥+root token 在
   /root/openbao-init-*.json，compose 注释即配方）。**封印期间 postgres
   画像 provision 会 fail-closed 报「先解封」**——这是设计，不是故障。
@@ -407,7 +407,7 @@ PG 数据根的**第二道闸**（第一道仍是行数上限 `CUSTOMER_DATASET_
 默认 50 万行——两闸叠加，互不替代）：
 
 ```sh
-# cheap-1 /opt/cell-manager/env.sh（可选）
+# the node /opt/cell-manager/env.sh（可选）
 export CELL_PG_QUOTA_MB=512      # provision 时注入容器 env
 # 引擎侧等价 env（手工重建场景直接设）：
 #   FD_CELL_STORAGE_QUOTA_MB=512

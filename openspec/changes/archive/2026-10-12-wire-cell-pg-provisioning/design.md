@@ -7,16 +7,16 @@
   写死 sqlite 四斜杠）→ ContainerSpec → create/start/wait_ready/register，
   异常回滚删容器+删空卷。CLI `python -m cell_manager provision <id>`。
   config 全部 `CELL_*` env（`CellManagerConfig.from_env`，测试可注入 mapping）。
-- 生产部署=cheap-1 /opt/cell-manager（rsync 形态，非 git checkout），env.sh
+- 生产部署=the node /opt/cell-manager（rsync 形态，非 git checkout），env.sh
   + state/audit/volumes/secrets 目录；生产 wire cell 仅 drillcust001（已在
   PG 终态，v1 手工迁移）。
-- OpenBAO=cheap-1 `mcp-openbao`（openbao 2.5.5，registry 栈成员，file
-  backend，8200/overlay 100.64.0.11:8200）。本轮已解封（此前封印 5h）、
+- OpenBAO=the node `mcp-openbao`（openbao 2.5.5，registry 栈成员，file
+  backend，8200/overlay <relay-host>:8200）。本轮已解封（此前封印 5h）、
   已铸专用 token（policy `wire-cell-db`，仅 `secret/data/wire/cell-db/*`
   CRUD+metadata，10y renewable，落 /root/wire-cell-openbao.token 0600）。
   解封钥+root token=/root/openbao-init-*.json（root-only，compose 注释
   即配方）。
-- wire PG=cheap-3 `wire-postgres`（超管角色 `wire`，无 `wire` 库——admin
+- wire PG=the node `wire-postgres`（超管角色 `wire`，无 `wire` 库——admin
   连接串指 wire_platform）。
 
 ## 2. 方案
@@ -83,7 +83,7 @@ for db in "$POSTGRES_DB" wire_datasets $(docker exec <pg> psql -U <user> \
   where datname like 'wire_cell_%' order by datname"); do
 ```
 
-（容器内 psql 免密语义与现状一致；重部署 cheap-3 后跑一次验证产物含
+（容器内 psql 免密语义与现状一致；重部署 the node 后跑一次验证产物含
 wire_cell_drillcust001。）
 
 ### 2.5 测试

@@ -5,7 +5,7 @@
 | 面 | 版本/证据 |
 |---|---|
 | wire api/web | `sha-b717c7d`（cheap fd-prod，四连滚 7fae9e5→f226cae→0ba2e85→b717c7d） |
-| registry auth-server | `sha-0aad2b5`（wire-quota-gate 分支=生产基线+行数门；cheap-1 prebuilt compose，gate=on） |
+| registry auth-server | `sha-0aad2b5`（wire-quota-gate 分支=生产基线+行数门；the node prebuilt compose，gate=on） |
 | 主官网 | `sha-5ae66e5`（tencent fd-web，伴生 change wire-tab-refresh 8/8 已收官） |
 | 生产库 | alembic 版本位 0015（手写等价 SQL 路径；四档 seed、旧三档禁用、console_onboardings 表） |
 
@@ -17,7 +17,7 @@
 4. **行数门**（quota-gate-livefire.md）：0 行档 → 402 `MONTHLY_QUOTA_EXHAUSTED`（与余额 402 区分）；free 档 0 余额 → 200（余额门对免超额档退位）
 5. **停用即断**：吊 key → 401；suspended → quota 归零（0/0），复活 → 1000 恢复
 6. **admin 双闸**：BEARER_GATE=on 生效（无角色/无令牌各拒）；wire-admin 角色挂 aloadtree
-7. **令牌轮换**（token-rotation.md）：三键轮换，旧值实弹 401，值=root-only cheap-1 /opt/fd-wire-tokens.txt；INFRA-NOTES 明文已打码
+7. **令牌轮换**（token-rotation.md）：三键轮换，旧值实弹 401，值=root-only the node /opt/fd-wire-tokens.txt；INFRA-NOTES 明文已打码
 8. **用量透明**：`/api/console/usage` 端点+控制台用量页正式化（「上线中」移除；数据流=registry 审计→poller→metering_records，审计恢复后自动充盈）
 9. **主官网**：双语新文案+「查看定价」CTA→wire 定价页；全站零价格数字（构建期数字律合规）
 
@@ -37,5 +37,5 @@
 ## 过程事件与移交（如实）
 
 - 生产事件三起当场闭环：mcpgw 审计停摆（重启恢复）、sub2api 旧契约×2（重写）、铸 key form 形状（JSON 化）
-- **移交 registry 专属 session**：gitee 分支 `wire-quota-gate`（=scs001 main）合流裁决、origin github main 未动；mcpgw 楔死根因未深挖（建议加监控）；cheap-1 磁盘 96% 建议扩容
+- **移交 registry 专属 session**：gitee 分支 `wire-quota-gate`（=scs001 main）合流裁决、origin github main 未动；mcpgw 楔死根因未深挖（建议加监控）；the node 磁盘 96% 建议扩容
 - E2E 过客：docstudio 测试身份为首位自助客户（free 档，5 把实弹 key 明文未落盘）

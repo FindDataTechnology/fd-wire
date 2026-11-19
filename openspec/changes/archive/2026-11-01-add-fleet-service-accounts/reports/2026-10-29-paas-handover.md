@@ -13,7 +13,7 @@
 | `svc-fleet-ops-1@finddatatech.cloud` | `vsc4tv88zxhb` | `svc/fleet-ops-1`（free 档） | 运维/巡检链位备用（按需取用） |
 
 - 两号已经真实登录探针验证可用；发号/探针/退役配方已固化：`fd-wire/scripts/provision_service_account.py`（幂等，`ensure-org`/`provision`/`retire`/`probe`/`guard`/`selftest` 六个子命令；以后要发新号跑 `provision <cell>-<n>` 即可）。
-- 护栏已装机：xinru `fd-svc-guard.sh` + cron 每日 08:50——这两个号出现任何浏览器 UA 登录即告警。护栏验证不靠观察期，靠构造测试 `selftest`（临时号 tool-UA→ok / Mozilla→ALARM / 退役即停用，7/7 全绿）。
+- 护栏已装机：the db host `fd-svc-guard.sh` + cron 每日 08:50——这两个号出现任何浏览器 UA 登录即告警。护栏验证不靠观察期，靠构造测试 `selftest`（临时号 tool-UA→ok / Mozilla→ALARM / 退役即停用，7/7 全绿）。
 - 注：`svc-selftest-*` 命名空间为测试号（用毕即退役），请勿用作真实链位。
 
 ## 二、你们要做的：切换（收号 + 换铸币源）

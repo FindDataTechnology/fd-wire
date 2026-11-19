@@ -49,5 +49,5 @@ upsert 全部与 PG 兼容。
   五个方言点改造 + 测试矩阵；不动謙面本地产品路径（sqlite 默认不变）。
 - **fd-wire**：cell-image/Dockerfile（+psycopg）、docs 新配方、本 change 工件；
   api/web 代码**零改动**（本轮无 api/web 镜像发布）。
-- **生产**：cheap-3 wire PG 实例新增试点库与属主角色；cheap-1 drill cell
+- **生产**：the node wire PG 实例新增试点库与属主角色；the node drill cell
   重建（换 env + 新 cell 镜像）；其余 cell 一概不动。

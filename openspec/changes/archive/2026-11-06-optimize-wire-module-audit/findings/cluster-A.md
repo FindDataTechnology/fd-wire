@@ -90,7 +90,7 @@
 
 一句理由：代铸/代吊/通道不扩面三条全实现——本机自签 JWT 通道与集群侧 admin 代铸 API 双轨，退租自动化闭环，测试在位。
 
-- ① 对齐：代铸指定归属与组 → cell-manager/cell_manager/keys.py:44-148（`sign_self_signed_jwt` HS256，groups=组快照，TTL 600s）+ :180-202 `AdminPatchKeyChannel`（显式 admin API 铸/吊，26e926a「铸 key 切 admin 代铸 API（4.3 收口）」）；代吊+幂等 → keys.py:148-178 `revoke`（revoked/already_revoked/not_found）；开户代铸接线 → console/onboarding.py:111-149（CELL_REGISTRY_TOKEN=平台 admin wgk-；簿记只落 key_id 明文不落库 :373）；根信任材料不出主机 → keys.py:5-14（CELL_REGISTRY_SECRET_KEY_FILE 只在 cheap-1）。
+- ① 对齐：代铸指定归属与组 → cell-manager/cell_manager/keys.py:44-148（`sign_self_signed_jwt` HS256，groups=组快照，TTL 600s）+ :180-202 `AdminPatchKeyChannel`（显式 admin API 铸/吊，26e926a「铸 key 切 admin 代铸 API（4.3 收口）」）；代吊+幂等 → keys.py:148-178 `revoke`（revoked/already_revoked/not_found）；开户代铸接线 → console/onboarding.py:111-149（CELL_REGISTRY_TOKEN=平台 admin wgk-；簿记只落 key_id 明文不落库 :373）；根信任材料不出主机 → keys.py:5-14（CELL_REGISTRY_SECRET_KEY_FILE 只在 the node）。
 - ② 测试：cell-manager/tests/test_grant.py、test_registry_http.py（registry client 铸/吊 mock 面）。
 - ③ 部署：cell-manager 不在 k8s 主清单（运维主机工具形态）；其产物（key/scope/预检映射）经 registry API 生效，registry 部署新鲜（2026-11-04）。cell-manager 自身版本管理**未证实**（无镜像清单命中）。
 - ④ 痛感：26e926a/e53175c/1b14377 为授权束自动化收口链（10-09 ~ 10-12），fix 密度集中在退租链（见 cell-grant）。
@@ -102,7 +102,7 @@
 
 - ① 对齐：开通/暂停/恢复/注销 → cell-manager/cell_manager/manager.py:122 `provision`/:277 `pause`/:287 `resume`/:326 `purge`/:386 `purge_expired`（保留期清除）；注册凭据自动化 → cell_manager/config.py:17-19（CELL_REGISTRY_AUTH/TOKEN）+ manager.py provision 注册步（30ba42d「register 追加启用步」修复默认 disabled）；provision 失败原子回滚 → 77ee695（CELL_READINESS_TIMEOUT）；引擎无多租户概念 → 引擎在 DAAS 仓（internal-main 线），fd-wire 侧无 tenant 列（datasets 模型以单 cell 数据根为前提）。
 - ② 测试：cell-manager/tests/test_lifecycle.py、test_retention.py、test_isolation.py、test_manager_storage.py。
-- ③ 部署：cell-manager 为运维面工具（provision 动作在 cheap-1 执行），主服务清单不含之；cell 容器由 docker driver 拉起（drivers/docker.py）。
+- ③ 部署：cell-manager 为运维面工具（provision 动作在 the node 执行），主服务清单不含之；cell 容器由 docker driver 拉起（drivers/docker.py）。
 - ④ 痛感：22 commits 中 ≥6 次 fix（30ba42d/8bedec7/77ee695/e53175c/10b529e/ef2eb79/1b14377）集中在 provision/退租链——中高（见 cell-grant）。
 - ⑤ 陈旧：R spec mtime 2026-10-07 vs cell-manager 最近 commit 2026-10-12（cee7fbf 配额下发）→ 5 天。
 - 备注：paas 仓（壹座）grep `wire_cell|DAAS_DATABASE_URL|cell-key` 零命中——萬星去处契约尚未落地，与 spec「后续增量」一致，无矛盾。
@@ -133,7 +133,7 @@
 
 - ① 对齐：发号幂等 → scripts/provision_service_account.py:6-22（ensure-org/provision/retire/probe/guard 五子命令；svc-fleet 组织、svc/<key> 服务客户、billing_customers 映射）；组织隔离+命名约定 → :26-28（ORG_NAME="svc-fleet"、EMAIL_DOMAIN、KEY_RE）；护栏巡检 → scripts/service_account_guard.sh:1-33（浏览器 UA=ALARM，Logto 审计 SQL）；退役 → provision_service_account.py retire（is_suspended+关服务客户，幂等）。
 - ② 测试：**无**（ssh+docker exec psql 的运维脚本，无 api/tests 覆盖）——与 spec 场景的对应验证依赖 probe/guard 实跑。
-- ③ 部署：脚本形态（xinru/cheap-3 双库），无 k8s 清单；cron 于 xinru-master（guard 脚本头注释）。
+- ③ 部署：脚本形态（the db host/the node 双库），无 k8s 清单；cron 于 the db host-master（guard 脚本头注释）。
 - ④ 痛感：仅 0f88e52 一次提交（10-31 能力落地），无 fix——太新，痛感样本不足。
 - ⑤ 陈旧：spec 2026-11-01（归档日）vs scripts 2026-10-31 → 1 天。
 - 备注：change archive/2026-11-01-add-fleet-service-accounts/tasks.md 12/12 `[x]` 全勾；狗粮迁移（Requirement 5）实跑效果**未证实**。

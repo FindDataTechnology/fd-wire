@@ -80,7 +80,7 @@
 
 - [x] 8.1 生产迁移与滚版（2026-10-13 完成）
   - 发布通道：**GHA 被账单阻断**（runner 起不来，近四轮全败）→ 绕行 =
-    cheap-2（x86_64）本机 docker build 直推 ccr；web Dockerfile 首行
+    the node（x86_64）本机 docker build 直推 ccr；web Dockerfile 首行
     `# syntax=docker/dockerfile:1` 需 docker.io frontend（境内不通）→
     构建机临时删行 + 轩辕基础镜像
   - 镜像：api + web = `sha-f4970ed`（ccr 远端核验 amd64）

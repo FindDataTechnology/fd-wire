@@ -58,7 +58,7 @@ cell-manager/
 
 ## registry 真实 API（任务 5.2 摸底，源码 /Users/chengsishi/code/mcp-gateway-registry）
 
-部署：cheap-1 docker compose（/opt/mcp-gateway-registry），基址 `https://mcp.finddatatech.cloud`（v1.30.0，已连通验证）。
+部署：the node docker compose（/opt/mcp-gateway-registry），基址 `https://mcp.finddatatech.cloud`（v1.30.0，已连通验证）。
 
 | 操作 | 端点 | 请求体 | 成功 | 备注（源码行号） |
 | --- | --- | --- | --- | --- |
@@ -135,7 +135,7 @@ python -m cell_manager provision acme && python -m cell_manager status acme
 | `CELL_CUSTOMER_CREDENTIAL_MAP` | -（空） | 客户轨凭据 JSON（`customer_id → key`），provision 时注入容器 `WIRE_CUSTOMER_KEY` |
 | `CELL_PLATFORM_CREDENTIAL` | -（空） | 平台轨凭据单值（全部 cell 共用），provision 时注入容器 `WIRE_PLATFORM_KEY` |
 | `CELL_CUSTOMER_IDENTITY_MAP` | -（空） | 开户身份 JSON（`customer_id → {username, sub2api_user_id}`），cell 授权束（grant/mint-key/退租）的输入 |
-| `CELL_REGISTRY_SECRET_KEY_FILE` | -（空） | registry 根信任材料文件（mint-key 用）：registry `.env`（摘 `SECRET_KEY=` 行）或裸 secret（0600）；仅 cheap-1 本机配置 |
+| `CELL_REGISTRY_SECRET_KEY_FILE` | -（空） | registry 根信任材料文件（mint-key 用）：registry `.env`（摘 `SECRET_KEY=` 行）或裸 secret（0600）；仅 the node 本机配置 |
 | `CELL_PREFLIGHT_MAP_PATH` | -（空） | registry 预检映射写入 API 路径（切片二任务 3.1 交付后配置）；未配置时 grant 显式跳过该步并审计留痕 |
 | `CELL_SCOPE_IMPORT_PATH` / `CELL_SCOPE_DELETE_PATH` | `/api/servers/groups/import` / `/api/iam/groups` | 授权 scope 端点微调（契约可重指纪律） |
 

@@ -130,7 +130,7 @@ pack 会在闭包处被拒，报文为「tools outside its commercial set」—�
 
 不要只看 `tool_list` 长度。要**两条腿都对上仓内 manifest**：
 
-- 活栈是 cheap-8 k8s `ns mcp-registry`（**不是** cheap-1 那条已冻结的 compose 栈；
+- 活栈是 the node k8s `ns mcp-registry`（**不是** the node 那条已冻结的 compose 栈；
   两栈 Mongo 独立，查错栈会看到陈年快照——本次实测在旧栈看到的是 10-15 的 13 工具，
   正确值在活栈）；
 - 取数用 registry pod 内 `/app/.venv/bin/python` + pymongo 直连 pod env 的

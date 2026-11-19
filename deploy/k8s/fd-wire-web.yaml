@@ -1,6 +1,6 @@
 # fd-wire-web — prod (fd-prod)
 # 柏讯门面脸：官网/控制台静态面（nginx on :8080，非 root，SPA fallback
-# 见镜像内 nginx.conf）。对外：NodePort ← cheap-1 SafeLine→Caddy→tailscale
+# 见镜像内 nginx.conf）。对外：NodePort ← the node SafeLine→Caddy→tailscale
 # （wire.finddatatech.cloud，wanxing-web 同法）；/mcp 由 Caddy 直接反代
 # registry，不经本 Service（见 ingress.yaml 头注）。
 # 镜像 tag 待首次 GHA 构建后回填（TODO(go-live)）。

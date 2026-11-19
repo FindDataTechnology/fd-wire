@@ -124,7 +124,7 @@ $ env MCP_TRANSPORT=http MCP_PORT=18311 python cell-image/healthcheck.py
  D alerts-mcp/notifiers/dingtalk.py …（6 个 notifier 删除）
  M alerts-mcp/notifiers/registry.py       D daas-mcp/migrate_entity_collection_keys.py
  M daas-mcp/pyproject.toml                D daas-mcp/migrate_process_cron.py
- M daas/fd_daas_mcp/server.py             M k8s/zihan/50-fd-daas-mcp.yaml
+ M daas/fd_daas_mcp/server.py             M k8s/the node/50-fd-daas-mcp.yaml
 ```
 
 ## 10. 未做/受限项（如实）

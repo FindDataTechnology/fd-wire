@@ -25,7 +25,7 @@
 
 ## Impact
 
-- **Logto 租户**（xinru-master `fd-logto`/`fd-postgres`）：新增 org 与服务账号用户
+- **Logto 租户**（the db host-master `fd-logto`/`fd-postgres`）：新增 org 与服务账号用户
 - **fd-wire**：`scripts/` 新增幂等建号与停用脚本、服务账号巡检脚本；无 API/前端改动（狗粮阶段）
 - **docs/TEST-ACCOUNTS.md**：新增「服务账号」节（既有敏感文件约定内流转）
 - **壹座侧（协调项，不在本仓）**：fleet cell 铸币凭据源切换 + 观测计时重置知会

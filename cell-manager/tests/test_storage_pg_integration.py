@@ -2,7 +2,7 @@
 
 门控：
 - ``CELL_PG_TEST_ADMIN_URL`` 未设 → 整个模块 skip（真库腿需要真实例；
-  本机直连示例：postgresql+psycopg://fd_cm_test:<pw>@100.64.0.12:5433/postgres
+  本机直连示例：postgresql+psycopg://fd_cm_test:<pw>@<cheap3-host>:5433/postgres
   ——注意 fd_cm_test 对 wire_platform 无 CONNECT（baseline REVOKE 生效），
   管理连接用 ``postgres`` 库即可；若仍填了 /wire_platform，本模块会自动
   改写为 /postgres 并注明）。

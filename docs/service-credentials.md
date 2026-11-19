@@ -28,7 +28,7 @@
 
 ## 2. 发放通道
 
-registry（mcp-gateway-registry fork，cheap-1 compose，基址
+registry（mcp-gateway-registry fork，the node compose，基址
 `https://mcp.finddatatech.cloud`）的 wire 门只认 header 凭据：
 `Authorization: Bearer <key>`（auth_server `/validate` 子请求校验；不支持
 URL query 传 key）。
@@ -43,10 +43,10 @@ URL query 传 key）。
 - 同时被 **MCP 入口**（`/<server>/mcp`）与 **registry `/api/`** 双面接受
 - 每用户上限 20 把；吊销走 `DELETE /api/patch-keys/{key_id}`
 
-**无浏览器铸造通道**（服务身份无人值守的正解，cheap-1 实测配方）：
+**无浏览器铸造通道**（服务身份无人值守的正解，the node 实测配方）：
 
 ```bash
-# 在 cheap-1 /opt/mcp-gateway-registry 下执行（SECRET_KEY 不出主机）
+# 在 the node /opt/mcp-gateway-registry 下执行（SECRET_KEY 不出主机）
 python3 - <<'PY'
 import base64, hmac, hashlib, json, time, urllib.request
 secret = [l.split("=",1)[1].strip() for l in open(".env") if l.startswith("SECRET_KEY=")][0].strip("\"'")
@@ -131,13 +131,13 @@ PY
 
 ### 5.1 开户 ceremony（每客户一次，2026-10-08 起一条命令）
 
-前置（每客户一次性输入，cheap-1 `/opt/cell-manager/env.sh`）：
+前置（每客户一次性输入，the node `/opt/cell-manager/env.sh`）：
 
 - `CELL_CUSTOMER_IDENTITY_MAP` 加一行 `"<customer_id>": {"username": ..., "sub2api_user_id": ...}`
   （sub2api 账户由 wire api 建户时返回 user_id，`name=wire-<customer_id>`）
 - sub2api 充值：`POST /api/v1/admin/users/{id}/balance {"operation":"add","balance":N}`
 
-然后两步（cell-manager，cheap-1）：
+然后两步（cell-manager，the node）：
 
 ```bash
 source /opt/cell-manager/env.sh

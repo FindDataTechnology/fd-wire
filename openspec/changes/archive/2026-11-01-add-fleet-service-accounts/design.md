@@ -4,7 +4,7 @@
 
 - 杀链机理已源码级定案（2026-10-25，见 fd-wire `wire-content-fleet/reports/2026-10-24-paas-line-credential-renewal-closure.md` §八）：SPA refresh token 绑定铸币会话（三条件），同会话再授权/会话销毁即杀链；独立会话的新授权不杀链。人类「正常登录」不威胁别的链，但审计无法归因、计量混账、改密/禁用连带杀链。
 - 壹座侧铸币已是 headless（`mint-line/1`，走 platform mint 回调通道），14 天墙由其周期重铸自动化覆盖（每 12 天）——**服务账号不解决 14 天墙，解决的是身份归属与 人/机解耦**。
-- 既有资产：Logto 1.42.0（xinru-master docker）；建号/改密 DB 直插配方在册（`docs/TEST-ACCOUNTS.md` §五/§六：argon2i m=8192,t=8,p=1、id varchar(12)、首登 Set username 坑）；wire 侧身份模型 = Logto sub ↔ Customer 映射（console-auth spec）；org 表可用（`wire-testers`=pdr0vgxmcem6 先例）。
+- 既有资产：Logto 1.42.0（the db host-master docker）；建号/改密 DB 直插配方在册（`docs/TEST-ACCOUNTS.md` §五/§六：argon2i m=8192,t=8,p=1、id varchar(12)、首登 Set username 坑）；wire 侧身份模型 = Logto sub ↔ Customer 映射（console-auth spec）；org 表可用（`wire-testers`=pdr0vgxmcem6 先例）。
 - 用户裁决（2026-10-29）：现在就做；现役所用均为测试账号，测试账号集可直接用。
 
 ## Goals / Non-Goals
@@ -36,11 +36,11 @@
 4. **凭据归属：每服务账号映射一个 wire Customer，命名前缀 `svc/` 承载 kind**
    - 理由：复用 sub ↔ Customer 单一真源；计量/配额天然按服务客户归属。Customer 命名 `svc/<cell>-<n>`。
    - 实施更正（2026-10-29）：`billing_customers` 无 `kind` 列——原 design 写的 `kind=service` 落地为 **name 前缀 `svc/` 约定**（唯一索引在 name 上，前缀即判别符），plan 挂 free。
-5. **密码保管：只进 `docs/TEST-ACCOUNTS.md`「服务账号」节 + cheap-1 令牌文件**
+5. **密码保管：只进 `docs/TEST-ACCOUNTS.md`「服务账号」节 + the node 令牌文件**
    - 沿既有敏感文件约定（内部流转、不进公开仓、不贴代码/UI）；与测试账号同管线，不新造密钥设施。
 6. **护栏 v1 = 巡检脚本扫 Logto 审计 `logs` 表**
    - 判据：svc-fleet 成员的 `Interaction.SignIn.Submit`，按 UA 分类——浏览器 UA（Mozilla*）= **ALARM**；工具 UA（`fd-svc-probe/1` 探针、`mint-line/1` 铸币、curl 等）= 记录不告警。探针登录会进审计（可见可核），属预期。
-   - 实施形态：`scripts/service_account_guard.sh` 装机 xinru `/usr/local/bin/fd-svc-guard.sh` + root cron 08:50 每日（26h 窗口）追加 `/var/log/fd-svc-guard.log`，退出码=告警位（可接告警通道）。验证门按用户裁决（2026-10-29，无真实客户不跑观察）改为构造测试：脚本 `selftest` 子命令——临时号全链（tool UA→ok / browser UA→ALARM / 退役即停用），绿即视为护栏验证通过。
+   - 实施形态：`scripts/service_account_guard.sh` 装机 the db host `/usr/local/bin/fd-svc-guard.sh` + root cron 08:50 每日（26h 窗口）追加 `/var/log/fd-svc-guard.log`，退出码=告警位（可接告警通道）。验证门按用户裁决（2026-10-29，无真实客户不跑观察）改为构造测试：脚本 `selftest` 子命令——临时号全链（tool UA→ok / browser UA→ALARM / 退役即停用），绿即视为护栏验证通过。
 7. **退役 = Logto 禁用（users 表禁用位）+ 台账行**
    - 链的死法自动落既有语义：续期 `invalid_grant` → 行 stale、提示重连（壹座已实现），无需 wire 改动。
 8. **迁移纪律：切换即知会壹座重置该链观测起算点；只铸目标账号，不动其他活跃链**

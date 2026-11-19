@@ -18,7 +18,7 @@ from cell_manager.secrets_store import SecretsStoreError
 from cell_manager.storage_pg import PostgresStorage, StorageProvisionError
 
 ADMIN_URL = "postgresql+psycopg://adm:admpw@pg.internal:5433/postgres"
-URL_HOST = "db-internal.cheap-3"
+URL_HOST = "db-internal.the node"
 URL_PORT = "5433"
 PROBE_ROLE = "wire_cell_someone_else"
 HEX48_RE = re.compile(r"^[0-9a-f]{48}$")
@@ -270,7 +270,7 @@ class TestIdempotentReentry:
 
         url = storage.provision("acme")
 
-        assert url.endswith(":oldpw@db-internal.cheap-3:5433/wire_cell_acme")
+        assert url.endswith(":oldpw@db-internal.the node:5433/wire_cell_acme")
         assert "oldpw" in url
         # 复用不 ALTER、不 CREATE、不发新条目；REVOKE 仍幂等执行
         assert state.sql("ALTER ROLE") == []

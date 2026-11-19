@@ -39,4 +39,4 @@
 - **cell-manager**：被 wire api 以服务身份触发开户（既有 ceremony 不改语义，只加触发入口）。
 - **Logto（UI 手工，M2M 不可用）**：新建 wire SPA 应用（回调 /console/callback、CORS wire 域）+ wire-admin 角色 + 挂现有管理员。
 - **fd-official-web（伴生 change `wire-tab-refresh`）**：i18n 四键 + 两张 wire 卡文案 + 定价跳转 CTA。
-- **运维**：静态令牌轮换、Secret 滚动、IdP 单点风险挂账（xinru-master OOM 前科，接客前硬前提另线跟踪）。
+- **运维**：静态令牌轮换、Secret 滚动、IdP 单点风险挂账（the db host-master OOM 前科，接客前硬前提另线跟踪）。

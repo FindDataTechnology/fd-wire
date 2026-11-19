@@ -16,7 +16,7 @@ pg16-trixie 防 collation 降级、shm 512m、SQLAlchemy 2.1 断 psycopg2、布�
 
 - **wire 专用 PG 实例配方**：`deploy/wire-postgres/` docker compose——pg16-trixie
   钉版、shm 512m、独立卷、健康检查、每日 pg_dump 备份 cron 与恢复演练文档。
-  部署目标 cheap-1（与 cells 同机，就近低延迟）；生产部署本身=运维步骤，配方与
+  部署目标 the node（与 cells 同机，就近低延迟）；生产部署本身=运维步骤，配方与
   文档先行。
 - **api 存储 URL 收敛**：`FD_WIRE_DATABASE_URL`（元数据）与
   `FD_WIRE_DATASETS_DATABASE_URL`（数据集库，含 api 层行存储）双 URL 语义明确，

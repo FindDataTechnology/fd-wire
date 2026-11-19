@@ -7,7 +7,7 @@ law-ai-official 快照线（用户既定正道，禁本机构建）：
 - 主仓 github/main 干净 clone（HEAD `4146d1b`）→ rsync 锚定 `/.git` →
   快照仓 commit `68242b8`（commit message 标注 `fd-wire @ 4146d1b`）。
 - GHA run `38466793614`：**2 分 20 秒全绿**（api/web/cell + connector 五平台）。
-- relay 回灌：cheap-3 cron 轮完成 hkccr → ccr；`skopeo inspect --creds`
+- relay 回灌：the node cron 轮完成 hkccr → ccr；`skopeo inspect --creds`
   核验 `fd-wire/api:sha-68242b8` 与 `fd-wire/web:sha-68242b8` 双 OK。
 
 ## 迁移（备份先行——吸取 console-ux-fixes 教训）
@@ -17,7 +17,7 @@ law-ai-official 快照线（用户既定正道，禁本机构建）：
 2. **迁移前置核查发现口径修正**：此前记录「wire_platform 0034 / wire_datasets
    0035」；本次逐一核验实为**双库均 0035**（0035 quality_rules 的 DDL 曾在
    双库同跑）。
-3. `alembic upgrade head` 依次对两库执行（Mac → tailnet 100.64.0.12:5433，
+3. `alembic upgrade head` 依次对两库执行（Mac → tailnet <cheap3-host>:5433，
    wire 角色；口令经临时 0600 文件传递、用毕即删）：
    - `wire_platform` 0035 → 0036 ✓
    - `wire_datasets` 0035 → 0036 ✓

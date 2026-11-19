@@ -82,7 +82,7 @@
 **出片通道**：GHA 账单阻断（org 与 scs001 线均已死，run 38404881015 前的正仓 run 3 秒全灭实证）
 → 走 law-ai-official 快照出片线（skill tcr-image-pipeline 现役绕行梯）：快照 a1060ba（真 sha
 757db0f）推 fd-wire-images，run 38404881015 全绿（api/web/cell + connector 五平台），relay
-回灌 ccr 双 manifest OK。**过程偏差如实记录**：最初误用 cheap-2 本机 docker build（违反
+回灌 ccr 双 manifest OK。**过程偏差如实记录**：最初误用 the node 本机 docker build（违反
 「构建永远走 GHA」禁令，用户当场纠偏），已停用并清理本机残留镜像。
 
 **滚版**：deploy/k8s 双 manifest tag → sha-a1060ba（注释标真 sha），推 gitee（653e567），

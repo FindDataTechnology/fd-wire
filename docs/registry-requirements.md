@@ -1,6 +1,6 @@
 # registry 侧需求：cell 隔离与 wire 接客前配套（2026-10-08 整理）
 
-> **交付对象**：registry 专属 session（cheap-1 `/opt/mcp-gateway-registry`，gitee
+> **交付对象**：registry 专属 session（the node `/opt/mcp-gateway-registry`，gitee
 > `FindDataTechnology/mcp-gateway-registry`，分支 `fd-backend-auth-fallback`，
 > HEAD dbf213e 定版）。本文档自包含：每个需求的现状证据、期望行为、验收判据
 > 都已给全，不需要读本 session 的上下文。
@@ -200,9 +200,9 @@ ecosystem-bridge 3.1）按 `REGISTRY_MONGO_URI` 直读 registry 的
 
 ### 期望
 
-决定一个正式口径：a) 配 `REGISTRY_MONGO_URI`（从 cheap-1 mongo 凭据生成
+决定一个正式口径：a) 配 `REGISTRY_MONGO_URI`（从 the node mongo 凭据生成
 只读账号 + `mongodb://<user>:<pass>@<host>:27017/mcp_registry?authSource=admin`
-——注意 mongo 端口只绑 cheap-1 本机/内网，需要经 k8s 可达路径，可能要走
+——注意 mongo 端口只绑 the node 本机/内网，需要经 k8s 可达路径，可能要走
 NodePort 或 tailscale IP）或 b) registry 侧加 HTTP 推送（audit 流 → wire
 internal endpoint）。**session 里拍板并落地**。
 
@@ -212,7 +212,7 @@ internal endpoint）。**session 里拍板并落地**。
 
 - 只读账号已建（集合级角色 `wireMeteringRO`，仅
   `mcp_registry.audit_events_default` find 权限；写/他集合实证 Unauthorized）
-- mongo 绑 tailnet `100.64.0.11:27017`（公网不可达），闸门探针从 fd-prod
+- mongo 绑 tailnet `<relay-host>:27017`（公网不可达），闸门探针从 fd-prod
   临时 pod 实探**通过**
 - api 镜像已带 pymongo（sha-5d3c2fa），`REGISTRY_MONGO_COLLECTION` 已配
   `audit_events_default`
@@ -238,7 +238,7 @@ internal endpoint）。**session 里拍板并落地**。
 
 ## 附：环境事实速查
 
-- registry 栈：cheap-1 `/opt/mcp-gateway-registry`（compose），registry
+- registry 栈：the node `/opt/mcp-gateway-registry`（compose），registry
   app=127.0.0.1:7860（nginx 8080 唯一对外 7860 路径 =
   `/_egress_internal/egress-token`）、auth-server:8888、mongo
   `mcp-mongodb`（root 凭据在容器 env `MONGO_INITDB_ROOT_*`）。
@@ -246,13 +246,13 @@ internal endpoint）。**session 里拍板并落地**。
   ——**R4 若选直读要考虑 TTL 窗口**，300s 轮询足够）、`mcp_scopes_default`
   （scope 文档）、`mcp_servers_default`（server 条目）、
   `virtual_servers_default`（虚拟入口）。
-- 平台服务凭据：`wire-platform-service`（两把 wgk-，明文 cheap-1
+- 平台服务凭据：`wire-platform-service`（两把 wgk-，明文 the node
   `/opt/cell-manager/secrets/`，0600）。
 - cell 条目约定：`fd-wire-cell-<customer_id>`（cell-manager
   `CELL_NAME_PREFIX`）；演练 cell `fd-wire-cell-drillcust001` 在跑（可作
   R1 验收对象）。
 - 提交纪律：registry 改动走 gitee 分支（当前 `fd-backend-auth-fallback`），
-  cheap-1 /opt 是 ff 部署；重建镜像参考 dbf213e 的 CN 镜像配方；compose
+  the node /opt 是 ff 部署；重建镜像参考 dbf213e 的 CN 镜像配方；compose
   操作 `docker compose up -d --no-deps --no-build`（alpine 依赖镜像国内
   拉不到，禁 --build）。
 

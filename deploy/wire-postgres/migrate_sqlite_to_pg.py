@@ -7,7 +7,7 @@ src/dst 计数，任一不齐即非零退出——「对账不过即止，不切
 
 用法：
   python3 migrate_sqlite_to_pg.py --sqlite /path/fd_wire_platform.db \
-      --pg "postgresql+psycopg://wire:***@100.64.0.12:5433/wire_platform" \
+      --pg "postgresql+psycopg://wire:***@<cheap3-host>:5433/wire_platform" \
       --tables billing_customers,billing_plans,...
 
 类型映射（读 PG information_schema 反推）：
