@@ -55,7 +55,7 @@ from console_fixture import (
 )
 from test_billing_common import FakeSub2Api, insert_metering
 
-INTERNAL = {"X-Internal-Token": "wire-internal-dev"}
+INTERNAL = {"X-Internal-Token": "test-internal-token"}
 SUB_A, SUB_B = "sub-cust-a", "sub-cust-b"
 
 #: admin 双闸凭据（gate=on：X-Admin-Token + 含 wire-admin 角色的 Bearer）

@@ -155,7 +155,7 @@ def test_notify_recipient_overridable_and_only_on_submit(client, monkeypatch):
         client.post(
             f"/internal/demands/{d['id']}/transition",
             json={"target_status": "in_progress", "by": "ops-001"},
-            headers={"X-Internal-Token": "wire-internal-dev"},
+            headers={"X-Internal-Token": "test-internal-token"},
         ).status_code
         == 200
     )

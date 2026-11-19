@@ -36,7 +36,7 @@ from fd_wire_api.demands import evaluation as evaluation_module
 from fd_wire_api.demands import get_db
 from fd_wire_api.demands.db import Base
 
-INTERNAL_TOKEN = "wire-internal-dev"
+INTERNAL_TOKEN = "test-internal-token"
 INTERNAL = {"X-Internal-Token": INTERNAL_TOKEN}
 from console_fixture import bearer, install_fake_jwks, make_console_env, mint_id_token
 

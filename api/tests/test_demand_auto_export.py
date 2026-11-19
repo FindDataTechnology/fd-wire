@@ -46,7 +46,7 @@ from console_fixture import bearer, install_fake_jwks, make_console_env, mint_id
 
 SUB_CUST = "sub-cust-001"
 CUST = bearer(mint_id_token(SUB_CUST))
-INTERNAL_TOKEN = "wire-internal-dev"
+INTERNAL_TOKEN = "test-internal-token"
 INTERNAL = {"X-Internal-Token": INTERNAL_TOKEN}
 
 VALID_SOURCE = "https://www.stats.gov.cn/sj/zxfb/"

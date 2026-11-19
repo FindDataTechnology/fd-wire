@@ -61,7 +61,7 @@ from fd_wire_api.quality.service import TOOL_QUALITY
 
 from console_fixture import bearer, install_fake_jwks, make_console_env, mint_id_token
 
-INTERNAL_TOKEN = "wire-internal-dev"
+INTERNAL_TOKEN = "test-internal-token"
 SUB_A = "sub-cust-001"
 SUB_B = "sub-cust-002"
 # token 在模块导入期铸好（RSA 进程缓存；iss/aud 在 fixture 里以 env 对齐），

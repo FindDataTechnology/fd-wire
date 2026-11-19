@@ -19,4 +19,4 @@ import os
 os.environ.setdefault("XINGYAN_SYNC_ENABLED", "0")
 os.environ.setdefault("XINGYAN_AUTO_CREATE_TABLES", "1")
 os.environ.setdefault("ONTOLOGY_SNAPSHOT_ENABLED", "0")
-os.environ.setdefault("FD_WIRE_INTERNAL_TOKEN", "wire-internal-dev")
+os.environ.setdefault("FD_WIRE_INTERNAL_TOKEN", "test-internal-token")

@@ -173,7 +173,7 @@ def make_console_env(
     gate: str | None = None,
     admin_role: str = "wire-admin",
     db_filename: str = "platform.db",
-    internal_token: str | None = "wire-internal-dev",
+    internal_token: str | None = "test-internal-token",
     plan_code: str = "free",
 ) -> ConsoleEnv:
     """建平台库环境（admin/billing/console 同一临时文件库，静态池单文件）。

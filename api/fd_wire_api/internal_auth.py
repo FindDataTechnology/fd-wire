@@ -24,7 +24,7 @@ from fastapi import Header, HTTPException, status
 
 #: 环境变量名。**这里刻意没有缺省值。**
 #:
-#: 曾经有 ``DEFAULT_INTERNAL_TOKEN = "wire-internal-dev"``。生产一直由 deploy/k8s 的
+#: 曾经有一个写死的缺省口令常量。生产一直由 deploy/k8s 的
 #: Secret 注入真值，所以缺省值在线上从没生效过——但这正是它危险的地方：
 #: 任何一次漏配 Secret 的部署都会**静默地**用一个写在源码里的口令跑起来，
 #: 而这份源码是公开的，等于把口令公开。漏配必须炸，不能降级。

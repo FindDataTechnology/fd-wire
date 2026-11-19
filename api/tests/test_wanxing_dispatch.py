@@ -54,7 +54,7 @@ from fd_wire_api.demands.wanxing import (
 from console_fixture import bearer, install_fake_jwks, make_console_env, mint_id_token
 from test_admin_api import AUTH, admin_env, seed_console_customers, submit_demand
 
-INTERNAL_TOKEN = "wire-internal-dev"
+INTERNAL_TOKEN = "test-internal-token"
 INTERNAL = {"X-Internal-Token": INTERNAL_TOKEN}
 SUB_CUST = "sub-cust-001"
 CUST = bearer(mint_id_token(SUB_CUST))

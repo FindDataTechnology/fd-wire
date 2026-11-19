@@ -648,7 +648,7 @@ def test_demands_list_all_customers_with_status_filter(admin_env):
     resp = client.post(
         f"/internal/demands/{d2['id']}/transition",
         json={"target_status": "in_progress", "by": "tester"},
-        headers={"X-Internal-Token": "wire-internal-dev"},
+        headers={"X-Internal-Token": "test-internal-token"},
     )
     assert resp.status_code == 200, resp.text
 

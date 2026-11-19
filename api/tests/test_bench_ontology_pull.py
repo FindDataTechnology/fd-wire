@@ -916,3 +916,111 @@ def test_routes_corrupt_snapshot_projection_500(routes_env):
     )
     assert resp.status_code == 500
     assert "缺少核心键" in resp.json()["detail"]
+
+
+# ================================================ 6. 登录态只读读面（console 面）
+# add-bench-wire-seam-contract 任务 2.1/2.2：/api/v1/console/bench-ontology
+# 与内部面**分属两套信任边界**——这一组用例并存地把两件事同时钉住：
+#   (1) 新面只要有 console 登录即 200，且不认 X-Internal-Token；
+#   (2) 旧内部面仍然不认 console 登录（无 X-Internal-Token 就 401）。
+# 任何把它们合并成一套鉴权边界的改动都会让其中一半变红。
+
+CONSOLE_SUB = "sub-bench-console-a"
+CONSOLE_CUST = "bench-console-cust-a"
+
+
+@pytest.fixture()
+def console_env(tmp_path, monkeypatch):
+    """平台库 + bench 快照库 + TestClient 登录态（复用 console_fixture）。"""
+    from console_fixture import install_fake_jwks, make_console_env
+
+    install_fake_jwks(monkeypatch)
+    env = make_console_env(
+        tmp_path, monkeypatch, customers=[(CONSOLE_SUB, CONSOLE_CUST)]
+    )
+    sf = _make_session_factory()
+
+    def override_get_db():
+        db = sf()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[bench_store.get_db] = override_get_db
+    try:
+        yield env, sf
+    finally:
+        app.dependency_overrides.pop(bench_store.get_db, None)
+
+
+def test_console_face_requires_login(console_env):
+    env, _sf = console_env
+    client = TestClient(app)
+    url = "/api/v1/console/bench-ontology"
+    assert client.get(url).status_code == 401  # 未登录
+    assert client.get(url, headers=env.headers_for(CONSOLE_SUB)).status_code == 200
+
+
+def test_console_face_does_not_accept_internal_token(console_env, monkeypatch):
+    """内部令牌不是这张脸的凭据：不带 console 登录仍是 401。"""
+    env, _sf = console_env
+    monkeypatch.setenv("FD_WIRE_INTERNAL_TOKEN", INTERNAL_TOKEN)
+    client = TestClient(app)
+    url = "/api/v1/console/bench-ontology"
+    assert client.get(url, headers=AUTH).status_code == 401
+
+
+def test_internal_face_does_not_accept_console_login(console_env):
+    """反向边界：内部面不认 console 登录（两套信任边界未被合并）。"""
+    env, _sf = console_env
+    client = TestClient(app)
+    url = "/api/v1/internal/bench-ontology/domains"
+    assert client.get(url, headers=env.headers_for(CONSOLE_SUB)).status_code == 401
+
+
+def test_console_overview_empty_is_empty_list(console_env):
+    """从未拉取过 → domains 为空列表（「还没拉过」不是 404）。"""
+    env, _sf = console_env
+    client = TestClient(app)
+    resp = client.get(
+        "/api/v1/console/bench-ontology", headers=env.headers_for(CONSOLE_SUB)
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"domains": []}
+
+
+def test_console_overview_metadata_only_no_payload(console_env):
+    """有快照时只出元数据：版本/digest/计数/时间，响应体不含正文。"""
+    env, sf = console_env
+    db = sf()
+    try:
+        save_snapshot(
+            db,
+            domain_key="pv-industry",
+            version=1,
+            digest=DIGEST_V1,
+            payload=_payload(),
+        )
+    finally:
+        db.close()
+    client = TestClient(app)
+    resp = client.get(
+        "/api/v1/console/bench-ontology", headers=env.headers_for(CONSOLE_SUB)
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert list(body) == ["domains"]
+    entries = body["domains"]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["domain_key"] == "pv-industry"
+    assert entry["version"] == 1
+    assert entry["digest"] == DIGEST_V1
+    assert entry["entity_count"] == 2
+    assert entry["relationship_count"] == len(_payload()["relationships"])
+    assert entry["pulled_at"]  # ISO 文本，非空
+    # 正文不可见：任何条目正文/载荷键都不得出现在响应里
+    raw = resp.text
+    assert "payload" not in raw
+    assert "上游-多晶硅" not in raw  # body 里的实体名

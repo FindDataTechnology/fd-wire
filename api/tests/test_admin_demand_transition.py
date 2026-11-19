@@ -21,7 +21,7 @@ from fd_wire_api.delivery.scope_client import ScopeClientError, scope_client_dep
 from console_fixture import bearer, mint_id_token
 from test_admin_api import AUTH, admin_env, seed_console_customers
 
-INTERNAL_TOKEN = "wire-internal-dev"
+INTERNAL_TOKEN = "test-internal-token"
 INTERNAL = {"X-Internal-Token": INTERNAL_TOKEN}
 #: 目录锚点（交付时逐指标 grant 进 scope allow-list）
 INDICATOR = "IND-AUTO-014"
