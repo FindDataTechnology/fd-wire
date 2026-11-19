@@ -24,6 +24,8 @@ name: build
 # scs001/fd-wire-images 承担（免费；已用 git tree 逐 blob 核对与本源仓 0 差异）。
 # 本仓 CI 因组织私有额度耗尽而全部瞬时失败，无产出。保留手动入口以便回滚。
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -151,8 +153,8 @@ jobs:
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.TCR_USERNAME }}
-          password: ${{ secrets.TCR_PASSWORD }}
+          username: ${{ secrets.TCR_USER }}
+          password: ${{ secrets.TCR_PASS }}
 
       # 内容基线：读 main 当前 digest（未认证/不存在都容忍，空 = 首次构建）
       - id: prev
@@ -345,8 +347,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.TCR_USERNAME }}
-          password: ${{ secrets.TCR_PASSWORD }}
+          username: ${{ secrets.TCR_USER }}
+          password: ${{ secrets.TCR_PASS }}
 
       - name: Pack & push downloads image (OCI relay)
         run: |
