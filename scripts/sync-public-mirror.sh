@@ -71,6 +71,9 @@ git archive HEAD | tar -x -C "$WORK/tree"
 
 echo "2/4 排除非源码目录"
 removed=0
+# 本脚本自己也要排掉：它的禁品扫描规则里就写着那些地址与令牌字面量，
+# 带进镜像会被自己那道检查命中（实测：第一次跑就撞上了）。
+rm -f "$WORK/tree/scripts/sync-public-mirror.sh"
 for d in "${EXCLUDES[@]}"; do
   if [ -e "$WORK/tree/$d" ]; then
     rm -rf "$WORK/tree/$d"
