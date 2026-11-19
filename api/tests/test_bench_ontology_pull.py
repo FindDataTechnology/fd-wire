@@ -1059,11 +1059,10 @@ def test_console_overview_pulled_at_tracks_last_ok_pull(console_env):
         )
         log_pull(db, domain_key="legal", version=2, digest=DIGEST_V2, ok=True)
         log_pull(db, domain_key="legal", version=2, digest=DIGEST_V2, ok=True)
+        # `log_pull` 的 pulled_at 由 default=_utcnow 落当前时刻（比 first/later 都新），
+        # 所以必须把**所有**日志行钉到测试时刻——只改最后一行，前一行会赢排序。
         db.execute(
-            text(
-                "UPDATE bench_pull_log SET pulled_at = :t "
-                "WHERE domain_key = 'legal' AND id = (SELECT MAX(id) FROM bench_pull_log)"
-            ),
+            text("UPDATE bench_pull_log SET pulled_at = :t WHERE domain_key = 'legal'"),
             {"t": later},
         )
         db.commit()
