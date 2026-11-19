@@ -34,7 +34,7 @@ import os
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -1020,7 +1020,88 @@ def test_console_overview_metadata_only_no_payload(console_env):
     assert entry["entity_count"] == 2
     assert entry["relationship_count"] == len(_payload()["relationships"])
     assert entry["pulled_at"]  # ISO 文本，非空
+    assert entry["version_pulled_at"]  # 该版首次落库时间
     # 正文不可见：任何条目正文/载荷键都不得出现在响应里
     raw = resp.text
     assert "payload" not in raw
     assert "上游-多晶硅" not in raw  # body 里的实体名
+
+
+def test_console_overview_pulled_at_tracks_last_ok_pull(console_env):
+    """`pulled_at` = 最近一次**成功拉取**，不是快照行首次落库时间。
+
+    为什么单独立一条：快照表按 (domain, digest) 幂等，同一版本每小时重拉都
+    命中既有行、不写新行。若读面直接取快照行的 pulled_at，一个每小时都在跑
+    的同步会永远显示「3 小时前拉过」——读起来像停了，而那正是用户要看这个
+    页面的原因。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    env, sf = console_env
+    db = sf()
+    try:
+        save_snapshot(
+            db,
+            domain_key="legal",
+            version=2,
+            digest=DIGEST_V2,
+            payload=_payload(version=2, digest=DIGEST_V2),
+        )
+        # 快照行是一次性落库的（旧时刻）；随后两次幂等重拉成功。
+        first = datetime(2026, 11, 19, 10, 20, tzinfo=timezone.utc)
+        later = first + timedelta(hours=2)
+        db.execute(
+            text(
+                "UPDATE bench_ontology_snapshots SET pulled_at = :t "
+                "WHERE domain_key = 'legal'"
+            ),
+            {"t": first},
+        )
+        log_pull(db, domain_key="legal", version=2, digest=DIGEST_V2, ok=True)
+        log_pull(db, domain_key="legal", version=2, digest=DIGEST_V2, ok=True)
+        db.execute(
+            text(
+                "UPDATE bench_pull_log SET pulled_at = :t "
+                "WHERE domain_key = 'legal' AND id = (SELECT MAX(id) FROM bench_pull_log)"
+            ),
+            {"t": later},
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    client = TestClient(app)
+    resp = client.get(
+        "/api/v1/console/bench-ontology", headers=env.headers_for(CONSOLE_SUB)
+    )
+    assert resp.status_code == 200
+    entry = resp.json()["domains"][0]
+    assert entry["pulled_at"].startswith("2026-11-19T12:20")  # 最近成功拉取
+    assert entry["version_pulled_at"].startswith("2026-11-19T10:20")  # 该版首次落库
+    assert entry["pulled_at"] != entry["version_pulled_at"]
+
+
+def test_console_overview_failed_pull_does_not_move_pulled_at(console_env):
+    """失败拉取**不算**「什么时候拉的」——只有 ok=True 的行参与。"""
+    env, sf = console_env
+    db = sf()
+    try:
+        save_snapshot(
+            db,
+            domain_key="legal",
+            version=2,
+            digest=DIGEST_V2,
+            payload=_payload(version=2, digest=DIGEST_V2),
+        )
+        log_pull(db, domain_key="legal", ok=False, error="对端拒绝：令牌未登记")
+        db.commit()
+    finally:
+        db.close()
+
+    client = TestClient(app)
+    resp = client.get(
+        "/api/v1/console/bench-ontology", headers=env.headers_for(CONSOLE_SUB)
+    )
+    entry = resp.json()["domains"][0]
+    # 无成功拉取行 → 回落快照行的时刻（不因失败行而前移）
+    assert entry["pulled_at"] == entry["version_pulled_at"]

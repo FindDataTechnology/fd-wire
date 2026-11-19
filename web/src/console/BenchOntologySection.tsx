@@ -142,6 +142,17 @@ export function BenchOntologySection() {
               <span className="ml-auto text-slate-400">
                 {t("console.entities.benchOntology.pulledAtLabel")}{" "}
                 <span className="font-mono">{d.pulled_at}</span>
+                {d.version_pulled_at && d.version_pulled_at !== d.pulled_at && (
+                  // 同一版本被反复拉到属正常：主时间答「同步还活着吗」，
+                  // 这一句答「这一版是哪天进来的」。两个问题不同，合并会误导。
+                  <span
+                    className="ml-2 font-mono text-slate-400"
+                    data-testid={`bench-ontology-version-at-${d.domain_key}`}
+                  >
+                    ({t("console.entities.benchOntology.versionPulledAtShort")}{" "}
+                    {d.version_pulled_at})
+                  </span>
+                )}
               </span>
             </li>
           ))}

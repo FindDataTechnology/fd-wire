@@ -138,12 +138,36 @@ def _count_items(payload: dict | None, key: str) -> int:
     return len(items) if isinstance(items, list) else 0
 
 
+def _last_ok_pull(conn: Session, *, domain_key: str):
+    """该域最近一次**成功拉取**的时刻（含幂等命中），无记录返回 None。
+
+    为什么不用快照行的 ``pulled_at``：那张表按 ``(domain, digest)`` 幂等，
+    同一版本每小时重拉都命中既有行、不写新行——快照时间因此永久停在
+    「该版本首次落库」，读起来像同步停了。拉取日志才是「最后一次真的够到
+    对端」的地方（每次尝试都记一行，成败都记）。
+    """
+    from .store import BenchPullLog
+
+    return conn.scalars(
+        select(BenchPullLog.pulled_at)
+        .where(BenchPullLog.domain_key == domain_key, BenchPullLog.ok.is_(True))
+        .order_by(BenchPullLog.pulled_at.desc(), BenchPullLog.id.desc())
+        .limit(1)
+    ).first()
+
+
 def snapshot_overview(conn: Session) -> list[dict]:
     """登录态读面的载荷：每域最新版本的**元数据**，不含快照正文。
 
     只读且只出元数据是刻意的（design D3）：快照正文整块含共享层内容，一旦
     可读就等于把平台发布物免费复制进浏览器；而用户要回答的问题是「拉到哪
     一版、拉的是什么规模、什么时候拉的」，这四项都在元数据里。
+
+    两个时间分开给，因为它们回答的问题不同（且合并过一次就出过错）：
+    ``pulled_at`` = 最近一次成功拉取（含幂等命中，来自拉取日志）；
+    ``version_pulled_at`` = 这一版首次落库的时间（来自不可变快照行）。
+    只给前者会看不出「这一版是哪天进来的」，只给后者会让每小时都在跑的
+    同步看起来像停了。
     """
     from .store import get_latest_snapshot
 
@@ -163,7 +187,10 @@ def snapshot_overview(conn: Session) -> list[dict]:
                 "digest": latest["digest"],
                 "entity_count": _count_items(payload, "entities"),
                 "relationship_count": _count_items(payload, "relationships"),
-                "pulled_at": _isoformat(latest["pulled_at"]),
+                "pulled_at": _isoformat(
+                    _last_ok_pull(conn, domain_key=domain_key) or latest["pulled_at"]
+                ),
+                "version_pulled_at": _isoformat(latest["pulled_at"]),
             }
         )
     return overview

@@ -37,7 +37,8 @@ describe("BenchOntologySection", () => {
           digest: "5897354d" + "0".repeat(56),
           entity_count: 5117,
           relationship_count: 25,
-          pulled_at: "2026-11-19T02:00:00",
+          pulled_at: "2026-11-19T12:02:49",
+          version_pulled_at: "2026-11-19T02:00:00",
         },
       ],
     });
@@ -48,6 +49,26 @@ describe("BenchOntologySection", () => {
     expect(screen.getByText("5117")).toBeTruthy();
     expect(screen.getByText("25")).toBeTruthy();
     expect(screen.getByText("2026-11-19T02:00:00")).toBeTruthy();
+  });
+
+  it("最近拉取与该版落库时间不同时，两者都显示", async () => {
+    fetchOverview.mockResolvedValue({
+      domains: [
+        {
+          domain_key: "legal",
+          version: 2,
+          digest: "5897354d" + "0".repeat(56),
+          entity_count: 5117,
+          relationship_count: 25,
+          pulled_at: "2026-11-19T12:02:49",
+          version_pulled_at: "2026-11-19T02:00:00",
+        },
+      ],
+    });
+    render(<BenchOntologySection />);
+    expect(await screen.findByText("2026-11-19T12:02:49")).toBeTruthy();
+    // 关键：只看 pulled_at 会让人以为这一版是刚进来的，实际它更早落库
+    expect(screen.getByTestId("bench-ontology-version-at-legal")).toBeTruthy();
   });
 
   it("空数组显示「尚未拉取」空态而不是错误", async () => {
