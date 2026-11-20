@@ -13,6 +13,10 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-fund --no-audit
 COPY tsconfig.json vite.config.ts index.html ./
+# public/ 必须显式拷：Vite 不会凭空生成它，而下面的 COPY 只点了 src。
+# 缺这一行时 index.html 里声明的 /favicon.svg、og:image 全部 404
+#（2026-11-20 实测：线上 /favicon.svg 返回 404，图标根本没进镜像）。
+COPY public ./public
 COPY src ./src
 # package.json build = tsc --noEmit && vite build → dist/
 RUN npm run build
