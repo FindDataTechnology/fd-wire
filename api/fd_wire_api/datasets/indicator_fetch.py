@@ -28,18 +28,38 @@ from .ingest import EngineCallError, EngineUnavailable
 INDICATOR_SERIES_TOOL = "indicator_series_read"
 
 
+#: 代码默认：网内 business-mcp 副本（仅本地/开发；生产 cheap 集群无此服务）
+DEFAULT_DIRECT_URL = "http://fd-find-data-business-mcp.fd-mcp.svc:8310"
+
+
 class IndicatorFetchSettings(BaseSettings):
-    """上游拉数通道配置（env 可重指；缺省网内 business-mcp 副本）。"""
+    """上游拉数通道配置（env 可重指；缺省网内 business-mcp 副本）。
+
+    端点/凭据解析顺序（与 ``subjects/service.py`` 同序——那条链路生产验证过）：
+
+    - 端点：``INDICATOR_FETCH_URL`` → ``BUSINESS_MCP_URL`` → 代码默认；
+    - 凭据：``AI_PLATFORM_CREDENTIAL``（经 registry 计量入口的平台服务凭据，
+      生产实测 200）→ ``INDICATOR_FETCH_TOKEN``（直连 business-mcp 的
+      internal token）。即便设了显式端点，也仍优先平台凭据（同一计量轨）。
+    """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    #: 显式端点覆盖；空 = 落到 BUSINESS_MCP_URL（生产 registry 入口）
     indicator_fetch_url: str = Field(
-        default="http://fd-find-data-business-mcp.fd-mcp.svc:8310",
-        validation_alias="INDICATOR_FETCH_URL",
+        default="", validation_alias="INDICATOR_FETCH_URL"
     )
-    #: 平台服务凭据（business-mcp 的 internal token 轨；空=匿名仅限本地开发）
+    #: 直连 business-mcp 的 internal token（仅直连模式用）
     indicator_fetch_token: str = Field(
         default="", validation_alias="INDICATOR_FETCH_TOKEN"
+    )
+    #: registry 入口地址（生产 reachable 的 business-mcp 公网 MCP 端点）
+    business_mcp_url: str = Field(
+        default="", validation_alias="BUSINESS_MCP_URL"
+    )
+    #: 平台服务凭据（经 registry 计量入口调上游的凭据，计量归集轨）
+    platform_credential: str = Field(
+        default="", validation_alias="AI_PLATFORM_CREDENTIAL"
     )
     #: 单次建集的指标数上限（v0 单指标一集，1 即够；留位批量包）
     indicator_fetch_max_ids: int = Field(
@@ -56,8 +76,15 @@ class IndicatorFetchSettings(BaseSettings):
 
     @property
     def mcp_url(self) -> str:
-        url = self.indicator_fetch_url.rstrip("/")
+        # 端点：显式覆盖 → 生产 registry 入口 → 代码默认（网内副本）
+        raw = (self.indicator_fetch_url or self.business_mcp_url or DEFAULT_DIRECT_URL)
+        url = raw.rstrip("/")
         return url if url.endswith("/mcp") else f"{url}/mcp"
+
+    @property
+    def credential(self) -> str | None:
+        # 凭据：平台服务凭据优先（经 registry 计量入口，生产实测 200）→ internal token
+        return (self.platform_credential or self.indicator_fetch_token) or None
 
 
 @lru_cache(maxsize=1)
@@ -116,7 +143,7 @@ def fetch_series(
     cfg = settings or get_indicator_fetch_settings()
     client = NativeMcpClient(
         cfg.mcp_url,
-        credential=cfg.indicator_fetch_token or None,
+        credential=cfg.credential,
         http_client=http_client or httpx.Client(timeout=cfg.indicator_fetch_timeout_seconds),
         label="指标拉数端点",
     )

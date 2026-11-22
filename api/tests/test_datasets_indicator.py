@@ -252,3 +252,38 @@ def select_event(dataset_key):
         LedgerEvent.type == "dataset.indicator.registered",
         LedgerEvent.subject["key"].as_string() == dataset_key,
     )
+
+
+class TestEndpointResolution:
+    """端点/凭据解析（生产回归：曾被硬编码到不可达的网内副本 + 错凭据）。
+
+    这些纯解析用例不打网络，钉住「生产经 registry 入口 + 平台凭据」的默认，
+    避免再次出现「本地绿、生产 502 不可达」的静默失败。
+    """
+
+    def test_prod_resolves_registry_entry_and_platform_credential(self, monkeypatch):
+        monkeypatch.delenv("INDICATOR_FETCH_URL", raising=False)
+        monkeypatch.setenv("BUSINESS_MCP_URL", "https://mcp.example/fd-biz")
+        monkeypatch.setenv("AI_PLATFORM_CREDENTIAL", "plat-key")
+        monkeypatch.delenv("INDICATOR_FETCH_TOKEN", raising=False)
+        s = indicator_fetch.IndicatorFetchSettings()
+        assert s.mcp_url == "https://mcp.example/fd-biz/mcp"
+        assert s.credential == "plat-key"
+
+    def test_explicit_override_wins(self, monkeypatch):
+        monkeypatch.setenv("INDICATOR_FETCH_URL", "http://direct:8310/mcp")
+        monkeypatch.setenv("BUSINESS_MCP_URL", "https://mcp.example/fd-biz")
+        monkeypatch.setenv("INDICATOR_FETCH_TOKEN", "internal")
+        monkeypatch.setenv("AI_PLATFORM_CREDENTIAL", "plat-key")
+        s = indicator_fetch.IndicatorFetchSettings()
+        assert s.mcp_url == "http://direct:8310/mcp"
+        # 平台凭据仍优先（即便设了显式 URL，仍是同一计量轨凭据）
+        assert s.credential == "plat-key"
+
+    def test_no_env_falls_back_to_direct_default(self, monkeypatch):
+        for k in ("INDICATOR_FETCH_URL", "BUSINESS_MCP_URL", "AI_PLATFORM_CREDENTIAL",
+                  "INDICATOR_FETCH_TOKEN"):
+            monkeypatch.delenv(k, raising=False)
+        s = indicator_fetch.IndicatorFetchSettings()
+        assert s.mcp_url == "http://fd-find-data-business-mcp.fd-mcp.svc:8310/mcp"
+        assert s.credential is None
