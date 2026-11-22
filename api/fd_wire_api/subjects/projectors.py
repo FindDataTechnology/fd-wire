@@ -230,9 +230,13 @@ def project_graph(rr: ResolvedRef, spec: dict, caller: McpCaller) -> ChannelResu
     args = {
         "algorithm": algo,
         "start_entity_code": center[0],
-        "entity_type_filter": center[1],
         "max_depth": spec.get("max_depth", 1),
     }
+    # entity_type_filter 在 graph_search 里过滤的是**邻居**类型，不是中心实体类型
+    # ——传中心类型（如 stock）会把 industry/person 邻居全滤掉、通道恒空。只在
+    # 调用方显式在 spec 里指定想看的邻居类型时才传。
+    if spec.get("neighbor_type"):
+        args["entity_type_filter"] = spec["neighbor_type"]
     try:
         payload = caller.call("graph_search", args)
     except Exception as exc:  # noqa: BLE001

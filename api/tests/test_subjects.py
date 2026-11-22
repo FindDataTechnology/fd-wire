@@ -159,6 +159,17 @@ def test_project_graph_neighbors():
     biz = FakeBiz({"graph_search": {"algorithm": "neighbors", "results": [{"code": "801120"}]}})
     r = proj.project_graph(rr, {}, biz)
     assert r.coverage == proj.COVERAGE_AVAILABLE and r.rows[0]["code"] == "801120"
+    # 默认不传 entity_type_filter——它过滤邻居类型，传中心类型(stock)会滤掉
+    # industry/person 邻居致通道恒空（生产踩过的坑）
+    assert biz.calls[0][1].get("entity_type_filter") is None
+
+
+def test_project_graph_neighbor_type_honored():
+    rr = proj.resolve_ref("company", {"source": "stock_code", "code": "300762"})
+    biz = FakeBiz({"graph_search": {"results": [{"code": "801740", "entity_type": "industry"}]}})
+    proj.project_graph(rr, {"neighbor_type": "industry"}, biz)
+    # 显式声明邻居类型时才传 filter
+    assert biz.calls[0][1]["entity_type_filter"] == "industry"
 
 
 def test_project_context_defaults_unavailable():
