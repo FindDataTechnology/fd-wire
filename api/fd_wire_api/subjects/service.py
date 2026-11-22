@@ -75,12 +75,25 @@ def _subject_mcp_url() -> str:
 
 
 def get_business_caller():
-    """business-mcp 类工具面客户端（NativeMcpClient 包一层；端点见 _subject_mcp_url）。"""
+    """business-mcp 类工具面客户端（NativeMcpClient 包一层；端点见 _subject_mcp_url）。
+
+    凭据解析：``SUBJECT_MCP_TOKEN`` 显式覆盖 → ``AI_PLATFORM_CREDENTIAL``（平台
+    服务凭据——经 registry 入口调 business-mcp 的计量轨凭据，生产实测 200）→
+    ``INDICATOR_FETCH_TOKEN``。生产经 registry 入口时用平台凭据；直连
+    business-mcp 时用 internal token。
+    """
+    import os
+
     from fd_mcp_client import NativeMcpClient
     from ..datasets.indicator_fetch import get_indicator_fetch_settings
 
     url = _subject_mcp_url()
-    token = get_indicator_fetch_settings().indicator_fetch_token or None
+    token = (
+        os.environ.get("SUBJECT_MCP_TOKEN")
+        or os.environ.get("AI_PLATFORM_CREDENTIAL")
+        or get_indicator_fetch_settings().indicator_fetch_token
+        or None
+    )
 
     class _Caller:
         def __init__(self) -> None:
