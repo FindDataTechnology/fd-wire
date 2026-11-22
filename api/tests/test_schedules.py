@@ -848,3 +848,44 @@ def test_migration_downgrade_drops_table(migrated_0023) -> None:
     engine = create_engine(db_url)
     assert "refresh_schedules" not in inspect(engine).get_table_names()
     engine.dispose()
+
+
+class TestArtifactContractPath:
+    """调度器契约路径（regression）：带合法 query 面板的看板定时刷新必须走
+    确定性契约路径（零 LLM、免费档也可），与手动端点同决策。此前调度器恒走
+    AI 无头轮——契约看板被 LLM 重生成且免费档 403。"""
+
+    def test_artifact_contract_path_scheduled_zero_llm(self, env):
+        from test_artifacts_refresh import contract_panel, make_dataset
+
+        with get_datasets_session() as db:
+            make_dataset(db, dataset_id="ds-contract", tier="api")
+        spec = {
+            "title": "契约看板",
+            "spec": {"panels": [contract_panel("q1", "ds-contract")]},
+        }
+        dashboard = _make_artifact(env, CUST_HEADERS["cust-001"], spec=spec)
+        # LLM 被调用即抛——契约路径根本不应创建/调用 LLM
+        executor_mod._llm_factory_override = lambda: FakeLlm(
+            [AssertionError("契约路径不应调用 LLM")]
+        )
+        t0 = utc_now_naive()
+        with get_schedules_session() as db:
+            row = schedules_service.create_schedule(
+                db, customer_id="cust-001", target_type="artifact",
+                target_id=str(dashboard["id"]), interval_minutes=360, now=t0,
+            )
+            row_id = row.id
+        stats = runner_mod.tick_once(now=t0 + timedelta(minutes=361))
+        assert stats == {"due": 1, "ok": 1, "failed": 0, "removed": 0}
+        detail = env.client.get(
+            f"/api/v1/artifacts/{dashboard['id']}", headers=CUST_HEADERS["cust-001"]
+        ).json()
+        assert detail["version"] == 2
+        # 确定性快照（amount desc limit 1 → 20.75）
+        assert detail["spec"]["spec"]["panels"][0]["snapshot"] == {
+            "columns": ["amount"], "rows": [[20.75]],
+        }
+        with get_schedules_session() as db:
+            saved = db.get(RefreshSchedule, row_id)
+            assert saved.last_status == "ok"

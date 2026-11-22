@@ -126,6 +126,38 @@ def execute_artifact(*, customer_id: str, target_id: str) -> dict:
         if not artifacts_refresh.acquire_refresh_lock(artifact.id):
             raise RuntimeError(f"产物 {artifact.id} 正在刷新中（单飞锁被占）")
         try:
+            current = artifacts_service.current_spec(db, artifact)
+            # 与手动端点同决策（artifacts/routes.py）：≥1 合法契约面板 → 确定性
+            # 契约路径（零 LLM、不碰 cell，免费档也可调度）；空计划 → AI 无头轮。
+            # 此前调度器恒走 AI 轮，契约看板被 LLM 重生成且免费档 403。
+            from ..artifacts import info_contract, query_contract
+
+            info_plan = info_contract.info_refresh_plan(current)
+            contract_plan = query_contract.contract_refresh_plan(current)
+            if info_plan or contract_plan:
+                base = current
+                if info_plan:
+                    base, _ = info_contract.refresh_spec_with_info(
+                        base, info_contract.client_from_env(),
+                        now=artifacts_service.utc_now_iso(),
+                    )
+                if contract_plan:
+                    from ..datasets.db import get_session as get_datasets_session
+
+                    with get_datasets_session() as datasets_db:
+                        base, _ = query_contract.refresh_spec_with_contracts(
+                            datasets_db, spec=base,
+                            customer_id=customer_id,
+                            engine_factory=_engine_factory(),
+                        )
+                new_spec = base
+                new_spec["refreshed_at"] = artifacts_service.utc_now_iso()
+                artifacts_service.update_spec(
+                    db, artifact, spec=new_spec, customer_id=customer_id
+                )
+                return {"artifact_id": artifact_id,
+                        "version": artifact.version}
+            # 无契约面板 → AI 无头轮（需 llm + tool_executor）
             if _llm_factory_override is not None:
                 llm = _llm_factory_override()
             else:
@@ -140,13 +172,12 @@ def execute_artifact(*, customer_id: str, target_id: str) -> dict:
                 tool_executor = CellMcpExecutor(customer_id)
             try:
                 new_spec = artifacts_refresh.refresh_dashboard_spec(
-                    current_spec=artifacts_service.current_spec(db, artifact),
+                    current_spec=current,
                     llm=llm,
                     tool_executor=tool_executor,
                     customer_id=customer_id,
                     max_turns=get_ai_settings().ai_max_turns,
                 )
-                # 成功才落盘：同 PUT 语义（追加新版本行 + operator 审计）
                 artifacts_service.update_spec(
                     db, artifact, spec=new_spec, customer_id=customer_id
                 )
