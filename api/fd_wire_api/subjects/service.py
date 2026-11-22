@@ -54,18 +54,37 @@ def get_info_client():
     return HttpInfoClient(url, os.environ.get("FD_INFO_TOKEN") or None)
 
 
-def get_business_caller():
-    """business-mcp 客户端（与 indicator_fetch 同款 NativeMcpClient 包一层）。"""
-    from ..datasets.indicator_fetch import get_indicator_fetch_settings
-    from fd_mcp_client import NativeMcpClient
+def _subject_mcp_url() -> str:
+    """主体通道上游端点（business-mcp 类工具面）。
 
-    cfg = get_indicator_fetch_settings()
+    解析顺序：``SUBJECT_MCP_URL`` 显式覆盖 → ``INDICATOR_FETCH_URL``（与建集
+    同源）→ ``indicator_fetch`` 的代码默认。之所以留 SUBJECT_MCP_URL：生产
+    cheap 集群无 business-mcp，指标/工商/背景通道要指到实际可达的联邦服务
+    （如 fd-open-data-mcp 或经 registry 的 business 条目）；端点配错时各通道
+    如实 unavailable，不崩（失败隔离见 projectors）。
+    """
+    import os
+
+    from ..datasets.indicator_fetch import get_indicator_fetch_settings
+
+    explicit = os.environ.get("SUBJECT_MCP_URL")
+    if explicit:
+        raw = explicit.rstrip("/")
+        return raw if raw.endswith("/mcp") else f"{raw}/mcp"
+    return get_indicator_fetch_settings().mcp_url
+
+
+def get_business_caller():
+    """business-mcp 类工具面客户端（NativeMcpClient 包一层；端点见 _subject_mcp_url）。"""
+    from fd_mcp_client import NativeMcpClient
+    from ..datasets.indicator_fetch import get_indicator_fetch_settings
+
+    url = _subject_mcp_url()
+    token = get_indicator_fetch_settings().indicator_fetch_token or None
 
     class _Caller:
         def __init__(self) -> None:
-            self._client = NativeMcpClient(
-                cfg.mcp_url, credential=cfg.indicator_fetch_token or None, label="主体追踪端点"
-            )
+            self._client = NativeMcpClient(url, credential=token, label="主体追踪端点")
 
         def call(self, tool: str, args: dict[str, Any]) -> dict[str, Any]:
             return self._client.call(tool, args)
