@@ -1,3 +1,8 @@
+> **部署清单已迁走（2026-11-20）**
+> 本仓不再承载集群清单。清单在 `fd-infra-deploy/all-services/fd-wire/`，
+> Application 定义在 `fd-infra-deploy/argocd/app-fd-wire.yaml`。
+> 原因与判据：`openspec/changes/consolidate-deploy-manifests`。
+
 # fd-wire 部署 runbook（wire-platform-v1 任务 3.4）
 
 上线通道沿用 **tcr-image-pipeline**（GHA 构建推 TCR）+ **mcp-service-deploy**（ArgoCD/GitOps、不可变 sha- tag）既有模式。本仓工件：

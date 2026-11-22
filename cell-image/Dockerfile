@@ -36,7 +36,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # 版本下限照抄根 pyproject；fastmcp 自带 uvicorn/starlette/httpx/mcp。
 # pyyaml/jsonschema/pypdf 来自 daas-mcp 组（process 工具链）的声明。
 RUN pip install \
-      "fastmcp>=3.4.2" \
+      "fastmcp>=4.2.4,<5" \
       "click>=8.0" \
       "pandas>=1.0" \
       "pandera>=0.34" \
