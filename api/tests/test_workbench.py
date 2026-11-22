@@ -499,3 +499,4 @@ def test_empty_customer_all_zero_sections(harness) -> None:
     assert body["artifacts"]["recent"] == []
     assert body["alerts"] == {"alert_rules": 0, "firing": 0, "events_24h": 0}
     assert body["demands"] == {"open": 0, "latest": None}
+    assert body["subjects"] == {"total": 0, "by_kind": {}, "recent": []}

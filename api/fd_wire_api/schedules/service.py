@@ -49,6 +49,8 @@ def min_interval_minutes(target_type: str) -> int:
         return settings.min_interval_dataset_minutes
     if target_type == "artifact":
         return settings.min_interval_artifact_minutes
+    if target_type == "subject":
+        return settings.min_interval_subject_minutes
     raise InvalidScheduleTarget(
         f"target_type 仅支持 {'/'.join(TARGET_TYPES)}——收到 {target_type!r}"
     )
@@ -92,12 +94,31 @@ def _validate_artifact_target(customer_id: str, target_id: str) -> None:
             )
 
 
+def _validate_subject_target(customer_id: str, target_id: str) -> None:
+    """subject 目标：须本人追踪主体（wire-subject-tracking）。"""
+    from ..subjects.db import get_session as get_subjects_session
+    from ..subjects.models import Subject
+
+    try:
+        subject_id = int(target_id)
+    except ValueError as exc:
+        raise InvalidScheduleTarget(
+            f"subject 目标的 target_id 需为主体数字 id——收到 {target_id!r}"
+        ) from exc
+    with get_subjects_session() as db:
+        subject = db.get(Subject, subject_id)
+        if subject is None or subject.customer_id != customer_id:
+            raise ScheduleTargetNotFound(f"主体 {target_id} 不存在")
+
+
 def _validate_target(customer_id: str, target_type: str, target_id: str) -> None:
     """目标校验统一入口：类型 → 属主（不存在/跨客户 404 语义）。"""
     if target_type == "dataset":
         _validate_dataset_target(customer_id, target_id)
     elif target_type == "artifact":
         _validate_artifact_target(customer_id, target_id)
+    elif target_type == "subject":
+        _validate_subject_target(customer_id, target_id)
     else:
         raise InvalidScheduleTarget(
             f"target_type 仅支持 {'/'.join(TARGET_TYPES)}——收到 {target_type!r}"

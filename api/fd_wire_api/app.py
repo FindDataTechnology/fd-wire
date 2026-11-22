@@ -40,6 +40,9 @@ from .share import router as share_router
 # 源包订阅（wire-source-packs）：/api/v1/packs 全端点
 from .packs import init_db as init_packs_db
 from .packs import router as packs_router
+# 追踪主体（wire-subject-tracking）：/api/v1/subjects 全端点（通道扇出 + 物化）
+from .subjects import init_db as init_subjects_db
+from .subjects import router as subjects_router
 # 管线图（wire-transform-pipeline-view）：本企业数据集派生图（console 身份）
 from .pipeline import router as pipeline_router
 # 实体语义层（wire-entity-layer）：/api/v1/entities 全端点（实体+关系声明+
@@ -204,6 +207,9 @@ async def lifespan(_: FastAPI):
     # 源包订阅（wire-source-packs）：pack_subscriptions 幂等建表兜底
     # （生产走 alembic 0022；指标切片实时查目录镜像，无自身快照表）。
     _boot_step("packs", init_packs_db)
+    # 追踪主体（wire-subject-tracking）：subjects / subject_channels 幂等建表
+    # 兜底（落 datasets 库，与快照数据集同库同事务；生产走 alembic）。
+    _boot_step("subjects", init_subjects_db)
     # 实体语义层（wire-entity-layer）：entities / entity_relationships
     # 幂等建表兜底（生产走 alembic 0026；零引擎调用——纯元数据声明层）。
     _boot_step("entities", init_entities_db)
@@ -338,6 +344,9 @@ app.include_router(schedules_router)
 # 源包订阅（wire-source-packs）：公开包列表/详情（实时目录切片）+ 登录
 # 订阅/退订/我的订阅（pack_subscriptions 走元数据库，alembic 0022）
 app.include_router(packs_router)
+# 追踪主体（wire-subject-tracking）：声明/通道扇出/物化快照（console 身份；
+# 免费档可用——扇出读零计量，快照落 api 层数据集）
+app.include_router(subjects_router)
 # 实体语义层（wire-entity-layer）：实体/关系声明 + 同源图谱（console 身份；
 # 免费档全功能——零引擎调用的元数据层，AI 上下文注入走 ai/routes）
 app.include_router(entities_router)

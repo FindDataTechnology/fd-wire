@@ -148,8 +148,25 @@ class WorkbenchDemands(BaseModel):
     latest: WorkbenchDemandLatest | None
 
 
+class SubjectRecentItem(BaseModel):
+    """最近追踪主体条目。"""
+
+    id: int
+    kind: str
+    title: str
+    updated_at: datetime
+
+
+class WorkbenchSubjects(BaseModel):
+    """追踪主体段：总数 + 按 kind 计数 + 最近 ≤5（wire-subject-tracking）。"""
+
+    total: int
+    by_kind: dict[str, int]
+    recent: list[SubjectRecentItem]
+
+
 class WorkbenchOut(BaseModel):
-    """工作台聚合响应：六段一次返回（字段名与 web 预约定逐字冻结）。"""
+    """工作台聚合响应：七段一次返回（字段名与 web 预约定逐字冻结）。"""
 
     datasets: WorkbenchDatasets
     free_quota: WorkbenchFreeQuota | None
@@ -157,6 +174,7 @@ class WorkbenchOut(BaseModel):
     artifacts: WorkbenchArtifacts
     alerts: WorkbenchAlerts
     demands: WorkbenchDemands
+    subjects: WorkbenchSubjects
 
 
 # ------------------------------------------------------------------ service
@@ -406,7 +424,7 @@ def build_workbench(
     ai_db: Session,
     demands_db: Session,
 ) -> WorkbenchOut:
-    """聚合六段（各切片纯读、独立会话；供路由直调与测试复用）。"""
+    """聚合七段（各切片纯读、独立会话；供路由直调与测试复用）。"""
     return WorkbenchOut(
         datasets=datasets_section(datasets_db, customer_id=customer_id),
         free_quota=free_quota_section(datasets_db, customer_id=customer_id),
@@ -414,7 +432,29 @@ def build_workbench(
         artifacts=artifacts_section(ai_db, customer_id=customer_id),
         alerts=alerts_section(ai_db, customer_id=customer_id),
         demands=demands_section(demands_db, customer_id=customer_id),
+        subjects=subjects_section(datasets_db, customer_id=customer_id),
     )
+
+
+def subjects_section(db: Session, *, customer_id: str) -> WorkbenchSubjects:
+    """追踪主体段（subject 与 datasets 同库——各库独立会话纪律不变）。"""
+    from .subjects.models import Subject
+
+    rows = list(
+        db.execute(
+            select(Subject)
+            .where(Subject.customer_id == customer_id)
+            .order_by(Subject.updated_at.desc(), Subject.id.desc())
+        ).scalars()
+    )
+    by_kind: dict[str, int] = {}
+    for s in rows:
+        by_kind[s.kind] = by_kind.get(s.kind, 0) + 1
+    recent = [
+        SubjectRecentItem(id=s.id, kind=s.kind, title=s.title, updated_at=s.updated_at)
+        for s in rows[:5]
+    ]
+    return WorkbenchSubjects(total=len(rows), by_kind=by_kind, recent=recent)
 
 
 # ------------------------------------------------------------------ 路由

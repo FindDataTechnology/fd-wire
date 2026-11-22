@@ -53,6 +53,9 @@ class ScheduleSettings(BaseSettings):
     min_interval_artifact_minutes: int = Field(
         default=360, validation_alias="FD_WIRE_SCHEDULE_MIN_INTERVAL_ARTIFACT"
     )
+    min_interval_subject_minutes: int = Field(
+        default=60, validation_alias="FD_WIRE_SCHEDULE_MIN_INTERVAL_SUBJECT"
+    )
     max_per_customer: int = Field(
         default=10, validation_alias="FD_WIRE_SCHEDULE_MAX_PER_CUSTOMER"
     )

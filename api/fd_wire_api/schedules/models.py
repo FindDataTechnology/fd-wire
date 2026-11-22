@@ -29,7 +29,7 @@ def utc_now_naive() -> datetime:
 
 
 #: 目标类型合法值（路由/服务层校验依据）
-TARGET_TYPES: tuple[str, ...] = ("dataset", "artifact")
+TARGET_TYPES: tuple[str, ...] = ("dataset", "artifact", "subject")
 
 #: last_status 合法值（pending 建行初始、running 执行前置、ok/failed 后置）
 LAST_STATUSES: tuple[str, ...] = ("pending", "running", "ok", "failed")

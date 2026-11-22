@@ -158,16 +158,43 @@ def execute_artifact(*, customer_id: str, target_id: str) -> dict:
     return {"artifact_id": artifact_id, "version": artifact.version}
 
 
+def execute_subject(*, customer_id: str, target_id: str) -> dict:
+    """执行主体追踪物化（wire-subject-tracking）：重跑快照，更新其数据集。
+
+    与手动 ``POST /subjects/{id}/snapshot`` 同一实现（``service.snapshot_subject``），
+    行为零漂移。主体已删除/他企 → 抛 :class:`TargetGone`（调度循环据此移除调度行）。
+    """
+    from ..subjects import service as subjects_service
+    from ..subjects.db import get_session as get_subjects_session
+    from ..subjects.models import Subject
+
+    try:
+        subject_id = int(target_id)
+    except ValueError as exc:
+        raise TargetGone(f"subject 目标 id 非法：{target_id!r}") from exc
+    with get_subjects_session() as db:
+        subject = db.get(Subject, subject_id)
+        if subject is None or subject.customer_id != customer_id:
+            raise TargetGone(f"主体 {target_id} 已删除或不再属于该客户")
+        dataset = subjects_service.snapshot_subject(
+            db, customer_id=customer_id, subject_id=subject_id
+        )
+    return {"subject_id": subject_id, "dataset_id": dataset.id, "row_count": dataset.row_count}
+
+
 def execute_schedule(row) -> dict:
     """按调度行分发到对应执行体（runner 的默认执行入口）。
 
-    dataset → execute_dataset；artifact → execute_artifact；其余为脏数据
-    （建行走服务层校验，不该出现）——上抛由 runner 记 failed。
+    dataset → execute_dataset；artifact → execute_artifact；subject →
+    execute_subject；其余为脏数据（建行走服务层校验，不该出现）——上抛由
+    runner 记 failed。
     """
     if row.target_type == "dataset":
         return execute_dataset(customer_id=row.customer_id, target_id=row.target_id)
     if row.target_type == "artifact":
         return execute_artifact(customer_id=row.customer_id, target_id=row.target_id)
+    if row.target_type == "subject":
+        return execute_subject(customer_id=row.customer_id, target_id=row.target_id)
     raise ValueError(f"未知调度目标类型：{row.target_type!r}")
 
 
