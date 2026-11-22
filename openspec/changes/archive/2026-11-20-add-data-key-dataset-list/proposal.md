@@ -1,3 +1,9 @@
+> **2026-11-20 裁决：放弃（归档）。** 理由：功能在产、无流量、端到端验证无对象。
+>
+> `require_dataset_actor_dual` 已在生产镜像 `sha-9ac53d6` 内（pod 内 grep 到 3 处，实现提交 `a595f6b`/`0dafdfa` 均 11-11）。剩余 3.3/3.4/4.3/4.4 全为「出片后线上实测」，而 `GET /api/v1/datasets` 在 72h 生产日志中请求数为 **0**——不是修好了，是没有使用、也就没有可验证的对象。功能本身已在产、无缺陷证据。
+>
+> 内容原样保留于 `changes/archive/`；若将来重启，从归档目录取回即可。
+
 # Proposal: add-data-key-dataset-list
 
 ## Why
