@@ -287,3 +287,61 @@ class TestEndpointResolution:
         s = indicator_fetch.IndicatorFetchSettings()
         assert s.mcp_url == "http://fd-find-data-business-mcp.fd-mcp.svc:8310/mcp"
         assert s.credential is None
+
+
+class TestVerifiedGate:
+    """verified 闸（spec indicator-to-dataset）：registered 指标服务器侧 422 拒建集。
+
+    受测试的 API 层：``_create_from_indicator`` 在拉数前查目录镜像。镜像不可读/
+    查不到时放行（上游如实拒绝）；仅**明确 registered** 才拦。
+    """
+
+    def test_registered_indicator_rejected_422(self, free_env, fake_fetch, monkeypatch):
+        from fd_wire_api.catalog import service as cat_svc
+
+        class _Snap:
+            status = "registered"
+
+        class _FakeQuery:
+            def __init__(self, *a, **k):
+                pass
+
+            def get(self, ref):
+                return _Snap()
+
+        monkeypatch.setattr(cat_svc, "CatalogQueryService", _FakeQuery)
+        resp = _create(free_env.client, FREE)
+        assert resp.status_code == 422, resp.text
+        assert "尚未认证" in resp.text or "registered" in resp.text
+        # 闸在拉数前：上游一次都没被调用
+        assert fake_fetch["calls"] == []
+
+    def test_verified_indicator_passes(self, free_env, fake_fetch, monkeypatch):
+        from fd_wire_api.catalog import service as cat_svc
+
+        class _Snap:
+            status = "verified"
+
+        class _FakeQuery:
+            def __init__(self, *a, **k):
+                pass
+
+            def get(self, ref):
+                return _Snap()
+
+        monkeypatch.setattr(cat_svc, "CatalogQueryService", _FakeQuery)
+        resp = _create(free_env.client, FREE)
+        assert resp.status_code == 201, resp.text
+        assert len(fake_fetch["calls"]) == 1
+
+    def test_catalog_unavailable_does_not_block(self, free_env, fake_fetch, monkeypatch):
+        from fd_wire_api.catalog import service as cat_svc
+
+        class _Boom:
+            def __init__(self, *a, **k):
+                raise RuntimeError("catalog db down")
+
+        monkeypatch.setattr(cat_svc, "CatalogQueryService", _Boom)
+        resp = _create(free_env.client, FREE)
+        # 镜像不可读不阻断建集（上游仍会如实判定）；这里桩 fetch 成功 ⇒ 201
+        assert resp.status_code == 201, resp.text

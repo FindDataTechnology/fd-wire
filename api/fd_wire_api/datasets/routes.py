@@ -745,6 +745,24 @@ def _create_from_indicator(
             detail=f"该指标已建过数据集（{existing.key}）；重建请先删除或改名新集",
         )
 
+    # verified 闸：registered 指标拒建集并导流需求单（spec indicator-to-dataset）。
+    # 目录镜像查不到该标识时不拦（上游自会按源/标识如实拒绝），只在**明确 registered**
+    # 时 422——避免镜像同步滞后把可读指标误拒。
+    try:
+        from ..catalog.service import CatalogQueryService
+
+        snap = CatalogQueryService().get(source.indicator_id)
+    except Exception:  # noqa: BLE001 - 目录不可读不阻断建集，上游仍会如实判定
+        snap = None
+    if snap is not None and snap.status == "registered":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"指标 {source.indicator_id} 尚未认证（registered），不能直接落成数据集；"
+                "请通过需求单申请开通"
+            ),
+        )
+
     try:
         series = indicator_fetch.fetch_series(
             source.indicator_id, source.entity_type,
