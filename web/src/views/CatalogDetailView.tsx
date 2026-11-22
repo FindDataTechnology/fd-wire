@@ -204,7 +204,7 @@ export function CatalogDetailView({ id }: { id: string }) {
             </a>
           </div>
         ) : (
-          <IndicatorToDatasetCard indicatorId={d.indicator_id} />
+          <IndicatorToDatasetCard indicatorId={d.indicator_id} sourceDb={d.source_db} />
         )}
       </div>
     );
@@ -228,15 +228,27 @@ export function CatalogDetailView({ id }: { id: string }) {
 // 指标落成数据集（wire-indicator-to-dataset）：verified 指标的建集卡片。
 // 实体字典 v0 前端只给两个常用预设（yearbook=region、world_bank=country），
 // 其余 source_db 交由后端 422 如实拒绝——前端不猜不拦截。
+// 默认实体类型按 source_db 预选（world_bank→country，其余→region）：否则
+// 世行指标的默认 region 必 422，用户得先手动切换才建得成（2026-11-23 e2e 撞到）。
+function defaultEntityType(sourceDb: string | null | undefined): string {
+  return sourceDb === "world_bank" ? "country" : "region";
+}
+
 type CreateState =
   | { phase: "idle" }
   | { phase: "submitting" }
   | { phase: "error"; message: string }
   | { phase: "done"; datasetId: string };
 
-function IndicatorToDatasetCard({ indicatorId }: { indicatorId: string }) {
+function IndicatorToDatasetCard({
+  indicatorId,
+  sourceDb,
+}: {
+  indicatorId: string;
+  sourceDb?: string | null;
+}) {
   const { t } = useTranslation();
-  const [entityType, setEntityType] = useState("region");
+  const [entityType, setEntityType] = useState(defaultEntityType(sourceDb));
   const [entityId, setEntityId] = useState("");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");

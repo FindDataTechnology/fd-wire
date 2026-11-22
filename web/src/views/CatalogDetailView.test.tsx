@@ -108,9 +108,29 @@ describe("CatalogDetailView", () => {
     expect(screen.getByTestId("to-dataset-start")).toBeTruthy();
     expect(screen.getByTestId("to-dataset-end")).toBeTruthy();
     expect(screen.getByTestId("to-dataset-submit").textContent).toContain("落成数据集");
+    // 默认实体类型按 source_db 预选：world_bank → country（否则默认 region 必 422）
+    expect(
+      (screen.getByTestId("to-dataset-entity-type") as HTMLSelectElement).value,
+    ).toBe("country");
     expect(screen.queryByTestId("detail-on-demand")).toBeNull();
     expect(screen.queryByText("按需开通（提交需求单）")).toBeNull();
     expect(card.textContent).toContain("verified");
+  });
+
+  it("非 world_bank 源（年鉴）：默认实体类型预选 region", async () => {
+    installDetails({
+      "ind-yb": {
+        ...VERIFIED,
+        indicator_id: "ind-yb",
+        source_db: "yearbook_catalog",
+        status: "verified",
+      },
+    });
+    render(<CatalogDetailView id="ind-yb" />);
+    await screen.findByTestId("detail-to-dataset");
+    expect(
+      (screen.getByTestId("to-dataset-entity-type") as HTMLSelectElement).value,
+    ).toBe("region");
   });
 
   it("404：指标不存在的明确态", async () => {
