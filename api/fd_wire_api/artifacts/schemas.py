@@ -27,10 +27,17 @@ class ArtifactOut(BaseModel):
 
 
 class ArtifactDetailOut(ArtifactOut):
-    """产物详情（当前 spec + 状态迁移操作记录）。"""
+    """产物详情（当前 spec + 状态迁移操作记录）。
+
+    ``disclosure`` / ``source_health``（5.7 告警诚实性）：看板依赖源不健康时
+    前置声明文本 + 结构化源健康元数据；仅详情端点按 kind=dashboard 计算
+    （其余端点保持缺省 None/[]，零额外读取）。
+    """
 
     spec: Any
     status_history: list[dict[str, Any]] = []
+    disclosure: str | None = None
+    source_health: list[dict[str, Any]] = []
 
 
 class ArtifactVersionOut(BaseModel):
@@ -102,12 +109,17 @@ class ArtifactRefreshOut(BaseModel):
 
     mode：契约路径（≥1 面板带合法 query，零 LLM 确定性执行）="contract"，
     旧 AI 无头轮 ="ai"；panels 仅契约路径携带（AI 路径 None，向后兼容）。
+
+    ``disclosure`` / ``source_health``（5.7 告警诚实性）：刷新后按新 spec
+    计算的依赖源声明与结构化健康面（不健康才有文本）。
     """
 
     version: int
     refreshed_at: str
     mode: Literal["contract", "ai"] | None = None
     panels: list[PanelRefreshResult] | None = None
+    disclosure: str | None = None
+    source_health: list[dict[str, Any]] = []
 
 
 class QueryPreviewOut(BaseModel):
@@ -121,8 +133,18 @@ class QueryPreviewOut(BaseModel):
     query: dict[str, Any]
 
 
-def artifact_detail(artifact: Artifact, spec: dict) -> ArtifactDetailOut:
-    """ORM + 当前 spec → 详情视图（spec 来自版本表最新行）。"""
+def artifact_detail(
+    artifact: Artifact,
+    spec: dict,
+    *,
+    disclosure: str | None = None,
+    source_health: list[dict[str, Any]] | None = None,
+) -> ArtifactDetailOut:
+    """ORM + 当前 spec → 详情视图（spec 来自版本表最新行）。
+
+    ``disclosure`` / ``source_health`` 由详情端点按看板依赖源健康计算后传入
+    （5.7 告警诚实性）；其余端点缺省不带（零额外读取）。
+    """
     return ArtifactDetailOut(
         id=artifact.id,
         customer_id=artifact.customer_id,
@@ -135,6 +157,8 @@ def artifact_detail(artifact: Artifact, spec: dict) -> ArtifactDetailOut:
         updated_at=artifact.updated_at,
         spec=spec,
         status_history=list(artifact.status_history or []),
+        disclosure=disclosure,
+        source_health=source_health or [],
     )
 
 

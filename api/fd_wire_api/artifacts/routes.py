@@ -61,6 +61,7 @@ from ..ai.protocols import LlmClient, ToolExecutor
 # test_ai_api 的 dependency_overrides 手法注入 mock，生产同为网关/cell 实现）。
 from ..ai.routes import get_llm_client, get_tool_executor
 from ..ai.settings import get_settings
+from ..alerts import source_health
 from ..console.auth import require_console_customer_id
 from ..datasets import api_store
 from ..datasets.db import get_db as get_datasets_db
@@ -99,6 +100,18 @@ def _artifact_or_404(db: Session, artifact_id: int, customer_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+def _dashboard_disclosure(
+    artifact, spec: dict, ai_db: Session, datasets_db: Session | None
+) -> tuple[str | None, list[dict]]:
+    """看板依赖源声明（5.7 告警诚实性）：仅 dashboard 计算，其余 kind 零读取。
+
+    输出面永不因判定失败而失败——``safe_board_disclosure`` 兜住异常。
+    """
+    if artifact.kind != "dashboard":
+        return None, []
+    return source_health.safe_board_disclosure(ai_db, datasets_db, spec)
+
+
 @router.get("/api/v1/artifacts", response_model=list[ArtifactOut])
 def list_artifacts(
     kind: str | None = Query(default=None),
@@ -118,10 +131,19 @@ def get_artifact(
     artifact_id: int,
     customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
+    datasets_db: Session = Depends(get_datasets_db),
 ) -> ArtifactDetailOut:
-    """产物详情（当前 spec + 状态迁移记录；他企或不存在一律 404）。"""
+    """产物详情（当前 spec + 状态迁移记录；他企或不存在一律 404）。
+
+    看板详情附带依赖源声明（5.7 告警诚实性）：源不健康时 `disclosure` 非空、
+    `source_health` 覆盖该板依赖的全部已声明源族。
+    """
     artifact = _artifact_or_404(db, artifact_id, customer_id)
-    return artifact_detail(artifact, service.current_spec(db, artifact))
+    spec = service.current_spec(db, artifact)
+    disclosure, health = _dashboard_disclosure(artifact, spec, db, datasets_db)
+    return artifact_detail(
+        artifact, spec, disclosure=disclosure, source_health=health
+    )
 
 
 @router.get("/api/v1/artifacts/{artifact_id}/evidence")
@@ -513,11 +535,17 @@ def refresh_artifact(
         refresh.release_refresh_lock(artifact.id)
         _release(llm)
         _release(tool_executor)
+    # 刷新响应同样披露依赖源健康（5.7 告警诚实性）：按落盘后的新 spec 计算。
+    disclosure, health = _dashboard_disclosure(
+        artifact, service.current_spec(db, artifact), db, datasets_db
+    )
     return ArtifactRefreshOut(
         version=artifact.version,
         refreshed_at=refreshed_at,
         mode=mode,
         panels=panels,
+        disclosure=disclosure,
+        source_health=health,
     )
 
 

@@ -33,6 +33,7 @@ import asyncio
 import logging
 import operator
 import os
+from collections.abc import Iterable
 from datetime import datetime, timezone
 
 import httpx
@@ -54,6 +55,7 @@ from ..datasets.ingest import (
     EngineUnavailable,
     get_engine_client_factory,
 )
+from . import source_health
 from .models import (
     EVENT_DETAIL_LIMIT,
     AlertEvent,
@@ -130,9 +132,13 @@ def render_alert_mail(
     op: str,
     at: str,
     artifact_id: int,
+    disclosures: Iterable[source_health.SourceHealth] = (),
 ) -> tuple[str, str]:
     """渲染告警邮件（纯函数）：主题含规则名与状态，正文含归约值/阈值/时间
     与产物链接（``WIRE_ENTRY_URL`` 未配置时如实降级为产物号）。
+
+    ``disclosures`` 为依赖源健康快照（5.7 告警诚实性）：不健康源的前置声明
+    块拼在正文最前，健康/空集不产生任何文本（零噪声）。
     """
     subject = f"[柏讯·告警] {title} {state}"
     base = (os.getenv("WIRE_ENTRY_URL") or "").strip().rstrip("/")
@@ -142,7 +148,8 @@ def render_alert_mail(
         else "（平台未配置入口地址，请经控制台查看）"
     )
     body = (
-        f"告警规则「{title}」进入 {state} 状态。\n"
+        source_health.disclosure_prefix(disclosures)
+        + f"告警规则「{title}」进入 {state} 状态。\n"
         f"\n"
         f"规则名：{title}\n"
         f"状态：{state}\n"
@@ -315,6 +322,51 @@ def _record_event(
     return True
 
 
+def _rule_disclosures(
+    snapshot: dict,
+    *,
+    ai_session: Session,
+    datasets_db: Session,
+    cache: dict | None,
+) -> list[source_health.SourceHealth]:
+    """规则依赖源的健康快照（5.7 告警诚实性）。
+
+    依赖族取自规则本次查询快照的 ``family`` 列——断更规则（183/184）快照
+    即新鲜度行、业务越阈规则（181/182）的行同样带 family，取到即真实依赖。
+    容忍窗来自已发布断更规则（:func:`source_health.freshness_rules`），不在
+    代码里另写数字。
+
+    快照行自带 ``lag_days`` 时（断更规则场景）直接按该行判定；否则回落到
+    水位映射 ``health_map`` 读断更规则声明的快照数据集。读不到 → 该族如实
+    缺席（不确定就不声明）。
+    """
+    families = source_health.families_in_snapshot(snapshot)
+    if not families:
+        return []
+    rules = source_health.freshness_rules(ai_session, cache=cache)
+    found: dict[str, source_health.SourceHealth] = {}
+    for record in source_health.snapshot_records(snapshot):
+        family = record.get("family")
+        rule = rules.get(family) if isinstance(family, str) else None
+        if rule is None or family in found:
+            continue
+        item = source_health.health_from_row(record, rule)
+        if item is not None:
+            found[family] = item
+    missing = families - found.keys()
+    if missing:
+        try:
+            health = source_health.health_map(ai_session, datasets_db, cache=cache)
+        except Exception:  # noqa: BLE001 - 水位不可读如实降级为无声明，不拖垮评估
+            logger.exception("源健康水位读取失败（本次告警不作声明）")
+            health = {}
+        for family in missing:
+            item = health.get(family)
+            if item is not None:
+                found[family] = item
+    return list(found.values())
+
+
 def _notify(
     session: Session,
     artifact: Artifact,
@@ -324,6 +376,7 @@ def _notify(
     state_name: str,
     value: float,
     now: datetime,
+    disclosures: Iterable[source_health.SourceHealth] = (),
 ) -> bool:
     """通知投递（firing/resolved 沿共用）：webhook 与邮件双渠道并存互不阻塞。
 
@@ -334,6 +387,8 @@ def _notify(
       发送失败记 notify_failed（尾注渠道 email）；
     - 任一渠道失败不阻塞评估、不阻塞另一渠道；渠道均未配置零外呼返回
       False（不算失败）。
+    - ``disclosures``（5.7 告警诚实性）：不健康依赖源的前置声明块拼在邮件
+      正文首部，同时以结构化数组进 webhook payload。
 
     返回是否有任一渠道投递成功（成功时推进 state.last_notified_at——冷却
     再通知的基准两渠道共用 ``cooldownMinutes``）。
@@ -346,6 +401,8 @@ def _notify(
         "threshold": params["value"],
         "op": params["op"],
         "at": now.replace(tzinfo=timezone.utc).isoformat(),
+        # 5.7 告警诚实性：不健康依赖源随 payload 一并披露（结构化数组，空=无声明）
+        "disclosures": [item.to_dict() for item in disclosures],
     }
     delivered = False
 
@@ -384,6 +441,7 @@ def _notify(
                 op=params["op"],
                 at=payload["at"],
                 artifact_id=artifact.id,
+                disclosures=disclosures,
             )
             try:
                 deliver_mail(", ".join(emails), subject, body, config)
@@ -517,6 +575,8 @@ def tick_once(
                     datasets_session=datasets_session,
                     engine_factory=engine_factory or get_engine_client_factory(),
                     stats=stats,
+                    # 同一 tick 内复用断更规则/水位读取（每规则都读一遍库是浪费）
+                    health_cache={},
                 )
             except Exception:  # noqa: BLE001 - 单规则失败不断环
                 logger.exception("告警规则 %s 评估异常（跳过，下轮重试）", artifact.id)
@@ -535,6 +595,7 @@ def _evaluate_rule(
     datasets_session: Session | None,
     engine_factory: EngineClientFactory,
     stats: dict[str, int],
+    health_cache: dict | None = None,
 ) -> None:
     """单条规则的完整评估（due 判定 → 校验 → 查询归约 → 状态机 → 落库）。"""
     spec = artifacts_service.current_spec(session, artifact)
@@ -571,6 +632,9 @@ def _evaluate_rule(
     # ② 查询（datasets 会话：测试注入 / 生产逐规则自建）
     own_ds = datasets_session is None
     ds = datasets_session if datasets_session is not None else get_datasets_session()
+    # 依赖源健康判定（5.7 告警诚实性）：在 datasets 会话关闭前算好，通知
+    # 路径只消费结果。先初始化——查询异常路径不得留下未定义符号。
+    disclosures: list[source_health.SourceHealth] = []
     try:
         snapshot, query_error = _run_query(
             ds,
@@ -578,6 +642,16 @@ def _evaluate_rule(
             query=params["query"],
             engine_factory=engine_factory,
         )
+        if query_error is None:
+            try:
+                disclosures = _rule_disclosures(
+                    snapshot,
+                    ai_session=session,
+                    datasets_db=ds,
+                    cache=health_cache,
+                )
+            except Exception:  # noqa: BLE001 - 判不出就不声明，评估照常
+                logger.exception("告警 %s 源健康判定失败（本次不作声明）", artifact.id)
     finally:
         if own_ds:
             ds.close()
@@ -641,6 +715,7 @@ def _evaluate_rule(
                 state_name="firing",
                 value=value,
                 now=moment,
+                disclosures=disclosures,
             ):
                 stats["notified"] += 1
             stats["firing"] += 1
@@ -667,6 +742,7 @@ def _evaluate_rule(
                 state_name="firing",
                 value=value,
                 now=moment,
+                disclosures=disclosures,
             ):
                 stats["notified"] += 1
             stats["firing"] += 1
@@ -688,6 +764,7 @@ def _evaluate_rule(
                 state_name="resolved",
                 value=value,
                 now=moment,
+                disclosures=disclosures,
             ):
                 stats["notified"] += 1
             stats["resolved"] += 1
@@ -709,6 +786,7 @@ def _evaluate_rule(
                     state_name="firing",
                     value=value,
                     now=moment,
+                    disclosures=disclosures,
                 ):
                     stats["notified"] += 1
     session.commit()

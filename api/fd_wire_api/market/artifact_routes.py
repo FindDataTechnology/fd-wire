@@ -30,6 +30,8 @@ from ..assets.routes import require_asset_editor
 from ..billing.models import Customer
 from ..console.auth import require_console_customer_id
 from ..ai.db import get_db
+from ..alerts import source_health
+from ..datasets.db import get_db as get_datasets_db
 from . import artifact_browse as browse
 
 from . import artifact_service as service
@@ -450,10 +452,13 @@ def render_market_artifact(
     artifact_id: int,
     customer_id: str = Depends(require_console_customer_id),
     db: Session = Depends(get_db),
+    datasets_db: Session = Depends(get_datasets_db),
 ) -> dict:
     """订阅者渲染素材（版本 spec 快照 + 快照时间；零引擎调用）。
 
     Q5 渲染点：绑定数据集事后改成敏感档 → 拒绝渲染（不静默出数据）。
+    5.7 告警诚实性：按依赖源健康返回 ``disclosure`` / ``source_health``
+    （源断更时读者须看到「信息可能不完整」，不以旧快照冒充最新）。
     """
     artifact, source = browse.resolve_renderable(db, artifact_id, customer_id)
     if artifact is None:
@@ -492,6 +497,7 @@ def render_market_artifact(
 
     spec = latest.spec or {}
     refreshed_at = spec.get("refreshed_at") if isinstance(spec, dict) else None
+    disclosure, health = source_health.safe_board_disclosure(db, datasets_db, spec)
     return {
         "artifact_id": artifact.id,
         "kind": artifact.kind,
@@ -500,6 +506,9 @@ def render_market_artifact(
         "spec": spec,
         # Q3/Q9：快照时间如实呈现（缺失 → None，前端显「未知」），不自动刷新
         "refreshed_at": refreshed_at if isinstance(refreshed_at, str) else None,
+        # 5.7 告警诚实性：依赖源不健康时前置声明（健康/无声明面为 None/[]）
+        "disclosure": disclosure,
+        "source_health": health,
         "access_source": source,
     }
 
