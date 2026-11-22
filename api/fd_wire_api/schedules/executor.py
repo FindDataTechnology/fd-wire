@@ -97,7 +97,8 @@ def _release(client: object) -> None:
 
 
 def execute_artifact(*, customer_id: str, target_id: str) -> dict:
-    """执行看板 AI 无头刷新：复用 artifacts/refresh.py 轮 + PUT 语义落新版本。
+    """执行看板刷新：与手动端点同决策——带合法 query/info 契约面板 → 确定性
+    契约路径（零 LLM、不碰 cell）；否则 AI 无头轮（refresh.py）+ PUT 语义落新版本。
 
     同手动端点的单飞锁（进行中再触发 → 本次失败记 last_error）与失败
     零半写语义；产物已删/归档抛 TargetGone（调度行自动清理）。
