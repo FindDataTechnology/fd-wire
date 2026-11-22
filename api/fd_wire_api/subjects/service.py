@@ -43,7 +43,11 @@ class SubjectNotFound(SubjectError):
 
 
 def get_info_client():
-    """fd-info 客户端（复用 artifacts 的 HttpInfoClient；FD_INFO_URL 缺省时 None）。"""
+    """fd-info 客户端（复用 artifacts 的 HttpInfoClient；FD_INFO_URL 缺省时 None）。
+
+    凭据解析：``FD_INFO_TOKEN`` → ``MCP_BEARER_TOKEN``（fd-info 共享 bearer 门
+    的实际 env 名——生产 fd-info 要求带此令牌，否则 401；生产实测用它取到条目）。
+    """
     import os
 
     from ..artifacts.info_contract import HttpInfoClient
@@ -51,7 +55,8 @@ def get_info_client():
     url = os.environ.get("FD_INFO_URL")
     if not url:
         return None
-    return HttpInfoClient(url, os.environ.get("FD_INFO_TOKEN") or None)
+    token = os.environ.get("FD_INFO_TOKEN") or os.environ.get("MCP_BEARER_TOKEN") or None
+    return HttpInfoClient(url, token)
 
 
 def _subject_mcp_url() -> str:
