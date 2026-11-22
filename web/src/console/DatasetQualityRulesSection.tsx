@@ -330,7 +330,7 @@ export function DatasetQualityRulesSection({
   const [rules, setRules] = useState<QualityRule[] | null>(null);
   const [note, setNote] = useState("");
   const [results, setResults] = useState<QualityRuleResult[] | null>(null);
-  const [loadError, setLoadError] = useState(false);
+  const [loadError, setLoadError] = useState<boolean | string>(false);
   const [busy, setBusy] = useState(false); // 增/删/启停/改名互斥
   const [running, setRunning] = useState(false); // 立即检查进行中
   const [actionError, setActionError] = useState<string | null>(null);
@@ -369,8 +369,10 @@ export function DatasetQualityRulesSection({
       setRules(rulesResp.items);
       setNote(rulesResp.note ?? "");
       setResults(resultsResp ? resultsResp.items : []);
-    } catch {
-      setLoadError(true);
+    } catch (err) {
+      // 如实呈后端 detail（付费档闸 403 会给「需 cell」说明），而非泛化「读取失败」
+      const detail = apiErrorText(err, "");
+      setLoadError(detail || true);
     }
   }, [datasetId]);
 
@@ -604,7 +606,9 @@ export function DatasetQualityRulesSection({
           className="mt-2 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3"
         >
           <p className="text-xs text-red-700">
-            {t("console.dataset.qualityRules.error")}
+            {typeof loadError === "string"
+              ? loadError
+              : t("console.dataset.qualityRules.error")}
           </p>
           <button
             type="button"

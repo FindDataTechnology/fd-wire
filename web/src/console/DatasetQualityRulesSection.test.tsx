@@ -118,6 +118,8 @@ function installBackend(options: {
   note?: string;
   /** 强制 GET 规则列表返回该状态（错误态测试）。 */
   failRulesGetStatus?: number;
+  /** GET 规则列表失败时回的后端 detail（默认 `quality rules <status>`）。 */
+  failRulesGetDetail?: string;
   /** 强制 POST 新增规则返回该状态（422 detail 回显测试）。 */
   failAddStatus?: number;
   failAddDetail?: string;
@@ -151,7 +153,7 @@ function installBackend(options: {
     if (path === RULES_PATH && method === "GET") {
       if (options.failRulesGetStatus) {
         return jsonResponse(
-          { detail: `quality rules ${options.failRulesGetStatus}` },
+          { detail: options.failRulesGetDetail ?? `quality rules ${options.failRulesGetStatus}` },
           options.failRulesGetStatus,
         );
       }
@@ -327,6 +329,14 @@ describe("DatasetQualityRulesSection 渲染与三态（wire-quality-rules）", (
     await waitFor(() =>
       expect(callsOf(backend.calls, "GET", RULES_PATH).length).toBe(2),
     );
+  });
+
+  it("付费档闸 403：如实呈后端 detail（「需 cell」说明），非泛化「读取失败」", async () => {
+    installBackend({ failRulesGetStatus: 403, failRulesGetDetail: "质量规则需开通 cell（付费档）" });
+    render(<DatasetQualityRulesSection datasetId="ds-1" canEdit />);
+    const err = await screen.findByTestId("quality-rules-error");
+    expect(err.textContent).toContain("质量规则需开通 cell");
+    expect(err.textContent).not.toContain("读取失败");
   });
 
   it("canEdit=false：只读——无添加/启停/删除/立即检查/改名入口，规则与徽章仍呈现", async () => {
