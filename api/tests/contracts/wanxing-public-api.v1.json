@@ -3,8 +3,74 @@
   "$id": "https://wanxing.finddatatech.cloud/contracts/wanxing-public-api.v1.json",
   "title": "Wanxing public read surfaces — consumer contract",
   "x-contract-rev": "3",
-  "description": "The response shapes that sibling lines rely on. Only consumed fields are constrained; anything else may be added freely (additive changes do not bump the revision). Bumping x-contract-rev is required for any rename, removal, or semantic change of a field named here. Consumers: paas/facet/supply-catalog.js (spine), paas/server/routes/fleets.js (owner cross-line), paas/services/ops-console (fleet board), fd-lex (copilot loader — not covered here, see copilot.js contract), fd-wire (A2A receipt — covered by /turn below), wanxing-ops-mcp (catalog + card), fd-industry-data (A2A work-order dispatch).",
+  "description": "The response shapes that sibling lines rely on. Only consumed fields are constrained; anything else may be added freely (additive changes do not bump the revision). Bumping x-contract-rev is required for any rename, removal, or semantic change of a field named here. Consumers: paas/scripts/plaza-export.mjs (catalog export — reads the projection counters below as a hard gate), paas/facet/supply-catalog.js (spine), paas/server/routes/fleets.js (owner cross-line), paas/services/ops-console (fleet board), fd-lex (copilot loader — not covered here, see copilot.js contract), fd-wire (A2A receipt — covered by /turn below), wanxing-ops-mcp (catalog + card), fd-industry-data (A2A work-order dispatch).",
   "$defs": {
+    "facadeCatalogResponse": {
+      "type": "object",
+      "description": "GET /api/facades-catalog — the public facade projection. Consumers: paas/scripts/plaza-export.mjs (facades + the two projection counters), paas/facet/supply-catalog.js (producer).",
+      "required": [
+        "facades"
+      ],
+      "properties": {
+        "facades": {
+          "type": "array",
+          "description": "Projected facade entries. A malformed upstream row never appears here — it is counted in `dropped` instead."
+        },
+        "dropped": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Upstream rows the projection discarded entirely (missing/unusable id). Consumed by plaza-export as a hard gate: >0 fails the export, because the plaza would otherwise publish a silently shorter catalog."
+        },
+        "coerced": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Rows kept although a required field was not a string (blank fields are published). Consumed by plaza-export as a hard gate."
+        },
+        "viewer": {
+          "type": "string",
+          "enum": [
+            "identified",
+            "anonymous"
+          ],
+          "description": "Serving plane's own admission result; reserved, not an authorisation decision."
+        },
+        "source_absent": {
+          "type": "boolean",
+          "description": "Present only when the upstream feed is unconfigured or has never landed. Absence is honest (empty array), never a fabricated row."
+        }
+      }
+    },
+    "dataAnchorsCatalogResponse": {
+      "type": "object",
+      "description": "GET /api/data-anchors-catalog — the DAAS data-anchor projection. Consumers: paas/scripts/plaza-export.mjs (anchors + the two projection counters), paas/facet/supply-catalog.js (producer).",
+      "required": [
+        "anchors"
+      ],
+      "properties": {
+        "anchors": {
+          "type": "array",
+          "description": "Projected data-anchor entries (official-data species). Same drop discipline as the facade face."
+        },
+        "dropped": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Upstream rows the projection discarded entirely (missing/unusable id). Consumed by plaza-export as a hard gate."
+        },
+        "coerced": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Rows kept although a required field was not a string. Consumed by plaza-export as a hard gate."
+        },
+        "as_of": {
+          "type": "string",
+          "description": "Upstream snapshot instant the projection was computed against."
+        },
+        "source_absent": {
+          "type": "boolean",
+          "description": "Present only when the upstream feed is unconfigured or has never landed."
+        }
+      }
+    },
     "agentsResponse": {
       "type": "object",
       "description": "GET /api/wanxing/v1/agents — the deployed-instance view. Consumers: paas/facet/supply-catalog.js (every field below), wanxing-ops-mcp (browse tool).",
@@ -154,6 +220,72 @@
         "status_as_of": {
           "type": "string",
           "description": "The snapshot instant the status was derived from — lets a consumer tell a fresh 'idle' from a frozen 'unknown'."
+        },
+        "toolFace": {
+          "type": "object",
+          "description": "Per-role narrowed tool names, projected from the registry entry metadata.mcpTools (openspec unify-pillar-surfaces 3.2). Absent when the entry declares none. Contract facts only — never prose."
+        },
+        "memory": {
+          "type": "object",
+          "description": "Declared memory axes (store/read/write/process), projected from registry entry metadata.memory. Absent when undeclared; the `guidance` charter text is deliberately stripped — this face is anonymous."
+        },
+        "console": {
+          "type": "object",
+          "description": "Team console DECLARATION projected from registry entry metadata.console: {headline, blocks:[blockId]} (design D8 — a single-agent face says whether the pack declares a team console; it never renders runtime values). Absent when the pack declares none. Block params/surfaces and any prose are deliberately not projected.",
+          "properties": {
+            "headline": {
+              "type": "string"
+            },
+            "blocks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "external_systems": {
+          "type": "object",
+          "description": "External-system requirements (surface-connector-requirements-in-wanxing): the pack's `connector_bindings` declaration joined against what this deployment actually minted (registry entry metadata.connector_bindings). Absent when the pack declares none — an undeclared pack must not read as 'needs zero systems', and a failed declaration read is absent too, never an empty gap list. Carries binding keys and the optional flag only; never a token, secret name or connector URL.",
+          "required": [
+            "declared",
+            "required",
+            "wired",
+            "missing"
+          ],
+          "properties": {
+            "declared": {
+              "type": "number",
+              "description": "Bindings the pack version declares."
+            },
+            "required": {
+              "type": "number",
+              "description": "Declared bindings that are not optional. paas never mints an optional binding, so this is the number that can actually be closed."
+            },
+            "wired": {
+              "type": "number",
+              "description": "Declared bindings this deployment minted; counted against the declaration so it can never exceed it."
+            },
+            "missing": {
+              "type": "array",
+              "description": "Declared keys that were not minted. `optional` rides along because the repair differs: an optional gap closes by nothing.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "key",
+                  "optional"
+                ],
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  },
+                  "optional": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
