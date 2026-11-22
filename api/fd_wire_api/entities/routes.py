@@ -817,7 +817,9 @@ def list_entity_objects(
             {"column": needle_column, "op": "contains", "value": q}
         ]
     sort = (
-        [{"column": sort_column, "direction": sort_dir}] if sort_column else []
+        # 引擎/api 层读 ``dir``（customer_dataset_tools / api_store 的 sort 契约），
+        # 发 ``direction`` 会静默落回 asc（降序请求全变升序）。
+        [{"column": sort_column, "dir": sort_dir}] if sort_column else []
     )
     offset = (page - 1) * page_size
     result = _run_dataset_query(

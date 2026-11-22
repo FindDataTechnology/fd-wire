@@ -700,3 +700,24 @@ def test_mn_traversal_accepts_dict_rows(client, db_session, engine_fake):
     assert engine_fake.calls[1][1]["filters"] == [
         {"column": "cid", "op": "in", "value": ["c2", "c1"]}
     ]
+
+
+def test_object_list_sort_uses_dir_key(client, db_session, engine_fake):
+    """降序排序必须发 ``dir``（引擎/api 层契约键），否则静默落回 asc。
+
+    regression：routes 曾发 ``{"direction": ...}``，而 customer_dataset_tools /
+    api_store 读 ``item["dir"]`` —— 所有降序请求被无视、一律升序返回。
+    """
+    ds = seed_dataset(db_session, key="customers")
+    entity = make_entity(db_session, ds, name="客户", pk=("id",), display="name")
+    engine_fake.results["customer_dataset_query"] = [query_result(
+        ["id", "name"], [["c2", "乙"], ["c1", "甲"]]
+    )]
+    resp = client.get(
+        f"/api/v1/entities/{entity.id}/objects",
+        params={"sort_column": "id", "sort_dir": "desc"}, headers=OWNER,
+    )
+    assert resp.status_code == 200, resp.text
+    tool, args = engine_fake.calls[0]
+    assert args["sort"] == [{"column": "id", "dir": "desc"}]
+    assert "direction" not in args["sort"][0]
