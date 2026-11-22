@@ -42,5 +42,5 @@
 
 ## Workflow follow-up
 
-- 归档前需 Change 1 `add-info-entity-filter` 先 archive（announcements 通道依赖）。
-- 上产后留一条真库查询与一次 MCP 实调结果在 PR/报告。
+- ~~归档前需 Change 1 `add-info-entity-filter` 先 archive~~ 已完成（2026-11-22 归档，cninfo entities 回填后 announcements 通道可用）。
+- **生产验证（2026-11-22 已完成）**：wire-api 滚 sha-c5a5320（+ SUBJECT_MCP_URL/MCP_BEARER_TOKEN env）。真机 E2E：`create_subject(company,300222)` + announcements/indicators/registry 三通道 `read` → 全部 `coverage=available`（announcements 命中 2 条真实公告）；`snapshot` 出 `source_kind=subject`/`storage_tier=api` 数据集 2 行，经既有 `query_contract._query_dataset`（api_store，零引擎）取回 2 行——alerts/dashboard/market 直接可用、零特化。subjects CRUD/read/archive 与客户隔离均真机通过。graph 通道因 business-mcp 镜像缺 networkx 返 unavailable（如实降级，非本仓缺陷）。
