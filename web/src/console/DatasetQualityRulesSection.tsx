@@ -277,15 +277,17 @@ async function qualityRequest(
     );
   }
   if (!response.ok) {
-    let detail: string | undefined;
+    // detail 两种真形态：字符串（多数端点）与对象 {code,message,upgrade}（档位闸
+    // PLAN_TIER_REQUIRED）。两种都原样带上——apiErrorText 会取字符串或对象的 message。
+    // 只认字符串会把对象 detail 丢掉 → 回泛化「读取失败」（2026-11-23 生产撞到）。
+    let detail: string | Record<string, unknown> | undefined;
     try {
       const data: unknown = await response.json();
-      if (
-        data &&
-        typeof data === "object" &&
-        typeof (data as { detail?: unknown }).detail === "string"
-      ) {
-        detail = (data as { detail: string }).detail;
+      if (data && typeof data === "object") {
+        const d = (data as { detail?: unknown }).detail;
+        if (typeof d === "string" || (d !== null && typeof d === "object")) {
+          detail = d as string | Record<string, unknown>;
+        }
       }
     } catch {
       /* 无 JSON body：保留 undefined（走兜底文案） */

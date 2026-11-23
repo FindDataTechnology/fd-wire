@@ -120,6 +120,8 @@ function installBackend(options: {
   failRulesGetStatus?: number;
   /** GET 规则列表失败时回的后端 detail（默认 `quality rules <status>`）。 */
   failRulesGetDetail?: string;
+  /** GET 规则列表失败时回的对象 detail（生产档位闸真形态 {code,message,upgrade}）。 */
+  failRulesGetDetailObject?: Record<string, unknown>;
   /** 强制 POST 新增规则返回该状态（422 detail 回显测试）。 */
   failAddStatus?: number;
   failAddDetail?: string;
@@ -152,10 +154,11 @@ function installBackend(options: {
     const path = url.pathname;
     if (path === RULES_PATH && method === "GET") {
       if (options.failRulesGetStatus) {
-        return jsonResponse(
-          { detail: options.failRulesGetDetail ?? `quality rules ${options.failRulesGetStatus}` },
-          options.failRulesGetStatus,
-        );
+        const detail =
+          options.failRulesGetDetailObject ??
+          options.failRulesGetDetail ??
+          `quality rules ${options.failRulesGetStatus}`;
+        return jsonResponse({ detail }, options.failRulesGetStatus);
       }
       return jsonResponse({ items: rules, note: options.note ?? "" });
     }
@@ -332,6 +335,22 @@ describe("DatasetQualityRulesSection 渲染与三态（wire-quality-rules）", (
   });
 
   it("付费档闸 403：如实呈后端 detail（「需 cell」说明），非泛化「读取失败」", async () => {
+    // 生产真实形态：detail 是对象 {code,message,upgrade}，不是字符串。
+    installBackend({
+      failRulesGetStatus: 403,
+      failRulesGetDetailObject: {
+        code: "PLAN_TIER_REQUIRED",
+        message: "质量规则 需要 cell 物化层（基础档及以上套餐）",
+        upgrade: "升级到基础档及以上套餐后可用",
+      },
+    });
+    render(<DatasetQualityRulesSection datasetId="ds-1" canEdit />);
+    const err = await screen.findByTestId("quality-rules-error");
+    expect(err.textContent).toContain("需要 cell 物化层");
+    expect(err.textContent).not.toContain("读取失败");
+  });
+
+  it("付费档闸 403（字符串 detail 形态）同样如实呈", async () => {
     installBackend({ failRulesGetStatus: 403, failRulesGetDetail: "质量规则需开通 cell（付费档）" });
     render(<DatasetQualityRulesSection datasetId="ds-1" canEdit />);
     const err = await screen.findByTestId("quality-rules-error");
