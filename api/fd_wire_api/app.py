@@ -410,5 +410,35 @@ app.include_router(cell_provision_router)
 
 @app.get("/health")
 def health() -> dict:
-    """存活探针：部署链（ArgoCD/Caddy）与健康检查消费。"""
+    """存活探针：部署链（ArgoCD/Caddy）与健康检查消费。纯进程存活，不碰 DB。"""
     return {"status": "ok", "service": "fd-wire-api", "version": app.version}
+
+
+@app.get("/readyz")
+def readyz():
+    """就绪探针：反映**元数据库可达性**（openspec: decouple-wire-db-from-cheap-3）。
+
+    为什么单独一个而非并入 /health：2026-11-23 实测——wire 的 Postgres 单宿 cheap-3
+    宕机时，所有 DB 端点假死而 `/health` 仍回 200（它不碰 DB）⇒ 整站挂掉在探针层
+    完全不可见。`/readyz` 做一次 `SELECT 1`（2s 超时）：DB 不可达 → 503，readinessProbe
+    据此把 pod 判 NotReady，`kubectl get pods` 与告警即可见。`/health` 保留为纯 liveness。
+    """
+    from fastapi.responses import JSONResponse
+
+    try:
+        from sqlalchemy import text
+
+        from .admin.db import get_engine
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            # statement_timeout 是 Postgres 方言；sqlite（开发/测试）不认，设了会抛。
+            if engine.dialect.name == "postgresql":
+                conn.execute(text("set statement_timeout = 2000"))
+            conn.execute(text("select 1"))
+    except Exception as exc:  # noqa: BLE001 - 任何 DB 不可达都判未就绪
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "reason": f"db unreachable: {type(exc).__name__}"},
+        )
+    return {"status": "ready", "service": "fd-wire-api"}
