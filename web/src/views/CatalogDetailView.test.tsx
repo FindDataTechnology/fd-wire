@@ -133,6 +133,38 @@ describe("CatalogDetailView", () => {
     ).toBe("region");
   });
 
+  it("china_city_panel：默认且唯一预设 city", async () => {
+    installDetails({
+      "ind-city": {
+        ...VERIFIED,
+        indicator_id: "ind-city",
+        source_db: "china_city_panel",
+        status: "verified",
+      },
+    });
+    render(<CatalogDetailView id="ind-city" />);
+    await screen.findByTestId("detail-to-dataset");
+    const sel = screen.getByTestId("to-dataset-entity-type") as HTMLSelectElement;
+    expect(sel.value).toBe("city");
+    expect([...sel.options].map((o) => o.value)).toEqual(["city"]);
+  });
+
+  it("gta_panel：默认且唯一预设 firm", async () => {
+    installDetails({
+      "ind-gta": {
+        ...VERIFIED,
+        indicator_id: "ind-gta",
+        source_db: "gta_panel",
+        status: "verified",
+      },
+    });
+    render(<CatalogDetailView id="ind-gta" />);
+    await screen.findByTestId("detail-to-dataset");
+    const sel = screen.getByTestId("to-dataset-entity-type") as HTMLSelectElement;
+    expect(sel.value).toBe("firm");
+    expect([...sel.options].map((o) => o.value)).toEqual(["firm"]);
+  });
+
   it("404：指标不存在的明确态", async () => {
     installDetails({});
     render(<CatalogDetailView id="missing" />);

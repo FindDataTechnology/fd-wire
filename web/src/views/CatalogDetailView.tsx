@@ -226,12 +226,27 @@ export function CatalogDetailView({ id }: { id: string }) {
 }
 
 // 指标落成数据集（wire-indicator-to-dataset）：verified 指标的建集卡片。
-// 实体字典 v0 前端只给两个常用预设（yearbook=region、world_bank=country），
-// 其余 source_db 交由后端 422 如实拒绝——前端不猜不拦截。
-// 默认实体类型按 source_db 预选（world_bank→country，其余→region）：否则
-// 世行指标的默认 region 必 422，用户得先手动切换才建得成（2026-11-23 e2e 撞到）。
+// 实体类型预设与默认值按 source_db 定（与后端口径一致）：
+//   yearbook_catalog→region、world_bank→country、china_city_panel→city、
+//   gta_panel→firm；其余源（如 fd_open_data）仍给通用 region/country 供选，
+//   最终由后端按源如实判定 422——前端不猜不拦截。
+function entityPresetsFor(sourceDb: string | null | undefined): string[] {
+  switch (sourceDb) {
+    case "world_bank":
+      return ["country"];
+    case "china_city_panel":
+      return ["city"];
+    case "gta_panel":
+      return ["firm"];
+    case "yearbook_catalog":
+      return ["region"];
+    default:
+      return ["region", "country"];
+  }
+}
+
 function defaultEntityType(sourceDb: string | null | undefined): string {
-  return sourceDb === "world_bank" ? "country" : "region";
+  return entityPresetsFor(sourceDb)[0];
 }
 
 type CreateState =
@@ -254,10 +269,8 @@ function IndicatorToDatasetCard({
   const [end, setEnd] = useState("");
   const [state, setState] = useState<CreateState>({ phase: "idle" });
 
-  const presets: Array<{ value: string; label: string }> = [
-    { value: "region", label: "region" },
-    { value: "country", label: "country" },
-  ];
+  const presets: Array<{ value: string; label: string }> =
+    entityPresetsFor(sourceDb).map((v) => ({ value: v, label: v }));
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
