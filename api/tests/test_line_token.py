@@ -55,6 +55,7 @@ def mint_line_token(
     tag: str = "line",
     drop: tuple[str, ...] = (),
     key=None,
+    logto_sub: str | None = None,
 ) -> str:
     private_key, _ = _rsa_keypair(tag)
     now = int(time.time())
@@ -70,6 +71,8 @@ def mint_line_token(
     }
     if email:
         payload["email"] = email
+    if logto_sub:
+        payload["logto_sub"] = logto_sub
     for claim in drop:
         payload.pop(claim, None)
     return pyjwt.encode(payload, key or private_key, algorithm="RS256")
@@ -82,6 +85,14 @@ def test_valid_token_yields_identity():
     assert ident.scope == ("line:read", "line:write")
     assert ident.source == LINE
     assert ident.jti
+    assert ident.logto_sub is None  # absent unless the minting gateway sets it
+
+
+def test_logto_sub_claim_surfaces():
+    ident = verify_line_token(
+        mint_line_token(logto_sub="pih8r05mwh8w"), settings=_settings()
+    )
+    assert ident.logto_sub == "pih8r05mwh8w"
 
 
 def test_not_configured_when_issuer_or_key_missing():
