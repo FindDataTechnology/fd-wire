@@ -43,6 +43,14 @@ COPY --chown=appuser:appuser fd_wire_api ./fd_wire_api
 COPY --chown=appuser:appuser fd_mcp_client ./fd_mcp_client
 # 运维脚本随镜像（对账/自检类只读脚本；k8s 不挂卷，现场要能直接跑）
 COPY --chown=appuser:appuser scripts ./scripts
+# 迁移目录随镜像（alembic.ini + alembic/versions/）：scripts/e2e_doc.py 与任何
+# `alembic upgrade` 都要它。**2026-11-24 实锤缺件**：镜像原来只 COPY fd_wire_api/scripts，
+# 没有 alembic.ini ⇒ 在镜像里跑 e2e_doc 时 `FAILED: No 'script_location' key found`，
+# 整条链 26 PASS 却卡在这 2 条红（缺件假红，与 lex 镜像缺 esignature 同族）。补上后
+# 62 PASS 0 FAIL（2026-11-24 实测）。**注意**：alembic/env.py 在启动期 import fd_wire_api，
+# 所以它必须在 runtime 阶段（与包源码同层），不能只在 builder。
+COPY --chown=appuser:appuser alembic.ini ./alembic.ini
+COPY --chown=appuser:appuser alembic ./alembic
 # `/app` 目录本身必须归 appuser：`COPY --chown` 只改**文件**，`WORKDIR /app` 建出的
 # 目录仍是 root 所有 ⇒ 非 root 进程建不了新文件，而本包有 8 个 CWD 相对的 sqlite
 # 默认值（`sqlite:///./fd_wire_dev.db`、…/fd_wire_demands.db、…/fd_wire_datasets.db、
