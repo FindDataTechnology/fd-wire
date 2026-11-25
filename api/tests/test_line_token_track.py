@@ -96,6 +96,31 @@ def test_line_token_logto_sub_fallback_resolves_customer(datasets_env, line_env)
     assert {d["customer_id"] for d in resp.json()} == {"cust-001"}
 
 
+def test_line_token_logto_sub_owner_beats_guest(datasets_env, line_env):  # noqa: F811
+    """Owner-first: a caller who is a *guest* of another customer still resolves to
+    their OWN customer via logto_sub (the bug: resolve_member_role picked the guest
+    team, returning that team's empty demand list)."""
+    from fd_wire_api.admin.db import get_session
+    from fd_wire_api.billing.models import Customer
+    from fd_wire_api.console.models import CustomerMember
+
+    # sub-cust-001 is a guest (owner role) of cust-002 in addition to owning cust-001.
+    with get_session() as sess:
+        cust002 = sess.query(Customer).filter_by(name="cust-002").one()
+        sess.add(CustomerMember(customer_id=cust002.id, logto_sub="sub-cust-001", role="owner"))
+        sess.commit()
+
+    mine = datasets_env.client.post(
+        "/api/v1/demands", headers=CUST_HEADERS["cust-001"], json=DEMAND_BODY
+    )
+    assert mine.status_code in (200, 201), mine.text
+    token = mint_line_token(sub="not-a-sub2api-id", logto_sub="sub-cust-001")
+    resp = datasets_env.client.get("/api/v1/demands", headers=_bearer(token))
+    assert resp.status_code == 200, resp.text
+    # Resolves to cust-001 (owner), not cust-002 (where they are a guest).
+    assert {d["customer_id"] for d in resp.json()} == {"cust-001"}
+
+
 def test_line_token_reaches_data_plane_route(datasets_env, line_env):  # noqa: F811
     """同一枚票也要能打数据集面（channel=line-token，不做成员级判定）。"""
     token = mint_line_token(sub=SUB2API_CUST_001)

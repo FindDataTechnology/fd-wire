@@ -316,11 +316,15 @@ def resolve_actor(
         if customer is None and getattr(line, "logto_sub", None):
             # Line token carrying the caller's Logto sub (minted by a gateway that
             # holds the shared Logto identity rather than the billing id). Resolve
-            # by logto_sub — the SAME key the Logto track trusts — via the existing
-            # member/owner resolver, instead of the ambiguous sub2api id.
-            resolved_ls = resolve_member_role(db, line.logto_sub)
-            if resolved_ls is not None:
-                customer = resolved_ls[0]
+            # by logto_sub, OWNER first: the caller's own billing_customers row.
+            # resolve_member_role would pick a guest/team pointer (a human can be a
+            # member of several customers), which is the wrong scope for a line
+            # ticket; only fall back to it when the caller owns no customer.
+            customer = resolve_customer(db, line.logto_sub)
+            if customer is None:
+                resolved_ls = resolve_member_role(db, line.logto_sub)
+                if resolved_ls is not None:
+                    customer = resolved_ls[0]
         if customer is None:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
