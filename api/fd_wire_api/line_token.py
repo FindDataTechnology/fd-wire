@@ -76,6 +76,12 @@ class LineTokenIdentity:
     source: str
     expires_at: int
     jti: str
+    # Optional: the caller's Logto sub, carried by line tokens minted by a gateway
+    # that holds the shared Logto identity rather than the line's billing id. When
+    # present, console auth resolves the customer by logto_sub (the same key the
+    # Logto track trusts) instead of by sub2api_user_id. Absent on tokens minted
+    # by the billing plane (paas line-proxy), which keep the sub2api-id path.
+    logto_sub: str | None = None
 
 
 class CustomerResolver(Protocol):
@@ -199,4 +205,9 @@ def verify_line_token(
         source=source.strip(),
         expires_at=exp,
         jti=jti,
+        logto_sub=(
+            str(claims.get("logto_sub")).strip()
+            if isinstance(claims.get("logto_sub"), str) and claims.get("logto_sub").strip()
+            else None
+        ),
     )

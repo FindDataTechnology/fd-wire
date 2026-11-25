@@ -313,6 +313,14 @@ def resolve_actor(
         if line is None:
             raise logto_error from None
         customer = resolve_line_customer(db, line.subject)
+        if customer is None and getattr(line, "logto_sub", None):
+            # Line token carrying the caller's Logto sub (minted by a gateway that
+            # holds the shared Logto identity rather than the billing id). Resolve
+            # by logto_sub — the SAME key the Logto track trusts — via the existing
+            # member/owner resolver, instead of the ambiguous sub2api id.
+            resolved_ls = resolve_member_role(db, line.logto_sub)
+            if resolved_ls is not None:
+                customer = resolved_ls[0]
         if customer is None:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

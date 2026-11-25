@@ -75,6 +75,27 @@ def test_line_token_reaches_console_route(datasets_env, line_env):  # noqa: F811
     assert {d["customer_id"] for d in items} == {"cust-001"}
 
 
+def test_line_token_logto_sub_fallback_resolves_customer(datasets_env, line_env):  # noqa: F811
+    """A line token whose `sub` is NOT a sub2api id but carries `logto_sub` still
+    resolves the customer — via the same logto_sub key the Logto track trusts.
+
+    This is the registry-gateway mint path: it holds the shared Logto sub (not the
+    line's billing id), so it sets `logto_sub`; wire resolves by it.
+    """
+    mine = datasets_env.client.post(
+        "/api/v1/demands", headers=CUST_HEADERS["cust-001"], json=DEMAND_BODY
+    )
+    assert mine.status_code in (200, 201), mine.text
+    # `sub` is deliberately not caller-1 (no sub2api match); only logto_sub points
+    # at cust-001 ("sub-cust-001").
+    token = mint_line_token(sub="not-a-sub2api-id", logto_sub="sub-cust-001")
+    resp = datasets_env.client.get("/api/v1/demands", headers=_bearer(token))
+    assert resp.status_code == 200, resp.text
+    ids = [d["id"] for d in resp.json()]
+    assert mine.json()["id"] in ids
+    assert {d["customer_id"] for d in resp.json()} == {"cust-001"}
+
+
 def test_line_token_reaches_data_plane_route(datasets_env, line_env):  # noqa: F811
     """同一枚票也要能打数据集面（channel=line-token，不做成员级判定）。"""
     token = mint_line_token(sub=SUB2API_CUST_001)
