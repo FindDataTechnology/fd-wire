@@ -416,9 +416,9 @@ def health() -> dict:
 
 @app.get("/readyz")
 def readyz():
-    """就绪探针：反映**元数据库可达性**（openspec: decouple-wire-db-from-cheap-3）。
+    """就绪探针：反映**元数据库可达性**（openspec: decouple-wire-db-from-host）。
 
-    为什么单独一个而非并入 /health：2026-11-23 实测——wire 的 Postgres 单宿 cheap-3
+    为什么单独一个而非并入 /health：2026-11-23 实测——wire 的 Postgres 单宿节点
     宕机时，所有 DB 端点假死而 `/health` 仍回 200（它不碰 DB）⇒ 整站挂掉在探针层
     完全不可见。`/readyz` 做一次 `SELECT 1`（2s 超时）：DB 不可达 → 503，readinessProbe
     据此把 pod 判 NotReady，`kubectl get pods` 与告警即可见。`/health` 保留为纯 liveness。
